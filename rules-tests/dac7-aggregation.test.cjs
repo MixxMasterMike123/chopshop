@@ -34,6 +34,29 @@ console.log('\n=== Refunded / cancelled / garbage excluded ===');
   ok(a.grossConsiderationSek === 100, 'gross only the one valid sale (100)');
 }
 
+console.log('\n=== Partial refunds net out of gross consideration ===');
+{
+  // A PARTIALLY refunded sale still happened (counts as a transaction), but only
+  // the amount the seller kept is consideration. Regression: partial refunds used
+  // to set status 'refunded', dropping the WHOLE order from the report.
+  const partial = { total: 1000, status: 'partially_refunded', createdAt: new Date(Date.UTC(2026, 5, 15)), payment: { refundedAmount: 100 } };
+  const a = aggregateSellerYear([partial], 2026, 0.1);
+  ok(a.transactionCount === 1, 'partially refunded sale still counts as a transaction');
+  ok(a.grossConsiderationSek === 900, 'gross nets the refund: 1000 - 100 = 900');
+
+  // Over-refund (data anomaly) must clamp at 0, never go negative.
+  const over = { total: 100, status: 'partially_refunded', createdAt: new Date(Date.UTC(2026, 5, 15)), payment: { refundedAmount: 500 } };
+  ok(aggregateSellerYear([over], 2026, 0.1).grossConsiderationSek === 0, 'over-refund clamps to 0, never negative');
+
+  // No refund data / garbage → full total, unchanged behaviour.
+  const clean = { total: 250, status: 'confirmed', createdAt: new Date(Date.UTC(2026, 5, 15)), payment: { refundedAmount: 'x' } };
+  ok(aggregateSellerYear([clean], 2026, 0.1).grossConsiderationSek === 250, 'garbage refundedAmount ignored → full total');
+
+  // A FULLY refunded order is still excluded entirely by status.
+  const full = { total: 400, status: 'refunded', createdAt: new Date(Date.UTC(2026, 5, 15)), payment: { refundedAmount: 400 } };
+  ok(aggregateSellerYear([full], 2026, 0.1).transactionCount === 0, 'fully refunded order still excluded by status');
+}
+
 console.log('\n=== De-minimis boundary: transaction count (< 30) ===');
 {
   // 29 small sales, well under EUR 2000 → BELOW de-minimis (excluded).

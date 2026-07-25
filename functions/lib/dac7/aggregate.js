@@ -63,8 +63,15 @@ function aggregateSellerYear(orders, year, sekToEurRate) {
         const total = Number(o?.total);
         if (!Number.isFinite(total) || total <= 0)
             continue; // skip non-positive/garbage
+        // A PARTIALLY refunded sale still happened (so it counts as a transaction),
+        // but only the amount the seller kept is consideration. Fully refunded
+        // orders never reach here — they're excluded by status above.
+        const refunded = Number(o?.payment?.refundedAmount);
+        const retained = Number.isFinite(refunded) && refunded > 0
+            ? Math.max(0, total - refunded)
+            : total;
         count += 1;
-        grossSek += total;
+        grossSek += retained;
     }
     // Round SEK to ören-free krona for reporting; EUR to cents.
     const grossConsiderationSek = Math.round(grossSek * 100) / 100;

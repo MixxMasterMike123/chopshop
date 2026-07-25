@@ -20,6 +20,9 @@ export interface Dac7Order {
     status?: string;
     createdAt?: any;
     source?: string;
+    payment?: {
+        refundedAmount?: number;
+    };
 }
 export interface Dac7YearAggregate {
     year: number;

@@ -1,29 +1,20 @@
 // sendAffiliateApplicationEmails.ts - Send both affiliate and admin emails when application is submitted
 // Replaces missing affiliate application notification system
 
-import { onCall } from 'firebase-functions/v2/https';
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { appUrls } from '../../config/app-urls';
 import { EmailOrchestrator } from '../core/EmailOrchestrator';
 import { EMAIL_CONFIG } from '../core/config';
+import { db } from '../../config/database';
+import { FieldValue } from 'firebase-admin/firestore';
 
+// The affiliate application form is PUBLIC (anonymous applicants), so this
+// callable cannot require auth. Instead it takes ONLY an applicationId and
+// reads the applicant details from the stored document — the client never
+// supplies the recipient address. Without that, this was an open relay: anyone
+// could send arbitrary mail from the platform's verified sending domain to any
+// address, and flood the admin inbox.
 interface AffiliateApplicationEmailsRequest {
-  applicantInfo: {
-    name: string;
-    email: string;
-    phone?: string;
-    address?: string;
-    city?: string;
-    country?: string;
-    promotionMethod?: string;
-    message?: string;
-    socials?: {
-      website?: string;
-      instagram?: string;
-      youtube?: string;
-      facebook?: string;
-      tiktok?: string;
-    };
-  };
   applicationId: string;
   language?: string;
 }
@@ -39,21 +30,43 @@ export const sendAffiliateApplicationEmails = onCall<AffiliateApplicationEmailsR
   async (request) => {
     try {
       console.log('📧 sendAffiliateApplicationEmails: Starting dual email send');
-      console.log('📧 Request data:', {
-        applicantName: request.data.applicantInfo.name,
-        applicantEmail: request.data.applicantInfo.email,
-        applicationId: request.data.applicationId,
-        language: request.data.language
-      });
 
-      // Validate required data
-      if (!request.data.applicantInfo || !request.data.applicationId) {
-        throw new Error('Applicant info and application ID are required');
+      const applicationId = (request.data?.applicationId || '').trim();
+      if (!applicationId) {
+        throw new HttpsError('invalid-argument', 'applicationId is required');
       }
 
-      if (!request.data.applicantInfo.name || !request.data.applicantInfo.email) {
-        throw new Error('Applicant name and email are required');
+      // Recipient comes from the STORED application, never from the caller.
+      const appSnap = await db.collection('affiliateApplications').doc(applicationId).get();
+      if (!appSnap.exists) {
+        throw new HttpsError('not-found', 'Application not found');
       }
+      const appData = appSnap.data() as any;
+
+      // Send once per application: re-calling must not re-deliver mail (which
+      // would turn a legitimate applicationId into a repeatable send primitive).
+      if (appData.applicationEmailsSentAt) {
+        console.log(`📧 Emails already sent for ${applicationId} — skipping.`);
+        return { success: true, alreadySent: true };
+      }
+
+      const applicantInfo = {
+        name: appData.name,
+        email: appData.email,
+        phone: appData.phone,
+        address: appData.address,
+        city: appData.city,
+        country: appData.country,
+        promotionMethod: appData.promotionMethod,
+        message: appData.message,
+        socials: appData.socials
+      };
+
+      if (!applicantInfo.name || !applicantInfo.email) {
+        throw new HttpsError('failed-precondition', 'Application is missing name or email');
+      }
+
+      console.log('📧 Sending for application:', applicationId);
 
       // Initialize EmailOrchestrator
       const orchestrator = new EmailOrchestrator();
@@ -63,13 +76,13 @@ export const sendAffiliateApplicationEmails = onCall<AffiliateApplicationEmailsR
       const applicantResult = await orchestrator.sendEmail({
         emailType: 'AFFILIATE_APPLICATION_RECEIVED',
         customerInfo: {
-          email: request.data.applicantInfo.email,
-          name: request.data.applicantInfo.name
+          email: applicantInfo.email,
+          name: applicantInfo.name
         },
-        language: request.data.language || 'sv-SE',
+        language: appData.preferredLang || request.data?.language || 'sv-SE',
         additionalData: {
-          applicantInfo: request.data.applicantInfo,
-          applicationId: request.data.applicationId
+          applicantInfo,
+          applicationId
         },
         adminEmail: false
       });
@@ -89,8 +102,8 @@ export const sendAffiliateApplicationEmails = onCall<AffiliateApplicationEmailsR
         },
         language: 'sv-SE', // Admin emails always in Swedish
         additionalData: {
-          applicantInfo: request.data.applicantInfo,
-          applicationId: request.data.applicationId,
+          applicantInfo,
+          applicationId,
           adminPortalUrl: appUrls.B2B_PORTAL
         },
         adminEmail: true
@@ -101,6 +114,10 @@ export const sendAffiliateApplicationEmails = onCall<AffiliateApplicationEmailsR
         // Don't fail the entire operation if admin email fails
         console.log('⚠️ Continuing despite admin email failure');
       }
+
+      // Stamp AFTER a successful applicant send, so a transient failure can be
+      // retried but a success can never be replayed into repeat delivery.
+      await appSnap.ref.update({ applicationEmailsSentAt: FieldValue.serverTimestamp() });
 
       console.log('✅ sendAffiliateApplicationEmails: Success');
       return {

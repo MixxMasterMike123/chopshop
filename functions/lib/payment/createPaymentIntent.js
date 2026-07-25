@@ -48,6 +48,14 @@ async function computeOrderTotalsSek(cartItems, shippingCountry, discountCode, s
             throw new Error(`Unknown product: ${productId}`);
         }
         const product = snap.data();
+        // TENANT ISOLATION: `products` is a top-level collection with globally
+        // unique ids and is world-readable, so a caller can name ANY shop's product.
+        // Without this check a charge for shop A could be priced from shop B's
+        // catalog and settled into shop A's connected account. Mirrors the B2B
+        // guard in order-processing/createB2BOrder.ts.
+        if (product.shopId !== shopId) {
+            throw new Error(`Product ${productId} belongs to another shop`);
+        }
         if (product.isActive === false) {
             throw new Error(`Product not available: ${productId}`);
         }

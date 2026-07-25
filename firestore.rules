@@ -479,8 +479,12 @@ service cloud.firestore {
 
     // Public application form (anonymous applicants); admins of the shop manage.
     match /affiliateApplications/{applicationId} {
+      // Public application form (anonymous applicants). The send-once stamp is
+      // written ONLY by the mailer function (Admin SDK); a client that could set
+      // it at create time would silently suppress the notification emails.
       allow create: if request.resource.data.email is string &&
-        request.resource.data.email.size() < 200;
+        request.resource.data.email.size() < 200 &&
+        !('applicationEmailsSentAt' in request.resource.data);
       allow read, update, delete: if isAdminOfShop(resource.data.shopId);
     }
 

@@ -75,18 +75,10 @@ const AffiliateRegistration = () => {
         const functions = getFunctions();
         const sendAffiliateApplicationEmails = httpsCallable(functions, 'sendAffiliateApplicationEmails');
         
+        // Only the applicationId travels: the function reads the applicant's
+        // details (including the recipient address) from the document written
+        // above, so the callable can't be used to mail arbitrary addresses.
         const emailResult = await sendAffiliateApplicationEmails({
-          applicantInfo: {
-            name: formData.name,
-            email: formData.email,
-            phone: formData.phone,
-            address: formData.address,
-            city: formData.city,
-            country: formData.country,
-            promotionMethod: formData.promotionMethod,
-            message: formData.message,
-            socials: formData.socials
-          },
           applicationId: applicationDoc.id,
           language: formData.preferredLang || currentLanguage || 'sv-SE'
         });

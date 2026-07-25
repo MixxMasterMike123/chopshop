@@ -128,6 +128,13 @@ async function run() {
   await check('anon CANNOT list all orders', assertFails(getDocs(collection(anonDb(), 'orders'))));
   await check('anon CANNOT write a product', assertFails(setDoc(doc(anonDb(), 'products/pHack'), { shopId: 'shopA' })));
   await check('customer CANNOT self-promote to admin (role field)', assertFails(setDoc(doc(customerDb('cust'), 'users/cust'), { role: 'admin' })));
+  // The public affiliate form must stay open, but the send-once stamp is
+  // server-only: forging it at create time would suppress the notification
+  // emails for that application.
+  await check('anon submits affiliate application (public form stays open)',
+    assertSucceeds(setDoc(doc(anonDb(), 'affiliateApplications/appOk'), { email: 'a@b.se', shopId: 'shopA' })));
+  await check('anon CANNOT forge applicationEmailsSentAt (suppresses notifications)',
+    assertFails(setDoc(doc(anonDb(), 'affiliateApplications/appHack'), { email: 'a@b.se', shopId: 'shopA', applicationEmailsSentAt: new Date() })));
 
   console.log('\n=== PLATFORM privileges ===');
   await check('platform provisions a new shop', assertSucceeds(setDoc(doc(platformDb(), 'shops/shopC'), { name: 'C', status: 'active' })));

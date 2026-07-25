@@ -7,6 +7,8 @@ const https_1 = require("firebase-functions/v2/https");
 const app_urls_1 = require("../../config/app-urls");
 const EmailOrchestrator_1 = require("../core/EmailOrchestrator");
 const config_1 = require("../core/config");
+const database_1 = require("../../config/database");
+const firestore_1 = require("firebase-admin/firestore");
 exports.sendAffiliateApplicationEmails = (0, https_1.onCall)({
     region: 'us-central1',
     secrets: ['RESEND_API_KEY'],
@@ -16,19 +18,37 @@ exports.sendAffiliateApplicationEmails = (0, https_1.onCall)({
 }, async (request) => {
     try {
         console.log('📧 sendAffiliateApplicationEmails: Starting dual email send');
-        console.log('📧 Request data:', {
-            applicantName: request.data.applicantInfo.name,
-            applicantEmail: request.data.applicantInfo.email,
-            applicationId: request.data.applicationId,
-            language: request.data.language
-        });
-        // Validate required data
-        if (!request.data.applicantInfo || !request.data.applicationId) {
-            throw new Error('Applicant info and application ID are required');
+        const applicationId = (request.data?.applicationId || '').trim();
+        if (!applicationId) {
+            throw new https_1.HttpsError('invalid-argument', 'applicationId is required');
         }
-        if (!request.data.applicantInfo.name || !request.data.applicantInfo.email) {
-            throw new Error('Applicant name and email are required');
+        // Recipient comes from the STORED application, never from the caller.
+        const appSnap = await database_1.db.collection('affiliateApplications').doc(applicationId).get();
+        if (!appSnap.exists) {
+            throw new https_1.HttpsError('not-found', 'Application not found');
         }
+        const appData = appSnap.data();
+        // Send once per application: re-calling must not re-deliver mail (which
+        // would turn a legitimate applicationId into a repeatable send primitive).
+        if (appData.applicationEmailsSentAt) {
+            console.log(`📧 Emails already sent for ${applicationId} — skipping.`);
+            return { success: true, alreadySent: true };
+        }
+        const applicantInfo = {
+            name: appData.name,
+            email: appData.email,
+            phone: appData.phone,
+            address: appData.address,
+            city: appData.city,
+            country: appData.country,
+            promotionMethod: appData.promotionMethod,
+            message: appData.message,
+            socials: appData.socials
+        };
+        if (!applicantInfo.name || !applicantInfo.email) {
+            throw new https_1.HttpsError('failed-precondition', 'Application is missing name or email');
+        }
+        console.log('📧 Sending for application:', applicationId);
         // Initialize EmailOrchestrator
         const orchestrator = new EmailOrchestrator_1.EmailOrchestrator();
         // 1. Send confirmation email to affiliate applicant
@@ -36,13 +56,13 @@ exports.sendAffiliateApplicationEmails = (0, https_1.onCall)({
         const applicantResult = await orchestrator.sendEmail({
             emailType: 'AFFILIATE_APPLICATION_RECEIVED',
             customerInfo: {
-                email: request.data.applicantInfo.email,
-                name: request.data.applicantInfo.name
+                email: applicantInfo.email,
+                name: applicantInfo.name
             },
-            language: request.data.language || 'sv-SE',
+            language: appData.preferredLang || request.data?.language || 'sv-SE',
             additionalData: {
-                applicantInfo: request.data.applicantInfo,
-                applicationId: request.data.applicationId
+                applicantInfo,
+                applicationId
             },
             adminEmail: false
         });
@@ -60,8 +80,8 @@ exports.sendAffiliateApplicationEmails = (0, https_1.onCall)({
             },
             language: 'sv-SE',
             additionalData: {
-                applicantInfo: request.data.applicantInfo,
-                applicationId: request.data.applicationId,
+                applicantInfo,
+                applicationId,
                 adminPortalUrl: app_urls_1.appUrls.B2B_PORTAL
             },
             adminEmail: true
@@ -71,6 +91,9 @@ exports.sendAffiliateApplicationEmails = (0, https_1.onCall)({
             // Don't fail the entire operation if admin email fails
             console.log('⚠️ Continuing despite admin email failure');
         }
+        // Stamp AFTER a successful applicant send, so a transient failure can be
+        // retried but a success can never be replayed into repeat delivery.
+        await appSnap.ref.update({ applicationEmailsSentAt: firestore_1.FieldValue.serverTimestamp() });
         console.log('✅ sendAffiliateApplicationEmails: Success');
         return {
             success: true,
