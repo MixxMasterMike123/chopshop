@@ -9,9 +9,9 @@ Koden (podProfiles, podValidation, templates, print-pipeline) ska följa detta.
 ### Plagg (t-shirt, hoodie, sweatshirt — samma ytor på alla tre)
 | Slot | Storlek (mm) | Position |
 |---|---|---|
-| front | 250 × max 350 | startar "handbredd" (~85–90 mm, exakt mått TBC) under nacksömmen |
-| back | 300 × 400 | startar "dryg handbredd" (~100 mm, TBC) under nacksömmen |
-| pocket | 100 × 100 | diskret position: left / right / center (INTE fri placering) |
+| front | 250 × max 350 | startar 60–70 mm under nacksömmen (BEKRÄFTAT 2026-07-27) |
+| back | 300 × 400 | startar 80–90 mm under nacksömmen (BEKRÄFTAT 2026-07-27) |
+| pocket | 100 × 100 | diskret position: left / right / center (INTE fri placering). BEKRÄFTAT: "pocket" är bara ett positionsnamn — ingen sydd ficka; klassisk left-chest-logga (3–4 tum bred) |
 | sleeve (left/right) | 80 × 80 | vänster / höger ärm |
 
 ### Övriga produkter (en slot: front)
@@ -101,23 +101,26 @@ Tre lager, inget blockerar:
 - Nacksöms-offset kodas in i flats-kalibreringen (printAreas-px ritas på
   rätt höjd) så mockupen visar sann position.
 
-## 6. Leverans till tryckeri (steg 4, delvis öppet)
+## 6. Leverans till tryckeri (AVGJORT 2026-07-27)
 
-- Tryckfilen är alltid den gate-verifierade PNG:en.
-- ÖPPEN FRÅGA till tryckeriet: artwork-only-PNG i exakt px-storlek, ELLER
-  full tryckyte-canvas (t.ex. rygg = 3543×4724 px) med motivet inbakat på
-  sin placering? Rekommendation: canvas-varianten (otvetydig placering,
-  rotation bakas in, ersätter dagens fritext-placering).
-- Placeringsgeometrin (xMm/yMm/wMm/rotationDeg) ska PERSISTERAS på mappningen
-  (idag kastas den efter att fritextsträngen formaterats).
+**Tryckeriets svar: BARA MOTIVET som PNG + MOCKUPBILDEN från shopen.** Första
+trycket av ett motiv kräver lite ögonmått hos tryckeriet; därefter är
+placeringen låst för alla kommande tryck av samma motiv. Ingen canvas-PNG.
+
+- Tryckfilen = den gate-verifierade motiv-PNG:en (✅ byggd, levereras redan).
+- STEG 4 (omdefinierat, mycket enklare): bifoga MOCKUPBILD per orderrad i
+  tryckeriportalen — den komposit som visar motivet på plagget i rätt
+  position/storlek (studio-mockupen eller produktens bild) + dagens
+  placeringstext ("4 cm uppifrån · centrerad · 21 cm bred").
+- Placeringsgeometri-persistens (xMm/yMm/wMm) kvarstår som nice-to-have
+  (behövs om mockupen någon gång ska återgenereras exakt), inte blockerande.
+- Transparens BEKRÄFTAD: allt migreras till PNG; fotografiska motiv utan
+  friläggning trycks som fylld rektangel — helt OK.
 
 ## 7. Öppna frågor till tryckeriet
 
-1. Solhatt: tryckyta (mm)?
-2. Exakt nacksöms-offset i cm (handbredd resp. dryg handbredd)?
-3. Leverans: artwork-only-PNG eller full canvas med placering inbakad?
-4. Pocket: tryck PÅ sydd ficka eller tryck på fick-POSITION på bröstet?
-5. Är JPG/fotografiska (icke-transparenta) motiv OK att trycka?
+1. Solhatt: tryckyta (mm)? — PARKERAD ("skip for now", Mikael 2026-07-27).
+   Solhatt byggs inte förrän måttet finns.
 
 ## 8. Scenariokatalog (2026-07-27) — KONVERTERA / INFORMERA / BLOCKERA
 
@@ -183,5 +186,6 @@ Tre lager, inget blockerar:
 3. **Flats + slots:** nya SVG:er (3 ryggar + sweatshirt + väska/keps/beanie/
    flat mössa), pocket-slot + positionsväljare, hård DPI-clamp i studion,
    slot-medveten flat-registry (ryggen komposileras idag på framsidans flat).
-4. **Print-master-leverans:** canvas-PNG (efter tryckeriets svar),
-   persisterad placeringsgeometri.
+4. **Mockup-till-portalen:** bifoga mockupbild (motivet på plagget) per
+   orderrad i tryckeriportalen så första trycket kan ögonmåttas (§6).
+   Persisterad placeringsgeometri = nice-to-have.
