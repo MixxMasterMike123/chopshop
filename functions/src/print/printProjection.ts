@@ -33,6 +33,22 @@ export function slotLabel(slot: PlacementSlot): string {
   return SLOT_LABELS[slot] || SLOT_LABELS[DEFAULT_SLOT];
 }
 
+// Sanitize a client-influenced image URL before it may render in the PRINT
+// OPERATOR's portal: https only (kills javascript:/data: stored XSS) and
+// platform storage hosts only (kills off-platform tracking beacons). Product
+// imagery on this platform lives in Firebase Storage; anything else → null and
+// the portal simply shows no mockup thumbnail.
+const ALLOWED_IMAGE_HOSTS = new Set(['firebasestorage.googleapis.com', 'storage.googleapis.com']);
+function safeImageUrl(u: unknown): string | null {
+  if (typeof u !== 'string' || !u) return null;
+  try {
+    const p = new URL(u);
+    return p.protocol === 'https:' && ALLOWED_IMAGE_HOSTS.has(p.hostname) ? u : null;
+  } catch {
+    return null;
+  }
+}
+
 // Mint a short-lived signed read URL for a Storage object. Falls back to the
 // stored download URL if signing isn't available (the Functions service account
 // needs roles/iam.serviceAccountTokenCreator to sign — a project-config item).
@@ -185,10 +201,40 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
   // a slot-aware placement label ("Bröst — Centrerat på bröstet": slot label +
   // free-text detail). Slots resolve independently (see resolveSlots).
   const lines = [];
+  // Per-order cache for the product-image fallback (one read per productId max).
+  const productImageCache = new Map<string, string | null>();
   for (const it of items) {
     if (!it || !it.sku) continue;
     const slots = resolveSlots(it.sku, mappingsBySku);
     if (slots.size === 0) continue; // non-POD line — skip
+
+    // MOCKUP for the printer's first-print eyeballing (docs/POD_PRINT_SPEC.md §6:
+    // "bara motivet + mockupbilden"). The order item's image IS the bought
+    // colourway's mockup/product photo (public product imagery — no PII).
+    //
+    // TRUST BOUNDARY: it.image is CLIENT-WRITTEN at checkout (cart → Stripe
+    // metadata → order doc, verbatim) and this renders as <img src> + <a href>
+    // in the PRINT OPERATOR's portal — a different, more privileged user. So it
+    // is sanitized server-side (https + platform storage hosts only; kills
+    // javascript:/data: XSS and off-platform beacons). Falls back to the
+    // product doc's first image (server-derived, shop-checked).
+    let mockupUrl: string | null = safeImageUrl(it.image);
+    const productId = String(it.productId || it.id || '');
+    if (!mockupUrl && productId) {
+      if (!productImageCache.has(productId)) {
+        try {
+          const p = await db.collection('products').doc(productId).get();
+          // Same-shop only — a foreign productId must not pull another shop's
+          // imagery into this shop's print job.
+          const d: any = p.exists && p.data()?.shopId === order.shopId ? p.data() : null;
+          productImageCache.set(productId, safeImageUrl(
+            (Array.isArray(d?.images) && d.images[0]) || d?.b2cImageUrl || d?.imageUrl || null));
+        } catch {
+          productImageCache.set(productId, null);
+        }
+      }
+      mockupUrl = productImageCache.get(productId) || null;
+    }
 
     // Stable ordering of the per-item slot lines (front→back→sleeves→other).
     const SLOT_ORDER: PlacementSlot[] = ['front', 'back', 'pocket', 'left_sleeve', 'right_sleeve', 'other'];
@@ -208,6 +254,10 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
         slotLabel: slotLabel(slot),
         placement,
         profileId: mapping.profileId || null,
+        // The bought colourway's product mockup (front view) — the printer's
+        // visual reference. NOTE: for back/sleeve lines this still shows the
+        // front mockup; the placement text is the per-slot instruction.
+        mockupUrl,
       };
 
       if (!mapping.artworkId) {

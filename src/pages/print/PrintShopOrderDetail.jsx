@@ -226,8 +226,36 @@ const PrintShopOrderDetail = () => {
               {job.lines.map((ln, i) => (
                 <div key={i} className="rounded-xl border border-white/10 bg-white/5 p-4">
                   <div className="flex items-start gap-4">
+                    {/* Mockup (motivet på plagget) — the printer's visual reference
+                        for the FIRST print of a motif; thereafter placement is
+                        locked per artwork. Click opens full size. The image is the
+                        bought colourway's FRONT product photo, so non-front lines
+                        get an honest label (the placement text is the per-slot
+                        instruction). A dead URL hides the whole tile (onError). */}
+                    {ln.mockupUrl && (
+                      <a
+                        href={ln.mockupUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 text-center"
+                        title="Öppna i full storlek"
+                      >
+                        <img
+                          src={ln.mockupUrl}
+                          alt="Mockup"
+                          onError={(e) => { const a = e.currentTarget.closest('a'); if (a) a.style.display = 'none'; }}
+                          className="h-24 w-24 rounded-lg border border-white/10 bg-white/5 object-contain"
+                        />
+                        <span className="mt-0.5 block text-[10px] text-gray-500">
+                          {ln.placementSlot === 'front' ? 'Mockup' : 'Produktbild (framsida)'}
+                        </span>
+                      </a>
+                    )}
                     {ln.artwork?.previewUrl && (
-                      <img src={ln.artwork.previewUrl} alt="" className="h-16 w-16 shrink-0 rounded-lg border border-white/10 object-cover" />
+                      <div className="shrink-0 text-center">
+                        <img src={ln.artwork.previewUrl} alt="" className="h-16 w-16 rounded-lg border border-white/10 object-cover" />
+                        <span className="mt-0.5 block text-[10px] text-gray-500">Motiv</span>
+                      </div>
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
