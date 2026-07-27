@@ -38,6 +38,13 @@ import { requireAdminOfShop } from '../email-orchestrator/functions/authGuard';
 
 export const PIPELINE_VERSION = 1;
 
+// libvips' operation cache holds decoded pixels across WARM invocations — with
+// ~200MB raw per 7000px image that intermittently OOMed the instance (observed
+// live 2026-07-27: "Memory limit of 1024 MiB exceeded"). Trade cache hits (none
+// here — every call is a new image) for a flat memory profile.
+sharp.cache(false);
+sharp.concurrency(1);
+
 const MM_PER_INCH = 25.4;
 // Hard ceiling on source pixels (spec §8) — protects this function's memory.
 const MAX_SOURCE_PX = 10000;
@@ -175,28 +182,35 @@ async function runPipeline(shopId: string, originalStoragePath: string, profile:
     notices.push({ code: 'cmyk_converted', message: 'Filen var i CMYK och har konverterats till RGB — färgerna kan skifta något. Kontrollera mockupen.' });
   }
 
+  // ONE decode+encode pass produces the final PNG (rotate → [trim] → sRGB).
+  // No intermediate full-size buffers: a 7000px image is ~200MB raw, and an
+  // extra encode pass was part of the observed 1GiB OOM.
   let trimApplied = false;
+  let png: Buffer;
   if (meta.hasAlpha) {
     // Auto-trim transparent padding so the GATE measures the MOTIF, not the
     // artboard (spec §8 — without this the gate + cm readouts lie). Trim keys on
     // fully-transparent background; threshold tolerates stray near-zero alpha.
     try {
-      const trimmed = await work
+      png = await work
         .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 }, threshold: TRIM_THRESHOLD })
         .toColourspace('srgb')
         .png()
         .toBuffer();
-      work = sharp(trimmed);
       trimApplied = true;
     } catch {
       // Trim failure: proceed untrimmed (never block on the optimizer). A fully
       // transparent image passes trim UNCHANGED (probed empirically) — that case
       // is caught below via alpha stats, not here.
-      work = sharp(buf, { limitInputPixels: (MAX_SOURCE_PX + 2000) * (MAX_SOURCE_PX + 2000) }).rotate();
+      png = await sharp(buf, { limitInputPixels: (MAX_SOURCE_PX + 2000) * (MAX_SOURCE_PX + 2000) })
+        .rotate()
+        .toColourspace('srgb')
+        .png()
+        .toBuffer();
     }
+  } else {
+    png = await work.toColourspace('srgb').png().toBuffer();
   }
-
-  const png = await work.toColourspace('srgb').png().toBuffer();
   const outMeta = await sharp(png).metadata();
   const width = outMeta.width || 0;
   const height = outMeta.height || 0;
@@ -322,8 +336,10 @@ async function alphaProfile(png: Buffer) {
   };
 }
 
-// 1GiB: a 10000px-side PNG decodes to ~400MB of raw pixels in libvips.
-const OPTS = { region: 'us-central1', memory: '1GiB', timeoutSeconds: 300, cors: appUrls.CORS_ORIGINS } as const;
+// 2GiB: a 10000px-side image decodes to ~400MB of raw pixels, and the pipeline
+// legitimately holds input + decoded + output at its peak. 1GiB OOMed in prod
+// on 7087px files (2026-07-27) even before the double-encode was removed.
+const OPTS = { region: 'us-central1', memory: '2GiB', timeoutSeconds: 300, cors: appUrls.CORS_ORIGINS } as const;
 
 export const processPodArtwork = onCall(OPTS, async (request) => {
   const shopId = String(request.data?.shopId || '').trim();

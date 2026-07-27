@@ -71,7 +71,12 @@ const ArtworkLibrary = ({
       else toast.error(result?.reasons?.[0]?.message || 'Filen godkändes inte mot de nya kraven.');
       refresh();
     } catch (e) {
-      toast.error(e?.message || 'Kunde inte validera om.');
+      // httpsCallable surfaces uncaught server crashes as the bare string
+      // "internal" — translate it instead of showing a raw error code.
+      const msg = e?.message === 'internal'
+        ? 'Filen kunde inte bearbetas på servern — försök igen om en stund.'
+        : (e?.message || 'Kunde inte validera om.');
+      toast.error(msg);
     } finally {
       markRevalidating(art.id, false);
     }

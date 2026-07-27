@@ -207,7 +207,10 @@ const ArtworkUploadModal = ({ shopId, products = [], artwork = [], onClose, onCr
       setSaving(false);
     } catch (err) {
       console.error('POD upload failed:', err);
-      toast.error(err?.message || 'Uppladdningen misslyckades.');
+      const msg = err?.message === 'internal'
+        ? 'Filen kunde inte bearbetas på servern — försök igen om en stund.'
+        : (err?.message || 'Uppladdningen misslyckades.');
+      toast.error(msg);
       setSaving(false);
     }
   };
