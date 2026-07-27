@@ -37,7 +37,8 @@ const ArtworkLibrary = ({
   // When set, the upload modal opens in REPLACE mode for this artwork (profile
   // locked, updates the doc in place → all products + queue orders get the new file).
   const [replaceTarget, setReplaceTarget] = useState(null);
-  const [revalidating, setRevalidating] = useState(null); // artworkId being reprocessed
+  const [revalidatingIds, setRevalidatingIds] = useState(() => new Set()); // artworkIds in flight
+  const [bulkProgress, setBulkProgress] = useState(null); // { done, total } during Validera alla
   const items = artwork;
 
   const refresh = () => onChanged?.();
@@ -46,20 +47,63 @@ const ArtworkLibrary = ({
   // validated against the old advisory thresholds and have no print PNG — the
   // printer would get the raw original. "Validera om" runs them through the
   // server pipeline (trim + PNG + authoritative gate) and stamps ready/rejected.
+  // Each row is independent — validating one never locks the others.
+  const revalidateOne = async (art) => {
+    const call = httpsCallable(functions, 'processPodArtwork');
+    const { data: result } = await call({ shopId, artworkId: art.id });
+    return result;
+  };
+
+  const markRevalidating = (id, on) => {
+    setRevalidatingIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+
   const handleRevalidate = async (art) => {
-    if (revalidating) return;
-    setRevalidating(art.id);
+    if (revalidatingIds.has(art.id)) return;
+    markRevalidating(art.id, true);
     try {
-      const call = httpsCallable(functions, 'processPodArtwork');
-      const { data: result } = await call({ shopId, artworkId: art.id });
-      if (result?.ok) toast.success('Godkänd — tryckfil (PNG) skapad');
+      const result = await revalidateOne(art);
+      if (result?.ok) toast.success(`Godkänd — tryckfil (PNG) skapad (${art.label || art.fileName})`);
       else toast.error(result?.reasons?.[0]?.message || 'Filen godkändes inte mot de nya kraven.');
       refresh();
     } catch (e) {
       toast.error(e?.message || 'Kunde inte validera om.');
     } finally {
-      setRevalidating(null);
+      markRevalidating(art.id, false);
     }
+  };
+
+  // Bulk: run every LEGACY item (no status yet) through the pipeline SEQUENTIALLY
+  // (each call decodes a full-res image server-side — no reason to stampede the
+  // function), with live progress on the button and one summary toast at the end.
+  // Already-rejected items are excluded: same bytes give the same verdict — the
+  // per-row button remains for deliberate retries.
+  const pendingItems = items.filter((a) => a.status == null);
+  const handleRevalidateAll = async () => {
+    if (bulkProgress || pendingItems.length === 0) return;
+    setBulkProgress({ done: 0, total: pendingItems.length });
+    let ok = 0;
+    let failed = 0;
+    for (const art of pendingItems) {
+      markRevalidating(art.id, true);
+      try {
+        const result = await revalidateOne(art);
+        if (result?.ok) ok++; else failed++;
+      } catch {
+        failed++;
+      } finally {
+        markRevalidating(art.id, false);
+        setBulkProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
+      }
+    }
+    setBulkProgress(null);
+    refresh();
+    if (failed === 0) toast.success(`${ok} original godkända — tryckfiler (PNG) skapade`);
+    else toast(`${ok} godkända · ${failed} underkända — se raderna för orsak`, { icon: '⚠️' });
   };
 
   // Map artworkId → the SKU+slot pills that reference it (built once from the shared
@@ -93,7 +137,16 @@ const ArtworkLibrary = ({
   return (
     <CardSection
       title="Original"
-      actions={<Button variant="primary" onClick={() => setUploadOpen(true)}>Ladda upp original</Button>}
+      actions={
+        <div className="flex items-center gap-2">
+          {pendingItems.length > 0 && (
+            <Button variant="secondary" onClick={handleRevalidateAll} disabled={!!bulkProgress}>
+              {bulkProgress ? `Validerar ${bulkProgress.done + 1}/${bulkProgress.total}…` : `Validera om alla (${pendingItems.length})`}
+            </Button>
+          )}
+          <Button variant="primary" onClick={() => setUploadOpen(true)}>Ladda upp original</Button>
+        </div>
+      }
     >
       {loading ? (
         <p className="text-[13px] text-admin-text-muted">Laddar…</p>
@@ -159,11 +212,11 @@ const ArtworkLibrary = ({
               {art.status !== 'ready' && (
                 <button
                   onClick={() => handleRevalidate(art)}
-                  disabled={!!revalidating}
+                  disabled={revalidatingIds.has(art.id) || !!bulkProgress}
                   className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2 disabled:opacity-50"
                   title="Kör filen genom den nya tryckpipelinen (PNG + 300 DPI-krav)"
                 >
-                  {revalidating === art.id ? 'Validerar…' : 'Validera om'}
+                  {revalidatingIds.has(art.id) ? 'Validerar…' : 'Validera om'}
                 </button>
               )}
               {!isMapped && onMapArtwork && (
