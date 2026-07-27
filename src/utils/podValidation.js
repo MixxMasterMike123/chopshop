@@ -1,152 +1,157 @@
-// podValidation.js — the POD artwork validation ENGINE. Pure functions, no I/O.
+// podValidation.js — the POD artwork GATE engine. Pure functions, no I/O.
 //
-// Given measured facts about an uploaded file + a spec profile (from
-// settings/podProfiles), returns a three-tier verdict with the computed effective
-// DPI and plain-Swedish reasons. ADVISORY: WARN/FAIL never blocks — it guides the
-// seller; the printer decides. Thresholds derive ENTIRELY from the profile, so
-// changing a profile's size/DPI/formats in config changes the verdict with no code
-// change.
+// SSOT for the rules: docs/POD_PRINT_SPEC.md (print shop's real specs, locked
+// 2026-07-27). The gate is BLOCKING: artwork that fails does not enter the
+// library. One rule, zero user choices: the motif must hold ≥ profile.min_dpi
+// (300) at the LARGEST size it can physically print — its contain-fit inside the
+// profile's print area (largest surface = rygg 300×400 mm for apparel), aspect
+// preserved. Wide/tall motifs therefore need fewer pixels on the short side —
+// COVER math (old effectiveDpiFor semantics) must NOT be used for the gate, it
+// would wrongly fail wide logos.
 //
-// Tier precedence: any FAIL → FAIL; else any WARN → WARN; else PASS.
+// The client runs this for instant feedback; the SERVER verdict is authoritative
+// (functions/src/pod/processArtwork.ts mirrors this math — keep the two in sync).
 
 const MM_PER_INCH = 25.4;
 
-// Required pixels for a physical size at a target DPI. Config-driven threshold.
-const requiredPx = (mm, dpi) => Math.round((mm / MM_PER_INCH) * dpi);
+// Hard ceiling on source pixels (protects the sharp pipeline; spec §8).
+export const MAX_SOURCE_PX = 10000;
 
-// Effective DPI achieved by widthPx×heightPx printed onto a w×h mm area: the
-// smaller of the two axis DPIs (the limiting dimension). ROUND (not floor): a file
-// at exactly the displayed required pixels computes to e.g. 299.97 DPI, which must
-// read as 300 (PASS), not 299 (a spurious WARN). requiredPx() rounds too, so
-// rounding here keeps the "required px ↔ DPI" pair consistent at the boundary.
-// Exported for the Design Studio compositor, which computes the SAME effective DPI
-// against the seller's chosen placement size instead of the full print area.
+/**
+ * Effective DPI achieved by widthPx×heightPx printed onto EXACTLY a w×h mm area
+ * (cover semantics: the limiting axis). Used by the Design Studio compositor
+ * against the seller's chosen placement size — where the artwork IS printed at
+ * that size, so cover math is correct. NOT for the upload gate (see containDpiFor).
+ * ROUND (not floor): a file at exactly the required pixels computes to e.g.
+ * 299.97 DPI, which must read as 300, not a spurious 299.
+ */
 export const effectiveDpiFor = (widthPx, heightPx, areaMm) => {
   const dpiW = widthPx / (areaMm.w / MM_PER_INCH);
   const dpiH = heightPx / (areaMm.h / MM_PER_INCH);
   return Math.round(Math.min(dpiW, dpiH));
 };
 
-const norm = (s) => String(s || '').trim().toLowerCase();
-
-// Find the accepted-format entry for an ext (case-insensitive). Returns the entry
-// ({ext, preferred}) or null if the format isn't accepted at all.
-const formatEntry = (profile, ext) =>
-  (profile.accepted_formats || []).find((f) => norm(f.ext) === norm(ext)) || null;
-
 /**
- * validateArtwork(measured, profile) → { tier, effectiveDpi, reasons:[{code,severity,message}] }
- *
- * measured:
- *   widthPx, heightPx          natural pixel dims (null for PDF/SVG/TIFF the browser can't decode)
- *   ext, mimeType              file extension / mime
- *   colorModeKnown             'rgb' | undefined (browsers can't reliably read CMYK)
- *   hasAlphaChannel            bool | undefined (undefined for non-raster)
- *   transparentPixelRatio      0..1 fraction of sampled pixels with alpha<250 | undefined
- *   fileSizeBytes              number
- *
- * profile: a settings/podProfiles entry (see scripts/seed-pod-profiles.cjs).
+ * The largest physical size (mm) this artwork can print inside `areaMm`:
+ * contain-fit, aspect preserved. A 5:1 wordmark in 300×400 → 300×60 mm.
  */
-export const validateArtwork = (measured, profile) => {
-  const reasons = [];
-  const add = (severity, code, message) => reasons.push({ code, severity, message });
-
-  if (!profile) {
-    return { tier: 'FAIL', effectiveDpi: null, reasons: [{ code: 'no_profile', severity: 'FAIL', message: 'Ingen tryckprofil vald.' }] };
-  }
-
-  const {
-    widthPx, heightPx, ext, colorModeKnown,
-    hasAlphaChannel, transparentPixelRatio, fileSizeBytes,
-  } = measured || {};
-
-  // ---- file size (vs max_file_mb) ----
-  const maxBytes = (profile.max_file_mb || 0) * 1024 * 1024;
-  if (maxBytes && typeof fileSizeBytes === 'number' && fileSizeBytes > maxBytes) {
-    add('FAIL', 'file_too_large',
-      `Filen är ${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB — max ${profile.max_file_mb} MB för ${profile.label}.`);
-  }
-
-  // ---- format (accepted? preferred?) ----
-  const fmt = formatEntry(profile, ext);
-  if (!fmt) {
-    const allowed = (profile.accepted_formats || []).map((f) => f.ext.toUpperCase()).join(', ');
-    add('FAIL', 'format_not_accepted',
-      `Formatet .${norm(ext) || '?'} stöds inte för ${profile.label}. Tillåtna: ${allowed || '—'}.`);
-  } else if (fmt.preferred === false) {
-    const preferred = (profile.accepted_formats || []).filter((f) => f.preferred).map((f) => f.ext.toUpperCase()).join('/');
-    add('WARN', 'format_not_preferred',
-      `.${norm(ext).toUpperCase()} fungerar men är inte idealiskt${preferred ? ` — föredra ${preferred}` : ''}.`);
-  }
-
-  // ---- resolution (effective DPI vs min/target) — only when dimensions are known ----
-  const dimsUnknown = widthPx == null || heightPx == null;
-  let effectiveDpi = null;
-
-  if (dimsUnknown) {
-    // PDF/SVG/TIFF: browser can't read pixel dims. Don't FAIL on resolution or
-    // transparency; emit an ACTIONABLE WARN naming the required pixels so the
-    // seller can self-check in their design tool. (PDF is the preferred poster
-    // format, so this is the common path for posters.)
-    const reqW = requiredPx(profile.print_area_mm.w, profile.target_dpi);
-    const reqH = requiredPx(profile.print_area_mm.h, profile.target_dpi);
-    add('WARN', 'dimensions_unknown',
-      `Kunde inte läsa måtten för .${norm(ext).toUpperCase()} automatiskt. För ${profile.label} ` +
-      `behöver originalet vara minst ${reqW}×${reqH} px vid ${profile.target_dpi} DPI ` +
-      `(${profile.print_area_mm.w}×${profile.print_area_mm.h} mm). Kontrollera måtten i ditt designprogram.`);
-  } else {
-    // Compute effective DPI against the main print area AND any alt_sizes; the
-    // seller may legitimately target a smaller alternate, so take the BEST (max).
-    const sizes = [{ label: 'huvudformat', w: profile.print_area_mm.w, h: profile.print_area_mm.h }]
-      .concat(Array.isArray(profile.alt_sizes) ? profile.alt_sizes : []);
-    let best = { dpi: -1, label: '' };
-    for (const s of sizes) {
-      const dpi = effectiveDpiFor(widthPx, heightPx, { w: s.w, h: s.h });
-      if (dpi > best.dpi) best = { dpi, label: s.label };
-    }
-    effectiveDpi = best.dpi;
-    const sizeNote = best.label && best.label !== 'huvudformat' ? ` (vid ${best.label})` : '';
-
-    if (effectiveDpi < profile.min_dpi) {
-      add('FAIL', 'resolution_too_low',
-        `Upplösningen ger ${effectiveDpi} DPI${sizeNote} — under minimum ${profile.min_dpi} DPI. ` +
-        `Bilden blir suddig i tryck. Ladda upp en större fil.`);
-    } else if (effectiveDpi < profile.target_dpi) {
-      add('WARN', 'resolution_below_target',
-        `Upplösningen ger ${effectiveDpi} DPI${sizeNote} — under rekommenderade ${profile.target_dpi} DPI ` +
-        `(men över minimum ${profile.min_dpi}). Acceptabelt men inte optimalt.`);
-    }
-
-    // ---- transparency (only meaningful for raster with a known alpha story) ----
-    if (profile.transparency === 'required') {
-      if (hasAlphaChannel === false) {
-        // No alpha channel at all (e.g. JPEG) → can't be cut out.
-        add('FAIL', 'transparency_missing',
-          `${profile.label} kräver transparent bakgrund, men filen saknar transparens (t.ex. JPEG). ` +
-          `Exportera som PNG med genomskinlig bakgrund.`);
-      } else if (hasAlphaChannel === true && typeof transparentPixelRatio === 'number' && transparentPixelRatio < 0.005) {
-        // Alpha channel present but effectively all-opaque (solid background) →
-        // would print as a filled rectangle. WARN (some sellers want that), don't FAIL.
-        add('WARN', 'transparency_effectively_opaque',
-          `Bilden har inga genomskinliga ytor – den trycks som en fylld rektangel. ` +
-          `Vill du bara ha motivet på produkten, exportera med transparent bakgrund.`);
-      }
-    }
-
-    // ---- color mode (cmyk_preferred profile, RGB source) ----
-    if (profile.color_mode === 'cmyk_preferred' && colorModeKnown === 'rgb') {
-      add('WARN', 'color_mode_rgb',
-        `Filen är RGB; ${profile.label} trycks i CMYK. Färgerna konverteras och kan skilja något. ` +
-        `Leverera gärna CMYK för exakt färg.`);
-    }
-  }
-
-  // ---- worst-severity wins ----
-  let tier = 'PASS';
-  if (reasons.some((r) => r.severity === 'FAIL')) tier = 'FAIL';
-  else if (reasons.some((r) => r.severity === 'WARN')) tier = 'WARN';
-
-  return { tier, effectiveDpi, reasons };
+export const maxPrintMmFor = (widthPx, heightPx, areaMm) => {
+  const aspect = widthPx / heightPx;
+  const w = Math.min(areaMm.w, areaMm.h * aspect);
+  return { w, h: w / aspect };
 };
 
-export default validateArtwork;
+/** DPI at that largest printable size (the gate's measure). */
+export const containDpiFor = (widthPx, heightPx, areaMm) => {
+  const { w } = maxPrintMmFor(widthPx, heightPx, areaMm);
+  return Math.round(widthPx / (w / MM_PER_INCH));
+};
+
+/** Pixels required for THIS artwork's aspect ratio to pass at `dpi`. */
+export const requiredPxFor = (widthPx, heightPx, areaMm, dpi) => {
+  const { w, h } = maxPrintMmFor(widthPx, heightPx, areaMm);
+  return { w: Math.round((w / MM_PER_INCH) * dpi), h: Math.round((h / MM_PER_INCH) * dpi) };
+};
+
+// mm → "30 × 6 cm" (Swedish comma, 1 decimal only when needed).
+export const formatMmAsCm = (mm) => {
+  const cm = mm / 10;
+  const r = Math.round(cm * 10) / 10;
+  return Number.isInteger(r) ? String(r) : String(r).replace('.', ',');
+};
+
+const norm = (s) => String(s || '').trim().toLowerCase();
+const ALIAS = { jpeg: 'jpg', tif: 'tiff', heif: 'heic' };
+export const normalizeExt = (ext) => { const e = norm(ext); return ALIAS[e] || e; };
+
+// Formats that get a DEDICATED rejection message regardless of profile —
+// the generic "not accepted" would leave these users stranded (spec §8).
+const SPECIAL_FORMAT_FAIL = {
+  heic:
+    'iPhone-bild (HEIC) stöds inte. Välj "Mest kompatibel" under Inställningar → Kamera → Format, ' +
+    'eller exportera bilden som JPG/PNG och ladda upp igen.',
+  pdf:
+    'PDF stöds inte för tryck på textil. Exportera motivet som PNG i full storlek från ditt designprogram.',
+  svg:
+    'SVG stöds inte ännu. Exportera motivet som PNG i full storlek (behåll transparent bakgrund).',
+  gif:
+    'GIF är ett webbformat, inte ett tryckformat. Exportera motivet som PNG.',
+};
+
+const formatEntry = (profile, ext) =>
+  (profile.accepted_formats || []).find((f) => normalizeExt(f.ext) === normalizeExt(ext)) || null;
+
+/**
+ * gateArtwork(measured, profile) → { ok, effectiveDpi, maxPrintMm, requiredPx, reasons }
+ *
+ * BLOCKING verdict. `reasons` are plain-Swedish, actionable rejection messages
+ * ({ code, message }); ok === false ⇒ the file must not be saved.
+ *
+ * measured:
+ *   widthPx, heightPx   pixel dims. null ⇒ the caller couldn't decode (e.g. TIFF
+ *                       in the browser): px checks are SKIPPED here and the
+ *                       server (which always decodes) is the authority.
+ *   ext                 file extension
+ *   fileSizeBytes       number
+ *
+ * Advisory notices (transparency, CMYK, trim) are NOT the gate's job — they
+ * never block and are assembled by the caller/server (spec §4, §8).
+ */
+export const gateArtwork = (measured, profile) => {
+  const reasons = [];
+  const add = (code, message) => reasons.push({ code, message });
+
+  if (!profile) {
+    return { ok: false, effectiveDpi: null, maxPrintMm: null, requiredPx: null, reasons: [{ code: 'no_profile', message: 'Ingen tryckprofil vald.' }] };
+  }
+
+  const { widthPx, heightPx, ext, fileSizeBytes } = measured || {};
+  const e = normalizeExt(ext);
+  const dimsKnown = widthPx != null && heightPx != null && widthPx > 0 && heightPx > 0;
+
+  // ---- format (by EXTENSION — only trustworthy when the browser could NOT
+  // decode the file). The server identifies by CONTENT, so a decodable file
+  // with a wrong/odd extension (PNG named .bmp, HEIC named .png in Safari)
+  // must pass through to the server's verdict, not die on a filename check. ----
+  if (!dimsKnown) {
+    if (SPECIAL_FORMAT_FAIL[e]) {
+      add(`format_${e}`, SPECIAL_FORMAT_FAIL[e]);
+    } else if (!formatEntry(profile, e)) {
+      const allowed = (profile.accepted_formats || []).map((f) => f.ext.toUpperCase()).join(', ');
+      add('format_not_accepted', `Formatet .${e || '?'} stöds inte. Tillåtna format: ${allowed || '—'}.`);
+    }
+  }
+
+  // ---- file size ----
+  const maxBytes = (profile.max_file_mb || 0) * 1024 * 1024;
+  if (maxBytes && typeof fileSizeBytes === 'number' && fileSizeBytes > maxBytes) {
+    add('file_too_large', `Filen är ${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB — max ${profile.max_file_mb} MB.`);
+  }
+
+  // ---- pixel checks (only when dims are known; server always knows) ----
+  let effectiveDpi = null;
+  let maxPrintMm = null;
+  let requiredPx = null;
+  if (dimsKnown) {
+    const area = profile.print_area_mm;
+    maxPrintMm = maxPrintMmFor(widthPx, heightPx, area);
+    requiredPx = requiredPxFor(widthPx, heightPx, area, profile.min_dpi);
+    effectiveDpi = containDpiFor(widthPx, heightPx, area);
+
+    if (Math.max(widthPx, heightPx) > MAX_SOURCE_PX) {
+      add('px_too_large',
+        `Bilden är ${widthPx} × ${heightPx} px — max ${MAX_SOURCE_PX} px på längsta sidan. Skala ner filen.`);
+    } else if (effectiveDpi < profile.min_dpi) {
+      add('resolution_too_low',
+        `Din bild är ${widthPx} × ${heightPx} px. I sin största tryckstorlek ` +
+        `${formatMmAsCm(maxPrintMm.w)} × ${formatMmAsCm(maxPrintMm.h)} cm blir det ${effectiveDpi} DPI — ` +
+        `minimikravet är ${profile.min_dpi} DPI. För din bilds proportioner krävs minst ` +
+        `${requiredPx.w} × ${requiredPx.h} px. Exportera om från originalet i full storlek — ` +
+        `uppskalning i efterhand hjälper inte, det skapar bara suddiga pixlar.`);
+    }
+  }
+
+  return { ok: reasons.length === 0, effectiveDpi, maxPrintMm, requiredPx, reasons };
+};
+
+export default gateArtwork;

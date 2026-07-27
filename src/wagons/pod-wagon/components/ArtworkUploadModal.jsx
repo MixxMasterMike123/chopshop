@@ -1,47 +1,63 @@
-// ArtworkUploadModal — the seller's artwork upload + validation flow.
+// ArtworkUploadModal — the seller's artwork upload + GATE flow.
 //
-// Flow: pick print purpose (profile) → pick file → measure (dims + alpha) →
-// validateArtwork (ADVISORY — WARN/FAIL never blocks; printer decides) → show the
-// verdict + plain-Swedish reasons BEFORE committing → on confirm, upload the
-// ORIGINAL untouched + a separate web preview + write the podArtwork doc.
+// SSOT: docs/POD_PRINT_SPEC.md (print shop specs 2026-07-27). The gate BLOCKS:
+// artwork that can't print at ≥300 DPI never enters the library. Flow:
+//   pick profile → pick file → CLIENT pre-check (gateArtwork — instant feedback)
+//   → on save: upload original → processPodArtwork callable (sharp: PNG-convert,
+//   trim, sRGB, authoritative gate, writes print PNG + preview) → on PASS create
+//   the podArtwork doc (status 'ready'); on FAIL show the rejection (the server
+//   already deleted the original — nothing persists).
 //
-// Design: Admin-Neutral, mirrors the dark-overlay modal pattern (ProvisionShopModal)
-// but with admin tokens. The original is never compressed (uploadPodOriginal).
+// Transparency INFORMS, never blocks (opaque notice + honest mockups). Design:
+// Admin-Neutral, mirrors the dark-overlay modal pattern with admin tokens.
 import React, { useState, useEffect } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
+import { httpsCallable } from 'firebase/functions';
 import { Field, Input, Select, Button } from '../../../components/admin/ui';
 import StatusPill from '../../../components/admin/ui/StatusPill';
-import { loadPodProfiles, getProfileById, getPodProfilesMeta } from '../../../config/podProfiles';
-import { readImageDimensions, generatePodPreview, uploadPodOriginal, extOf } from '../../../utils/podUpload';
-import { validateArtwork } from '../../../utils/podValidation';
+import { loadPodProfiles, getProfileById } from '../../../config/podProfiles';
+import { readImageDimensions, uploadPodOriginal, extOf, sha256Hex } from '../../../utils/podUpload';
+import { gateArtwork, normalizeExt } from '../../../utils/podValidation';
 import { createArtwork, replaceArtworkFile } from '../../../utils/podArtwork';
 import { setMapping } from '../../../utils/podMappings';
 import { POD_SLOTS, slotLabel } from '../../../config/podSlots';
-import { auth } from '../../../firebase/config';
+import { auth, functions } from '../../../firebase/config';
 import { tierTone, tierLabel } from './podTier';
 import PodProductPicker from './PodProductPicker';
 
-// `replaceTarget` (optional): when set, the modal runs in REPLACE mode — the profile
-// is LOCKED to the existing artwork's profile and confirming UPDATES that artwork
-// doc in place (same id → all products + unshipped queue orders get the new file);
-// no post-upload mapping prompt (the mapping graph is untouched).
-const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replaceTarget = null }) => {
+// Checkerboard behind the preview so all-white/light motifs read as motifs, not
+// as "empty" (spec §8 Färg) — and so transparency is visibly transparent.
+const CHECKER_STYLE = {
+  backgroundImage:
+    'linear-gradient(45deg, rgba(128,128,128,.18) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.18) 75%), ' +
+    'linear-gradient(45deg, rgba(128,128,128,.18) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.18) 75%)',
+  backgroundSize: '16px 16px',
+  backgroundPosition: '0 0, 8px 8px',
+};
+
+// `replaceTarget` (optional): REPLACE mode — profile locked to the existing
+// artwork's, confirming updates that doc in place (same id → all products +
+// unshipped queue orders get the new file); no post-upload mapping prompt.
+// `artwork`: the shop's existing library (duplicate detection via sha256).
+const ArtworkUploadModal = ({ shopId, products = [], artwork = [], onClose, onCreated, replaceTarget = null }) => {
   const isReplace = !!replaceTarget;
   const [profiles, setProfiles] = useState([]);
   const [profileId, setProfileId] = useState('');
   const [label, setLabel] = useState('');
   const [file, setFile] = useState(null);
   const [measuring, setMeasuring] = useState(false);
-  const [measured, setMeasured] = useState(null); // { widthPx, heightPx, hasAlphaChannel, transparentPixelRatio, previewObjUrl }
-  const [verdict, setVerdict] = useState(null);    // { tier, effectiveDpi, reasons }
+  const [measured, setMeasured] = useState(null);   // { widthPx, heightPx, hasAlphaChannel, transparentPixelRatio, previewObjUrl, sha256 }
+  const [clientGate, setClientGate] = useState(null); // gateArtwork() result (pre-check)
+  const [rightsOk, setRightsOk] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [serverReject, setServerReject] = useState(null); // [{code,message}] from the authoritative gate
+  const [notices, setNotices] = useState([]);             // server notices after PASS
 
-  // Post-upload "koppla nu?" step. NEVER blocks — the artwork is already saved; the
-  // mapping is optional here (an unmapped original stays flagged in the library).
+  // Post-upload "koppla nu?" step. NEVER blocks — the artwork is already saved.
   const [createdArtworkId, setCreatedArtworkId] = useState(null);
   const [mapSku, setMapSku] = useState('');
-  const [mapSlot, setMapSlot] = useState('front'); // default Bröst
+  const [mapSlot, setMapSlot] = useState('front');
   const [mapPlacement, setMapPlacement] = useState('');
   const [manualSku, setManualSku] = useState(false);
   const [mapping, setMappingSaving] = useState(false);
@@ -49,7 +65,6 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
   useEffect(() => {
     loadPodProfiles().then((p) => {
       setProfiles(p);
-      // Replace mode: LOCK the profile to the existing artwork's profile.
       const target = isReplace ? (replaceTarget.purpose || p[0]?.id) : p[0]?.id;
       if (p.length && !profileId) setProfileId(target || '');
     });
@@ -58,35 +73,46 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
 
   const profile = getProfileById(profiles, profileId);
 
-  // Re-measure + re-validate whenever the file or profile changes.
+  // The current preview object URL — revoked when replaced or on unmount so a
+  // seller cycling through big files doesn't pin every decoded image in memory.
+  const previewUrlRef = React.useRef(null);
+  const swapPreviewUrl = (next) => {
+    if (previewUrlRef.current && previewUrlRef.current !== next) {
+      URL.revokeObjectURL(previewUrlRef.current);
+    }
+    previewUrlRef.current = next || null;
+  };
+  useEffect(() => () => swapPreviewUrl(null), []);
+
+  // Pre-check whenever the file or profile changes. TIFF can't be decoded in the
+  // browser → px checks are skipped here; the server (which always decodes) rules.
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      if (!file || !profile) { setMeasured(null); setVerdict(null); return; }
+      setServerReject(null);
+      if (!file || !profile) { setMeasured(null); setClientGate(null); swapPreviewUrl(null); return; }
       setMeasuring(true);
       try {
-        const dims = await readImageDimensions(file);
-        // Local preview for the modal (object URL) + alpha read happen together via
-        // a lightweight measure: we reuse generatePodPreview's alpha logic only at
-        // SAVE time (it uploads); for the pre-commit check we read dims + a cheap
-        // alpha probe by drawing to an offscreen canvas here.
-        const probe = await probeAlpha(file);
-        if (cancelled) return;
-        const m = {
-          widthPx: dims.width,
-          heightPx: dims.height,
+        const [dims, probe, sha256] = await Promise.all([
+          readImageDimensions(file),
+          probeAlpha(file),
+          sha256Hex(file).catch(() => null),
+        ]);
+        if (cancelled) {
+          if (probe.previewObjUrl) URL.revokeObjectURL(probe.previewObjUrl);
+          return;
+        }
+        swapPreviewUrl(probe.previewObjUrl);
+        setMeasured({
+          widthPx: dims.width, heightPx: dims.height,
           hasAlphaChannel: probe.hasAlphaChannel,
           transparentPixelRatio: probe.transparentPixelRatio,
           previewObjUrl: probe.previewObjUrl,
-        };
-        setMeasured(m);
-        setVerdict(validateArtwork({
-          widthPx: m.widthPx, heightPx: m.heightPx,
-          ext: extOf(file.name), mimeType: file.type,
-          colorModeKnown: dims.width != null ? 'rgb' : undefined, // browser raster decodes to RGB
-          hasAlphaChannel: m.hasAlphaChannel,
-          transparentPixelRatio: m.transparentPixelRatio,
-          fileSizeBytes: file.size,
+          sha256,
+        });
+        setClientGate(gateArtwork({
+          widthPx: dims.width, heightPx: dims.height,
+          ext: extOf(file.name), fileSizeBytes: file.size,
         }, profile));
       } finally {
         if (!cancelled) setMeasuring(false);
@@ -100,41 +126,64 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
   const onPick = (e) => {
     const f = e.target.files?.[0] || null;
     setFile(f);
+    setRightsOk(false);
+    // Synchronous: the measure effect runs a tick later — without this a fast
+    // Save click between pick and effect could pair file B with file A's verdict.
+    if (f) setMeasuring(true);
     if (f && !label) setLabel(f.name.replace(/\.[a-z0-9]+$/i, ''));
   };
 
+  // Duplicate: same bytes already in the library (INFORM, never block — spec §8).
+  const duplicateOf = measured?.sha256
+    ? artwork.find((a) => a.sha256 === measured.sha256 && a.id !== replaceTarget?.id)
+    : null;
+
+  // Client-side opaque hint (pre-upload). The server re-derives this authoritatively.
+  const looksOpaque =
+    measured && (
+      measured.hasAlphaChannel === false ||
+      (measured.hasAlphaChannel === true && typeof measured.transparentPixelRatio === 'number' && measured.transparentPixelRatio < 0.005)
+    );
+
+  const dimsUnknown = !!file && measured && measured.widthPx == null;
+  const blocked = !!clientGate && !clientGate.ok;
+
   const handleSave = async () => {
-    if (!file || !profile || saving) return;
+    // serverReject is deterministic for the same bytes — block re-tries until the
+    // seller picks a different file (the effect clears it on file/profile change).
+    if (!file || !profile || saving || blocked || !rightsOk || serverReject) return;
     setSaving(true);
+    setServerReject(null);
     try {
       const original = await uploadPodOriginal(file, shopId, profile);
-      const preview = await generatePodPreview(file, shopId);
-      const meta = getPodProfilesMeta();
+      // The AUTHORITATIVE gate + conversion (sharp). On reject the server has
+      // already deleted the uploaded original — nothing persists.
+      const call = httpsCallable(functions, 'processPodArtwork');
+      const { data: result } = await call({
+        shopId,
+        originalStoragePath: original.originalStoragePath,
+        profileId: profile.id,
+      });
+
+      if (!result?.ok) {
+        setServerReject(result?.reasons || [{ code: 'unknown', message: 'Filen godkändes inte.' }]);
+        setSaving(false);
+        return;
+      }
+
       const fileFields = {
         originalUrl: original.originalUrl,
         originalStoragePath: original.originalStoragePath,
-        previewUrl: preview.previewUrl,
-        previewStoragePath: preview.previewStoragePath,
         fileName: original.fileName,
         fileSizeBytes: original.fileSizeBytes,
         mimeType: original.mimeType,
         ext: original.ext,
-        sourceWidthPx: measured?.widthPx ?? null,
-        sourceHeightPx: measured?.heightPx ?? null,
-        validation: {
-          tier: verdict?.tier || 'WARN',
-          effectiveDpi: verdict?.effectiveDpi ?? null,
-          reasons: verdict?.reasons || [],
-          checkedAt: new Date().toISOString(),
-          profileId: profile.id,
-          profileVersion: meta.version || 0,
-        },
+        sha256: measured?.sha256 || null,
+        rightsConfirmed: true,
+        ...result.fields, // status/printUrl/printStoragePath/previewUrl/previewStoragePath/sourceWidthPx/sourceHeightPx/validation
       };
 
       if (isReplace) {
-        // REPLACE the existing doc in place (same id → mappings + queue untouched),
-        // then the util best-effort deletes the OLD storage objects. Keep label/
-        // purpose unless the seller edited the label.
         await replaceArtworkFile(replaceTarget, {
           ...fileFields,
           ...(label.trim() ? { label: label.trim() } : {}),
@@ -145,16 +194,14 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
         return;
       }
 
-      const docData = {
+      const newId = await createArtwork({
         label: label.trim() || file.name,
         purpose: profile.id,
         ...fileFields,
         createdBy: auth.currentUser?.uid || null,
-      };
-      const newId = await createArtwork(docData, shopId);
-      toast.success('Original uppladdat');
-      // Advance to the (optional) "koppla nu?" step instead of closing. The library
-      // refreshes now so the new original appears (flagged unmapped until coupled).
+      }, shopId);
+      toast.success('Tryckfil godkänd och sparad');
+      setNotices(result.notices || []);
       onCreated?.();
       setCreatedArtworkId(newId);
       setSaving(false);
@@ -187,7 +234,7 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
-        className="w-full max-w-lg rounded-[var(--radius-admin)] border border-admin-border bg-admin-surface p-5 text-admin-text"
+        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-[var(--radius-admin)] border border-admin-border bg-admin-surface p-5 text-admin-text"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
@@ -200,64 +247,66 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
         </div>
 
         {createdArtworkId ? (
-          /* Post-upload prompt — OPTIONAL. Artwork is already saved; coupling now
-             just means fewer unmapped-flag surprises later. Never blocks. */
-          products.length === 0 ? (
-            <div className="space-y-4">
-              <p className="text-[13px] text-admin-text-muted">
-                Du har inga produkter ännu — koppla originalet senare under Produktkoppling.
-              </p>
-              <div className="flex justify-end">
-                <Button variant="primary" onClick={onClose}>Stäng</Button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <p className="text-[13px] text-admin-text-muted">
-                Ett original måste kopplas till en produkt innan ordrar kan nå tryckeriet.
-                Du kan göra det nu eller senare under Produktkoppling.
-              </p>
-              {profile && ['poster_large', 'sticker_diecut', 'mug_wrap'].includes(profile.id) && (
-                <p className="text-[12px] text-admin-text-faint">
-                  Detta original är av typen <span className="font-medium">{profile.label}</span> — kontrollera att
-                  du kopplar det till rätt sorts produkt.
+          <div className="space-y-4">
+            {notices.length > 0 && (
+              <ul className="space-y-1 rounded-[var(--radius-admin)] border border-admin-caution-dot/30 bg-admin-caution-bg px-3 py-2">
+                {notices.map((n, i) => (
+                  <li key={i} className="text-[12px] text-admin-caution-text">• {n.message}</li>
+                ))}
+              </ul>
+            )}
+            {products.length === 0 ? (
+              <>
+                <p className="text-[13px] text-admin-text-muted">
+                  Du har inga produkter ännu — koppla originalet senare under Produktkoppling.
                 </p>
-              )}
-              <Field label="Produkt" htmlFor="pod-map-pick-product">
-                <PodProductPicker
-                  products={products}
-                  value={mapSku}
-                  onChange={setMapSku}
-                  manual={manualSku}
-                  onToggleManual={setManualSku}
-                  idPrefix="pod-map-pick"
-                />
-              </Field>
-              <Field label="Placering" htmlFor="pod-map-slot">
-                <Select id="pod-map-slot" value={mapSlot} onChange={(e) => setMapSlot(e.target.value)}>
-                  {POD_SLOTS.map((s) => (
-                    <option key={s.id} value={s.id}>{s.label}</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Detalj (valfritt)" htmlFor="pod-map-place">
-                <Input id="pod-map-place" value={mapPlacement} onChange={(e) => setMapPlacement(e.target.value)} placeholder="t.ex. Centrerat på bröstet, 25 cm" />
-              </Field>
-              <div className="flex justify-end gap-2 pt-1">
-                <Button variant="secondary" onClick={onClose}>Senare</Button>
-                <Button variant="primary" onClick={handleMap} disabled={mapping}>
-                  {mapping ? 'Kopplar…' : 'Koppla'}
-                </Button>
-              </div>
-            </div>
-          )
+                <div className="flex justify-end">
+                  <Button variant="primary" onClick={onClose}>Stäng</Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-[13px] text-admin-text-muted">
+                  Ett original måste kopplas till en produkt innan ordrar kan nå tryckeriet.
+                  Du kan göra det nu eller senare under Produktkoppling.
+                </p>
+                {profile && ['poster_large', 'sticker_diecut', 'mug_wrap'].includes(profile.id) && (
+                  <p className="text-[12px] text-admin-text-faint">
+                    Detta original är av typen <span className="font-medium">{profile.label}</span> — kontrollera att
+                    du kopplar det till rätt sorts produkt.
+                  </p>
+                )}
+                <Field label="Produkt" htmlFor="pod-map-pick-product">
+                  <PodProductPicker
+                    products={products}
+                    value={mapSku}
+                    onChange={setMapSku}
+                    manual={manualSku}
+                    onToggleManual={setManualSku}
+                    idPrefix="pod-map-pick"
+                  />
+                </Field>
+                <Field label="Placering" htmlFor="pod-map-slot">
+                  <Select id="pod-map-slot" value={mapSlot} onChange={(e) => setMapSlot(e.target.value)}>
+                    {POD_SLOTS.map((s) => (
+                      <option key={s.id} value={s.id}>{s.label}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Detalj (valfritt)" htmlFor="pod-map-place">
+                  <Input id="pod-map-place" value={mapPlacement} onChange={(e) => setMapPlacement(e.target.value)} placeholder="t.ex. Centrerat på bröstet, 25 cm" />
+                </Field>
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button variant="secondary" onClick={onClose}>Senare</Button>
+                  <Button variant="primary" onClick={handleMap} disabled={mapping}>
+                    {mapping ? 'Kopplar…' : 'Koppla'}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         ) : (
         <>
-        {/* Provisional-spec note: validation is advisory + the profiles are placeholders. */}
-        <p className="mb-3 text-[12px] text-admin-text-faint">
-          Valideringen är vägledande och trycksparametrarna är preliminära – verifiera med tryckeriet.
-        </p>
-
         {profiles.length === 0 ? (
           <p className="text-[13px] text-admin-text-muted">
             Inga tryckprofiler hittades. Be plattformen att köra seed-pod-profiles innan du laddar upp.
@@ -279,45 +328,78 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
               <Input id="pod-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="t.ex. Logotyp – framsida" />
             </Field>
 
-            <Field label="Fil" htmlFor="pod-file" help={profile ? `Tillåtna: ${(profile.accepted_formats || []).map((f) => f.ext.toUpperCase()).join(', ')} · max ${profile.max_file_mb} MB` : ''}>
+            <Field label="Fil" htmlFor="pod-file" help={profile ? `Tillåtna: ${(profile.accepted_formats || []).map((f) => f.ext.toUpperCase()).join(', ')} · max ${profile.max_file_mb} MB · minst ${profile.min_dpi} DPI i största tryckstorlek` : ''}>
               <input id="pod-file" type="file" onChange={onPick} className="block w-full text-[13px] text-admin-text-muted file:mr-3 file:rounded-[var(--radius-admin-el)] file:border-0 file:bg-admin-surface-2 file:px-3 file:py-1.5 file:text-[13px] file:text-admin-text" />
             </Field>
 
-            {/* Verdict */}
+            {/* Verdict — client pre-check (server rules at save) */}
             {file && (
               <div className="rounded-[var(--radius-admin)] border border-admin-border-soft bg-admin-surface-2 p-3">
                 {measuring ? (
                   <p className="text-[13px] text-admin-text-muted">Analyserar filen…</p>
-                ) : verdict ? (
+                ) : clientGate ? (
                   <>
                     <div className="mb-2 flex items-center gap-2">
-                      <StatusPill tone={tierTone(verdict.tier)}>{tierLabel(verdict.tier)}</StatusPill>
-                      {verdict.effectiveDpi != null && (
-                        <span className="text-[12px] text-admin-text-muted">Effektiv upplösning: {verdict.effectiveDpi} DPI</span>
+                      <StatusPill tone={tierTone(blocked ? 'FAIL' : 'PASS')}>
+                        {blocked ? tierLabel('FAIL') : dimsUnknown ? 'Kontrolleras vid uppladdning' : tierLabel('PASS')}
+                      </StatusPill>
+                      {clientGate.effectiveDpi != null && !blocked && (
+                        <span className="text-[12px] text-admin-text-muted">{clientGate.effectiveDpi} DPI i största tryckstorlek</span>
                       )}
                       {measured?.widthPx && (
                         <span className="text-[12px] text-admin-text-faint">{measured.widthPx}×{measured.heightPx} px</span>
                       )}
                     </div>
-                    {verdict.reasons.length > 0 ? (
+
+                    {/* preview on checkerboard (light/white motifs stay visible) */}
+                    {measured?.previewObjUrl && (
+                      <div className="mb-2 inline-block rounded-[6px] border border-admin-border p-1" style={CHECKER_STYLE}>
+                        <img src={measured.previewObjUrl} alt="" className="max-h-40 max-w-full object-contain" />
+                      </div>
+                    )}
+
+                    {blocked ? (
                       <ul className="space-y-1">
-                        {verdict.reasons.map((r, i) => (
-                          <li key={i} className="text-[12px] text-admin-text-muted">
-                            <span className={r.severity === 'FAIL' ? 'text-admin-critical-text' : r.severity === 'WARN' ? 'text-admin-caution-text' : ''}>•</span>{' '}
-                            {r.message}
-                          </li>
+                        {clientGate.reasons.map((r, i) => (
+                          <li key={i} className="text-[12px] text-admin-critical-text">• {r.message}</li>
                         ))}
                       </ul>
                     ) : (
-                      <p className="text-[12px] text-admin-text-muted">Uppfyller tryckspecen.</p>
-                    )}
-                    {verdict.tier === 'FAIL' && (
-                      <p className="mt-2 text-[12px] text-admin-text-faint">
-                        Du kan ändå spara — valideringen är vägledande, tryckeriet avgör.
-                      </p>
+                      <>
+                        {dimsUnknown && (
+                          <p className="text-[12px] text-admin-text-muted">
+                            Måtten för .{normalizeExt(extOf(file.name)).toUpperCase()} läses på servern vid uppladdningen —
+                            filen godkänns bara om den håller {profile?.min_dpi} DPI.
+                          </p>
+                        )}
+                        {looksOpaque && (
+                          <p className="mt-1 text-[12px] text-admin-caution-text">
+                            Bilden saknar transparent bakgrund — hela rektangeln trycks, inklusive ev. vit bakgrund.
+                            Är motivet en logga? Exportera som PNG med transparens.
+                          </p>
+                        )}
+                        {duplicateOf && (
+                          <p className="mt-1 text-[12px] text-admin-caution-text">
+                            Samma fil finns redan i biblioteket som ”{duplicateOf.label || duplicateOf.fileName}”.
+                          </p>
+                        )}
+                      </>
                     )}
                   </>
                 ) : null}
+              </div>
+            )}
+
+            {/* Server rejection (authoritative) */}
+            {serverReject && (
+              <div className="rounded-[var(--radius-admin)] border border-admin-critical-dot/30 bg-admin-critical-bg p-3">
+                <p className="mb-1 text-[12px] font-medium text-admin-critical-text">Filen godkändes inte:</p>
+                <ul className="space-y-1">
+                  {serverReject.map((r, i) => (
+                    <li key={i} className="text-[12px] text-admin-critical-text">• {r.message}</li>
+                  ))}
+                </ul>
+                <p className="mt-1 text-[12px] text-admin-text-faint">Välj en ny fil för att försöka igen.</p>
               </div>
             )}
 
@@ -327,10 +409,34 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
                 beställningar i print-kön.
               </p>
             )}
+
+            {file && !blocked && (
+              <label className="flex items-start gap-2 text-[12px] text-admin-text-muted">
+                <input
+                  type="checkbox"
+                  checked={rightsOk}
+                  onChange={(e) => setRightsOk(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>Jag har rätt att använda detta motiv (upphovsrätt/varumärke).</span>
+              </label>
+            )}
+
+            <details className="text-[12px] text-admin-text-faint">
+              <summary className="cursor-pointer select-none">Tips för tryckfiler</summary>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                <li>PNG med transparent bakgrund ger friliggande motiv — JPG trycks alltid som en fylld rektangel.</li>
+                <li>En fil = ett motiv. Ladda upp motivet i den riktning det ska tryckas.</li>
+                <li>Tunna linjer under ~1 mm och mycket liten text trycks inte skarpt.</li>
+                <li>Tryckta färger kan avvika något från skärmen — särskilt starka neonfärger.</li>
+                <li>Skärmdumpar och webbloggor räcker sällan — be om originalfilen i full upplösning.</li>
+              </ul>
+            </details>
+
             <div className="flex justify-end gap-2 pt-1">
               <Button variant="secondary" onClick={onClose}>Avbryt</Button>
-              <Button variant="primary" onClick={handleSave} disabled={!file || saving}>
-                {saving ? (isReplace ? 'Ersätter…' : 'Laddar upp…') : isReplace ? 'Ersätt fil' : 'Spara original'}
+              <Button variant="primary" onClick={handleSave} disabled={!file || saving || measuring || blocked || !rightsOk || !!serverReject}>
+                {saving ? 'Bearbetar…' : isReplace ? 'Ersätt fil' : 'Spara original'}
               </Button>
             </div>
           </div>
@@ -342,8 +448,8 @@ const ArtworkUploadModal = ({ shopId, products = [], onClose, onCreated, replace
   );
 };
 
-// probeAlpha — pre-commit alpha + preview probe (does NOT upload). Mirrors the
-// alpha logic in generatePodPreview but only for the modal's instant feedback.
+// probeAlpha — pre-commit alpha + preview probe (client-side, instant feedback
+// ONLY; the server re-derives alpha authoritatively on the converted PNG).
 const probeAlpha = (file) =>
   new Promise((resolve) => {
     const ext = extOf(file.name);

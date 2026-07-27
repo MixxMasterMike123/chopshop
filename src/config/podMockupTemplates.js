@@ -77,6 +77,7 @@ export const loadPodMockupTemplates = async () => {
       const data = snap.data() || {};
       _cache = Array.isArray(data.templates) ? data.templates : [];
       _meta = { version: data.version || 0, provisional: data.provisional !== false };
+      warnOnAspectMismatch(_cache);
     } else {
       _cache = [];
     }
@@ -89,6 +90,27 @@ export const loadPodMockupTemplates = async () => {
 
 /** The version/provisional metadata of the last successful load (for banners). */
 export const getPodMockupTemplatesMeta = () => _meta;
+
+// The px rect and the mm size MUST describe the same physical region, so their
+// aspect ratios must agree (docs/POD_PRINT_SPEC.md) — a mismatch silently skews
+// every preview and cm readout. Config is seed-script-authored (no editor UI),
+// so this is a loud dev-time tripwire, not a hard failure.
+const warnOnAspectMismatch = (templates) => {
+  for (const t of templates || []) {
+    for (const slot of Object.keys(t?.printAreas || {})) {
+      const px = t.printAreas[slot];
+      const mm = t.printAreaMm?.[slot];
+      if (!px?.w || !px?.h || !mm?.w || !mm?.h) continue;
+      const drift = Math.abs((px.w / px.h) / (mm.w / mm.h) - 1);
+      if (drift > 0.01) {
+        console.warn(
+          `podMockupTemplates: ${t.id}.${slot} px aspect (${px.w}×${px.h}) drifts ` +
+          `${(drift * 100).toFixed(1)}% from mm aspect (${mm.w}×${mm.h}) — previews will skew. Fix the seed.`
+        );
+      }
+    }
+  }
+};
 
 // NOTE: isPhotoTemplate lives in the studio's TemplateBackground.jsx (not here) —
 // this module imports firebase/config, and the studio render pipeline must stay

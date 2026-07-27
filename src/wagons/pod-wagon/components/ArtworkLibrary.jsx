@@ -9,11 +9,13 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { TrashIcon, PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { httpsCallable } from 'firebase/functions';
 import { CardSection, Button } from '../../../components/admin/ui';
 import StatusPill from '../../../components/admin/ui/StatusPill';
 import { deleteArtwork } from '../../../utils/podArtwork';
 import { getProfileById } from '../../../config/podProfiles';
 import { slotOf, slotLabel } from '../../../config/podSlots';
+import { functions } from '../../../firebase/config';
 import { tierTone, tierLabel } from './podTier';
 import ArtworkUploadModal from './ArtworkUploadModal';
 
@@ -35,9 +37,30 @@ const ArtworkLibrary = ({
   // When set, the upload modal opens in REPLACE mode for this artwork (profile
   // locked, updates the doc in place → all products + queue orders get the new file).
   const [replaceTarget, setReplaceTarget] = useState(null);
+  const [revalidating, setRevalidating] = useState(null); // artworkId being reprocessed
   const items = artwork;
 
   const refresh = () => onChanged?.();
+
+  // LEGACY docs (no status field) predate the 2026-07-27 gate pipeline: they were
+  // validated against the old advisory thresholds and have no print PNG — the
+  // printer would get the raw original. "Validera om" runs them through the
+  // server pipeline (trim + PNG + authoritative gate) and stamps ready/rejected.
+  const handleRevalidate = async (art) => {
+    if (revalidating) return;
+    setRevalidating(art.id);
+    try {
+      const call = httpsCallable(functions, 'processPodArtwork');
+      const { data: result } = await call({ shopId, artworkId: art.id });
+      if (result?.ok) toast.success('Godkänd — tryckfil (PNG) skapad');
+      else toast.error(result?.reasons?.[0]?.message || 'Filen godkändes inte mot de nya kraven.');
+      refresh();
+    } catch (e) {
+      toast.error(e?.message || 'Kunde inte validera om.');
+    } finally {
+      setRevalidating(null);
+    }
+  };
 
   // Map artworkId → the SKU+slot pills that reference it (built once from the shared
   // mappings). MULTI-PLACEMENT: a SKU may appear per slot, so the pill carries the
@@ -96,7 +119,20 @@ const ArtworkLibrary = ({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-[13px] font-medium text-admin-text">{art.label || art.fileName}</span>
-                  <StatusPill tone={tierTone(art.validation?.tier)}>{tierLabel(art.validation?.tier)}</StatusPill>
+                  {art.status === 'ready' ? (
+                    <StatusPill tone={tierTone('PASS')}>{tierLabel('PASS')}</StatusPill>
+                  ) : art.status === 'rejected' ? (
+                    <StatusPill tone={tierTone('FAIL')}>{tierLabel('FAIL')}</StatusPill>
+                  ) : (
+                    <span className="inline-flex items-center rounded-full border border-admin-caution-dot/30 bg-admin-caution-bg px-2 py-0.5 text-[11px] font-medium text-admin-caution-text">
+                      Ej omvaliderad
+                    </span>
+                  )}
+                  {art.validation?.notices?.some((n) => n.code === 'opaque') && (
+                    <span className="inline-flex items-center rounded-full border border-admin-border-soft bg-admin-surface-2 px-2 py-0.5 text-[11px] text-admin-text-muted" title="Hela rektangeln trycks, inklusive ev. vit bakgrund">
+                      Ej transparent
+                    </span>
+                  )}
                   {isMapped ? (
                     mappedPills.map((p) => (
                       <span key={p.id || `${p.sku}-${p.slot}`} className="inline-flex items-center rounded-full border border-admin-border-soft bg-admin-surface-2 px-2 py-0.5 font-mono text-[11px] text-admin-text-muted">
@@ -116,7 +152,20 @@ const ArtworkLibrary = ({
                   {art.ext ? ` · ${art.ext.toUpperCase()}` : ''}
                   {art.fileSizeBytes ? ` · ${formatBytes(art.fileSizeBytes)}` : ''}
                 </div>
+                {art.status === 'rejected' && art.validation?.reasons?.[0] && (
+                  <p className="mt-0.5 text-[12px] text-admin-critical-text">{art.validation.reasons[0].message}</p>
+                )}
               </div>
+              {art.status !== 'ready' && (
+                <button
+                  onClick={() => handleRevalidate(art)}
+                  disabled={!!revalidating}
+                  className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2 disabled:opacity-50"
+                  title="Kör filen genom den nya tryckpipelinen (PNG + 300 DPI-krav)"
+                >
+                  {revalidating === art.id ? 'Validerar…' : 'Validera om'}
+                </button>
+              )}
               {!isMapped && onMapArtwork && (
                 <button
                   onClick={() => onMapArtwork(art.id)}
@@ -133,12 +182,13 @@ const ArtworkLibrary = ({
                 Ersätt fil
               </button>
               <a
-                href={art.originalUrl}
+                href={art.printUrl || art.originalUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="shrink-0 text-[12px] text-admin-text-muted underline hover:text-admin-text"
+                title={art.printUrl ? 'Den konverterade tryckfilen (PNG) som tryckeriet får' : 'Originalfilen (ingen tryckfil skapad ännu)'}
               >
-                Original
+                {art.printUrl ? 'Tryckfil' : 'Original'}
               </a>
               <button
                 onClick={() => handleDelete(art)}
@@ -157,6 +207,7 @@ const ArtworkLibrary = ({
         <ArtworkUploadModal
           shopId={shopId}
           products={products}
+          artwork={items}
           onClose={() => setUploadOpen(false)}
           onCreated={refresh}
         />
@@ -166,6 +217,7 @@ const ArtworkLibrary = ({
         <ArtworkUploadModal
           shopId={shopId}
           products={products}
+          artwork={items}
           replaceTarget={replaceTarget}
           onClose={() => setReplaceTarget(null)}
           onCreated={refresh}

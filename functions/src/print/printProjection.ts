@@ -219,14 +219,32 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
         continue;
       }
       const art: any = artSnap.data();
-      const downloadUrl = await signedUrlFor(art.originalStoragePath, art.originalUrl || null);
+      // DELIVERY = the gate-verified print PNG (docs/POD_PRINT_SPEC.md: always
+      // transparent PNG, RGB, ≥300 DPI). The print/ storage path is SERVER-OWNED
+      // (storage.rules denies client create/update), and we only honour a path
+      // inside THIS shop's print/ folder — so a hand-crafted doc can never route
+      // ungated or cross-tenant bytes to the printer.
+      const shopPrintPrefix = `pod-artwork/${String(order.shopId || '')}/print/`;
+      const isPrintFile =
+        typeof art.printStoragePath === 'string' && art.printStoragePath.startsWith(shopPrintPrefix);
+      // Legacy docs (created before the gate pipeline — no status field) fall back
+      // to the raw original for continuity. A doc that CLAIMS a status but lacks a
+      // valid print file is not deliverable — surface it instead of shipping it.
+      if (!isPrintFile && art.status !== undefined) {
+        lines.push({ ...base, purpose: art.purpose || mapping.profileId || null, artwork: { unresolved: true, reason: 'Tryckfil saknas — be butiken validera om originalet' } });
+        continue;
+      }
+      const downloadUrl = isPrintFile
+        ? await signedUrlFor(art.printStoragePath, art.printUrl || null)
+        : await signedUrlFor(art.originalStoragePath, art.originalUrl || null);
       lines.push({
         ...base,
         purpose: art.purpose || mapping.profileId || null,
         artwork: {
           tier: art.validation?.tier || null,
           fileName: art.fileName || '',
-          ext: art.ext || '',
+          ext: isPrintFile ? 'png' : (art.ext || ''),
+          isPrintFile,
           downloadUrl,
           previewUrl: art.previewUrl || null,
         },

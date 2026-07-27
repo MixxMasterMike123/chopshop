@@ -25,7 +25,7 @@ const triggerDownload = (csvContent, filename) => {
 
 const HEADERS = [
   'Ordernummer', 'Orderdatum', 'Butik', 'Produkt', 'SKU', 'Variant', 'Antal',
-  'Placeringstyp', 'Placering', 'Profil', 'Filnamn', 'Validering', 'Leveransort', 'Land',
+  'Placeringstyp', 'Placering', 'Profil', 'Filnamn', 'Format', 'Validering', 'Leveransort', 'Land',
 ];
 
 const fmtDate = (iso) => {
@@ -48,7 +48,7 @@ export const exportPrintQueueToCSV = (rows, options = {}) => {
     const filename = options.filename || `print-ko-${new Date().toISOString().slice(0, 10)}.csv`;
     const body = rows.map((r) => [
       r.orderNumber, fmtDate(r.orderDate), r.shopName, r.productName, r.sku, r.variant,
-      r.quantity, r.slot, r.placement, r.purpose, r.fileName, r.tier, r.shipToCity, r.shipToCountry,
+      r.quantity, r.slot, r.placement, r.purpose, r.fileName, r.format, r.tier, r.shipToCity, r.shipToCountry,
     ]);
     const csv = [HEADERS, ...body].map((row) => row.map(csvField).join(',')).join('\n');
     triggerDownload(csv, filename);

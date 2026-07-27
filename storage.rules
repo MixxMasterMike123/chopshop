@@ -119,9 +119,16 @@ service firebase.storage {
     // The print_shop role gets NO branch here: it never reads Storage directly. The
     // print-shop callable mints short-lived SIGNED download URLs (Admin SDK), so the
     // printer downloads without any Storage rule grant or custom claim.
+    //
+    // print/ is SERVER-OWNED (docs/POD_PRINT_SPEC.md): only the processPodArtwork
+    // callable (Admin SDK) may create/update the gate-verified print PNG the
+    // printer receives — a client-writable print file would let a tenant swap in
+    // ungated bytes AFTER approval. Delete stays allowed (library cleanup).
     match /pod-artwork/{shopId}/{allPaths=**} {
       allow read: if isAdminOfShop(shopId);
-      allow write: if isAdminOfShop(shopId);
+      allow delete: if isAdminOfShop(shopId);
+      allow create, update: if isAdminOfShop(shopId)
+        && !request.resource.name.matches('pod-artwork/[^/]+/print/.*');
     }
 
     // Content Studio ("Innehållsstudio" add-on) — PARTITIONED by shopId. Holds

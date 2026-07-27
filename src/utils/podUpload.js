@@ -3,17 +3,15 @@
 // CRITICAL: print originals must NEVER go through imageUpload.js
 // (compressImageForUpload WebP-compresses + resizes — that destroys a print file).
 // uploadPodOriginal uploads the file BYTE-FOR-BYTE via uploadBytes (mirrors
-// fileUpload.uploadFile / affiliatePayouts.uploadInvoicePDF). A SEPARATE low-res
-// web preview is generated for the UI only; the original is untouched.
+// fileUpload.uploadFile / affiliatePayouts.uploadInvoicePDF). The server pipeline
+// (processPodArtwork, sharp) then derives the print PNG + web preview from it.
 //
 // Storage layout (shopId-partitioned, matches storage.rules pod-artwork block):
-//   pod-artwork/{shopId}/originals/{ts}_{safeName}   ← the print-ready original
-//   pod-artwork/{shopId}/previews/{ts}.webp          ← ~800px web preview (UI only)
+//   pod-artwork/{shopId}/originals/{ts}_{safeName}   ← untouched upload (insurance)
+//   pod-artwork/{shopId}/print/{id}.png              ← THE print file (server-written)
+//   pod-artwork/{shopId}/previews/{id}.webp          ← ~800px web preview (server-written)
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase/config';
-
-const PREVIEW_MAX_EDGE = 800; // longest-edge cap for the web preview
-const ALPHA_OPAQUE_THRESHOLD = 250; // alpha < this counts as a transparent pixel
 
 // File extension (lowercase, no dot) from a filename.
 export const extOf = (name) => {
@@ -53,100 +51,16 @@ export const readImageDimensions = (file) =>
     img.src = url;
   });
 
-/**
- * generatePodPreview(file, shopId) → Promise<{ previewUrl, previewStoragePath, hasAlphaChannel, transparentPixelRatio }>
- *
- * Draws the source to an ~800px canvas, samples the alpha channel ON THE DRAW
- * CANVAS (not the re-encoded WebP — WebP perturbs alpha), then uploads a webp
- * preview. The original file is NOT touched. For non-decodable formats
- * (PDF/SVG/TIFF) returns previewUrl:null and undefined alpha info (the UI shows a
- * file-type placeholder; validation skips the transparency rule).
- *
- * Alpha story returned:
- *   hasAlphaChannel       — false when no alpha channel exists at all (e.g. JPEG);
- *                           true when the canvas has any sub-opaque pixel; for a
- *                           fully-opaque image with a channel it is also true but
- *                           transparentPixelRatio ≈ 0 (the validator WARNs on that).
- *   transparentPixelRatio — fraction of sampled pixels with alpha < 250.
- */
-export const generatePodPreview = (file, shopId) =>
-  new Promise((resolve, reject) => {
-    const ext = extOf(file.name);
-    if (!RASTER_DECODABLE.has(ext)) {
-      // Non-raster: no in-browser preview/alpha. Original still uploads separately.
-      resolve({ previewUrl: null, previewStoragePath: null, hasAlphaChannel: undefined, transparentPixelRatio: undefined });
-      return;
-    }
+// NOTE 2026-07-27: the web preview + print PNG are now generated SERVER-SIDE by
+// the processPodArtwork callable (sharp) — the old client-canvas generatePodPreview
+// is gone. The modal's pre-commit alpha probe (probeAlpha) remains client-side for
+// instant feedback only.
 
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-
-    img.onload = async () => {
-      try {
-        const w = img.naturalWidth || 1;
-        const h = img.naturalHeight || 1;
-        const scale = Math.min(1, PREVIEW_MAX_EDGE / Math.max(w, h));
-        const cw = Math.max(1, Math.round(w * scale));
-        const ch = Math.max(1, Math.round(h * scale));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = cw;
-        canvas.height = ch;
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, cw, ch);
-
-        // --- alpha sampling on the DRAW canvas (before WebP encode) ---
-        // JPEG never has an alpha channel; getImageData always yields 255 for it,
-        // so we key "no channel" off the source format, and the transparent-pixel
-        // RATIO off the actual pixels (catches solid-background PNGs).
-        let hasAlphaChannel;
-        let transparentPixelRatio;
-        const formatCanHaveAlpha = ext === 'png' || ext === 'webp' || ext === 'gif';
-        if (!formatCanHaveAlpha) {
-          hasAlphaChannel = false;
-          transparentPixelRatio = 0;
-        } else {
-          try {
-            const data = ctx.getImageData(0, 0, cw, ch).data; // RGBA
-            let transparent = 0;
-            const totalPx = cw * ch;
-            for (let i = 3; i < data.length; i += 4) {
-              if (data[i] < ALPHA_OPAQUE_THRESHOLD) transparent++;
-            }
-            transparentPixelRatio = totalPx > 0 ? transparent / totalPx : 0;
-            hasAlphaChannel = true; // channel present (format supports it + decoded)
-          } catch (e) {
-            // Tainted canvas / read failure — leave alpha undefined (validator skips it)
-            hasAlphaChannel = undefined;
-            transparentPixelRatio = undefined;
-          }
-        }
-
-        const blob = await new Promise((res) => canvas.toBlob(res, 'image/webp', 0.7));
-        URL.revokeObjectURL(url);
-        if (!blob) {
-          resolve({ previewUrl: null, previewStoragePath: null, hasAlphaChannel, transparentPixelRatio });
-          return;
-        }
-
-        const previewStoragePath = `pod-artwork/${shopId}/previews/${Date.now()}.webp`;
-        const snap = await uploadBytes(ref(storage, previewStoragePath), blob);
-        const previewUrl = await getDownloadURL(snap.ref);
-        resolve({ previewUrl, previewStoragePath, hasAlphaChannel, transparentPixelRatio });
-      } catch (err) {
-        URL.revokeObjectURL(url);
-        reject(err);
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      // Decode failed though extension looked raster — treat as no preview/alpha.
-      resolve({ previewUrl: null, previewStoragePath: null, hasAlphaChannel: undefined, transparentPixelRatio: undefined });
-    };
-    img.src = url;
-  });
+/** SHA-256 of a file's bytes as lowercase hex — duplicate detection in the library. */
+export const sha256Hex = async (file) => {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+};
 
 /**
  * uploadPodOriginal(file, shopId, profile) → Promise<{ originalUrl, originalStoragePath, fileName, fileSizeBytes, mimeType, ext }>

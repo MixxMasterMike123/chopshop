@@ -214,6 +214,10 @@ export {
 // because it declares the RESEND_API_KEY secret for the server-side status email.
 export { setPrintJobStatus } from './print/setPrintJobStatus';
 
+// processPodArtwork — the server-authoritative artwork pipeline (sharp):
+// convert-to-PNG + trim + sRGB + BLOCKING 300-DPI contain gate (docs/POD_PRINT_SPEC.md).
+export { processPodArtwork } from './pod/processArtwork';
+
 // Landing-page lead form ("Vill du ha en egen butik?") — public callable that
 // writes a platform-level `leads` doc + best-effort admin notification email.
 export { submitLead } from './leads/submitLead';

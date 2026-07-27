@@ -15,10 +15,13 @@
  * print-area coordinates (see the handover: mockup quality is bounded by the real
  * garment catalog). The Design Studio surfaces a "preliminära" banner.
  *
- * The printAreaMm values mirror settings/podProfiles → apparel_dtg print_area_mm
- * (300×400 mm). The printAreas (px) rects are hand-tuned to sit on the front chest
- * of src/wagons/pod-wagon/studio/garments/TeeFlat.jsx / HoodieFlat.jsx (viewBox
- * 800×900) and share the same 3:4 aspect ratio as the mm size.
+ * printAreaMm = the PRINT SHOP'S REAL print areas (docs/POD_PRINT_SPEC.md,
+ * 2026-07-27): front 250×350 mm (starts ~a hand's width below the neck seam),
+ * back 300×400 mm (a generous hand's width below the seam). The printAreas (px)
+ * rects are hand-tuned to sit on the front chest of
+ * src/wagons/pod-wagon/studio/garments/TeeFlat.jsx / HoodieFlat.jsx (viewBox
+ * 800×900) and MUST share the same aspect ratio as their mm size (front 5:7,
+ * back 3:4) — a px/mm aspect mismatch silently skews every preview.
  *
  * Mirrors scripts/seed-pod-profiles.cjs:
  *   - DRY RUN by default — prints the doc it WOULD write, then exits.
@@ -75,16 +78,17 @@ const TEMPLATES = [
     // PROVISIONAL production cost until the printshop price matrix (Kent checklist #2).
     costSek: 149,
     colorways: APPAREL_COLORWAYS,
-    // Front chest: centred (x 280..520 on the 196..604 torso), below the ribbed
-    // collar (~y158), well above the hem (~y830). 240×320 px = 3:4.
-    // Back v1 REUSES the same tee flat + an equivalent centred rect (no dedicated
-    // back-view SVG yet) — the compositor treats it as the back placement.
+    // Front chest 250×350 mm (print shop spec): centred (x 280..520 on the
+    // 196..604 torso), below the ribbed collar (~y158) at roughly a hand's width
+    // under the neck seam. 240×336 px = 5:7 ↔ 250×350 mm.
+    // Back 300×400 mm: v1 REUSES the same tee flat + an equivalent centred rect
+    // (no dedicated back-view SVG yet). 240×320 px = 3:4.
     printAreas: {
-      front: { x: 280, y: 210, w: 240, h: 320 },
+      front: { x: 280, y: 210, w: 240, h: 336 },
       back: { x: 280, y: 200, w: 240, h: 320 },
     },
     printAreaMm: {
-      front: { w: 300, h: 400 },
+      front: { w: 250, h: 350 },
       back: { w: 300, h: 400 },
     },
   },
@@ -96,14 +100,19 @@ const TEMPLATES = [
     // PROVISIONAL production cost until the printshop price matrix (Kent checklist #2).
     costSek: 249,
     colorways: APPAREL_COLORWAYS,
-    // Front only for v1 (a hoodie back-view flat comes with the real catalog).
-    // Chest: centred (x 285..515 on the 200..600 torso), below the drawstring
-    // bobbins (~y274), ABOVE the kangaroo pocket (top ~y596). 230×307 px = 3:4.
+    // Front chest 250×350 mm: centred (x 285..515 on the 200..600 torso), below
+    // the drawstring bobbins (~y274), ABOVE the kangaroo pocket (top ~y596).
+    // 230×322 px = 5:7 ↔ 250×350 mm. NOTE: 322px bottom edge (y 250..572) still
+    // clears the pocket top (~y596).
+    // Back 300×400 mm: reuses the front flat like the tee (no back-view SVG yet).
+    // 228×304 px = 3:4, centred.
     printAreas: {
-      front: { x: 285, y: 250, w: 230, h: 307 },
+      front: { x: 285, y: 250, w: 230, h: 322 },
+      back: { x: 286, y: 240, w: 228, h: 304 },
     },
     printAreaMm: {
-      front: { w: 300, h: 400 },
+      front: { w: 250, h: 350 },
+      back: { w: 300, h: 400 },
     },
   },
 
@@ -166,8 +175,8 @@ async function main() {
   }
 
   const docData = {
-    version: 1,
-    provisional: true, // generic flats — drives the "preliminära" banner
+    version: 2, // v2 2026-07-27: REAL print-shop mm areas (front 250×350, back 300×400)
+    provisional: true, // flats are still generic drawings (mm sizes are real now)
     templates: TEMPLATES,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };

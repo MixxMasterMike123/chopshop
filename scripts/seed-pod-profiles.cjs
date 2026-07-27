@@ -6,8 +6,12 @@
  * code) so they can be replaced when the real print shop delivers its specs —
  * changing a profile's size/DPI auto-updates the validation thresholds.
  *
- * ⚠️ The values below are INDUSTRY-TYPICAL PLACEHOLDERS (provisional:true). The real
- * numbers come from the printer later. The app surfaces a "preliminära" banner.
+ * REAL SPECS 2026-07-27 (no longer provisional): the print shop delivered its
+ * requirements — see docs/POD_PRINT_SPEC.md (SSOT). apparel_dtg carries the
+ * BLOCKING gate config: min_dpi 300 at contain-fit inside the LARGEST print area
+ * (rygg 300×400 mm). Per-slot sizes (front 250×350, pocket 100×100, sleeve 80×80)
+ * live on the mockup templates, not here. PDF/SVG removed from accepted formats
+ * everywhere — the server conversion pipeline (sharp) can't rasterize them (v1).
  *
  * Mirrors scripts/seed-default-shop.cjs:
  *   - DRY RUN by default — prints the doc it WOULD write, then exits.
@@ -40,49 +44,65 @@ admin.initializeApp(); // default credentials, like scripts/seed-default-shop.cj
 const db = getFirestore('b8s-reseller-db'); // the CORRECT named database
 db.settings({ ignoreUndefinedProperties: true });
 
-// PROVISIONAL placeholder profiles. Shape consumed by src/utils/podValidation.js +
-// src/config/podProfiles.js. accepted_formats: preferred:true marks the recommended
-// format; an accepted-but-not-preferred format (e.g. jpg) warns. transparency:
-// 'required' | 'optional' | 'flatten'. color_mode: 'rgb' | 'cmyk_preferred'.
+// REAL print-shop profiles (docs/POD_PRINT_SPEC.md). Shape consumed by
+// src/utils/podValidation.js (gateArtwork) + src/config/podProfiles.js +
+// functions/src/pod/processArtwork.ts. print_area_mm = the LARGEST print area
+// for the profile — the gate's contain-fit reference (largest surface sets the
+// bar; a passing file is valid for every position). accepted_formats: preferred
+// is informational only now — everything converts to PNG server-side.
+// transparency: 'required' | 'optional' | 'flatten' (informational; transparency
+// never blocks — spec §4).
 const PROFILES = [
   {
     id: 'apparel_dtg',
     label: 'Textil (DTG)',
-    accepted_formats: [{ ext: 'png', preferred: true }, { ext: 'tiff', preferred: false }, { ext: 'jpg', preferred: false }],
+    accepted_formats: [
+      { ext: 'png', preferred: true },
+      { ext: 'jpg', preferred: false },
+      { ext: 'tiff', preferred: false },
+      { ext: 'webp', preferred: false },
+    ],
     color_mode: 'rgb',
     transparency: 'required',
-    print_area_mm: { w: 300, h: 400 },
-    target_dpi: 300, min_dpi: 150, bleed_mm: 0, safe_margin_mm: 0, max_file_mb: 50,
+    print_area_mm: { w: 300, h: 400 }, // rygg = largest garment surface (gate ref)
+    target_dpi: 300, min_dpi: 300, bleed_mm: 0, safe_margin_mm: 0, max_file_mb: 50,
     alt_sizes: [],
   },
+  // Poster/sticker/mug: NO products exist yet — kept for the profile picker but
+  // aligned to the pipeline (PDF/SVG removed; sharp can't rasterize them in v1).
   {
     id: 'poster_large',
     label: 'Affisch (storformat)',
-    accepted_formats: [{ ext: 'pdf', preferred: true }, { ext: 'tiff', preferred: false }, { ext: 'png', preferred: false }, { ext: 'jpg', preferred: false }],
-    color_mode: 'cmyk_preferred',
+    accepted_formats: [
+      { ext: 'png', preferred: true },
+      { ext: 'tiff', preferred: false },
+      { ext: 'jpg', preferred: false },
+      { ext: 'webp', preferred: false },
+    ],
+    color_mode: 'rgb',
     transparency: 'flatten',
     print_area_mm: { w: 420, h: 594 }, // A2
-    target_dpi: 150, min_dpi: 120, bleed_mm: 3, safe_margin_mm: 5, max_file_mb: 100,
+    target_dpi: 300, min_dpi: 150, bleed_mm: 3, safe_margin_mm: 5, max_file_mb: 100,
     alt_sizes: [{ label: 'A3', w: 297, h: 420 }, { label: '500×700', w: 500, h: 700 }],
   },
   {
     id: 'sticker_diecut',
     label: 'Klistermärke (stansad)',
-    accepted_formats: [{ ext: 'pdf', preferred: true }, { ext: 'svg', preferred: true }, { ext: 'png', preferred: false }],
+    accepted_formats: [{ ext: 'png', preferred: true }, { ext: 'webp', preferred: false }],
     color_mode: 'rgb',
     transparency: 'required',
     print_area_mm: { w: 150, h: 150 },
-    target_dpi: 300, min_dpi: 200, bleed_mm: 3, safe_margin_mm: 3, max_file_mb: 50,
+    target_dpi: 300, min_dpi: 300, bleed_mm: 3, safe_margin_mm: 3, max_file_mb: 50,
     alt_sizes: [],
   },
   {
     id: 'mug_wrap',
     label: 'Mugg (wrap)',
-    accepted_formats: [{ ext: 'png', preferred: true }, { ext: 'pdf', preferred: false }],
+    accepted_formats: [{ ext: 'png', preferred: true }, { ext: 'jpg', preferred: false }, { ext: 'webp', preferred: false }],
     color_mode: 'rgb',
     transparency: 'optional',
     print_area_mm: { w: 200, h: 85 },
-    target_dpi: 300, min_dpi: 200, bleed_mm: 3, safe_margin_mm: 3, max_file_mb: 50,
+    target_dpi: 300, min_dpi: 300, bleed_mm: 3, safe_margin_mm: 3, max_file_mb: 50,
     alt_sizes: [],
   },
 ];
@@ -102,8 +122,8 @@ async function main() {
   }
 
   const docData = {
-    version: 1,
-    provisional: true, // placeholder values — drives the "preliminära" banner
+    version: 2,
+    provisional: false, // REAL print-shop specs 2026-07-27 (docs/POD_PRINT_SPEC.md)
     profiles: PROFILES,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };

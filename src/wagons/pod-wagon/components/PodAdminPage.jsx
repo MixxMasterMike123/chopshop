@@ -143,7 +143,14 @@ const PodAdminPage = () => {
           />
         )}
         {tab === 'studio' && (
-          <DesignStudio artwork={lib.artwork} loading={lib.loading} shopId={shopId} />
+          // GATE (docs/POD_PRINT_SPEC.md): only artwork the server pipeline
+          // approved (status 'ready') may be designed with. Legacy/rejected
+          // stays visible in the library with a "Validera om" action.
+          <DesignStudio
+            artwork={lib.artwork.filter((a) => a.status === 'ready')}
+            loading={lib.loading}
+            shopId={shopId}
+          />
         )}
       </Page>
     </AppLayout>

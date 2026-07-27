@@ -254,7 +254,9 @@ const PrintShopOrderDetail = () => {
                           rel="noopener noreferrer"
                           className="mt-2 inline-block rounded-lg bg-indigo-500/20 px-3 py-1.5 text-sm font-medium text-indigo-200 hover:bg-indigo-500/30"
                         >
-                          Ladda ner original{ln.artwork.fileName ? ` (${ln.artwork.fileName})` : ''}
+                          {ln.artwork.isPrintFile
+                            ? `Ladda ner tryckfil (PNG)${ln.artwork.fileName ? ` — ${ln.artwork.fileName}` : ''}`
+                            : `Ladda ner original${ln.artwork.fileName ? ` (${ln.artwork.fileName})` : ''}`}
                         </a>
                       ) : (
                         <p className="mt-2 text-sm text-gray-500">Ingen nedladdningslänk tillgänglig.</p>

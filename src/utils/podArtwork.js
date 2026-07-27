@@ -80,9 +80,11 @@ export const replaceArtworkFile = async (artwork, fields) => {
 
   // Best-effort cleanup of the OLD objects — only if the new paths actually differ
   // (never delete the file we just pointed the doc at). Non-fatal on failure.
+  const oldPrint = artwork.printStoragePath;
   const newOriginal = fields.originalStoragePath;
   const newPreview = fields.previewStoragePath;
-  for (const [oldPath, newPath] of [[oldOriginal, newOriginal], [oldPreview, newPreview]]) {
+  const newPrint = fields.printStoragePath;
+  for (const [oldPath, newPath] of [[oldOriginal, newOriginal], [oldPreview, newPreview], [oldPrint, newPrint]]) {
     if (!oldPath || oldPath === newPath) continue;
     try {
       await deleteObject(ref(storage, oldPath));
@@ -116,7 +118,7 @@ export const deleteArtwork = async (artwork, shopId, { force = false } = {}) => 
   }
 
   // Best-effort Storage cleanup (non-fatal if a path is already gone).
-  for (const path of [artwork.originalStoragePath, artwork.previewStoragePath]) {
+  for (const path of [artwork.originalStoragePath, artwork.previewStoragePath, artwork.printStoragePath]) {
     if (!path) continue;
     try {
       await deleteObject(ref(storage, path));
