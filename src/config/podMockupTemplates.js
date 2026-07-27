@@ -27,6 +27,11 @@
 //     colorways: [{ id, label, hex }, …],   // selectable garment colours
 //     printAreas: { front: {x,y,w,h}, … },  // in SVG viewBox coords (800×900)
 //     printAreaMm: { front: {w,h}, … },      // physical print size ↔ profile.print_area_mm
+//     pocketPositions: { left:{x}, center:{x}, right:{x} },  // OPTIONAL: discrete x
+//                                  // offsets for the fixed-size 'pocket' slot
+//                                  // (wearer's perspective; same y/w/h as
+//                                  // printAreas.pocket — see placementMath's
+//                                  // templateWithPocketPosition)
 //   }
 //
 // PHOTO template (real blank-garment photo per colourway; photo px = coord space):

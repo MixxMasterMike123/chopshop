@@ -70,6 +70,70 @@ const PROFILES = [
   },
   // Poster/sticker/mug: NO products exist yet — kept for the profile picker but
   // aligned to the pipeline (PDF/SVG removed; sharp can't rasterize them in v1).
+  // ── Accessories (print shop specs 2026-07-27, docs/POD_PRINT_SPEC.md §1) ──
+  // One profile per product type: print_area_mm = that product's (single/largest)
+  // print surface — the contain-gate reference. Small areas ⇒ modest px demands
+  // (bag 2953×2953, cap only 827×591 @300 DPI).
+  {
+    id: 'bag_dtg',
+    label: 'Väska (tygkasse)',
+    accepted_formats: [
+      { ext: 'png', preferred: true },
+      { ext: 'jpg', preferred: false },
+      { ext: 'tiff', preferred: false },
+      { ext: 'webp', preferred: false },
+    ],
+    color_mode: 'rgb',
+    transparency: 'required',
+    print_area_mm: { w: 250, h: 250 },
+    target_dpi: 300, min_dpi: 300, bleed_mm: 0, safe_margin_mm: 0, max_file_mb: 50,
+    alt_sizes: [],
+  },
+  {
+    id: 'cap_dtg',
+    label: 'Keps',
+    accepted_formats: [
+      { ext: 'png', preferred: true },
+      { ext: 'jpg', preferred: false },
+      { ext: 'tiff', preferred: false },
+      { ext: 'webp', preferred: false },
+    ],
+    color_mode: 'rgb',
+    transparency: 'required',
+    print_area_mm: { w: 70, h: 50 },
+    target_dpi: 300, min_dpi: 300, bleed_mm: 0, safe_margin_mm: 0, max_file_mb: 50,
+    alt_sizes: [],
+  },
+  {
+    id: 'beanie_dtg',
+    label: 'Mössa (beanie)',
+    accepted_formats: [
+      { ext: 'png', preferred: true },
+      { ext: 'jpg', preferred: false },
+      { ext: 'tiff', preferred: false },
+      { ext: 'webp', preferred: false },
+    ],
+    color_mode: 'rgb',
+    transparency: 'required',
+    print_area_mm: { w: 90, h: 40 },
+    target_dpi: 300, min_dpi: 300, bleed_mm: 0, safe_margin_mm: 0, max_file_mb: 50,
+    alt_sizes: [],
+  },
+  {
+    id: 'flatcap_dtg',
+    label: 'Flat mössa',
+    accepted_formats: [
+      { ext: 'png', preferred: true },
+      { ext: 'jpg', preferred: false },
+      { ext: 'tiff', preferred: false },
+      { ext: 'webp', preferred: false },
+    ],
+    color_mode: 'rgb',
+    transparency: 'required',
+    print_area_mm: { w: 100, h: 40 },
+    target_dpi: 300, min_dpi: 300, bleed_mm: 0, safe_margin_mm: 0, max_file_mb: 50,
+    alt_sizes: [],
+  },
   {
     id: 'poster_large',
     label: 'Affisch (storformat)',
@@ -122,7 +186,7 @@ async function main() {
   }
 
   const docData = {
-    version: 2,
+    version: 3, // v3 2026-07-27: + bag/cap/beanie/flatcap profiles (step 3)
     provisional: false, // REAL print-shop specs 2026-07-27 (docs/POD_PRINT_SPEC.md)
     profiles: PROFILES,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),

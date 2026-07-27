@@ -53,7 +53,7 @@ const canvasToBlob = (canvas, type, quality) => new Promise((resolve, reject) =>
  * generation loop in DesignStudio already reports errors).
  */
 export const renderMockup = async ({
-  template, colorway, slot = 'front', artwork = null, placement = null,
+  template, colorway, slot = 'front', artwork = null, placement = null, minDpi = null,
   scale = MOCKUP_SCALE, type = 'image/webp', quality = 0.92, background = '#ffffff',
 }) => {
   const viewBox = templateViewBox(template);
@@ -71,7 +71,7 @@ export const renderMockup = async ({
   ctx.fillStyle = background;
   ctx.fillRect(0, 0, W, H);
 
-  const bgSrc = await backgroundImageSource(template, colorway, { widthPx: W, heightPx: H });
+  const bgSrc = await backgroundImageSource(template, colorway, { widthPx: W, heightPx: H, slot });
   const bgImg = await loadImage(bgSrc);
   ctx.drawImage(bgImg, 0, 0, W, H);
 
@@ -79,8 +79,8 @@ export const renderMockup = async ({
   const ppm = pxPerMm(template, slot);
   if (artwork && isComposable(artwork) && areaRect && ppm) {
     const p = clampPlacement(
-      placement || defaultPlacement(template, slot, artwork),
-      template, slot, artwork
+      placement || defaultPlacement(template, slot, artwork, minDpi),
+      template, slot, artwork, minDpi
     );
     if (p) {
       const artImg = await loadImage(artwork.previewUrl);

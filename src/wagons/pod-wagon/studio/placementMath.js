@@ -84,6 +84,37 @@ export const maxWidthForRotationMm = (template, slot, artwork, rotationDeg = 0) 
 export const maxWidthMm = (template, slot, artwork) =>
   maxWidthForRotationMm(template, slot, artwork, 0);
 
+/** The widest this artwork may print at ≥ minDpi (mm): the HARD resolution cap
+ *  (docs/POD_PRINT_SPEC.md — the studio may not scale past the 300 DPI floor).
+ *  Infinity when unknowable (no dims / no threshold) so min() ignores it.
+ *  NOT redundant with the upload gate: the gate runs against the artwork's OWN
+ *  profile area (a cap-gated 70×50 file passes at tiny pixel counts), but the
+ *  studio lets any ready artwork onto any template — so EVERY geometry path
+ *  (canvas, strip, rasterizer, publish readouts) must apply this cap or the
+ *  mockup and the printed size diverge. */
+export const maxWidthForDpiMm = (artwork, minDpi) => {
+  const w = artwork?.sourceWidthPx;
+  return w > 0 && minDpi > 0 ? (w / minDpi) * 25.4 : Infinity;
+};
+
+/**
+ * Pocket position support: 'pocket' is a FIXED-SIZE slot at a discrete position
+ * (left/center/right, wearer's perspective — printer confirmed 2026-07-27). A
+ * template stores the LEFT rect in printAreas.pocket plus per-position x offsets
+ * in pocketPositions ({ left:{x}, center:{x}, right:{x} }, same y/w/h). This
+ * returns the template with the pocket rect moved to `position` — ONE derivation
+ * point in DesignStudio; canvas/strip/rasterizer stay position-agnostic.
+ */
+export const templateWithPocketPosition = (template, position) => {
+  const pocket = template?.printAreas?.pocket;
+  const x = template?.pocketPositions?.[position]?.x;
+  if (!pocket || x == null || x === pocket.x) return template;
+  return {
+    ...template,
+    printAreas: { ...template.printAreas, pocket: { ...pocket, x } },
+  };
+};
+
 /** The widest the artwork can grow WITHOUT moving, anchored at its current
  *  top-left (used while resizing so the artwork never slides during a resize). */
 export const maxWidthAtMm = (placement, template, slot, artwork) => {
@@ -103,12 +134,15 @@ const clampNum = (v, lo, hi) => Math.min(Math.max(v, lo), hi < lo ? lo : hi);
  * motif's corners can never poke outside the area. Corner case: if the area is so
  * small that MIN_ART_WIDTH_MM doesn't fit, the max wins over the min.
  */
-export const clampPlacement = (placement, template, slot, artwork) => {
+export const clampPlacement = (placement, template, slot, artwork, minDpi = null) => {
   const mm = template?.printAreaMm?.[slot];
   const a = artworkAspect(artwork);
   if (!mm || !a || !placement) return placement;
   const rotationDeg = clampRotationDeg(placement.rotationDeg);
-  const wMax = maxWidthForRotationMm(template, slot, artwork, rotationDeg);
+  const wMax = Math.min(
+    maxWidthForRotationMm(template, slot, artwork, rotationDeg),
+    maxWidthForDpiMm(artwork, minDpi) // hard DPI floor — never scale into blur
+  );
   const wMm = clampNum(placement.wMm, Math.min(MIN_ART_WIDTH_MM, wMax), wMax);
   const hMm = wMm * a;
   const aabb = rotatedAabb(wMm, hMm, rotationDeg);
@@ -129,11 +163,11 @@ export const clampPlacement = (placement, template, slot, artwork) => {
  * classic incumbent placement surprises). Returns null when the artwork can't be
  * composed. Slice 3 uses this same function for slots the seller never touched.
  */
-export const defaultPlacement = (template, slot, artwork) => {
+export const defaultPlacement = (template, slot, artwork, minDpi = null) => {
   const mm = template?.printAreaMm?.[slot];
   const a = artworkAspect(artwork);
   if (!mm || !a) return null;
-  const wMax = maxWidthMm(template, slot, artwork);
+  const wMax = Math.min(maxWidthMm(template, slot, artwork), maxWidthForDpiMm(artwork, minDpi));
   if (!(wMax > 0)) return null;
   const wMm = clampNum(mm.w * 0.7, Math.min(MIN_ART_WIDTH_MM, wMax), wMax);
   const hMm = wMm * a;

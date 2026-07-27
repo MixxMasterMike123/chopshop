@@ -28,7 +28,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PhotoIcon } from '@heroicons/react/24/outline';
 import { CardSection } from '../../../components/admin/ui';
 import StatusPill from '../../../components/admin/ui/StatusPill';
-import { slotLabel } from '../../../config/podSlots';
+import { slotLabel, POCKET_POSITIONS, DEFAULT_POCKET_POSITION, pocketPositionLabel } from '../../../config/podSlots';
 import {
   loadPodMockupTemplates,
   getPodMockupTemplatesMeta,
@@ -37,7 +37,7 @@ import {
 import { loadPodProfiles, getProfileById } from '../../../config/podProfiles';
 import { loadPod3dModels } from '../../../config/pod3dModels';
 import { tierTone, tierLabel } from '../components/podTier';
-import { isComposable, placementReadout, defaultPlacement } from './placementMath';
+import { isComposable, placementReadout, defaultPlacement, templateWithPocketPosition } from './placementMath';
 import { renderMockup } from './mockupRender';
 import { uploadMockup } from './mockupUpload';
 import TemplateBackground from './TemplateBackground';
@@ -82,6 +82,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [colorwayId, setColorwayId] = useState(null);
   const [slot, setSlot] = useState('front');
+  // Pocket position (left/center/right, wearer's perspective) — 'pocket' is a
+  // fixed-size discrete-position slot, not free placement (docs/POD_PRINT_SPEC.md).
+  const [pocketPosition, setPocketPosition] = useState(DEFAULT_POCKET_POSITION);
   // One placement per slot for the CURRENT artwork+template pair:
   // { front: {xMm,yMm,wMm}, back: … }. Missing slot → compositor uses its default.
   const [placements, setPlacements] = useState({});
@@ -163,6 +166,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     if (!cwIds.includes(colorwayId)) setColorwayId(cwIds[0] || null);
     const slots = templateSlots(selectedTemplate);
     if (!slots.includes(slot)) setSlot(slots[0] || 'front');
+    setPocketPosition(DEFAULT_POCKET_POSITION);
     resetDesignState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplateId]);
@@ -199,6 +203,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   const profile = useMemo(
     () => getProfileById(profiles, selectedTemplate?.profileId),
     [profiles, selectedTemplate]
+  );
+
+  // The GEOMETRY template: selectedTemplate with the pocket rect moved to the
+  // chosen position. Everything that does placement geometry (canvas, strip,
+  // rasterizer, publish readouts) consumes THIS; pickers/colourways/slots read
+  // selectedTemplate (same ids either way).
+  const effTemplate = useMemo(
+    () => templateWithPocketPosition(selectedTemplate, pocketPosition),
+    [selectedTemplate, pocketPosition]
   );
 
   // Which artwork a colourway prints in a slot: its override, else the product's
@@ -259,7 +272,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           let blob, type;
           try {
             ({ blob, type } = await renderMockup({
-              template: selectedTemplate, colorway: cw, slot: s,
+              template: effTemplate, colorway: cw, slot: s, minDpi: profile?.min_dpi ?? null,
               artwork: art, placement: placements[s] || null,
             }));
           } catch (e) {
@@ -484,14 +497,20 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
       // not a label join, so duplicate colorway labels can never cross-target.
       const groupSkuByColorwayId = new Map(publishedIds.map((id, i) => [id, cleanGroups[i]?.sku]));
       for (const s of designedSlots(selectedTemplate)) {
-        const effective = placements[s] || defaultPlacement(selectedTemplate, s, selectedArtwork);
+        const effective = placements[s] || defaultPlacement(effTemplate, s, selectedArtwork, profile?.min_dpi ?? null);
+        const readout = placementReadout(effective, effTemplate, s, selectedArtwork);
+        const isPocket = s === 'pocket';
+        const posLabel = pocketPositionLabel(pocketPosition);
         await setMapping({
           shopId,
           sku: resolvedSku,
           artworkId: selectedArtwork.id,
           profileId: selectedTemplate.profileId,
-          placement: placementReadout(effective, selectedTemplate, s, selectedArtwork),
+          // Pocket rows carry the discrete position FIRST — that's the printer's
+          // primary instruction for this slot ("Ficka — Vänster · 2 cm uppifrån…").
+          placement: isPocket ? `${posLabel} · ${readout}` : readout,
           placementSlot: s,
+          ...(isPocket ? { position: pocketPosition } : {}),
         });
       }
 
@@ -504,14 +523,18 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           const groupSku = groupSkuByColorwayId.get(cwId);
           if (!groupSku) continue;
           const overrideArt = artwork.find((a) => a.id === overrideArtworkId) || selectedArtwork;
-          const effective = placements[s] || defaultPlacement(selectedTemplate, s, overrideArt);
+          const effective = placements[s] || defaultPlacement(effTemplate, s, overrideArt, profile?.min_dpi ?? null);
+          const readout = placementReadout(effective, effTemplate, s, overrideArt);
+          const isPocket = s === 'pocket';
+          const posLabel = pocketPositionLabel(pocketPosition);
           await setMapping({
             shopId,
             sku: groupSku,
             artworkId: overrideArtworkId,
             profileId: selectedTemplate.profileId,
-            placement: placementReadout(effective, selectedTemplate, s, overrideArt),
+            placement: isPocket ? `${posLabel} · ${readout}` : readout,
             placementSlot: s,
+            ...(isPocket ? { position: pocketPosition } : {}),
           });
         }
       }
@@ -643,7 +666,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
         )}
 
         <CompositorCanvas
-          template={selectedTemplate}
+          template={effTemplate}
           colorway={selectedColorway}
           slot={slot}
           artwork={canvasArtwork}
@@ -668,8 +691,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
         {/* Colourway strip: composited per-colour previews + artwork override. */}
         {selectedTemplate && (
           <ColorwayStrip
-            template={selectedTemplate}
+            template={effTemplate}
             slot={slot}
+            minDpi={profile?.min_dpi ?? null}
             activeColorwayId={colorwayId}
             onSelect={setColorwayId}
             placement={placements[slot] || null}
@@ -703,6 +727,37 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {/* Pocket position — discrete choice (left/center/right, wearer's
+            perspective), no free placement for the fixed 10×10 cm pocket spot. */}
+        {slot === 'pocket' && selectedTemplate?.pocketPositions && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-[12px] text-admin-text-muted">Fickposition:</span>
+            {POCKET_POSITIONS.map((p) => {
+              const active = p.id === pocketPosition;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => {
+                    setPocketPosition(p.id);
+                    setMockups([]); // stale — the pocket rect moved
+                    setHeroKey(null);
+                    resetReviews(); // the composite changed — every colourway must be re-seen
+                  }}
+                  className={`rounded-[var(--radius-admin-el)] px-2.5 py-1 text-[12px] ${
+                    active
+                      ? 'bg-black/[0.08] font-medium text-admin-text'
+                      : 'text-admin-text-muted hover:bg-black/[0.06]'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+            <span className="text-[11px] text-admin-text-faint">(sett från bäraren)</span>
           </div>
         )}
 

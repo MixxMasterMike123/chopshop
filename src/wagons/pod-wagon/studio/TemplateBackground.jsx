@@ -15,6 +15,20 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { GARMENT_FLATS, GARMENT_VIEWBOX } from './garments';
 
+// SLOT → VIEW: the back slot renders on the garment's back-view flat; every other
+// slot (front/pocket/sleeves) is visible on the front view. A garment without a
+// back flat falls back to front (v1 behavior for photo templates too — one photo
+// set per colourway, no per-view photos yet).
+const viewForSlot = (slot) => (slot === 'back' ? 'back' : 'front');
+
+/** Resolve the flat COMPONENT for a garment + slot. GARMENT_FLATS values are
+ *  view maps ({ front, back? }); missing back view → front. Null when unknown. */
+export const flatForSlot = (garment, slot) => {
+  const views = GARMENT_FLATS[garment];
+  if (!views) return null;
+  return views[viewForSlot(slot)] || views.front || null;
+};
+
 /** True for a PHOTO template (real garment-photo background per colourway) vs a
  *  FLAT template (SVG flat). Defined HERE, not in config/podMockupTemplates — that
  *  module imports firebase/config, and the studio render pipeline (this file,
@@ -42,8 +56,8 @@ export const backgroundUrl = (template, colorway) =>
 // SVG flat → data URL for canvas rasterization. Explicit width/height attrs are
 // REQUIRED — Safari rasterizes a dimensionless SVG image at 0×0. Moved here from
 // mockupRender.js so both the DOM preview and the exporter share one definition.
-const flatToDataUrl = (garment, hex, widthPx, heightPx) => {
-  const Flat = GARMENT_FLATS[garment];
+const flatToDataUrl = (garment, slot, hex, widthPx, heightPx) => {
+  const Flat = flatForSlot(garment, slot);
   if (!Flat) throw new Error(`Okänt plagg: ${garment}`);
   const markup = renderToStaticMarkup(
     React.createElement(Flat, { color: hex, width: widthPx, height: heightPx })
@@ -52,13 +66,14 @@ const flatToDataUrl = (garment, hex, widthPx, heightPx) => {
 };
 
 /**
- * backgroundImageSource(template, colorway, { widthPx, heightPx }) → Promise<string>
+ * backgroundImageSource(template, colorway, { widthPx, heightPx, slot }) → Promise<string>
  * The src the canvas exporter draws as the background layer:
  *   • photo template → the colourway's photo url (REJECTS in Swedish if missing —
  *     the exporter can't fabricate a backdrop for an un-photographed colourway),
- *   • flat template  → the SVG flat as a data URL at the target px dimensions.
+ *   • flat template  → the SVG flat FOR THE SLOT'S VIEW (back slot → back flat)
+ *     as a data URL at the target px dimensions.
  */
-export const backgroundImageSource = (template, colorway, { widthPx, heightPx } = {}) => {
+export const backgroundImageSource = (template, colorway, { widthPx, heightPx, slot = 'front' } = {}) => {
   if (isPhotoTemplate(template)) {
     const url = backgroundUrl(template, colorway);
     return url
@@ -66,7 +81,7 @@ export const backgroundImageSource = (template, colorway, { widthPx, heightPx } 
       : Promise.reject(new Error(`Foto saknas för färgen ${colorway?.label || colorway?.id || ''} — ladda upp ett plaggfoto för den färgen.`));
   }
   try {
-    return Promise.resolve(flatToDataUrl(template.garment, colorway?.hex || '#ffffff', widthPx, heightPx));
+    return Promise.resolve(flatToDataUrl(template.garment, slot, colorway?.hex || '#ffffff', widthPx, heightPx));
   } catch (e) {
     return Promise.reject(e);
   }
@@ -82,7 +97,7 @@ export const backgroundImageSource = (template, colorway, { widthPx, heightPx } 
  *     no photo — the seller can still place artwork; only the backdrop is missing.
  *   • flat template  → the existing <Flat color={hex}>.
  */
-const TemplateBackground = ({ template, colorway, className = '' }) => {
+const TemplateBackground = ({ template, colorway, slot = 'front', className = '' }) => {
   const vb = templateViewBox(template);
 
   if (isPhotoTemplate(template)) {
@@ -107,7 +122,7 @@ const TemplateBackground = ({ template, colorway, className = '' }) => {
     );
   }
 
-  const Flat = template ? GARMENT_FLATS[template.garment] : null;
+  const Flat = template ? flatForSlot(template.garment, slot) : null;
   if (!Flat) return <div className={`h-full w-full bg-admin-surface-2 ${className}`} />;
   return <Flat color={colorway?.hex || '#ffffff'} className={`block h-auto w-full ${className}`} />;
 };

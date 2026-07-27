@@ -15,10 +15,11 @@ const SIGNED_URL_TTL_MS = 30 * 60 * 1000; // 30 minutes
 // prints on. MISSING placementSlot on a doc = 'front' (backward compat: the one
 // live pre-slot mapping keeps working with zero migration). Swedish labels are
 // the shop/print-facing text; the id is stored.
-export type PlacementSlot = 'front' | 'back' | 'left_sleeve' | 'right_sleeve' | 'other';
+export type PlacementSlot = 'front' | 'back' | 'pocket' | 'left_sleeve' | 'right_sleeve' | 'other';
 const SLOT_LABELS: Record<PlacementSlot, string> = {
   front: 'Bröst',
   back: 'Rygg',
+  pocket: 'Ficka', // position name, not a sewn pocket (left-chest logo spot)
   left_sleeve: 'Vänster ärm',
   right_sleeve: 'Höger ärm',
   other: 'Övrig',
@@ -26,7 +27,7 @@ const SLOT_LABELS: Record<PlacementSlot, string> = {
 export const DEFAULT_SLOT: PlacementSlot = 'front';
 export function slotOf(mapping: any): PlacementSlot {
   const s = mapping?.placementSlot;
-  return s === 'back' || s === 'left_sleeve' || s === 'right_sleeve' || s === 'other' ? s : DEFAULT_SLOT;
+  return s === 'back' || s === 'pocket' || s === 'left_sleeve' || s === 'right_sleeve' || s === 'other' ? s : DEFAULT_SLOT;
 }
 export function slotLabel(slot: PlacementSlot): string {
   return SLOT_LABELS[slot] || SLOT_LABELS[DEFAULT_SLOT];
@@ -126,7 +127,7 @@ export function toPrintNotificationLines(
   mappingsBySku: Map<string, any[]>
 ): Array<{ productName: string; sku: string; quantity: number; placement: string }> {
   const items = Array.isArray(order.items) ? order.items : [];
-  const SLOT_ORDER: PlacementSlot[] = ['front', 'back', 'left_sleeve', 'right_sleeve', 'other'];
+  const SLOT_ORDER: PlacementSlot[] = ['front', 'back', 'pocket', 'left_sleeve', 'right_sleeve', 'other'];
   const out: Array<{ productName: string; sku: string; quantity: number; placement: string }> = [];
   for (const it of items) {
     if (!it || !it.sku) continue;
@@ -190,7 +191,7 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
     if (slots.size === 0) continue; // non-POD line — skip
 
     // Stable ordering of the per-item slot lines (front→back→sleeves→other).
-    const SLOT_ORDER: PlacementSlot[] = ['front', 'back', 'left_sleeve', 'right_sleeve', 'other'];
+    const SLOT_ORDER: PlacementSlot[] = ['front', 'back', 'pocket', 'left_sleeve', 'right_sleeve', 'other'];
     const orderedSlots = SLOT_ORDER.filter((s) => slots.has(s));
 
     for (const slot of orderedSlots) {

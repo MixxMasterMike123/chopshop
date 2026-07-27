@@ -21,22 +21,22 @@ import {
 // Composited mini-preview: background (flat or photo) + artwork img at the
 // placement (same math as the big canvas — placementToViewBoxRect is the shared
 // source of truth).
-const MiniMockup = ({ template, slot, colorway, artwork, placement }) => {
+const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = null }) => {
   const viewBox = templateViewBox(template);
   if (!viewBox) return <div className="h-full w-full bg-admin-surface-2" />;
 
   let artRect = null;
   if (artwork && isComposable(artwork)) {
     const p = clampPlacement(
-      placement || defaultPlacement(template, slot, artwork),
-      template, slot, artwork
+      placement || defaultPlacement(template, slot, artwork, minDpi),
+      template, slot, artwork, minDpi
     );
     artRect = p ? placementToViewBoxRect(p, template, slot, artwork) : null;
   }
 
   return (
     <div className="relative w-full">
-      <TemplateBackground template={template} colorway={colorway} />
+      <TemplateBackground template={template} colorway={colorway} slot={slot} />
       {artRect && (
         <img
           src={artwork.previewUrl}
@@ -70,7 +70,7 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement }) => {
 const ColorwayStrip = ({
   template, slot, activeColorwayId, onSelect, placement,
   resolveArtwork, overrides = {}, onOverrideChange, artworkOptions = [], baseArtworkLabel = 'Standardmotiv',
-  reviewedColorwayIds = [],
+  reviewedColorwayIds = [], minDpi = null,
 }) => {
   if (!template) return null;
   const colorways = template.colorways || [];
@@ -111,6 +111,7 @@ const ColorwayStrip = ({
                   colorway={cw}
                   artwork={resolveArtwork(cw.id)}
                   placement={placement}
+                  minDpi={minDpi}
                 />
               </div>
               <div className="mt-1 flex items-center gap-1">

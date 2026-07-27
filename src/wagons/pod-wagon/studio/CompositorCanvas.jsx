@@ -31,7 +31,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import TemplateBackground, { templateViewBox } from './TemplateBackground';
 import {
   MIN_ART_WIDTH_MM, SNAP_SCREEN_PX, MAX_ROTATION_DEG,
-  pxPerMm, isComposable, maxWidthAtMm, maxWidthForRotationMm, clampRotationDeg,
+  pxPerMm, isComposable, maxWidthAtMm, maxWidthForRotationMm, maxWidthForDpiMm, clampRotationDeg,
   clampPlacement, defaultPlacement, snapPlacement, isCenteredX,
   placementToViewBoxRect, rectToPercent,
   formatCm, placementReadout, dpiVerdict,
@@ -146,14 +146,17 @@ const CompositorCanvas = ({
   const ppm = template ? pxPerMm(template, slot) : null;
 
   const composable = isComposable(artwork);
+  // Hard resolution floor (docs/POD_PRINT_SPEC.md): the artwork can never be
+  // scaled past the width where placement DPI drops below the profile minimum.
+  const minDpi = profile?.min_dpi ?? null;
 
   // The placement we render: the parent's, or the default until first touched.
   const effective = useMemo(() => {
     if (!composable || !template || !ppm) return null;
     return placement
-      ? clampPlacement(placement, template, slot, artwork)
-      : defaultPlacement(template, slot, artwork);
-  }, [composable, template, slot, artwork, placement, ppm]);
+      ? clampPlacement(placement, template, slot, artwork, minDpi)
+      : defaultPlacement(template, slot, artwork, minDpi);
+  }, [composable, template, slot, artwork, placement, ppm, minDpi]);
 
   const verdict = effective ? dpiVerdict(effective, artwork, profile) : null;
 
@@ -199,7 +202,7 @@ const CompositorCanvas = ({
       // threshold can nudge feel, never the numbers.
       const thresholdMm = SNAP_SCREEN_PX * scale.x;
       const snapped = snapPlacement(next, template, slot, artwork, thresholdMm);
-      next = clampPlacement(snapped.placement, template, slot, artwork);
+      next = clampPlacement(snapped.placement, template, slot, artwork, minDpi);
       setDragUi({ mode: 'move', snappedX: snapped.snappedX, snappedY: snapped.snappedY });
       onPlacementChange(next);
     } else {
@@ -209,7 +212,8 @@ const CompositorCanvas = ({
       // capped by its ROTATED bounding box fitting the area (clamp fixes residue).
       const wCap = Math.min(
         maxWidthAtMm(d.start, template, slot, artwork),
-        maxWidthForRotationMm(template, slot, artwork, d.start.rotationDeg || 0)
+        maxWidthForRotationMm(template, slot, artwork, d.start.rotationDeg || 0),
+        maxWidthForDpiMm(artwork, minDpi) // hard DPI floor
       );
       const wMm = Math.min(Math.max(d.start.wMm + dxMm, Math.min(MIN_ART_WIDTH_MM, wCap)), wCap);
       onPlacementChange({ ...d.start, wMm });
@@ -237,20 +241,20 @@ const CompositorCanvas = ({
     e.preventDefault();
     onPlacementChange(clampPlacement(
       { ...effective, xMm: effective.xMm + (delta.xMm || 0), yMm: effective.yMm + (delta.yMm || 0) },
-      template, slot, artwork
+      template, slot, artwork, minDpi
     ));
   };
 
   // Commit helpers for the numeric cm fields (parse → clamp → parent).
   const commitField = (patch) => {
     if (!effective) return;
-    onPlacementChange(clampPlacement({ ...effective, ...patch }, template, slot, artwork));
+    onPlacementChange(clampPlacement({ ...effective, ...patch }, template, slot, artwork, minDpi));
   };
   const centerX = () => {
     if (!effective || !areaMm) return;
     onPlacementChange(clampPlacement(
       { ...effective, xMm: (areaMm.w - effective.wMm) / 2 },
-      template, slot, artwork
+      template, slot, artwork, minDpi
     ));
   };
 
@@ -273,7 +277,7 @@ const CompositorCanvas = ({
       <div ref={wrapRef} className="relative mx-auto w-full max-w-[520px] select-none">
         {/* Garment background — SVG flat or per-colourway photo (placeholder when
             a photo colourway has no photo yet; artwork placement still works). */}
-        <TemplateBackground template={template} colorway={colorway} />
+        <TemplateBackground template={template} colorway={colorway} slot={slot} />
 
         {/* Print area (safe zone) with its physical size labelled in cm. */}
         {areaRect && (
