@@ -31,6 +31,7 @@ export declare const getPrintJob: import("firebase-functions/v2/https").Callable
             tier?: undefined;
             fileName?: undefined;
             ext?: undefined;
+            isPrintFile?: undefined;
             downloadUrl?: undefined;
             previewUrl?: undefined;
         };
@@ -42,12 +43,14 @@ export declare const getPrintJob: import("firebase-functions/v2/https").Callable
         slotLabel: string;
         placement: string;
         profileId: any;
+        mockupUrl: string | null;
     } | {
         purpose: any;
         artwork: {
             tier: any;
             fileName: any;
             ext: any;
+            isPrintFile: any;
             downloadUrl: string | null;
             previewUrl: any;
             unresolved?: undefined;
@@ -61,6 +64,7 @@ export declare const getPrintJob: import("firebase-functions/v2/https").Callable
         slotLabel: string;
         placement: string;
         profileId: any;
+        mockupUrl: string | null;
     })[];
 }>, unknown>;
 export declare const getPrintQueueExport: import("firebase-functions/v2/https").CallableFunction<any, Promise<{

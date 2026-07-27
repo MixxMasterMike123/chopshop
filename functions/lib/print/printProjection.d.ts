@@ -1,4 +1,4 @@
-export type PlacementSlot = 'front' | 'back' | 'left_sleeve' | 'right_sleeve' | 'other';
+export type PlacementSlot = 'front' | 'back' | 'pocket' | 'left_sleeve' | 'right_sleeve' | 'other';
 export declare const DEFAULT_SLOT: PlacementSlot;
 export declare function slotOf(mapping: any): PlacementSlot;
 export declare function slotLabel(slot: PlacementSlot): string;
@@ -54,6 +54,7 @@ export declare function toPrintJob(orderId: string, order: any, shopName: string
             tier?: undefined;
             fileName?: undefined;
             ext?: undefined;
+            isPrintFile?: undefined;
             downloadUrl?: undefined;
             previewUrl?: undefined;
         };
@@ -65,12 +66,14 @@ export declare function toPrintJob(orderId: string, order: any, shopName: string
         slotLabel: string;
         placement: string;
         profileId: any;
+        mockupUrl: string | null;
     } | {
         purpose: any;
         artwork: {
             tier: any;
             fileName: any;
             ext: any;
+            isPrintFile: any;
             downloadUrl: string | null;
             previewUrl: any;
             unresolved?: undefined;
@@ -84,5 +87,6 @@ export declare function toPrintJob(orderId: string, order: any, shopName: string
         slotLabel: string;
         placement: string;
         profileId: any;
+        mockupUrl: string | null;
     })[];
 }>;

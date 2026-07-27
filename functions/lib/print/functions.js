@@ -123,6 +123,9 @@ exports.getPrintQueueExport = (0, https_1.onCall)(COMMON, async (request) => {
                     placement: ln.placement || '',
                     purpose: ln.purpose || '',
                     fileName: ln.artwork?.fileName || (ln.artwork?.unresolved ? `OLÖST: ${ln.artwork.reason}` : ''),
+                    // The DELIVERED format (print PNG for gated artwork), not the upload's —
+                    // fileName keeps the seller's name (logo.tiff) while the download is .png.
+                    format: ln.artwork?.ext ? ln.artwork.ext.toUpperCase() : '',
                     tier: ln.artwork?.tier || '',
                     // Pickup orders have NO customer ship-to (shipTo is null) — the row
                     // shows the shop's pickup location instead.

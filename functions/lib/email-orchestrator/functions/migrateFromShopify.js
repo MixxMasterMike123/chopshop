@@ -20,78 +20,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.migrateFromShopify = void 0;
 const https_1 = require("firebase-functions/v2/https");
-const crypto_1 = require("crypto");
 const storage_1 = require("firebase-admin/storage");
 const firestore_1 = require("firebase-admin/firestore");
 const app_urls_1 = require("../../config/app-urls");
 const database_1 = require("../../config/database");
 const authGuard_1 = require("./authGuard");
-// ── ported slug/sku helpers (verbatim from src/utils/productUrls.js) ─────────
-const slugify = (str) => {
-    if (!str)
-        return '';
-    return str
-        .toString()
-        .toLowerCase()
-        .trim()
-        .replace(/\s+/g, '-')
-        .replace(/[åä]/g, 'a')
-        .replace(/ö/g, 'o')
-        .replace(/&/g, '-and-')
-        .replace(/[^\w\-]+/g, '')
-        .replace(/\-\-+/g, '-');
-};
-const skuFromName = (name) => {
-    const base = slugify(name).replace(/_/g, '-').replace(/\-\-+/g, '-').replace(/^-|-$/g, '');
-    return base || 'produkt';
-};
-const uniqueSku = (base, takenSkus) => {
-    const root = (base || 'produkt').toLowerCase();
-    if (!takenSkus.has(root))
-        return base || 'produkt';
-    for (let n = 2; n < 10000; n++) {
-        const candidate = `${root}-${n}`;
-        if (!takenSkus.has(candidate))
-            return candidate;
-    }
-    return `${root}-${Date.now()}`;
-};
-function deriveVariantsFromGroups(groups, { productSku, productPrice }) {
-    const takenRowSkus = new Set();
-    const uniqueRowSku = (base) => {
-        const root = base || 'variant';
-        let candidate = root;
-        for (let n = 2; takenRowSkus.has(candidate.toLowerCase()); n++)
-            candidate = `${root}-${n}`;
-        takenRowSkus.add(candidate.toLowerCase());
-        return candidate;
-    };
-    const cleanGroups = [];
-    const cleanVariants = [];
-    for (const g of groups) {
-        const label = g.label.trim();
-        const images = g.images;
-        const image = images[0] || '';
-        const groupSku = uniqueRowSku((g.sku || '').toString().trim() || `${productSku}-${skuFromName(label)}`);
-        const explicitPrice = parseFloat(String(g.price)) > 0;
-        const groupPrice = explicitPrice ? parseFloat(String(g.price)) : productPrice;
-        const sizes = [...new Set(g.sizes.map((s) => s.trim().toUpperCase()).filter(Boolean))];
-        cleanGroups.push({ label, sku: groupSku, price: explicitPrice ? groupPrice : null, image, images, sizes });
-        if (sizes.length === 0) {
-            cleanVariants.push({ sku: groupSku, label, price: groupPrice, image, images, group: label, size: null });
-        }
-        else {
-            for (const size of sizes) {
-                cleanVariants.push({
-                    sku: uniqueRowSku(`${groupSku}-${skuFromName(size)}`),
-                    label: `${label} / ${size}`,
-                    price: groupPrice, image, images, group: label, size,
-                });
-            }
-        }
-    }
-    return { cleanGroups, cleanVariants };
-}
+// Money-path helpers + SSRF guard + image reupload — shared with migrateFromWoo.
+// Moved here VERBATIM (do NOT re-inline / diverge the slug/sku/derivation logic).
+const migrationShared_1 = require("./migrationShared");
 // Map Shopify's product_type to our free-text `category` (drives /kategori/{slug}
 // browse + storefront filtering). Normalise the messy real-world values seen on
 // Ninetone ('cd', 'T-SHIRT', 'zip_hoodie', 'cap_baseball', …) to a clean, human
@@ -151,32 +87,6 @@ const optByPos = (v, pos) => {
         return v.option3;
     return null;
 };
-// SSRF defense-in-depth: reject hosts that resolve to localhost / private / link-
-// local ranges (incl. the cloud metadata endpoint 169.254.169.254) and internal
-// TLDs. The callable is already platform/admin-gated, but this stops a typo'd or
-// hostile internal target from being fetched. Applied to BOTH the products.json
-// host and every image src before fetching.
-const isBlockedHost = (host) => {
-    const h = (host || '').toLowerCase().split(':')[0];
-    if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local'))
-        return true;
-    // IPv6 loopback/ULA; bare IPv4 in private/link-local/loopback ranges.
-    if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80'))
-        return true;
-    const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (m) {
-        const [a, b] = [Number(m[1]), Number(m[2])];
-        if (a === 10 || a === 127 || a === 0)
-            return true;
-        if (a === 169 && b === 254)
-            return true; // link-local + metadata
-        if (a === 172 && b >= 16 && b <= 31)
-            return true;
-        if (a === 192 && b === 168)
-            return true;
-    }
-    return false;
-};
 exports.migrateFromShopify = (0, https_1.onCall)({
     region: 'us-central1',
     memory: '1GiB',
@@ -201,7 +111,7 @@ exports.migrateFromShopify = (0, https_1.onCall)({
     }
     if (!host)
         throw new https_1.HttpsError('invalid-argument', 'Ogiltig Shopify-adress.');
-    if (isBlockedHost(host))
+    if ((0, migrationShared_1.isBlockedHost)(host))
         throw new https_1.HttpsError('invalid-argument', 'Otillåten adress.');
     // The target shop must exist (don't strand products on a non-existent tenant).
     const shopSnap = await database_1.db.collection('shops').doc(shopId).get();
@@ -248,37 +158,9 @@ exports.migrateFromShopify = (0, https_1.onCall)({
             importedShopifyKeys.add(String(data.shopifyKey));
     });
     const bucket = (0, storage_1.getStorage)().bucket();
-    // Reupload one Shopify image into our Storage; returns a tokenized download URL
-    // (identical format to the web SDK's getDownloadURL, so the storefront reads it
-    // the same way). Raw bytes — no server-side canvas/compression; the source is
-    // already an optimised ~2000px JPEG, fine for a demo product image.
-    const reuploadImage = async (srcUrl, destPath) => {
-        try {
-            // Image src comes from the fetched JSON — re-check the host (SSRF).
-            let imgHost = '';
-            try {
-                imgHost = new URL(srcUrl).host;
-            }
-            catch {
-                return null;
-            }
-            if (isBlockedHost(imgHost))
-                return null;
-            const r = await fetch(srcUrl);
-            if (!r.ok)
-                return null;
-            const buf = Buffer.from(await r.arrayBuffer());
-            const contentType = r.headers.get('content-type') || 'image/jpeg';
-            const token = (0, crypto_1.randomUUID)();
-            await bucket.file(destPath).save(buf, {
-                metadata: { contentType, metadata: { firebaseStorageDownloadTokens: token } },
-            });
-            return `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(destPath)}?alt=media&token=${token}`;
-        }
-        catch {
-            return null;
-        }
-    };
+    // Reupload one image into our Storage → tokenized download URL (shared with
+    // migrateFromWoo; same SSRF re-check + raw-bytes + token logic).
+    const reuploadImage = (0, migrationShared_1.makeReuploadImage)(bucket);
     // ── 3. Transform + create each product. ──
     // GRACEFUL DEGRADATION (per requirement): Shopify sends many fields our system
     // has no home for (grams, barcode, compare_at_price, product_type, taxable,
@@ -312,12 +194,12 @@ exports.migrateFromShopify = (0, https_1.onCall)({
             // imported before shopifyKey existed: skip when the DERIVED base sku already
             // exists in the shop (so a re-run doesn't create "-2" duplicates of them).
             const shopifyKey = (sp.handle || `id-${sp.id}`).toString();
-            const baseSku = skuFromName(name);
+            const baseSku = (0, migrationShared_1.skuFromName)(name);
             if (importedShopifyKeys.has(shopifyKey) || takenSkus.has(baseSku.toLowerCase())) {
                 alreadyImported++;
                 continue;
             }
-            const productSku = uniqueSku(baseSku, takenSkus);
+            const productSku = (0, migrationShared_1.uniqueSku)(baseSku, takenSkus);
             takenSkus.add(productSku.toLowerCase()); // reserve so the next product can't collide
             importedShopifyKeys.add(shopifyKey);
             // Product price = the first PARSEABLE variant price (Shopify prices are
@@ -410,7 +292,7 @@ exports.migrateFromShopify = (0, https_1.onCall)({
                         sizes: [...e.sizes],
                     });
                 }
-                const derived = deriveVariantsFromGroups(rawGroups, { productSku, productPrice: firstPrice });
+                const derived = (0, migrationShared_1.deriveVariantsFromGroups)(rawGroups, { productSku, productPrice: firstPrice });
                 cleanGroups = derived.cleanGroups;
                 cleanVariants = derived.cleanVariants;
                 heroUrl = cleanGroups[0]?.image || (await uploadImageOnce(sp.images?.[0]?.src || '')) || '';

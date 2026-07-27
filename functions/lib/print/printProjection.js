@@ -14,6 +14,7 @@ const SIGNED_URL_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const SLOT_LABELS = {
     front: 'Bröst',
     back: 'Rygg',
+    pocket: 'Ficka',
     left_sleeve: 'Vänster ärm',
     right_sleeve: 'Höger ärm',
     other: 'Övrig',
@@ -21,13 +22,30 @@ const SLOT_LABELS = {
 exports.DEFAULT_SLOT = 'front';
 function slotOf(mapping) {
     const s = mapping?.placementSlot;
-    return s === 'back' || s === 'left_sleeve' || s === 'right_sleeve' || s === 'other' ? s : exports.DEFAULT_SLOT;
+    return s === 'back' || s === 'pocket' || s === 'left_sleeve' || s === 'right_sleeve' || s === 'other' ? s : exports.DEFAULT_SLOT;
 }
 exports.slotOf = slotOf;
 function slotLabel(slot) {
     return SLOT_LABELS[slot] || SLOT_LABELS[exports.DEFAULT_SLOT];
 }
 exports.slotLabel = slotLabel;
+// Sanitize a client-influenced image URL before it may render in the PRINT
+// OPERATOR's portal: https only (kills javascript:/data: stored XSS) and
+// platform storage hosts only (kills off-platform tracking beacons). Product
+// imagery on this platform lives in Firebase Storage; anything else → null and
+// the portal simply shows no mockup thumbnail.
+const ALLOWED_IMAGE_HOSTS = new Set(['firebasestorage.googleapis.com', 'storage.googleapis.com']);
+function safeImageUrl(u) {
+    if (typeof u !== 'string' || !u)
+        return null;
+    try {
+        const p = new URL(u);
+        return p.protocol === 'https:' && ALLOWED_IMAGE_HOSTS.has(p.hostname) ? u : null;
+    }
+    catch {
+        return null;
+    }
+}
 // Mint a short-lived signed read URL for a Storage object. Falls back to the
 // stored download URL if signing isn't available (the Functions service account
 // needs roles/iam.serviceAccountTokenCreator to sign — a project-config item).
@@ -126,7 +144,7 @@ exports.orderHasPodLine = orderHasPodLine;
 // portal for files), no customer PII. Mirrors toPrintJob's slot iteration.
 function toPrintNotificationLines(order, mappingsBySku) {
     const items = Array.isArray(order.items) ? order.items : [];
-    const SLOT_ORDER = ['front', 'back', 'left_sleeve', 'right_sleeve', 'other'];
+    const SLOT_ORDER = ['front', 'back', 'pocket', 'left_sleeve', 'right_sleeve', 'other'];
     const out = [];
     for (const it of items) {
         if (!it || !it.sku)
@@ -186,14 +204,43 @@ async function toPrintJob(orderId, order, shopName, mappingsBySku) {
     // a slot-aware placement label ("Bröst — Centrerat på bröstet": slot label +
     // free-text detail). Slots resolve independently (see resolveSlots).
     const lines = [];
+    // Per-order cache for the product-image fallback (one read per productId max).
+    const productImageCache = new Map();
     for (const it of items) {
         if (!it || !it.sku)
             continue;
         const slots = resolveSlots(it.sku, mappingsBySku);
         if (slots.size === 0)
             continue; // non-POD line — skip
+        // MOCKUP for the printer's first-print eyeballing (docs/POD_PRINT_SPEC.md §6:
+        // "bara motivet + mockupbilden"). The order item's image IS the bought
+        // colourway's mockup/product photo (public product imagery — no PII).
+        //
+        // TRUST BOUNDARY: it.image is CLIENT-WRITTEN at checkout (cart → Stripe
+        // metadata → order doc, verbatim) and this renders as <img src> + <a href>
+        // in the PRINT OPERATOR's portal — a different, more privileged user. So it
+        // is sanitized server-side (https + platform storage hosts only; kills
+        // javascript:/data: XSS and off-platform beacons). Falls back to the
+        // product doc's first image (server-derived, shop-checked).
+        let mockupUrl = safeImageUrl(it.image);
+        const productId = String(it.productId || it.id || '');
+        if (!mockupUrl && productId) {
+            if (!productImageCache.has(productId)) {
+                try {
+                    const p = await database_1.db.collection('products').doc(productId).get();
+                    // Same-shop only — a foreign productId must not pull another shop's
+                    // imagery into this shop's print job.
+                    const d = p.exists && p.data()?.shopId === order.shopId ? p.data() : null;
+                    productImageCache.set(productId, safeImageUrl((Array.isArray(d?.images) && d.images[0]) || d?.b2cImageUrl || d?.imageUrl || null));
+                }
+                catch {
+                    productImageCache.set(productId, null);
+                }
+            }
+            mockupUrl = productImageCache.get(productId) || null;
+        }
         // Stable ordering of the per-item slot lines (front→back→sleeves→other).
-        const SLOT_ORDER = ['front', 'back', 'left_sleeve', 'right_sleeve', 'other'];
+        const SLOT_ORDER = ['front', 'back', 'pocket', 'left_sleeve', 'right_sleeve', 'other'];
         const orderedSlots = SLOT_ORDER.filter((s) => slots.has(s));
         for (const slot of orderedSlots) {
             const mapping = slots.get(slot);
@@ -209,6 +256,10 @@ async function toPrintJob(orderId, order, shopName, mappingsBySku) {
                 slotLabel: slotLabel(slot),
                 placement,
                 profileId: mapping.profileId || null,
+                // The bought colourway's product mockup (front view) — the printer's
+                // visual reference. NOTE: for back/sleeve lines this still shows the
+                // front mockup; the placement text is the per-slot instruction.
+                mockupUrl,
             };
             if (!mapping.artworkId) {
                 lines.push({ ...base, purpose: mapping.profileId || null, artwork: { unresolved: true, reason: 'Ingen artworkId i kopplingen' } });
@@ -220,14 +271,31 @@ async function toPrintJob(orderId, order, shopName, mappingsBySku) {
                 continue;
             }
             const art = artSnap.data();
-            const downloadUrl = await signedUrlFor(art.originalStoragePath, art.originalUrl || null);
+            // DELIVERY = the gate-verified print PNG (docs/POD_PRINT_SPEC.md: always
+            // transparent PNG, RGB, ≥300 DPI). The print/ storage path is SERVER-OWNED
+            // (storage.rules denies client create/update), and we only honour a path
+            // inside THIS shop's print/ folder — so a hand-crafted doc can never route
+            // ungated or cross-tenant bytes to the printer.
+            const shopPrintPrefix = `pod-artwork/${String(order.shopId || '')}/print/`;
+            const isPrintFile = typeof art.printStoragePath === 'string' && art.printStoragePath.startsWith(shopPrintPrefix);
+            // Legacy docs (created before the gate pipeline — no status field) fall back
+            // to the raw original for continuity. A doc that CLAIMS a status but lacks a
+            // valid print file is not deliverable — surface it instead of shipping it.
+            if (!isPrintFile && art.status !== undefined) {
+                lines.push({ ...base, purpose: art.purpose || mapping.profileId || null, artwork: { unresolved: true, reason: 'Tryckfil saknas — be butiken validera om originalet' } });
+                continue;
+            }
+            const downloadUrl = isPrintFile
+                ? await signedUrlFor(art.printStoragePath, art.printUrl || null)
+                : await signedUrlFor(art.originalStoragePath, art.originalUrl || null);
             lines.push({
                 ...base,
                 purpose: art.purpose || mapping.profileId || null,
                 artwork: {
                     tier: art.validation?.tier || null,
                     fileName: art.fileName || '',
-                    ext: art.ext || '',
+                    ext: isPrintFile ? 'png' : (art.ext || ''),
+                    isPrintFile,
                     downloadUrl,
                     previewUrl: art.previewUrl || null,
                 },

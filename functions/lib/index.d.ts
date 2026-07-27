@@ -1,4 +1,4 @@
-export { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail, sendOrderNotificationAdmin, sendPasswordResetEmail, sendLoginCredentialsEmail, sendAffiliateWelcomeEmail, approveAffiliate, createShopUser, createPlatformSuperAdmin, deletePlatformUser, migrateFromShopify, sendEmailVerification, sendCustomEmailVerification, verifyEmailCode, sendAffiliateApplicationEmails } from './email-orchestrator/functions';
+export { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail, sendOrderNotificationAdmin, sendPasswordResetEmail, sendLoginCredentialsEmail, sendAffiliateWelcomeEmail, approveAffiliate, createShopUser, createPlatformSuperAdmin, deletePlatformUser, migrateFromShopify, migrateFromWoo, sendEmailVerification, sendCustomEmailVerification, verifyEmailCode, sendAffiliateApplicationEmails } from './email-orchestrator/functions';
 import { confirmPasswordReset } from './email-orchestrator/functions';
 import { logAffiliateClickV2 } from './affiliate/callable/logAffiliateClick';
 import { validateDiscountCode } from './affiliate/callable/validateDiscountCode';
@@ -26,6 +26,7 @@ export { saveDac7SellerProfile, getDac7SellerProfile, pullDac7FromStripe, aggreg
 export { scrapeWebsiteMeta as scrapeWebsiteMetaV2 };
 export { getPrintQueue, getPrintJob, getPrintQueueExport, createPrintShopUser, } from './print/functions';
 export { setPrintJobStatus } from './print/setPrintJobStatus';
+export { processPodArtwork } from './pod/processArtwork';
 export { submitLead } from './leads/submitLead';
 export { sweepAbandonedCheckouts } from './checkout-recovery/sweep';
 export { resolveCheckoutRecovery, unsubscribeCheckout } from './checkout-recovery/callables';
