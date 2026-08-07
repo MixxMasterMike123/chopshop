@@ -36,14 +36,14 @@ const variantGroups = (variants) => {
 const CARD_STYLES = {
   elevated: {
     container:
-      'bg-surface rounded-tile shadow-tile overflow-hidden transition-all duration-300 ease-nord group-hover:-translate-y-1 group-hover:shadow-lift',
+      'bg-surface rounded-tile shadow-tile overflow-hidden transition-[transform,box-shadow] duration-300 ease-nord group-hover:-translate-y-1 group-hover:shadow-lift',
     image: 'aspect-square',
     pad: 'p-5',
     overlay: false,
   },
   flat: {
     container:
-      'bg-surface rounded-tile border border-line overflow-hidden transition-all duration-300 ease-nord group-hover:border-ink/30',
+      'bg-surface rounded-tile border border-line overflow-hidden transition-colors duration-300 ease-nord group-hover:border-ink/30',
     image: 'aspect-[4/5]',
     pad: 'p-4',
     overlay: false,
@@ -58,7 +58,7 @@ const CARD_STYLES = {
   overlay: {
     // Image fills the whole card; name/price/CTA sit in a scrim over it.
     container:
-      'rounded-tile overflow-hidden shadow-tile transition-all duration-300 ease-nord group-hover:-translate-y-1 group-hover:shadow-lift',
+      'rounded-tile overflow-hidden shadow-tile transition-[transform,box-shadow] duration-300 ease-nord group-hover:-translate-y-1 group-hover:shadow-lift',
     image: 'aspect-[3/4]',
     pad: '',
     overlay: true,
@@ -109,7 +109,7 @@ const NordProductCard = ({ to, linkState, image, imageAlt, tag, name, descriptio
                   )}
                   <SmartPrice sekPrice={priceSek} className="font-display text-white" showOriginal={false} />
                 </div>
-                <span className="bg-accent text-accent-ink text-sm font-bold px-4 py-2 rounded-full whitespace-nowrap">
+                <span className="bg-accent text-accent-ink text-sm font-bold px-4 py-2 rounded-full whitespace-nowrap transition-transform duration-300 ease-nord group-hover:-translate-y-0.5">
                   {ctaLabel}
                 </span>
               </div>

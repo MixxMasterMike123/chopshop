@@ -57,11 +57,47 @@
 
   --ease-nord: cubic-bezier(0.22, 1, 0.36, 1);
 
-  --animate-rise: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-rise: rise 0.7s var(--ease-nord) both;
+
+  /* Storefront micro-motion (DESIGN.md §5): entrance/confirm keyframes.
+     Mount-time animations (not transitions) so conditionally-rendered
+     elements actually play their enter state. Exits stay instant —
+     exits should be faster than entrances. */
+  --animate-sheet-up: sheet-up 0.35s var(--ease-nord) both;
+  --animate-pop-in: pop-in 0.25s var(--ease-nord) both;
+  --animate-fade-up: fade-up 0.3s var(--ease-nord) both;
+  --animate-fade-down: fade-down 0.25s var(--ease-nord) both;
+  --animate-fade-in: fade-in 0.3s ease-out both;
+  --animate-badge-pop: badge-pop 0.35s var(--ease-nord) both;
 
   @keyframes rise {
     from { opacity: 0; transform: translateY(16px); }
     to { opacity: 1; transform: none; }
+  }
+  @keyframes sheet-up {
+    from { opacity: 0; transform: translateY(100%); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateY(8px) scale(0.96); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes fade-down {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes badge-pop {
+    0% { transform: scale(0.6); }
+    60% { transform: scale(1.15); }
+    100% { transform: scale(1); }
   }
 }
 
@@ -157,8 +193,16 @@
   }
 }
 
+/* Reduced motion: neutralize ALL animation and transition movement app-wide,
+   not just the entrance keyframe. 0.01ms (not `none`) so `both`-fill keyframes
+   still land on their end state and animationend events still fire. */
 @media (prefers-reduced-motion: reduce) {
-  .animate-rise { animation: none; }
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /*

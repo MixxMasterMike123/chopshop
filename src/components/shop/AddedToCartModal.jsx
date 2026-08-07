@@ -34,18 +34,16 @@ const AddedToCartModal = ({ isVisible, onClose, addedItem, cartCount }) => {
   return (
     <>
       {/* Mobile: Full backdrop overlay */}
-      <div 
-        className="fixed inset-0 bg-black/25 z-50 transition-opacity duration-300 md:hidden"
+      <div
+        className="fixed inset-0 bg-black/25 z-50 animate-fade-in md:hidden"
         onClick={onClose}
       />
-      
-      {/* Mobile: Nike-style modal sliding up from bottom */}
-      <div className={`
-        fixed z-50 md:hidden
-        bottom-0 left-0 right-0 p-6
-        transform transition-all duration-300 ease-out
-        ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'}
-      `}>
+
+      {/* Mobile: Nike-style modal sliding up from bottom. Mount-time keyframe
+          (not a transition) — the component unmounts when hidden, so a
+          transition would never get its two frames. Exit is intentionally
+          instant. */}
+      <div className="fixed z-50 md:hidden bottom-0 left-0 right-0 p-6 animate-sheet-up">
         <div className="bg-white rounded-t-2xl shadow-2xl overflow-hidden">
           <MobileNikeContent 
             addedItem={addedItem} 
@@ -57,13 +55,8 @@ const AddedToCartModal = ({ isVisible, onClose, addedItem, cartCount }) => {
         </div>
       </div>
 
-      {/* Desktop: Nike-style positioned modal */}
-      <div className={`
-        hidden md:block fixed z-50 
-        top-20 right-6 w-96
-        transform transition-all duration-200 ease-out
-        ${isVisible ? 'translate-y-0 opacity-100 scale-100' : 'translate-y-2 opacity-0 scale-95'}
-      `}>
+      {/* Desktop: Nike-style positioned modal — same mount-time entrance. */}
+      <div className="hidden md:block fixed z-50 top-20 right-6 w-96 animate-pop-in">
         
         {/* Arrow pointing to cart icon */}
         <div className="absolute -top-2 right-8 w-4 h-4 bg-white border-l border-t border-gray-200 transform rotate-45 shadow-xs"></div>

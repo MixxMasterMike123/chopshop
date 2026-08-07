@@ -660,22 +660,22 @@ const Checkout = () => {
 
               {/* Progress Steps */}
               <div className="flex items-center justify-between mb-6 sm:mb-8 px-2">
-                <div className={`flex flex-col items-center space-y-1 ${step === 'contact' ? 'text-accent' : 'text-ink-faint'}`}>
-                  <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold ${
+                <div className={`flex flex-col items-center space-y-1 transition-colors duration-300 ${step === 'contact' ? 'text-accent' : 'text-ink-faint'}`}>
+                  <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold transition-colors duration-300 ${
                     step === 'contact' ? 'bg-accent text-white' : 'bg-white shadow-tile text-ink-muted'
                   }`}>1</div>
                   <span className="text-xs sm:text-sm font-medium text-center">{t('checkout_step_contact', 'Kontakt')}</span>
                 </div>
                 <div className="flex-1 h-px bg-ink/15 mx-2 sm:mx-4"></div>
-                <div className={`flex flex-col items-center space-y-1 ${step === 'shipping' ? 'text-accent' : 'text-ink-faint'}`}>
-                  <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold ${
+                <div className={`flex flex-col items-center space-y-1 transition-colors duration-300 ${step === 'shipping' ? 'text-accent' : 'text-ink-faint'}`}>
+                  <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold transition-colors duration-300 ${
                     step === 'shipping' ? 'bg-accent text-white' : 'bg-white shadow-tile text-ink-muted'
                   }`}>2</div>
                   <span className="text-xs sm:text-sm font-medium text-center">{t('checkout_step_shipping', 'Leverans')}</span>
                 </div>
                 <div className="flex-1 h-px bg-ink/15 mx-2 sm:mx-4"></div>
-                <div className={`flex flex-col items-center space-y-1 ${step === 'payment' ? 'text-accent' : 'text-ink-faint'}`}>
-                  <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold ${
+                <div className={`flex flex-col items-center space-y-1 transition-colors duration-300 ${step === 'payment' ? 'text-accent' : 'text-ink-faint'}`}>
+                  <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold transition-colors duration-300 ${
                     step === 'payment' ? 'bg-accent text-white' : 'bg-white shadow-tile text-ink-muted'
                   }`}>3</div>
                   <span className="text-xs sm:text-sm font-medium text-center">{t('checkout_step_payment', 'Betalning')}</span>
@@ -684,7 +684,7 @@ const Checkout = () => {
 
               {/* Contact Information */}
               {step === 'contact' && (
-                <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile">
+                <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile animate-fade-up">
                   <h2 className="font-display text-lg sm:text-xl font-bold text-ink mb-4 sm:mb-6">
                     {t('checkout_contact_info', 'Kontaktinformation')}
                   </h2>
@@ -764,7 +764,7 @@ const Checkout = () => {
 
               {/* Shipping Information */}
               {step === 'shipping' && (
-                <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile">
+                <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile animate-fade-up">
                   <div className="flex items-center justify-between mb-4 sm:mb-6">
                     <h2 className="font-display text-lg sm:text-xl font-bold text-ink">
                       {t('checkout_shipping_address', 'Leveransadress')}
@@ -1017,7 +1017,7 @@ const Checkout = () => {
 
               {/* Payment Information */}
               {step === 'payment' && (
-                <div className="bg-white rounded-tile p-6 shadow-tile">
+                <div className="bg-white rounded-tile p-6 shadow-tile animate-fade-up">
                   <div className="flex items-center justify-between mb-6">
                     <h2 className="font-display text-xl font-bold text-ink">
                       {t('checkout_payment_title', 'Betalning')}

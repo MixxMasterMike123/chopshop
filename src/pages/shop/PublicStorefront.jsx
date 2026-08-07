@@ -604,7 +604,7 @@ const PublicStorefront = () => {
                       src={c.imageUrl}
                       alt={c.title || ''}
                       loading="lazy"
-                      className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 ease-nord group-hover:scale-105"
                     />
                   ) : (
                     <div className="absolute inset-0 bg-gradient-to-br from-ink to-ink-muted" />
@@ -612,7 +612,7 @@ const PublicStorefront = () => {
                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
                   <div className="absolute inset-x-0 bottom-0 p-5">
                     <span className="font-display font-bold text-lg lg:text-xl text-white">
-                      {c.title} <span aria-hidden="true" className="inline-block transition-transform group-hover:translate-x-1">→</span>
+                      {c.title} <span aria-hidden="true" className="inline-block transition-transform duration-300 ease-nord group-hover:translate-x-1">→</span>
                     </span>
                   </div>
                 </Link>

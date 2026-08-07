@@ -325,7 +325,12 @@ const ShopNavigation = ({ breadcrumb, breadcrumbCategory = null, tags = [], acti
             >
               <ShoppingBagIcon className="h-5 w-5" />
               {cartItemCount > 0 && (
-                <span className="bg-accent text-white text-xs rounded-full h-5 min-w-5 px-1.5 -mr-1.5 flex items-center justify-center font-bold tabular-nums">
+                // key={count} remounts the badge on every change so the pop
+                // keyframe replays — the nav-side confirmation of add-to-cart.
+                <span
+                  key={cartItemCount}
+                  className="bg-accent text-white text-xs rounded-full h-5 min-w-5 px-1.5 -mr-1.5 flex items-center justify-center font-bold tabular-nums animate-badge-pop"
+                >
                   {cartItemCount}
                 </span>
               )}
@@ -337,7 +342,7 @@ const ShopNavigation = ({ breadcrumb, breadcrumbCategory = null, tags = [], acti
       {/* Mobile menu dropdown — the curated menu (or category fallback) as a
           vertical list. Only rendered on small screens (the button is md:hidden). */}
       {showMobileMenu && (
-        <div className="md:hidden border-t border-ink/10 bg-canvas mobile-menu">
+        <div className="md:hidden border-t border-ink/10 bg-canvas mobile-menu animate-fade-down">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2">
             {mobileItems.map((mi, i) =>
               mi.external ? (

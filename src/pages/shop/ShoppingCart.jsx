@@ -112,7 +112,7 @@ const ShoppingCart = () => {
               <p className="text-ink-muted mb-6 sm:mb-8 px-4">{t('cart_empty_description', 'Utforska våra produkter och lägg till något i din varukorg.')}</p>
               <Link
                 to={getCountryAwareUrl('')}
-                className="inline-block bg-accent text-white px-6 sm:px-8 py-3 sm:py-4 rounded-full text-base sm:text-lg font-bold transition-all duration-300 ease-nord shadow-tile hover:shadow-lift hover:-translate-y-0.5"
+                className="inline-block bg-accent text-white px-6 sm:px-8 py-3 sm:py-4 rounded-full text-base sm:text-lg font-bold transition-[transform,box-shadow] duration-300 ease-nord shadow-tile hover:shadow-lift hover:-translate-y-0.5 active:translate-y-0"
               >
                 {t('continue_shopping', 'Fortsätt handla')}
               </Link>
@@ -337,7 +337,7 @@ const ShoppingCart = () => {
                 {/* Checkout Button */}
                 <button
                   onClick={handleCheckout}
-                  className="w-full bg-accent text-white px-6 sm:px-8 py-4 rounded-full text-base sm:text-lg font-bold transition-all duration-300 ease-nord shadow-tile hover:shadow-lift hover:-translate-y-0.5"
+                  className="w-full bg-accent text-white px-6 sm:px-8 py-4 rounded-full text-base sm:text-lg font-bold transition-[transform,box-shadow] duration-300 ease-nord shadow-tile hover:shadow-lift hover:-translate-y-0.5 active:translate-y-0"
                 >
                   {t('go_to_checkout', 'Gå till kassan')}
                 </button>

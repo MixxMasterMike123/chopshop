@@ -137,19 +137,19 @@ const PublicProductPage = () => {
     }
   }, [slug, shopId]);
 
-  // Nike mobile UX: Scroll detection for fixed button
+  // Nike mobile UX: show the fixed bottom bar when the inline add-to-cart
+  // button scrolls out of view. IntersectionObserver instead of a scroll
+  // listener — no per-scroll React renders. Re-runs when `product` lands
+  // because the observed button only exists after loading.
   useEffect(() => {
-    const handleScroll = () => {
-      if (regularButtonRef.current) {
-        const rect = regularButtonRef.current.getBoundingClientRect();
-        const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
-        setShowFixedButton(!isVisible);
-      }
-    };
-
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+    const el = regularButtonRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setShowFixedButton(!entry.isIntersecting)
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [product]);
 
   // Nike mobile UX: Track image scroll position
   useEffect(() => {
@@ -615,7 +615,7 @@ const PublicProductPage = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
                     </svg>
                   </button>
-                  <span className="px-4 py-2 text-sm font-bold text-ink min-w-12 text-center tabular-nums">
+                  <span key={quantity} className="px-4 py-2 text-sm font-bold text-ink min-w-12 text-center tabular-nums animate-badge-pop">
                     {quantity}
                   </span>
                   <button
@@ -635,7 +635,7 @@ const PublicProductPage = () => {
               <button
                 onClick={buttonState.disabled ? undefined : handleAddToCart}
                 disabled={buttonState.disabled}
-                className={`w-full py-3 px-6 rounded-full text-base font-bold transition-colors ${
+                className={`w-full py-3 px-6 rounded-full text-base font-bold transition-[opacity,transform] duration-150 ease-nord active:scale-[0.98] ${
                   buttonState.isComingSoon 
                     ? 'bg-ink-faint text-white cursor-not-allowed' 
                     : 'bg-accent text-white hover:opacity-90'
@@ -785,7 +785,7 @@ const PublicProductPage = () => {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
                         </svg>
                       </button>
-                      <span className="px-4 py-2 text-sm font-bold text-ink min-w-12 text-center tabular-nums">
+                      <span key={quantity} className="px-4 py-2 text-sm font-bold text-ink min-w-12 text-center tabular-nums animate-badge-pop">
                         {quantity}
                       </span>
                       <button
@@ -805,7 +805,7 @@ const PublicProductPage = () => {
                   <button
                     onClick={buttonState.disabled ? undefined : handleAddToCart}
                     disabled={buttonState.disabled}
-                    className={`w-full py-4 px-8 rounded-full text-base font-bold transition-colors ${
+                    className={`w-full py-4 px-8 rounded-full text-base font-bold transition-[opacity,transform] duration-150 ease-nord active:scale-[0.98] ${
                       buttonState.isComingSoon 
                         ? 'bg-ink-faint text-white cursor-not-allowed' 
                         : 'bg-accent text-white hover:opacity-90'
@@ -881,7 +881,7 @@ const PublicProductPage = () => {
             <button
               onClick={buttonState.disabled ? undefined : handleAddToCart}
               disabled={buttonState.disabled}
-              className={`w-full py-4 px-8 rounded-full text-base font-bold transition-colors ${
+              className={`w-full py-4 px-8 rounded-full text-base font-bold transition-[opacity,transform] duration-150 ease-nord active:scale-[0.98] ${
                 buttonState.isComingSoon 
                   ? 'bg-ink-faint text-white cursor-not-allowed' 
                   : 'bg-accent text-white hover:opacity-90'
