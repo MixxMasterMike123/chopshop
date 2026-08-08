@@ -3,6 +3,14 @@
 // the studio's live front placement (position/scale/rotation in mm — the same
 // object the flat canvas edits).
 //
+// READ-ONLY BY DESIGN (slice C, decided 2026-08-08): sellers get NO placement
+// or appearance controls here. The render always follows the flat canvas's
+// print placement, and tuning comes from the platform-calibrated model
+// (pod3dModels defaults + perColorway overrides, edited in ModelEditor).
+// Rationale: these renders can be downloaded and added to the customer-facing
+// product gallery — if the seller could move/style the motif in 3D, the
+// published photo could show a placement that will never be printed.
+//
 // GATES:
 //   • WebGL — the displacement warp needs it; without WebGL Pixi silently falls
 //     back to Canvas2D and SKIPS the filter, which would show an unwarped fake.
@@ -19,6 +27,7 @@ import { db, storage } from '../../../firebase/config';
 import { useShopId } from '../../../contexts/ShopContext';
 import { listShopProductSkus } from '../../../utils/podMappings';
 import { DEV_3D_GARMENTS } from './pixi/displacement3dConfig';
+import { defaultPlacement } from './placementMath';
 
 const DisplacementPreview = React.lazy(() => import('./pixi/DisplacementPreview'));
 
@@ -58,41 +67,11 @@ const hasWebGL = () => {
   }
 };
 
-// Shared slider row — label + mono value on top, full-width styled track below
-// (matches the "Modernizing slider UI design" reference). PRESENTATION ONLY: the
-// control is still a native <input type="range"> with the SAME value/onChange;
-// `--s3d-fill` is derived from the existing value/min/max purely to paint the
-// filled portion of the track and adds no behaviour.
-const Slider = ({ label, min, max, step, value, onChange, fmt = (v) => v }) => {
-  const fillPct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between">
-        <span className="text-[13px] text-admin-text">{label}</span>
-        <span className="font-mono text-[12px] tabular-nums text-admin-text-muted">{fmt(value)}</span>
-      </div>
-      <input
-        type="range" min={min} max={max} step={step} value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        aria-label={label}
-        className="s3d-range"
-        style={{ '--s3d-fill': `${fillPct}%` }}
-      />
-    </div>
-  );
-};
-
 /**
  * Props:
  *   artwork    — the artwork doc to composite (front slot's resolved artwork)
- *   placement  — the FRONT slot's print placement, used ONLY as the initial seed
- *
- * DELIBERATELY DECOUPLED from the canvas placement: the flat canvas placement is
- * the PRINT INSTRUCTION (it reaches the printer via the mapping readout); the 3D
- * view is PRODUCT-IMAGE composition only — where the motif looks right on the
- * posed model photo, which can legitimately differ from the physical print
- * placement. Its sliders therefore edit their own local state and never touch
- * the print placement (and never reset the colourway review gate).
+ *   placement  — the FRONT slot's print placement; the 3D view FOLLOWS it live
+ *                (read-only — nothing here can diverge from what gets printed)
  */
 const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
   const [open, setOpen] = useState(false);
@@ -129,19 +108,6 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
   const colorwayIds = useMemo(() => (garment ? readyColorwayIds(garment) : []), [garment]);
   const [colorwayId, setColorwayId] = useState(() => colorwayIds[0] || null);
 
-  // Beta TUNING knobs (live overrides of the garment/colourway config). Re-seeded
-  // on model/colourway switch (below); sliders still override live afterwards.
-  const [tuning, setTuning] = useState(() => ({
-    displacementScale: garment?.displacementScale ?? 30,
-    displacementContrast: garment?.displacementContrast ?? 1,
-    alpha: garment?.alpha ?? 0.8,
-    blend: garment?.blend ?? 'multiply',
-  }));
-
-  // The 3D view's OWN placement (product-image composition). Seeded once from
-  // the print placement (or a centred default), then fully independent.
-  const [p3d, setP3d] = useState(null);
-
   // Reconcile the selected model when the library loads/changes (id vanished →
   // snap to the first available garment).
   useEffect(() => {
@@ -163,25 +129,18 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
   // (prevents a compositorConfigFor-null error flash on model switch).
   const effColorwayId = colorwayIds.includes(colorwayId) ? colorwayId : (colorwayIds[0] || null);
 
-  // Re-seed tuning on model OR colourway switch: garment defaults with the
-  // platform-configured per-colourway overrides merged over them, so the console's
-  // per-colourway blend/alpha actually take effect (sliders still override live).
-  useEffect(() => {
+  // Tuning is READ-ONLY, derived from the platform-calibrated model: garment
+  // defaults with the per-colourway overrides merged over them (both edited in
+  // the platform ModelEditor). No live seller overrides.
+  const tuning = useMemo(() => {
     const per = garment?.perColorway?.[effColorwayId] || {};
-    setTuning({
+    return {
       displacementScale: per.displacementScale ?? garment?.displacementScale ?? 30,
       displacementContrast: per.displacementContrast ?? garment?.displacementContrast ?? 1,
       alpha: per.alpha ?? garment?.alpha ?? 0.8,
       blend: per.blend ?? garment?.blend ?? 'multiply',
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [garment?.id, effColorwayId]);
-
-  // Reset the 3D placement on MODEL switch only — a colour change must never
-  // move the motif (placement is per-model; re-seeds from the print placement).
-  useEffect(() => {
-    setP3d(null);
-  }, [garment?.id]);
+    };
+  }, [garment, effColorwayId]);
 
   // Load this shop's products once the 3D view is opened (for the "Lägg till i
   // produkt" picker). Best-effort — a failure just leaves the picker empty.
@@ -197,11 +156,12 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
 
   if (garments.length === 0 || !garment) return null;
 
-  const mm = garment.printAreaMm?.front;
-  const effectivePlacement = p3d || placement || (mm ? {
-    xMm: (mm.w - mm.w * 0.7) / 2, yMm: mm.h * 0.1, wMm: mm.w * 0.7, rotationDeg: 0,
-  } : null);
-  const patchP3d = (patch) => setP3d({ ...effectivePlacement, ...patch });
+  // The render FOLLOWS the flat canvas's print placement live (DesignStudio
+  // passes the same effective placement the mockups/publish use). The fallback
+  // only covers a missing placement and derives it the same way the flat
+  // canvas would (aspect-fitted defaultPlacement against the model's area) —
+  // never an invented width that could overflow what actually prints.
+  const effectivePlacement = placement || defaultPlacement(garment, 'front', artwork, null);
 
   const downloadPNG = async () => {
     setBusy(true);
@@ -277,9 +237,8 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
           {!artwork?.previewUrl ? (
             <p className="text-[12px] text-admin-text-muted">Välj ett original för att se 3D-vyn.</p>
           ) : (
-            /* Two-column layout: 2/3 canvas · 1/3 controls rail (desktop). The
-               larger canvas makes motif changes easier to read as you drag. On
-               narrow widths it stacks. */
+            /* Two-column layout: 2/3 canvas · 1/3 rail (model/colour pickers +
+               actions — no editing controls). On narrow widths it stacks. */
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
               {/* Canvas — 2/3 */}
               <div className="lg:col-span-2">
@@ -345,65 +304,10 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                   </div>
                 )}
 
-                {/* PLACERING section */}
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-admin-text-faint">Placering</span>
-                  <span className="h-px flex-1 bg-admin-border-soft" />
-                </div>
-                {/* Placement sliders — the 3D view's OWN composition (product image
-                    only, never a print instruction). */}
-                <div className="flex flex-col gap-4">
-                  <Slider label="Bredd" min={5} max={30} step={0.5}
-                    value={effectivePlacement.wMm / 10}
-                    onChange={(v) => patchP3d({ wMm: v * 10 })}
-                    fmt={(v) => `${v} cm`} />
-                  <Slider label="Vänster" min={0} max={30} step={0.5}
-                    value={effectivePlacement.xMm / 10}
-                    onChange={(v) => patchP3d({ xMm: v * 10 })}
-                    fmt={(v) => `${v} cm`} />
-                  <Slider label="Uppifrån" min={0} max={40} step={0.5}
-                    value={effectivePlacement.yMm / 10}
-                    onChange={(v) => patchP3d({ yMm: v * 10 })}
-                    fmt={(v) => `${v} cm`} />
-                  <Slider label="Rotation" min={-30} max={30} step={0.5}
-                    value={effectivePlacement.rotationDeg || 0}
-                    onChange={(v) => patchP3d({ rotationDeg: v })}
-                    fmt={(v) => `${v}°`} />
-                </div>
-
-                {/* UTSEENDE section */}
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-admin-text-faint">Utseende</span>
-                  <span className="h-px flex-1 bg-admin-border-soft" />
-                </div>
-                <div className="flex flex-col gap-4">
-                  <Slider label="Displacement" min={0} max={100} step={1}
-                    value={tuning.displacementScale}
-                    onChange={(v) => setTuning((t) => ({ ...t, displacementScale: v }))} />
-                  <Slider label="Kontrast (karta)" min={0.5} max={4} step={0.1}
-                    value={tuning.displacementContrast}
-                    onChange={(v) => setTuning((t) => ({ ...t, displacementContrast: v }))}
-                    fmt={(v) => v.toFixed(1)} />
-                  <Slider label="Opacitet" min={0} max={1} step={0.05}
-                    value={tuning.alpha}
-                    onChange={(v) => setTuning((t) => ({ ...t, alpha: v }))}
-                    fmt={(v) => v.toFixed(2)} />
-                  <div className="flex items-center justify-between gap-3 pt-0.5">
-                    <span className="text-[13px] text-admin-text">Blend</span>
-                    <select
-                      value={tuning.blend}
-                      onChange={(e) => setTuning((t) => ({ ...t, blend: e.target.value }))}
-                      aria-label="Blend"
-                      className="min-w-[120px] rounded-[10px] border border-admin-border bg-admin-surface px-2.5 py-1.5 text-[13px] text-admin-text focus:border-admin-info-dot focus:outline-none"
-                    >
-                      <option value="multiply">multiply</option>
-                      <option value="screen">screen</option>
-                      <option value="overlay">overlay</option>
-                      <option value="normal">normal</option>
-                      <option value="add">add</option>
-                    </select>
-                  </div>
-                </div>
+                {/* No placement/appearance controls here BY DESIGN: the render
+                    follows the flat canvas placement and the model's calibrated
+                    tuning, so a downloaded/gallery-added 3D image can never show
+                    a placement or look that won't be printed. */}
 
                 {/* Download — full-width dark button, per reference */}
                 <div className="mt-1 border-t border-admin-border-soft pt-4">
@@ -443,7 +347,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                   )}
 
                   <p className="mt-3 text-[12px] leading-relaxed text-admin-text-faint">
-                    Position, storlek och rotation styrs med reglagen ovan (påverkar bara produktbilden, inte trycket).
+                    3D-vyn är en illustration och följer tryckplaceringen i arbetsytan — trycket följer den platta mockupen.
                     {products.length > 0 && ' Bilden läggs till som extra produktbild, aldrig som huvudbild.'}
                   </p>
                 </div>

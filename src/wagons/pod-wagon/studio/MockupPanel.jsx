@@ -54,7 +54,7 @@ const MockupPanel = ({
         <PhotoIcon className="h-5 w-5 text-admin-text-faint" />
         {canGenerate
           ? 'Inga mockuper genererade ännu.'
-          : 'Välj ett original för att kunna generera mockuper.'}
+          : 'Lägg till ett tryck och välj motiv för att kunna generera mockuper.'}
       </div>
     ) : (
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">

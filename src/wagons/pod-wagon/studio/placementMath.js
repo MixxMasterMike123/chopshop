@@ -180,6 +180,22 @@ export const defaultPlacement = (template, slot, artwork, minDpi = null) => {
 };
 
 /**
+ * Placement for LOCKED slots (pocket — POD_PRINT_SPEC: fixed 100×100 area,
+ * discrete position, no free placement): the motif fills the area as large as
+ * aspect + DPI allow (contain) and centres on both axes. Deterministic — the
+ * canvas, the mockup renderer and publish all derive the SAME rect from it.
+ */
+export const containPlacement = (template, slot, artwork, minDpi = null) => {
+  const mm = template?.printAreaMm?.[slot];
+  const a = artworkAspect(artwork);
+  if (!mm || !a) return null;
+  const wMax = Math.min(maxWidthMm(template, slot, artwork), maxWidthForDpiMm(artwork, minDpi));
+  if (!(wMax > 0)) return null;
+  const hMm = wMax * a;
+  return { xMm: (mm.w - wMax) / 2, yMm: (mm.h - hMm) / 2, wMm: wMax, rotationDeg: 0 };
+};
+
+/**
  * Centre-snap during drag: if the artwork's centre is within thresholdMm of the
  * print area's centre on an axis, snap that axis exactly. Returns the (possibly
  * moved) placement + per-axis flags so the canvas can draw the guide lines.

@@ -14,23 +14,28 @@
 import React from 'react';
 import TemplateBackground, { templateViewBox } from './TemplateBackground';
 import {
-  isComposable, clampPlacement, defaultPlacement,
+  isComposable, clampPlacement, defaultPlacement, containPlacement,
   placementToViewBoxRect, rectToPercent,
 } from './placementMath';
 
 // Composited mini-preview: background (flat or photo) + artwork img at the
 // placement (same math as the big canvas — placementToViewBoxRect is the shared
-// source of truth).
-const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = null }) => {
+// source of truth). `locked` (pocket) uses the deterministic contain-centred
+// rect PER RESOLVED ARTWORK — same geometry as the locked canvas, the mockup
+// renderer and publish, so the review gate never shows a placement that
+// differs from the print.
+const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = null, locked = false }) => {
   const viewBox = templateViewBox(template);
   if (!viewBox) return <div className="h-full w-full bg-admin-surface-2" />;
 
   let artRect = null;
   if (artwork && isComposable(artwork)) {
-    const p = clampPlacement(
-      placement || defaultPlacement(template, slot, artwork, minDpi),
-      template, slot, artwork, minDpi
-    );
+    const p = locked
+      ? containPlacement(template, slot, artwork, minDpi)
+      : clampPlacement(
+          placement || defaultPlacement(template, slot, artwork, minDpi),
+          template, slot, artwork, minDpi
+        );
     artRect = p ? placementToViewBoxRect(p, template, slot, artwork) : null;
   }
 
@@ -70,7 +75,7 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
 const ColorwayStrip = ({
   template, slot, activeColorwayId, onSelect, placement,
   resolveArtwork, overrides = {}, onOverrideChange, artworkOptions = [], baseArtworkLabel = 'Standardmotiv',
-  reviewedColorwayIds = [], minDpi = null,
+  reviewedColorwayIds = [], minDpi = null, locked = false,
 }) => {
   if (!template) return null;
   const colorways = template.colorways || [];
@@ -111,6 +116,7 @@ const ColorwayStrip = ({
                   colorway={cw}
                   artwork={resolveArtwork(cw.id)}
                   placement={placement}
+                  locked={locked}
                   minDpi={minDpi}
                 />
               </div>

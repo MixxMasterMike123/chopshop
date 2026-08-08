@@ -32,7 +32,7 @@ import TemplateBackground, { templateViewBox } from './TemplateBackground';
 import {
   MIN_ART_WIDTH_MM, SNAP_SCREEN_PX, MAX_ROTATION_DEG,
   pxPerMm, isComposable, maxWidthAtMm, maxWidthForRotationMm, maxWidthForDpiMm, clampRotationDeg,
-  clampPlacement, defaultPlacement, snapPlacement, isCenteredX,
+  clampPlacement, defaultPlacement, containPlacement, snapPlacement, isCenteredX,
   placementToViewBoxRect, rectToPercent,
   formatCm, placementReadout, dpiVerdict,
 } from './placementMath';
@@ -134,6 +134,10 @@ const DegField = ({ label, deg, onCommit, disabled = false }) => {
 const CompositorCanvas = ({
   template, colorway, slot = 'front', artwork = null, profile = null,
   placement = null, onPlacementChange = () => {}, onResult, // eslint-disable-line no-unused-vars
+  // locked: fixed-geometry slots (pocket — POD_PRINT_SPEC: discrete position,
+  // no free placement). Renders the default placement read-only: no drag,
+  // resize, nudge or cm fields; readout + DPI verdict stay.
+  locked = false,
 }) => {
   const wrapRef = useRef(null);
   // Full drag data in a ref (no re-render churn mid-gesture); visual flags in state.
@@ -150,13 +154,16 @@ const CompositorCanvas = ({
   // scaled past the width where placement DPI drops below the profile minimum.
   const minDpi = profile?.min_dpi ?? null;
 
-  // The placement we render: the parent's, or the default until first touched.
+  // The placement we render: locked slots always show the deterministic
+  // contain-centred rect (parent placement ignored); free slots show the
+  // parent's placement, or the default until first touched.
   const effective = useMemo(() => {
     if (!composable || !template || !ppm) return null;
+    if (locked) return containPlacement(template, slot, artwork, minDpi);
     return placement
       ? clampPlacement(placement, template, slot, artwork, minDpi)
       : defaultPlacement(template, slot, artwork, minDpi);
-  }, [composable, template, slot, artwork, placement, ppm, minDpi]);
+  }, [composable, template, slot, artwork, placement, ppm, minDpi, locked]);
 
   const verdict = effective ? dpiVerdict(effective, artwork, profile) : null;
 
@@ -170,7 +177,7 @@ const CompositorCanvas = ({
   };
 
   const startDrag = (e, mode) => {
-    if (!effective) return;
+    if (!effective || locked) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return; // primary button only
     e.preventDefault();
     e.stopPropagation();
@@ -231,7 +238,7 @@ const CompositorCanvas = ({
 
   // Keyboard nudge on the focused artwork: arrows = 1 mm, Shift+arrows = 10 mm.
   const onKeyDown = (e) => {
-    if (!effective) return;
+    if (!effective || locked) return;
     const step = e.shiftKey ? 10 : 1;
     const delta = {
       ArrowLeft: { xMm: -step }, ArrowRight: { xMm: step },
@@ -294,7 +301,7 @@ const CompositorCanvas = ({
             {!artwork && (
               <div className="flex h-full w-full items-center justify-center p-2 text-center">
                 <span className="rounded-[6px] bg-admin-surface/85 px-2 py-1 text-[11px] font-medium text-admin-text-muted shadow-[var(--shadow-admin)]">
-                  Välj ett original till vänster
+                  Lägg till ett tryck och välj motiv i listan Original
                 </span>
               </div>
             )}
@@ -335,11 +342,13 @@ const CompositorCanvas = ({
             nudge. touch-action:none so touch drags aren't hijacked by scrolling. */}
         {artVb && (
           <div
-            role="button"
-            tabIndex={0}
-            aria-label={`Motiv: ${placementReadout(effective, template, slot, artwork)}. Flytta med piltangenterna (Skift = 1 cm steg).`}
-            className={`absolute touch-none outline-none ring-admin-info-dot/60 focus-visible:ring-2 ${
-              dragging && dragUi.mode === 'move' ? 'cursor-grabbing' : 'cursor-grab'
+            role={locked ? 'img' : 'button'}
+            tabIndex={locked ? -1 : 0}
+            aria-label={locked
+              ? `Motiv: ${placementReadout(effective, template, slot, artwork)}. Fast yta — placeringen kan inte ändras.`
+              : `Motiv: ${placementReadout(effective, template, slot, artwork)}. Flytta med piltangenterna (Skift = 1 cm steg).`}
+            className={`absolute outline-none ring-admin-info-dot/60 focus-visible:ring-2 ${
+              locked ? 'cursor-default' : `touch-none ${dragging && dragUi.mode === 'move' ? 'cursor-grabbing' : 'cursor-grab'}`
             }`}
             style={{
               ...rectToPercent(artVb, viewBox),
@@ -362,17 +371,19 @@ const CompositorCanvas = ({
             {/* Hairline so a white artwork on a white tee still shows its bounds. */}
             <div className="pointer-events-none absolute inset-0 border border-admin-info-dot/50" />
             {/* Resize handle (bottom-right): generous hit target, small visual. */}
-            <div
-              role="presentation"
-              className="absolute -bottom-2.5 -right-2.5 grid h-5 w-5 cursor-nwse-resize touch-none place-items-center"
-              onPointerDown={(e) => startDrag(e, 'resize')}
-              onPointerMove={onPointerMove}
-              onPointerUp={endDrag}
-              onPointerCancel={endDrag}
-              onLostPointerCapture={endDrag}
-            >
-              <div className="h-2.5 w-2.5 rounded-[2px] border border-admin-info-dot bg-admin-surface shadow-[var(--shadow-admin)]" />
-            </div>
+            {!locked && (
+              <div
+                role="presentation"
+                className="absolute -bottom-2.5 -right-2.5 grid h-5 w-5 cursor-nwse-resize touch-none place-items-center"
+                onPointerDown={(e) => startDrag(e, 'resize')}
+                onPointerMove={onPointerMove}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+                onLostPointerCapture={endDrag}
+              >
+                <div className="h-2.5 w-2.5 rounded-[2px] border border-admin-info-dot bg-admin-surface shadow-[var(--shadow-admin)]" />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -387,36 +398,42 @@ const CompositorCanvas = ({
             <span className="text-[11px] text-admin-text-faint">Mått inom tryckytan</span>
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-            <CmField
-              label="Bredd"
-              mm={effective.wMm}
-              onCommit={(mm) => commitField({ wMm: mm })}
-            />
-            <CmField
-              label="Uppifrån"
-              mm={effective.yMm}
-              onCommit={(mm) => commitField({ yMm: mm })}
-            />
-            <CmField
-              label="Från vänster"
-              mm={effective.xMm}
-              onCommit={(mm) => commitField({ xMm: mm })}
-            />
-            <DegField
-              label="Rotation"
-              deg={effective.rotationDeg || 0}
-              onCommit={(deg) => commitField({ rotationDeg: deg })}
-            />
-            <button
-              type="button"
-              onClick={centerX}
-              disabled={isCenteredX(effective, template, slot)}
-              className="rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1 text-[12px] text-admin-text hover:bg-admin-surface-2 disabled:cursor-default disabled:opacity-40"
-            >
-              Centrera
-            </button>
-          </div>
+          {locked ? (
+            <p className="mt-2 text-[12px] text-admin-text-faint">
+              Fast tryckyta — motivet placeras automatiskt (contain, centrerat). Välj position ovan.
+            </p>
+          ) : (
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <CmField
+                label="Bredd"
+                mm={effective.wMm}
+                onCommit={(mm) => commitField({ wMm: mm })}
+              />
+              <CmField
+                label="Uppifrån"
+                mm={effective.yMm}
+                onCommit={(mm) => commitField({ yMm: mm })}
+              />
+              <CmField
+                label="Från vänster"
+                mm={effective.xMm}
+                onCommit={(mm) => commitField({ xMm: mm })}
+              />
+              <DegField
+                label="Rotation"
+                deg={effective.rotationDeg || 0}
+                onCommit={(deg) => commitField({ rotationDeg: deg })}
+              />
+              <button
+                type="button"
+                onClick={centerX}
+                disabled={isCenteredX(effective, template, slot)}
+                className="rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1 text-[12px] text-admin-text hover:bg-admin-surface-2 disabled:cursor-default disabled:opacity-40"
+              >
+                Centrera
+              </button>
+            </div>
+          )}
 
           {verdict && (
             <div className={`mt-3 rounded-[var(--radius-admin-el)] px-3 py-2 text-[12px] ${DPI_TONE[verdict.tier]}`}>

@@ -39,7 +39,10 @@ const roundUpTo9 = (value) => {
  *   mockups        — [{ key, colorwayId, colorwayLabel, slot, objectUrl, ... }]
  *   template       — selectedTemplate (reads .costSek + .colorways for labels)
  *   vatRate        — number (e.g. 0.25)
- *   hasArtwork     — bool (a base artwork is selected — publish needs a mapping motif)
+ *   hasArtwork     — bool (the trycklista has ≥1 print AND every row has a motif —
+ *                     publish needs a mapping motif per designed slot)
+ *   printSummary   — [{ slot, slotLabel, artworkLabel }] — the prints about to
+ *                     publish, shown as the "Detta trycks" receipt (slice A)
  *   shopId         — string | null (null → publish disabled with an explanation)
  *   publishing     — bool (handler in flight)
  *   result         — { name, sku } | null (success)
@@ -56,6 +59,7 @@ const PublishPanel = ({
   template = null,
   vatRate = 0.25,
   hasArtwork = false,
+  printSummary = [],
   shopId = null,
   publishing = false,
   result = null,
@@ -199,6 +203,23 @@ const PublishPanel = ({
         <p className="mt-3 text-[12px] text-admin-text-muted">Generera mockuper först.</p>
       ) : (
         <div className="mt-4 space-y-5">
+          {/* 1. What gets printed — the trycklista receipt. The seller confirms
+              position + motif per print BEFORE naming/pricing (slot-aware
+              publish, slice A). */}
+          {printSummary.length > 0 && (
+            <div className="rounded-[var(--radius-admin-el)] bg-admin-surface-2 px-3 py-2.5">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-admin-text-faint">Detta trycks</span>
+              <ul className="mt-1 space-y-0.5">
+                {printSummary.map((p) => (
+                  <li key={p.slot} className="text-[12px] text-admin-text">
+                    <span className="font-medium">{p.slotLabel}</span>
+                    <span className="text-admin-text-muted"> — {p.artworkLabel}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* 2. Product name */}
           <div>
             <label className={labelCls}>Produktnamn</label>
@@ -431,7 +452,9 @@ const PublishPanel = ({
                 </p>
               )}
               {!hasArtwork && shopId && (
-                <p className="mt-2 text-[12px] text-admin-text-faint">Välj ett original innan du publicerar.</p>
+                <p className="mt-2 text-[12px] text-admin-text-faint">
+                  Lägg till minst ett tryck med motiv innan du publicerar (varje tryckrad behöver ett motiv).
+                </p>
               )}
               {/* Review gate is the LAST gate: shown only when everything else is
                   valid but not every selected colourway has been seen in the strip. */}

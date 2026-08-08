@@ -37,7 +37,7 @@ import {
 import { loadPodProfiles, getProfileById } from '../../../config/podProfiles';
 import { loadPod3dModels } from '../../../config/pod3dModels';
 import { tierTone, tierLabel } from '../components/podTier';
-import { isComposable, placementReadout, defaultPlacement, templateWithPocketPosition } from './placementMath';
+import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, templateWithPocketPosition } from './placementMath';
 import { renderMockup } from './mockupRender';
 import { uploadMockup } from './mockupUpload';
 import TemplateBackground from './TemplateBackground';
@@ -78,9 +78,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   const [profiles, setProfiles] = useState([]);
   const [models3d, setModels3d] = useState([]);
 
-  const [selectedArtworkId, setSelectedArtworkId] = useState(null);
+  // TRYCKLISTAN (slice A, 2026-08-08): the design = an ordered list of PRINTS,
+  // one row per physical position: { slot, artworkId|null }. A row without a
+  // motif is incomplete (blocks publish); NO row = NO print — the old implicit
+  // always-front default is gone. At most one row per slot.
+  const [prints, setPrints] = useState([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [colorwayId, setColorwayId] = useState(null);
+  // The ACTIVE print row's slot (drives canvas/strip). Reconciled against
+  // `prints` — when the list is empty it idles on 'front' with no artwork.
   const [slot, setSlot] = useState('front');
   // Pocket position (left/center/right, wearer's perspective) — 'pocket' is a
   // fixed-size discrete-position slot, not free placement (docs/POD_PRINT_SPEC.md).
@@ -165,18 +171,21 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     const cwIds = (selectedTemplate.colorways || []).map((c) => c.id);
     if (!cwIds.includes(colorwayId)) setColorwayId(cwIds[0] || null);
     const slots = templateSlots(selectedTemplate);
-    if (!slots.includes(slot)) setSlot(slots[0] || 'front');
+    // Keep print rows whose slot exists on the new garment (the seller's motif
+    // picks survive a garment switch); their placements reset below — they were
+    // clamped against the OLD template's print areas. Both dispatches sit in
+    // the effect body (never inside an updater — updaters must stay pure).
+    const kept = prints.filter((p) => slots.includes(p.slot));
+    setPrints(kept);
+    const first = kept[0]?.slot || slots[0] || 'front';
+    setSlot((cur) => (kept.some((p) => p.slot === cur) ? cur : first));
     setPocketPosition(DEFAULT_POCKET_POSITION);
     resetDesignState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplateId]);
 
-  // New artwork = new aspect ratio: every stored placement's derived height (and
-  // clamping) is stale, and overrides/mockups referenced the old base motif.
-  useEffect(() => {
-    resetDesignState();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedArtworkId]);
+  // (No global artwork-change reset anymore: changing a print row's motif
+  // resets only THAT row's placement — see setPrintArtwork below.)
 
   // The ACTIVE colourway is always considered SEEN — selecting one composites it
   // live in the strip. Covers the initial default colourway too. Switching slots
@@ -191,12 +200,63 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     [selectedTemplate, colorwayId]
   );
 
-  const selectedArtwork = useMemo(
-    () => artwork.find((a) => a.id === selectedArtworkId) || null,
-    [artwork, selectedArtworkId]
-  );
-
   const slots = templateSlots(selectedTemplate);
+
+  // ── Trycklista helpers ────────────────────────────────────────────────────
+  const printBySlot = useMemo(
+    () => Object.fromEntries(prints.map((p) => [p.slot, p])),
+    [prints]
+  );
+  const artworkById = (id) => (id ? artwork.find((a) => a.id === id) || null : null);
+  // The base motif a slot prints (its row's artwork; null if no row/motif).
+  const printArtwork = (forSlot) => artworkById(printBySlot[forSlot]?.artworkId);
+
+  // Bröst + pocket collide physically (front starts 60–70 mm below the neck
+  // seam; the pocket spot sits in that band — POD_PRINT_SPEC §1). BLOCKED as a
+  // combo (decided 2026-08-08): adding one greys out the other.
+  const BLOCKED_BY = { front: 'pocket', pocket: 'front' };
+  const slotAvailability = (s) => {
+    if (printBySlot[s]) return { available: false, reason: 'Redan tillagd' };
+    const blocker = BLOCKED_BY[s];
+    if (blocker && printBySlot[blocker]) {
+      const blockerName = blocker === 'front' ? 'brösttryck' : 'ficktryck';
+      return { available: false, reason: `Kan inte kombineras med ${blockerName} (ytorna överlappar)` };
+    }
+    return { available: true, reason: null };
+  };
+
+  // Any composite-affecting change invalidates generated mockups + reviews.
+  const invalidateComposite = () => {
+    setMockups([]);
+    setHeroKey(null);
+    resetReviews();
+  };
+
+  const addPrint = (s) => {
+    if (!slotAvailability(s).available) return;
+    setPrints((prev) => [...prev, { slot: s, artworkId: null }]);
+    if (s === 'pocket') setPocketPosition(DEFAULT_POCKET_POSITION);
+    setSlot(s);
+  };
+
+  const removePrint = (s) => {
+    setPrints((prev) => prev.filter((p) => p.slot !== s));
+    setPlacements((prev) => { const n = { ...prev }; delete n[s]; return n; });
+    setOverrides((prev) => { const n = { ...prev }; delete n[s]; return n; });
+    invalidateComposite();
+    if (slot === s) {
+      const remaining = prints.filter((p) => p.slot !== s);
+      setSlot(remaining[0]?.slot || 'front');
+    }
+  };
+
+  // New motif on a row = new aspect ratio for THAT slot only: its stored
+  // placement is stale (clamping/derived height), the rest of the design keeps.
+  const setPrintArtwork = (s, artId) => {
+    setPrints((prev) => prev.map((p) => (p.slot === s ? { ...p, artworkId: artId } : p)));
+    setPlacements((prev) => { const n = { ...prev }; delete n[s]; return n; });
+    invalidateComposite();
+  };
 
   // The template's print profile (settings/podProfiles) — DPI thresholds for the
   // compositor's live verdict.
@@ -214,16 +274,16 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     [selectedTemplate, pocketPosition]
   );
 
-  // Which artwork a colourway prints in a slot: its override, else the product's
-  // base artwork. Single resolver feeding the canvas, the strip AND the renderer,
-  // mirroring the podMappings colorway-override model.
+  // Which artwork a colourway prints in a slot: its override, else the SLOT's
+  // print-row artwork (slice A: per-slot base, no global motif). Single resolver
+  // feeding the canvas, the strip AND the renderer, mirroring podMappings.
   const resolveArtwork = (forSlot, cwId) => {
     const overrideId = overrides[forSlot]?.[cwId];
     if (overrideId) {
-      const found = artwork.find((a) => a.id === overrideId);
+      const found = artworkById(overrideId);
       if (found) return found;
     }
-    return selectedArtwork;
+    return printArtwork(forSlot);
   };
 
   const setOverride = (forSlot, cwId, artworkId) => {
@@ -238,18 +298,34 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     resetReviews(); // the composite changed — every colourway must be re-seen
   };
 
-  // Override choices: selectable (non-FAIL) artwork that can actually be
-  // COMPOSED (raster with known dims — a PASS-tier PDF can't preview/mockup, and
-  // offering it would silently drop that colourway from the generated set).
+  // Override choices for the ACTIVE slot: selectable (non-FAIL) artwork that can
+  // actually be COMPOSED (raster with known dims — a PASS-tier PDF can't
+  // preview/mockup), excluding the slot's own base motif.
+  const activeBaseArtworkId = printBySlot[slot]?.artworkId || null;
   const overrideOptions = useMemo(
-    () => artwork.filter((a) => isSelectableArtwork(a) && isComposable(a) && a.id !== selectedArtworkId),
-    [artwork, selectedArtworkId]
+    () => artwork.filter((a) => isSelectableArtwork(a) && isComposable(a) && a.id !== activeBaseArtworkId),
+    [artwork, activeBaseArtworkId]
   );
 
-  // Slots that end up on mockups: 'front' always (the canvas shows its default
-  // immediately), other slots only once the seller actually placed something.
-  const designedSlots = (t) =>
-    templateSlots(t).filter((s) => s === 'front' || Boolean(placements[s]));
+  // Slots that end up on mockups + mappings: exactly the trycklista's rows that
+  // have a motif AND exist on the template (list order preserved). No implicit
+  // front — an empty list designs nothing.
+  const designedSlots = (t) => {
+    const valid = new Set(templateSlots(t));
+    return prints.filter((p) => valid.has(p.slot) && p.artworkId).map((p) => p.slot);
+  };
+
+  // The placement a slot actually prints/renders: pocket is LOCKED to the
+  // deterministic contain-centred rect (never user-stored); free slots use the
+  // stored placement RE-CLAMPED against the given artwork (an override motif
+  // with another aspect/resolution must not inherit an out-of-area or sub-DPI
+  // rect), else the compositor default. Same function feeds the mockup
+  // renderer AND the publish readouts so they can never disagree.
+  const effectivePlacementFor = (s, art) => (s === 'pocket'
+    ? containPlacement(effTemplate, s, art, profile?.min_dpi ?? null)
+    : (placements[s]
+        ? clampPlacement(placements[s], effTemplate, s, art, profile?.min_dpi ?? null)
+        : defaultPlacement(effTemplate, s, art, profile?.min_dpi ?? null)));
 
   const generateMockups = async () => {
     // Also blocked while PUBLISHING: regenerating revokes the object URLs the
@@ -273,7 +349,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           try {
             ({ blob, type } = await renderMockup({
               template: effTemplate, colorway: cw, slot: s, minDpi: profile?.min_dpi ?? null,
-              artwork: art, placement: placements[s] || null,
+              artwork: art, placement: effectivePlacementFor(s, art),
             }));
           } catch (e) {
             renderSkips += 1;
@@ -361,7 +437,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
 
     // Validate (belt-and-suspenders; PublishPanel gates the button too).
     if (!shopId) { setPublishError('Ingen butik är vald.'); return; }
-    if (!selectedArtwork) { setPublishError('Välj ett original innan du publicerar.'); return; }
+    const publishSlots = designedSlots(selectedTemplate);
+    if (publishSlots.length === 0) { setPublishError('Lägg till minst ett tryck med motiv innan du publicerar.'); return; }
+    if (prints.some((p) => !p.artworkId)) { setPublishError('Ett tryck saknar motiv — välj motiv för raden eller ta bort den.'); return; }
+    // A motif deleted from the library after it was picked would crash mid-
+    // publish (after addDoc) — catch it here instead.
+    if (prints.some((p) => p.artworkId && !artworkById(p.artworkId))) {
+      setPublishError('Ett valt motiv finns inte längre i biblioteket — välj ett nytt motiv för trycket.');
+      return;
+    }
     const cleanName = (name || '').trim();
     if (!cleanName) { setPublishError('Ange ett produktnamn.'); return; }
     const productPrice = parseFloat(price) || 0;
@@ -496,15 +580,16 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
       // Group sku per COLORWAY ID (index-aligned with publishedIds) — an id join,
       // not a label join, so duplicate colorway labels can never cross-target.
       const groupSkuByColorwayId = new Map(publishedIds.map((id, i) => [id, cleanGroups[i]?.sku]));
-      for (const s of designedSlots(selectedTemplate)) {
-        const effective = placements[s] || defaultPlacement(effTemplate, s, selectedArtwork, profile?.min_dpi ?? null);
-        const readout = placementReadout(effective, effTemplate, s, selectedArtwork);
+      for (const s of publishSlots) {
+        const baseArt = printArtwork(s);
+        const effective = effectivePlacementFor(s, baseArt);
+        const readout = placementReadout(effective, effTemplate, s, baseArt);
         const isPocket = s === 'pocket';
         const posLabel = pocketPositionLabel(pocketPosition);
         await setMapping({
           shopId,
           sku: resolvedSku,
-          artworkId: selectedArtwork.id,
+          artworkId: baseArt.id,
           profileId: selectedTemplate.profileId,
           // Pocket rows carry the discrete position FIRST — that's the printer's
           // primary instruction for this slot ("Ficka — Vänster · 2 cm uppifrån…").
@@ -516,14 +601,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
 
       // OVERRIDE row per (designed slot, colourway that has an override AND is
       // published): targets that colourway's GROUP sku so it wins over the parent.
-      for (const s of designedSlots(selectedTemplate)) {
+      for (const s of publishSlots) {
         const slotOverrides = overrides[s] || {};
         for (const [cwId, overrideArtworkId] of Object.entries(slotOverrides)) {
           if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
           const groupSku = groupSkuByColorwayId.get(cwId);
           if (!groupSku) continue;
-          const overrideArt = artwork.find((a) => a.id === overrideArtworkId) || selectedArtwork;
-          const effective = placements[s] || defaultPlacement(effTemplate, s, overrideArt, profile?.min_dpi ?? null);
+          const overrideArt = artworkById(overrideArtworkId) || printArtwork(s);
+          const effective = effectivePlacementFor(s, overrideArt);
           const readout = placementReadout(effective, effTemplate, s, overrideArt);
           const isPocket = s === 'pocket';
           const posLabel = pocketPositionLabel(pocketPosition);
@@ -564,8 +649,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px,1fr]">
       {/* ── LEFT RAIL ─────────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-4">
-        {/* Artwork picker */}
+        {/* Artwork picker — assigns the motif to the ACTIVE print row (adds a
+            front row automatically when the trycklista is still empty, so the
+            old "click an artwork to start" muscle memory keeps working). */}
         <CardSection title="Original" bodyClassName="p-0">
+          {prints.length > 0 && (
+            <p className="border-b border-admin-border-soft px-4 py-2 text-[11px] text-admin-text-faint">
+              Väljer motiv för: <span className="font-medium text-admin-text-muted">{slotLabel(slot)}</span>
+            </p>
+          )}
           {loading ? (
             <p className="px-4 py-4 text-[13px] text-admin-text-muted">Laddar…</p>
           ) : artwork.length === 0 ? (
@@ -576,13 +668,24 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
             <ul className="max-h-[340px] overflow-y-auto">
               {artwork.map((art) => {
                 const selectable = isSelectableArtwork(art);
-                const active = art.id === selectedArtworkId;
+                const active = art.id === activeBaseArtworkId;
                 return (
                   <li key={art.id}>
                     <button
                       type="button"
                       disabled={!selectable}
-                      onClick={() => selectable && setSelectedArtworkId(art.id)}
+                      onClick={() => {
+                        if (!selectable) return;
+                        if (prints.length === 0) {
+                          // Templates are data — don't assume 'front' exists.
+                          const target = slots.includes('front') ? 'front' : (slots[0] || 'front');
+                          setPrints([{ slot: target, artworkId: art.id }]);
+                          setSlot(target);
+                          invalidateComposite();
+                        } else {
+                          setPrintArtwork(slot, art.id);
+                        }
+                      }}
                       title={!selectable ? 'Formatet kan inte förhandsgranskas i studion (bildmått saknas)' : undefined}
                       className={`flex w-full items-center gap-3 border-b border-admin-border-soft px-4 py-2.5 text-left ${
                         active ? 'bg-admin-info-bg/60' : 'hover:bg-admin-surface-2'
@@ -665,26 +768,144 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           </p>
         )}
 
+        {/* ── TRYCKLISTAN — the design's print rows (slice A). Sits ABOVE the
+            canvas: the list drives what the canvas shows. Each row = one
+            physical print (position + motif); the active row is highlighted. */}
+        <div className="mb-4 rounded-[var(--radius-admin)] border border-admin-border-soft p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] font-medium text-admin-text">Tryck på plagget</span>
+            {prints.length === 0 && (
+              <span className="text-[11px] text-admin-text-faint">Inga tryck ännu — lägg till ett för att börja</span>
+            )}
+          </div>
+
+          {prints.length > 0 && (
+            <ul className="mt-2 flex flex-col gap-1.5">
+              {prints.map((p) => {
+                const art = artworkById(p.artworkId);
+                const active = p.slot === slot;
+                const label = p.slot === 'pocket'
+                  ? `${slotLabel(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
+                  : slotLabel(p.slot);
+                return (
+                  <li
+                    key={p.slot}
+                    className={`flex items-center gap-2 rounded-[var(--radius-admin-el)] border px-2 py-1.5 ${
+                      active ? 'border-admin-info-dot bg-admin-info-bg/40' : 'border-admin-border-soft'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSlot(p.slot)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    >
+                      {art?.previewUrl ? (
+                        <img src={art.previewUrl} alt="" className="h-8 w-8 shrink-0 rounded-[4px] border border-admin-border object-cover" />
+                      ) : (
+                        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-[4px] border border-dashed border-admin-border text-admin-text-faint">
+                          <PhotoIcon className="h-4 w-4" />
+                        </div>
+                      )}
+                      <span className="min-w-0">
+                        <span className="block truncate text-[12px] font-medium text-admin-text">{label}</span>
+                        <span className={`block truncate text-[11px] ${art ? 'text-admin-text-muted' : 'text-admin-caution-text'}`}>
+                          {art ? (art.label || art.fileName) : 'Motiv saknas — välj i listan Original'}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removePrint(p.slot)}
+                      aria-label={`Ta bort trycket: ${slotLabel(p.slot)}`}
+                      className="shrink-0 rounded-[var(--radius-admin-el)] px-2 py-1 text-[12px] text-admin-text-faint hover:bg-admin-surface-2 hover:text-admin-text"
+                    >
+                      Ta bort
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {slots.some((s) => slotAvailability(s).available) && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <span className="text-[12px] text-admin-text-muted">Lägg till tryck:</span>
+              {slots.map((s) => {
+                const { available, reason } = slotAvailability(s);
+                if (printBySlot[s]) return null;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    disabled={!available}
+                    title={!available ? reason : undefined}
+                    onClick={() => addPrint(s)}
+                    className="rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1 text-[12px] text-admin-text hover:bg-admin-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    + {slotLabel(s)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Pocket position — discrete choice (left/center/right, wearer's
+              perspective); the fixed 10×10 cm spot has no free placement. */}
+          {slot === 'pocket' && selectedTemplate?.pocketPositions && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-admin-border-soft pt-2.5">
+              <span className="text-[12px] text-admin-text-muted">Fickposition:</span>
+              {POCKET_POSITIONS.map((p) => {
+                const active = p.id === pocketPosition;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      setPocketPosition(p.id);
+                      invalidateComposite(); // the pocket rect moved
+                    }}
+                    className={`rounded-[var(--radius-admin-el)] px-2.5 py-1 text-[12px] ${
+                      active
+                        ? 'bg-black/[0.08] font-medium text-admin-text'
+                        : 'text-admin-text-muted hover:bg-black/[0.06]'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+              <span className="text-[11px] text-admin-text-faint">(sett från bäraren)</span>
+            </div>
+          )}
+        </div>
+
         <CompositorCanvas
           template={effTemplate}
           colorway={selectedColorway}
           slot={slot}
           artwork={canvasArtwork}
           profile={profile}
-          placement={placements[slot] || null}
+          locked={slot === 'pocket'}
+          placement={slot === 'pocket' ? null : (placements[slot] || null)}
           onPlacementChange={(p) => {
+            if (slot === 'pocket') return; // locked — geometry is deterministic
             setPlacements((prev) => ({ ...prev, [slot]: p }));
-            resetReviews(); // moving the artwork changes every colourway's composite
+            // Moving the artwork changes the composite: generated mockups are
+            // stale (they'd publish the OLD placement while the mapping readout
+            // instructs the NEW one) and every colourway must be re-seen.
+            invalidateComposite();
           }}
         />
 
         {/* 3D-vy (beta): photo-displacement mockup with the FRONT slot's resolved
-            artwork. DECOUPLED from the print placement — the 3D view composes the
-            PRODUCT IMAGE only (never a print instruction); the canvas placement
-            only seeds its starting position. WebGL-gated; pixi lazy-loads. */}
+            artwork. READ-ONLY (slice C): it FOLLOWS the live print placement and
+            the model's calibrated tuning — sellers can't diverge the render from
+            what gets printed. WebGL-gated; pixi lazy-loads. */}
         <Studio3DSection
           artwork={resolveArtwork('front', colorwayId)}
-          placement={placements.front || null}
+          placement={resolveArtwork('front', colorwayId)
+            ? effectivePlacementFor('front', resolveArtwork('front', colorwayId))
+            : null}
           models={models3d}
         />
 
@@ -697,68 +918,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
             activeColorwayId={colorwayId}
             onSelect={setColorwayId}
             placement={placements[slot] || null}
+            locked={slot === 'pocket'}
             resolveArtwork={(cwId) => resolveArtwork(slot, cwId)}
             overrides={overrides[slot] || {}}
-            onOverrideChange={selectedArtwork ? (cwId, artId) => setOverride(slot, cwId, artId) : null}
+            onOverrideChange={printArtwork(slot) ? (cwId, artId) => setOverride(slot, cwId, artId) : null}
             artworkOptions={overrideOptions}
-            baseArtworkLabel={selectedArtwork?.label || selectedArtwork?.fileName || 'Standardmotiv'}
+            baseArtworkLabel={printArtwork(slot)?.label || printArtwork(slot)?.fileName || 'Standardmotiv'}
             reviewedColorwayIds={reviewedColorways}
           />
-        )}
-
-        {/* Slot selector — only when the template defines more than one slot. */}
-        {slots.length > 1 && (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="text-[12px] text-admin-text-muted">Placering:</span>
-            {slots.map((s) => {
-              const active = s === slot;
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSlot(s)}
-                  className={`rounded-[var(--radius-admin-el)] px-2.5 py-1 text-[12px] ${
-                    active
-                      ? 'bg-black/[0.08] font-medium text-admin-text'
-                      : 'text-admin-text-muted hover:bg-black/[0.06]'
-                  }`}
-                >
-                  {slotLabel(s)}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Pocket position — discrete choice (left/center/right, wearer's
-            perspective), no free placement for the fixed 10×10 cm pocket spot. */}
-        {slot === 'pocket' && selectedTemplate?.pocketPositions && (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-[12px] text-admin-text-muted">Fickposition:</span>
-            {POCKET_POSITIONS.map((p) => {
-              const active = p.id === pocketPosition;
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => {
-                    setPocketPosition(p.id);
-                    setMockups([]); // stale — the pocket rect moved
-                    setHeroKey(null);
-                    resetReviews(); // the composite changed — every colourway must be re-seen
-                  }}
-                  className={`rounded-[var(--radius-admin-el)] px-2.5 py-1 text-[12px] ${
-                    active
-                      ? 'bg-black/[0.08] font-medium text-admin-text'
-                      : 'text-admin-text-muted hover:bg-black/[0.06]'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              );
-            })}
-            <span className="text-[11px] text-admin-text-faint">(sett från bäraren)</span>
-          </div>
         )}
 
         {/* Generated mockups: per-colourway rasterized previews + hero pick. */}
@@ -769,7 +936,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           onGenerate={generateMockups}
           generating={generating}
           error={mockupError}
-          canGenerate={Boolean(selectedTemplate && isComposable(selectedArtwork)) && !publishing}
+          canGenerate={Boolean(selectedTemplate) && designedSlots(selectedTemplate).some((s) => isComposable(printArtwork(s))) && !publishing}
         />
 
         {/* Publish: pick colourways + sizes, price, and create the real product. */}
@@ -777,7 +944,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           mockups={mockups}
           template={selectedTemplate}
           vatRate={STORE.vatRate}
-          hasArtwork={Boolean(selectedArtwork)}
+          hasArtwork={designedSlots(selectedTemplate).length > 0 && prints.every((p) => p.artworkId)}
+          printSummary={designedSlots(selectedTemplate).map((s) => ({
+            slot: s,
+            slotLabel: s === 'pocket'
+              ? `${slotLabel(s)} · ${pocketPositionLabel(pocketPosition)}`
+              : slotLabel(s),
+            artworkLabel: printArtwork(s)?.label || printArtwork(s)?.fileName || '—',
+          }))}
           shopId={shopId}
           publishing={publishing}
           result={publishResult}
