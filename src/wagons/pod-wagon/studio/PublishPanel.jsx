@@ -52,6 +52,12 @@ const roundUpTo9 = (value) => {
  *                     ("inga tryck-överraskningar").
  *   onPublish(form) — form = { name, price, selectedColorwayIds, sizesByColorway,
  *                     perColorwayPrices }
+ *   products       — [{ id, sku, name, image, hasSku, variants }] existing shop
+ *                     products (shared library load) — the "Uppdatera befintlig
+ *                     produkt" target picker
+ *   onUpdateExisting(form) — form = { productId, selectedColorwayIds,
+ *                     connectPrint, replaceImages } — attach mockups (+ POD
+ *                     mappings) to an EXISTING product instead of creating one
  *   onReset()      — clear name/price after a success ("Skapa en till")
  */
 const PublishPanel = ({
@@ -66,6 +72,8 @@ const PublishPanel = ({
   error = null,
   reviewedColorwayIds = [],
   onPublish,
+  products = [],
+  onUpdateExisting,
   onReset,
 }) => {
   // Colourways that actually have ≥1 generated mockup (the only publishable set).
@@ -82,6 +90,12 @@ const PublishPanel = ({
 
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
+  // Publish TARGET: create a new product (default) or update an existing one
+  // (attach mockups + POD mappings to a product built content-first).
+  const [target, setTarget] = useState('new');
+  const [targetProductId, setTargetProductId] = useState('');
+  const [connectPrint, setConnectPrint] = useState(true);   // mappings = printability
+  const [replaceImages, setReplaceImages] = useState(false); // never silently replace
   const [margin, setMargin] = useState('40');
   const [sizes, setSizes] = useState(DEFAULT_SIZES);
   const [newSize, setNewSize] = useState('');
@@ -164,6 +178,22 @@ const PublishPanel = ({
   const canPublish =
     !publishing && validName && validPrice && hasColorways && hasArtwork && !!shopId && allReviewed;
 
+  const targetProduct = products.find((p) => p.id === targetProductId) || null;
+  const targetHasSku = Boolean(targetProduct?.hasSku);
+  const canUpdate =
+    !publishing && !!targetProductId && hasColorways && hasArtwork && !!shopId && allReviewed;
+
+  const submitExisting = () => {
+    if (!canUpdate) return;
+    onUpdateExisting?.({
+      productId: targetProductId,
+      selectedColorwayIds,
+      // Print connection needs a product SKU to key the mappings on.
+      connectPrint: connectPrint && targetHasSku,
+      replaceImages,
+    });
+  };
+
   const submit = () => {
     if (!canPublish) return;
     const sizesByColorway = {};
@@ -219,7 +249,68 @@ const PublishPanel = ({
             </div>
           )}
 
-          {/* 2. Product name */}
+          {/* 2. Target: new product (default) or an existing one. Closes the
+              content-first gap — a product created without images gets its
+              studio mockups AND its print connection here. */}
+          <div>
+            <label className={labelCls}>Mål</label>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              <label className="flex cursor-pointer items-center gap-2 text-[13px] text-admin-text">
+                <input type="radio" name="pub-target" checked={target === 'new'}
+                  onChange={() => { setTarget('new'); if (result) onReset?.(); }} className="h-4 w-4 accent-admin-primary" />
+                Skapa ny produkt
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-[13px] text-admin-text">
+                <input type="radio" name="pub-target" checked={target === 'existing'}
+                  onChange={() => { setTarget('existing'); if (result) onReset?.(); }} className="h-4 w-4 accent-admin-primary" />
+                Uppdatera befintlig produkt
+              </label>
+            </div>
+            {target === 'existing' && (
+              <div className="mt-2.5 space-y-2.5">
+                <select
+                  value={targetProductId}
+                  onChange={(e) => setTargetProductId(e.target.value)}
+                  aria-label="Produkt att uppdatera"
+                  className={`${inputCls} max-w-md`}
+                >
+                  <option value="">Välj produkt…</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name || '(namnlös produkt)'}{p.hasSku ? '' : ' — saknar SKU'}
+                    </option>
+                  ))}
+                </select>
+                <label className={`flex items-center gap-2 text-[13px] ${targetHasSku ? 'cursor-pointer text-admin-text' : 'cursor-not-allowed text-admin-text-muted'}`}>
+                  <input type="checkbox" checked={connectPrint && targetHasSku} disabled={!targetHasSku}
+                    onChange={(e) => setConnectPrint(e.target.checked)} className={checkboxCls} />
+                  Koppla trycket till produkten (krävs för POD-beställningar)
+                </label>
+                {targetProduct && targetHasSku &&
+                  products.filter((p) => p.hasSku && p.sku === targetProduct.sku).length > 1 && (
+                  <p className="text-[12px] text-admin-caution-text">
+                    Fler produkter delar SKU ”{targetProduct.sku}” — tryckkopplingen gäller
+                    ALLA produkter med det SKU:t. Ge produkterna unika SKU:n om de ska
+                    tryckas olika.
+                  </p>
+                )}
+                {targetProduct && !targetHasSku && (
+                  <p className="text-[12px] text-admin-caution-text">
+                    Produkten saknar SKU — bilderna läggs till, men trycket kan inte kopplas.
+                    Ge produkten ett SKU under Produkter först.
+                  </p>
+                )}
+                <label className="flex cursor-pointer items-center gap-2 text-[13px] text-admin-text">
+                  <input type="checkbox" checked={replaceImages}
+                    onChange={(e) => setReplaceImages(e.target.checked)} className={checkboxCls} />
+                  Ersätt även befintlig huvudbild/variantbilder (annars fylls bara tomma)
+                </label>
+              </div>
+            )}
+          </div>
+
+          {/* 2b. Product name (new-product target only) */}
+          {target === 'new' && (
           <div>
             <label className={labelCls} htmlFor="pub-name">Produktnamn</label>
             <input
@@ -231,6 +322,7 @@ const PublishPanel = ({
               className={inputCls}
             />
           </div>
+          )}
 
           {/* 3. Colourway multi-select */}
           <div>
@@ -253,7 +345,9 @@ const PublishPanel = ({
             )}
           </div>
 
-          {/* 4. Sizes — global chip list + per-colourway opt-out matrix */}
+          {/* 4. Sizes — new-product target only (an existing product keeps
+              its own variants untouched; v1 does no variant surgery). */}
+          {target === 'new' && (
           <div>
             <label className={labelCls}>Storlekar</label>
             <div className="flex flex-wrap items-center gap-2">
@@ -323,8 +417,10 @@ const PublishPanel = ({
               </p>
             )}
           </div>
+          )}
 
-          {/* 5. Pricing */}
+          {/* 5. Pricing (new-product target only) */}
+          {target === 'new' && (
           <div>
             <label className={labelCls} htmlFor="pub-price">Pris (SEK, inkl. moms)</label>
             <div className="flex flex-wrap items-center gap-2">
@@ -412,16 +508,26 @@ const PublishPanel = ({
               </p>
             )}
           </div>
+          )}
 
           {/* 6. Publish action + status */}
           {result ? (
             <div className="rounded-[var(--radius-admin)] border border-admin-success-dot/40 bg-admin-success-bg px-4 py-3">
               <p className="text-[13px] font-medium text-admin-success-text">
-                Produkten ”{result.name}” skapades.
+                {result.updated
+                  ? `Produkten ”${result.name}” uppdaterades med dina mockuper${result.connected ? ' och trycket kopplades' : ''}.`
+                  : `Produkten ”${result.name}” skapades.`}
               </p>
               <p className="mt-1 text-[12px] text-admin-success-text">
-                SKU: {result.sku} · den är nu LIVE i butiken.
+                {result.sku ? `SKU: ${result.sku} · ` : ''}den är {result.updated ? 'uppdaterad' : 'nu LIVE'} i butiken.
               </p>
+              {result.skippedOverrides?.length > 0 && (
+                <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
+                  Obs: eget motiv för {result.skippedOverrides.join(', ')} kunde INTE kopplas
+                  (ingen variant med matchande namn på produkten) — de färgerna trycks med
+                  standardmotivet. Kontrollera under Produktkoppling.
+                </p>
+              )}
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 <Link to="/admin/products" className="text-[12px] font-medium text-admin-info-text hover:underline">
                   Öppna Produkter
@@ -444,11 +550,13 @@ const PublishPanel = ({
               ) : (
                 <button
                   type="button"
-                  onClick={submit}
-                  disabled={!canPublish}
+                  onClick={target === 'existing' ? submitExisting : submit}
+                  disabled={target === 'existing' ? !canUpdate : !canPublish}
                   className="rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
                 >
-                  {publishing ? 'Skapar…' : 'Skapa produkt'}
+                  {publishing
+                    ? (target === 'existing' ? 'Uppdaterar…' : 'Skapar…')
+                    : (target === 'existing' ? 'Uppdatera produkten' : 'Skapa produkt')}
                 </button>
               )}
               {error && (
@@ -463,7 +571,7 @@ const PublishPanel = ({
               )}
               {/* Review gate is the LAST gate: shown only when everything else is
                   valid but not every selected colourway has been seen in the strip. */}
-              {shopId && hasArtwork && validName && validPrice && hasColorways && !allReviewed && (
+              {shopId && hasArtwork && (target === 'existing' ? !!targetProductId : (validName && validPrice)) && hasColorways && !allReviewed && (
                 <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
                   Granska färgerna i färglisten innan du publicerar — {selectedColorways.length - unreviewedColorways.length} av {selectedColorways.length} granskade.
                   {' '}Kvar: {unreviewedColorways.map((c) => c.label).join(', ')}.

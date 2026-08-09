@@ -155,6 +155,8 @@ const PodAdminPage = () => {
             artwork={lib.artwork.filter((a) => a.status === 'ready')}
             loading={lib.loading}
             shopId={shopId}
+            products={lib.products}
+            onChanged={lib.refresh}
           />
         </div>
       </Page>

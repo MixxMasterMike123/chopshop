@@ -48,7 +48,7 @@ import Studio3DSection from './Studio3DSection';
 // Publish (slice 4) — create the real product + variants + POD mappings. These
 // are the ONLY Firebase-touching imports in the studio; PublishPanel stays
 // Firebase-free (presentational) so the dev harness can mount it standalone.
-import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, serverTimestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../../../firebase/config';
 import { withShopId } from '../../../config/withShopId';
@@ -70,7 +70,7 @@ const GarmentThumb = ({ template, colorway }) => (
   <TemplateBackground template={template} colorway={colorway} />
 );
 
-const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
+const DesignStudio = ({ artwork = [], loading = false, shopId = null, products = [], onChanged = null }) => {
   const [templates, setTemplates] = useState([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [meta, setMeta] = useState({ version: 0, provisional: true });
@@ -657,6 +657,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
       await Promise.all(mappingWrites);
 
       setPublishResult({ name: cleanName, sku: resolvedSku });
+      onChanged?.();
     } catch (e) {
       console.error('DesignStudio: publish failed', e);
       setPublishError(
@@ -664,6 +665,192 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           ? 'Produkten skapades men bilder/kopplingar kan vara ofullständiga — kontrollera under Produkter.'
           : (e?.message || 'Publiceringen misslyckades.')
       );
+    } finally {
+      publishingRef.current = false;
+      setPublishing(false);
+    }
+  };
+
+  // ── UPDATE EXISTING PRODUCT (closing the content-first gap, 2026-08-09) ──
+  // Attach the generated mockups to an EXISTING product: gallery images, main
+  // image (only when missing, unless replaceImages), variant-group images on
+  // EXACT colourway-label matches — and, the part that makes it PRINTABLE,
+  // the same podMappings rows the create flow writes, keyed on the product's
+  // own sku. Variants/prices/copy stay untouched (no variant surgery in v1).
+  const updateProduct = async ({ productId, selectedColorwayIds, connectPrint, replaceImages }) => {
+    if (publishing || publishingRef.current) return;
+    setPublishError(null);
+    setPublishResult(null);
+    if (!shopId) { setPublishError('Ingen butik är vald.'); return; }
+    const publishSlots = designedSlots(selectedTemplate);
+    if (publishSlots.length === 0) { setPublishError('Lägg till minst ett tryck med motiv innan du publicerar.'); return; }
+    if (prints.some((p) => !p.artworkId)) { setPublishError('Ett tryck saknar motiv — välj motiv för raden eller ta bort den.'); return; }
+    if (prints.some((p) => p.artworkId && !artworkById(p.artworkId))) {
+      setPublishError('Ett valt motiv finns inte längre i biblioteket — välj ett nytt motiv för trycket.');
+      return;
+    }
+    const selectedSet = new Set(selectedColorwayIds || []);
+    if (selectedSet.size === 0) { setPublishError('Välj minst en färg.'); return; }
+    const pubMockups = mockups.filter((m) => selectedSet.has(m.colorwayId));
+    if (pubMockups.length === 0) { setPublishError('Inga mockuper för de valda färgerna — generera om.'); return; }
+
+    publishingRef.current = true;
+    setPublishing(true);
+    let docTouched = false;
+    try {
+      // Fresh authoritative read — the library listing is a projection and the
+      // doc may have changed since it loaded.
+      const prodRef = doc(db, 'products', productId);
+      const prodSnap = await getDoc(prodRef);
+      if (!prodSnap.exists()) throw new Error('Produkten finns inte längre.');
+      const prod = prodSnap.data();
+      if (prod.shopId !== shopId) throw new Error('Produkten tillhör en annan butik.');
+
+      const publicPath = `products/${shopId}/${productId}`;
+      const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
+      // 'studio_' prefix + deterministic (colorway, slot) names: re-running the
+      // update replaces this flow's own files instead of accumulating copies.
+      const galleryUrls = await Promise.all(pubMockups.map((m) =>
+        uploadBlobToPublicPath(m.objectUrl, m.type, publicPath, `studio_${m.colorwayId}_${m.slot}`)
+      ));
+      const heroUrl = galleryUrls[pubMockups.indexOf(hero)];
+
+      // Gallery merge deduped on storage PATH — download tokens differ between
+      // uploads of the same object, so URL equality would stack duplicates.
+      const pathOf = (u) => { try { return new URL(u).pathname; } catch { return u; } };
+      const existingGallery = Array.isArray(prod.b2cImageGallery) ? prod.b2cImageGallery : [];
+      const keptGallery = existingGallery.filter((u) => !galleryUrls.some((n) => pathOf(n) === pathOf(u)));
+      const updates = {
+        b2cImageGallery: [...keptGallery, ...galleryUrls],
+        updatedAt: serverTimestamp(),
+      };
+      // Main image: fill when missing; replace only on explicit opt-in.
+      const hasMain = Boolean(prod.imageUrl || prod.b2cImageUrl);
+      if (!hasMain || replaceImages) {
+        updates.imageUrl = heroUrl;
+        updates.b2cImageUrl = heroUrl;
+      }
+
+      // Variant-group images on EXACT label matches (case-insensitive):
+      // fill empty groups always, replace populated ones only on opt-in.
+      const norm = (x) => String(x || '').trim().toLowerCase();
+      const frontUrlByLabel = {};
+      pubMockups.forEach((m, i) => {
+        if (m.slot === 'front') frontUrlByLabel[norm(m.colorwayLabel)] = galleryUrls[i];
+      });
+      // NOTE both `image` AND `images` must be written: the storefront card
+      // reads g.image / v.image, the product page reads variant.images — the
+      // persisted shape carries both (variantDerivation CleanGroup/VariantRow).
+      // The change must also propagate to the sellable variants[] rows, which
+      // hold their own copies (joined by `group` = the group's label).
+      if (Array.isArray(prod.variantGroups) && prod.variantGroups.length) {
+        const updatedUrlByLabel = {};
+        let changed = false;
+        const groups = prod.variantGroups.map((g) => {
+          const url = frontUrlByLabel[norm(g?.label)];
+          if (!url) return g;
+          const has = Array.isArray(g.images) ? g.images.length > 0 : Boolean(g.image);
+          if (has && !replaceImages) return g;
+          changed = true;
+          updatedUrlByLabel[norm(g.label)] = url;
+          const rest = Array.isArray(g.images)
+            ? g.images.slice(1).filter((u) => pathOf(u) !== pathOf(url))
+            : [];
+          return { ...g, image: url, images: [url, ...rest] };
+        });
+        if (changed) {
+          updates.variantGroups = groups;
+          if (Array.isArray(prod.variants) && prod.variants.length) {
+            updates.variants = prod.variants.map((v) => {
+              const url = updatedUrlByLabel[norm(v?.group)];
+              if (!url) return v;
+              const rest = Array.isArray(v.images)
+                ? v.images.slice(1).filter((u) => pathOf(u) !== pathOf(url))
+                : [];
+              return { ...v, image: url, images: [url, ...rest] };
+            });
+          }
+        }
+      }
+
+      // KNOWN WINDOW: getDoc → uploads → updateDoc is a seconds-long
+      // read-modify-write; a concurrent ProductForm save in that window loses
+      // its group edits to this snapshot. Accepted for v1 (single-admin shops).
+      await updateDoc(prodRef, updates);
+      docTouched = true;
+
+      // Print connection — identical mapping rows to the create flow, keyed on
+      // the product's OWN sku; override rows target group skus whose label
+      // EXACTLY matches the overridden colourway's label (decision 2026-08-09:
+      // exact matches only, nothing fuzzy).
+      let connected = false;
+      const skippedOverrides = [];
+      if (connectPrint && prod.sku) {
+        const groupSkuByLabel = new Map(
+          (Array.isArray(prod.variantGroups) ? prod.variantGroups : [])
+            .filter((g) => g?.sku && g?.label)
+            .map((g) => [norm(g.label), g.sku])
+        );
+        const cwLabelOf = (id) =>
+          (selectedTemplate?.colorways || []).find((c) => c.id === id)?.label || null;
+        const writes = [];
+        for (const s of publishSlots) {
+          const baseArt = printArtwork(s);
+          const effective = effectivePlacementFor(s, baseArt);
+          const readout = placementReadout(effective, effTemplate, s, baseArt);
+          const isPocket = s === 'pocket';
+          const posLabel = pocketPositionLabel(pocketPosition);
+          writes.push(setMapping({
+            shopId,
+            sku: prod.sku,
+            artworkId: baseArt.id,
+            profileId: selectedTemplate.profileId,
+            placement: isPocket ? `${posLabel} · ${readout}` : readout,
+            placementSlot: s,
+            ...(isPocket ? { position: pocketPosition } : {}),
+          }));
+          const slotOverrides = overrides[s] || {};
+          for (const [cwId, overrideArtworkId] of Object.entries(slotOverrides)) {
+            if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
+            const gSku = groupSkuByLabel.get(norm(cwLabelOf(cwId)));
+            if (!gSku) {
+              // No matching variant group on the target → this colourway's
+              // override CANNOT be connected: the gallery would show the
+              // override motif while the printer gets the base one. Surface it.
+              skippedOverrides.push(cwLabelOf(cwId) || cwId);
+              continue;
+            }
+            const overrideArt = artworkById(overrideArtworkId) || printArtwork(s);
+            const effO = effectivePlacementFor(s, overrideArt);
+            const readoutO = placementReadout(effO, effTemplate, s, overrideArt);
+            writes.push(setMapping({
+              shopId,
+              sku: gSku,
+              artworkId: overrideArtworkId,
+              profileId: selectedTemplate.profileId,
+              placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
+              placementSlot: s,
+              ...(isPocket ? { position: pocketPosition } : {}),
+            }));
+          }
+        }
+        await Promise.all(writes);
+        connected = true;
+      }
+
+      setPublishResult({
+        name: prod.name || '(namnlös produkt)',
+        sku: prod.sku || '',
+        updated: true,
+        connected,
+        skippedOverrides,
+      });
+      onChanged?.();
+    } catch (e) {
+      console.error('DesignStudio: update product failed', e);
+      setPublishError(docTouched
+        ? 'Bilderna lades till men tryckkopplingen kan vara ofullständig — kontrollera under Produktkoppling.'
+        : (e?.message || 'Uppdateringen misslyckades.'));
     } finally {
       publishingRef.current = false;
       setPublishing(false);
@@ -1009,6 +1196,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           error={publishError}
           reviewedColorwayIds={reviewedColorways}
           onPublish={publish}
+          products={products}
+          onUpdateExisting={updateProduct}
           onReset={resetPublishForm}
         />
       </CardSection>
