@@ -57,6 +57,7 @@
 // Tenancy: create stamps shopId via withShopId(...) and the parent passes
 // shopId from useShopId().
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { collection, doc, getDoc, addDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, deleteObject } from 'firebase/storage';
 import { uploadImageToStorage } from '../../utils/imageUpload';
@@ -849,6 +850,23 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
 
             {/* Media */}
             <CardSection title="Media" bodyClassName="space-y-4">
+              {/* Content-first flow (way 2, 2026-08-09): a saved product without
+                  imagery can get its mockups + print connection from the Design
+                  Studio — deep-links with this product preselected as target. */}
+              {isEnabled('pod') && product && (product.documentId || product.id) && (
+                <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-admin-el)] bg-admin-surface-2 px-3 py-2.5">
+                  <span className="min-w-0 flex-1 text-[12px] text-admin-text-muted">
+                    Vill du skapa produktbilder från ett tryckmotiv? Designa i studion så
+                    kopplas bilderna och trycket till den här produkten.
+                  </span>
+                  <Link
+                    to={`/admin/pod?designFor=${product.documentId || product.id}`}
+                    className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border px-3 py-1.5 text-[12px] font-medium text-admin-text hover:bg-admin-surface"
+                  >
+                    Skapa bilder i Design Studio
+                  </Link>
+                </div>
+              )}
               <div>
                 <label className={labelCls}>Huvudbild (max 5MB)</label>
                 <div className="flex flex-col items-start gap-4 lg:flex-row lg:items-center">

@@ -11,6 +11,7 @@
 // (App.jsx), so reaching here implies the shop is entitled. We still read
 // useShopFeatures() defensively and useShopId() to scope all data to the shop.
 import React, { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import AppLayout from '../../../components/layout/AppLayout';
 import { Page, CardSection, Button } from '../../../components/admin/ui';
@@ -60,7 +61,11 @@ const UnmappedBanner = ({ count, onFix }) => {
 const PodAdminPage = () => {
   const shopId = useShopId();
   const { isEnabled } = useShopFeatures();
-  const [tab, setTab] = useState('library');
+  // Deep link from the product form (way 2): /admin/pod?designFor=<productId>
+  // opens the STUDIO tab with that product preselected as publish target.
+  const [searchParams] = useSearchParams();
+  const designForProductId = searchParams.get('designFor') || null;
+  const [tab, setTab] = useState(designForProductId ? 'studio' : 'library');
   // When set, the mapping tab preselects this original in its add-row.
   const [prefillArtworkId, setPrefillArtworkId] = useState(null);
 
@@ -157,6 +162,7 @@ const PodAdminPage = () => {
             shopId={shopId}
             products={lib.products}
             onChanged={lib.refresh}
+            designForProductId={designForProductId}
           />
         </div>
       </Page>

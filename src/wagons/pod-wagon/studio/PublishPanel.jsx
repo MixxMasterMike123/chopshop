@@ -58,6 +58,8 @@ const roundUpTo9 = (value) => {
  *   onUpdateExisting(form) — form = { productId, selectedColorwayIds,
  *                     connectPrint, replaceImages } — attach mockups (+ POD
  *                     mappings) to an EXISTING product instead of creating one
+ *   initialTargetProductId — preselects target='existing' with this product
+ *                     (the ?designFor deep link from the product form)
  *   onReset()      — clear name/price after a success ("Skapa en till")
  */
 const PublishPanel = ({
@@ -74,6 +76,7 @@ const PublishPanel = ({
   onPublish,
   products = [],
   onUpdateExisting,
+  initialTargetProductId = null,
   onReset,
 }) => {
   // Colourways that actually have ≥1 generated mockup (the only publishable set).
@@ -92,8 +95,8 @@ const PublishPanel = ({
   const [price, setPrice] = useState('');
   // Publish TARGET: create a new product (default) or update an existing one
   // (attach mockups + POD mappings to a product built content-first).
-  const [target, setTarget] = useState('new');
-  const [targetProductId, setTargetProductId] = useState('');
+  const [target, setTarget] = useState(initialTargetProductId ? 'existing' : 'new');
+  const [targetProductId, setTargetProductId] = useState(initialTargetProductId || '');
   const [connectPrint, setConnectPrint] = useState(true);   // mappings = printability
   const [replaceImages, setReplaceImages] = useState(false); // never silently replace
   const [margin, setMargin] = useState('40');

@@ -70,7 +70,7 @@ const GarmentThumb = ({ template, colorway }) => (
   <TemplateBackground template={template} colorway={colorway} />
 );
 
-const DesignStudio = ({ artwork = [], loading = false, shopId = null, products = [], onChanged = null }) => {
+const DesignStudio = ({ artwork = [], loading = false, shopId = null, products = [], onChanged = null, designForProductId = null }) => {
   const [templates, setTemplates] = useState([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [meta, setMeta] = useState({ version: 0, provisional: true });
@@ -864,8 +864,23 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
   const canvasArtwork = resolveArtwork(slot, colorwayId);
 
+  const designForProduct = designForProductId
+    ? products.find((p) => p.id === designForProductId) || null
+    : null;
+
   return (
     <div className="flex flex-col gap-4">
+      {/* Way-2 deep link (from the product form): the whole session designs FOR
+          an existing product — say so up front, and PublishPanel preselects it. */}
+      {designForProductId && (
+        <div className="rounded-[var(--radius-admin)] border border-admin-info-dot/40 bg-admin-info-bg px-4 py-3 text-[13px] text-admin-info-text">
+          <span className="font-semibold">
+            Du designar för: {designForProduct?.name || 'vald produkt'}.
+          </span>{' '}
+          Bilderna och trycket kopplas till produkten i steg 4 · Publicera
+          (förvalt som mål — du kan ändra det där).
+        </div>
+      )}
 
       {/* ── 1 · PLAGG — a one-time choice, sized like one (critique P2:
           the old 2-col aspect-square cards dominated whole screen-heights). */}
@@ -1198,6 +1213,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           onPublish={publish}
           products={products}
           onUpdateExisting={updateProduct}
+          initialTargetProductId={designForProductId}
           onReset={resetPublishForm}
         />
       </CardSection>
