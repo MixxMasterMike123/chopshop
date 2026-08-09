@@ -142,16 +142,21 @@ const PodAdminPage = () => {
             prefillArtworkId={prefillArtworkId}
           />
         )}
-        {tab === 'studio' && (
-          // GATE (docs/POD_PRINT_SPEC.md): only artwork the server pipeline
-          // approved (status 'ready') may be designed with. Legacy/rejected
-          // stays visible in the library with a "Validera om" action.
+        {/* The studio stays MOUNTED across tab switches (hidden with CSS, not
+            unmounted): its whole design state (prints/placements/mockups/
+            publish form) is component state, and the studio's own empty-state
+            advice sends users to the Original tab mid-design — unmounting
+            would silently destroy their work (critique P0, 2026-08-08). */}
+        <div className={tab === 'studio' ? '' : 'hidden'}>
+          {/* GATE (docs/POD_PRINT_SPEC.md): only artwork the server pipeline
+              approved (status 'ready') may be designed with. Legacy/rejected
+              stays visible in the library with a "Validera om" action. */}
           <DesignStudio
             artwork={lib.artwork.filter((a) => a.status === 'ready')}
             loading={lib.loading}
             shopId={shopId}
           />
-        )}
+        </div>
       </Page>
     </AppLayout>
   );

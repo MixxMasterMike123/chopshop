@@ -191,13 +191,12 @@ const PublishPanel = ({
     'h-4 w-4 rounded-[4px] border-admin-border text-[var(--color-admin-primary)] focus:ring-[var(--color-admin-primary)]';
 
   return (
-    <div className="mt-5 border-t border-admin-border-soft pt-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="text-[13px] font-semibold text-admin-text">Publicera</span>
-        <span className="text-[11px] text-admin-text-faint">
-          Skapa en riktig produkt av dina mockuper — den blir direkt köpbar i butiken.
-        </span>
-      </div>
+    // No own frame/heading — the studio renders this inside its numbered
+    // "4 · Publicera" section (the harness mounts it bare, also fine).
+    <div>
+      <p className="text-[12px] text-admin-text-muted">
+        Skapa en riktig produkt av dina mockuper — den blir direkt köpbar i butiken.
+      </p>
 
       {mockups.length === 0 ? (
         <p className="mt-3 text-[12px] text-admin-text-muted">Generera mockuper först.</p>

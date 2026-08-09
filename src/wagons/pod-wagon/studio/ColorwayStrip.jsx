@@ -83,13 +83,19 @@ const ColorwayStrip = ({
   const activeOverride = active ? overrides[active.id] || '' : '';
   // Accept a Set or an array — reviewed = the seller has seen this composite.
   const reviewedSet = reviewedColorwayIds instanceof Set ? reviewedColorwayIds : new Set(reviewedColorwayIds);
+  const reviewedCount = colorways.filter((c) => reviewedSet.has(c.id)).length;
+  const allSeen = reviewedCount === colorways.length;
 
   return (
     <div className="mt-4">
-      <div className="mb-1.5 flex items-baseline justify-between">
-        <span className="text-[12px] font-medium text-admin-text">Färger</span>
-        <span className="text-[11px] text-admin-text-faint">
-          Granska varje färg — det du ser är det som trycks
+      <div className="mb-1.5 flex items-baseline justify-between gap-3">
+        <span className="text-[13px] font-semibold text-admin-text">Färger</span>
+        {/* Live review-gate progress — the gate blocks publish, so its state
+            must be visible HERE, not first as a scolding in the publish step. */}
+        <span className={`text-[11px] ${allSeen ? 'text-admin-success-text' : 'text-admin-text-faint'}`}>
+          {allSeen
+            ? `Alla ${colorways.length} färger granskade ✓`
+            : `${reviewedCount} av ${colorways.length} färger granskade — klicka på varje färg; det du ser är det som trycks`}
         </span>
       </div>
 

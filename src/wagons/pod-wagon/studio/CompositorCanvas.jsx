@@ -138,6 +138,11 @@ const CompositorCanvas = ({
   // no free placement). Renders the default placement read-only: no drag,
   // resize, nudge or cm fields; readout + DPI verdict stay.
   locked = false,
+  // ghostAreas: other DESIGNED slots on the SAME flat — [{ slot, label, rect }]
+  // in viewBox px. Dashed outlines that link the trycklista's rows to their
+  // physical zones; clicking one calls onGhostClick(slot) to activate it.
+  ghostAreas = [],
+  onGhostClick = null,
 }) => {
   const wrapRef = useRef(null);
   // Full drag data in a ref (no re-render churn mid-gesture); visual flags in state.
@@ -301,7 +306,7 @@ const CompositorCanvas = ({
             {!artwork && (
               <div className="flex h-full w-full items-center justify-center p-2 text-center">
                 <span className="rounded-[6px] bg-admin-surface/85 px-2 py-1 text-[11px] font-medium text-admin-text-muted shadow-[var(--shadow-admin)]">
-                  Lägg till ett tryck och välj motiv i listan Original
+                  Lägg till ett tryck och välj motiv i trycklistan
                 </span>
               </div>
             )}
@@ -315,6 +320,26 @@ const CompositorCanvas = ({
             )}
           </div>
         )}
+
+        {/* Ghost zones — other designed prints on this flat, as clickable
+            dashed outlines (the row↔garment linkage). */}
+        {ghostAreas.map((g) => (
+          <button
+            key={g.slot}
+            type="button"
+            onClick={onGhostClick ? () => onGhostClick(g.slot) : undefined}
+            title={`Visa ${g.label}`}
+            aria-label={`Visa trycket: ${g.label}`}
+            className={`absolute rounded-[4px] border border-dashed border-admin-text-faint/60 ${
+              onGhostClick ? 'cursor-pointer hover:border-admin-info-dot hover:bg-admin-info-bg/20' : 'pointer-events-none'
+            }`}
+            style={rectToPercent(g.rect, viewBox)}
+          >
+            <span className="absolute left-1 top-1 rounded-[4px] bg-admin-surface/85 px-1 py-0.5 text-[10px] text-admin-text-muted">
+              {g.label}
+            </span>
+          </button>
+        ))}
 
         {/* Centre guides — visible only while a drag is snapped to that axis. */}
         {dragUi?.snappedX && areaRect && (
@@ -436,7 +461,11 @@ const CompositorCanvas = ({
           )}
 
           {verdict && (
-            <div className={`mt-3 rounded-[var(--radius-admin-el)] px-3 py-2 text-[12px] ${DPI_TONE[verdict.tier]}`}>
+            // role="status": a screen-reader user editing the cm fields hears
+            // the DPI verdict change ("Blir suddigt tryckt") without refocusing.
+            // Suspended DURING drags — announcing every pointermove frame would
+            // queue dozens of readouts; the final verdict announces on release.
+            <div role={dragging ? undefined : 'status'} className={`mt-3 rounded-[var(--radius-admin-el)] px-3 py-2 text-[12px] ${DPI_TONE[verdict.tier]}`}>
               {verdict.message}
             </div>
           )}

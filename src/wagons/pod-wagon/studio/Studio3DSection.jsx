@@ -288,11 +288,11 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                 </div>
                 {colorwayIds.length > 1 && (
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-[13px] font-medium text-admin-text-muted">Färgväg</span>
+                    <span className="text-[13px] font-medium text-admin-text-muted">Färg</span>
                     <select
                       value={effColorwayId}
                       onChange={(e) => setColorwayId(e.target.value)}
-                      aria-label="Färgväg"
+                      aria-label="Färg"
                       className="rounded-[10px] border border-admin-border bg-admin-surface px-2.5 py-1.5 text-[13px] font-medium text-admin-text focus:border-admin-info-dot focus:outline-none"
                     >
                       {colorwayIds.map((cwId) => (

@@ -1,12 +1,12 @@
 // DesignStudio.jsx — the Design Studio tab (POD add-on, Mode A / shop-owner studio).
 //
-// SLICE 2: the picking UI around the LIVE placement compositor:
-//   • left rail  — artwork picker (validated originals; PASS/WARN selectable, FAIL
-//                  greyed with an "underkänd" hint) + garment template picker
-//                  (cards showing the SVG flat thumbnail in its colourways).
-//   • main area  — CompositorCanvas: the garment flat with the artwork placed in
-//                  the print area (drag/resize/snap, cm readout, live DPI verdict).
-//                  Colourway chips + a front/back slot selector sit under it.
+// LAYOUT (v2 restructure 2026-08-08, from /impeccable critique): four NUMBERED
+// task phases in one column — 1·Plagg (compact template strip) · 2·Tryck &
+// placering (CompositorCanvas + trycklista SIDE BY SIDE; every print row owns
+// its motif via an INLINE picker — no separate artwork rail) · 3·Färger &
+// mockuper (colourway review strip w/ live gate counter, read-only 3D, mockup
+// generation) · 4·Publicera. The studio stays MOUNTED across PodAdminPage tab
+// switches (state survives a trip to the Original tab).
 //
 // PLACEMENT STATE lives here, ONE PER SLOT (placements[slot] = {xMm,yMm,wMm}), so
 // switching front↔back preserves each side's placement. Placements reset when the
@@ -27,7 +27,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PhotoIcon } from '@heroicons/react/24/outline';
 import { CardSection } from '../../../components/admin/ui';
-import StatusPill from '../../../components/admin/ui/StatusPill';
 import { slotLabel, POCKET_POSITIONS, DEFAULT_POCKET_POSITION, pocketPositionLabel } from '../../../config/podSlots';
 import {
   loadPodMockupTemplates,
@@ -36,7 +35,7 @@ import {
 } from '../../../config/podMockupTemplates';
 import { loadPodProfiles, getProfileById } from '../../../config/podProfiles';
 import { loadPod3dModels } from '../../../config/pod3dModels';
-import { tierTone, tierLabel } from '../components/podTier';
+import { tierLabel } from '../components/podTier';
 import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, templateWithPocketPosition } from './placementMath';
 import { renderMockup } from './mockupRender';
 import { uploadMockup } from './mockupUpload';
@@ -60,8 +59,8 @@ import { STORE } from '../../../config/store';
 
 // Validation is ADVISORY (podValidation's contract: "WARN/FAIL never blocks — it
 // guides the seller; the printer decides"). The studio therefore selects ANY
-// composable original; the tier pill (Underkänd/Varning) stays visible on the row
-// as the warning. Only non-composable files (no raster preview/dims — PDF/SVG)
+// composable original; non-pass tiers show as a caution dot on the inline
+// picker thumb. Only non-composable files (no raster preview/dims — PDF/SVG)
 // are unselectable, because the compositor literally has nothing to draw.
 const isSelectableArtwork = (art) => isComposable(art);
 
@@ -88,6 +87,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   // The ACTIVE print row's slot (drives canvas/strip). Reconciled against
   // `prints` — when the list is empty it idles on 'front' with no artwork.
   const [slot, setSlot] = useState('front');
+  // Which row's INLINE motif picker is open (slot id | null). The picker lives
+  // in the row itself — choosing a motif never means leaving the trycklista
+  // (critique P0: the old left-rail picker forced a scroll round-trip).
+  const [motifPickerSlot, setMotifPickerSlot] = useState(null);
   // Pocket position (left/center/right, wearer's perspective) — 'pocket' is a
   // fixed-size discrete-position slot, not free placement (docs/POD_PRINT_SPEC.md).
   const [pocketPosition, setPocketPosition] = useState(DEFAULT_POCKET_POSITION);
@@ -216,7 +219,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   // combo (decided 2026-08-08): adding one greys out the other.
   const BLOCKED_BY = { front: 'pocket', pocket: 'front' };
   const slotAvailability = (s) => {
-    if (printBySlot[s]) return { available: false, reason: 'Redan tillagd' };
+    if (printBySlot[s]) return { available: false, reason: 'Redan tillagt' };
     const blocker = BLOCKED_BY[s];
     if (blocker && printBySlot[blocker]) {
       const blockerName = blocker === 'front' ? 'brösttryck' : 'ficktryck';
@@ -237,12 +240,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     setPrints((prev) => [...prev, { slot: s, artworkId: null }]);
     if (s === 'pocket') setPocketPosition(DEFAULT_POCKET_POSITION);
     setSlot(s);
+    setMotifPickerSlot(s); // a motif-less row's next step is ALWAYS picking one
   };
 
   const removePrint = (s) => {
     setPrints((prev) => prev.filter((p) => p.slot !== s));
     setPlacements((prev) => { const n = { ...prev }; delete n[s]; return n; });
     setOverrides((prev) => { const n = { ...prev }; delete n[s]; return n; });
+    setMotifPickerSlot((cur) => (cur === s ? null : cur));
     invalidateComposite();
     if (slot === s) {
       const remaining = prints.filter((p) => p.slot !== s);
@@ -255,8 +260,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   const setPrintArtwork = (s, artId) => {
     setPrints((prev) => prev.map((p) => (p.slot === s ? { ...p, artworkId: artId } : p)));
     setPlacements((prev) => { const n = { ...prev }; delete n[s]; return n; });
+    setMotifPickerSlot(null);
     invalidateComposite();
   };
+
 
   // The template's print profile (settings/podProfiles) — DPI thresholds for the
   // compositor's live verdict.
@@ -303,7 +310,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   // preview/mockup), excluding the slot's own base motif.
   const activeBaseArtworkId = printBySlot[slot]?.artworkId || null;
   const overrideOptions = useMemo(
-    () => artwork.filter((a) => isSelectableArtwork(a) && isComposable(a) && a.id !== activeBaseArtworkId),
+    () => artwork.filter((a) => isSelectableArtwork(a) && a.id !== activeBaseArtworkId),
     [artwork, activeBaseArtworkId]
   );
 
@@ -326,6 +333,17 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     : (placements[s]
         ? clampPlacement(placements[s], effTemplate, s, art, profile?.min_dpi ?? null)
         : defaultPlacement(effTemplate, s, art, profile?.min_dpi ?? null)));
+
+  // Which flat a slot renders on (POD_PRINT_SPEC §5: sleeves + pocket draw on
+  // the FRONT flat; only 'back' has its own view). Ghost outlines on the canvas
+  // only make sense for designed slots sharing the ACTIVE slot's flat — they
+  // are the row↔garment linkage the critique flagged (clicking one activates
+  // that print's row).
+  const viewOfSlot = (s) => (s === 'back' ? 'back' : 'front');
+  const ghostAreas = designedSlots(selectedTemplate)
+    .filter((s) => s !== slot && viewOfSlot(s) === viewOfSlot(slot))
+    .map((s) => ({ slot: s, label: slotLabel(s), rect: effTemplate?.printAreas?.[s] || null }))
+    .filter((g) => g.rect);
 
   const generateMockups = async () => {
     // Also blocked while PUBLISHING: regenerating revokes the object URLs the
@@ -646,89 +664,20 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   const canvasArtwork = resolveArtwork(slot, colorwayId);
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px,1fr]">
-      {/* ── LEFT RAIL ─────────────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-4">
-        {/* Artwork picker — assigns the motif to the ACTIVE print row (adds a
-            front row automatically when the trycklista is still empty, so the
-            old "click an artwork to start" muscle memory keeps working). */}
-        <CardSection title="Original" bodyClassName="p-0">
-          {prints.length > 0 && (
-            <p className="border-b border-admin-border-soft px-4 py-2 text-[11px] text-admin-text-faint">
-              Väljer motiv för: <span className="font-medium text-admin-text-muted">{slotLabel(slot)}</span>
-            </p>
-          )}
-          {loading ? (
-            <p className="px-4 py-4 text-[13px] text-admin-text-muted">Laddar…</p>
-          ) : artwork.length === 0 ? (
-            <p className="px-4 py-4 text-[13px] text-admin-text-muted">
-              Inga original ännu. Ladda upp ett original under fliken Original först.
-            </p>
-          ) : (
-            <ul className="max-h-[340px] overflow-y-auto">
-              {artwork.map((art) => {
-                const selectable = isSelectableArtwork(art);
-                const active = art.id === activeBaseArtworkId;
-                return (
-                  <li key={art.id}>
-                    <button
-                      type="button"
-                      disabled={!selectable}
-                      onClick={() => {
-                        if (!selectable) return;
-                        if (prints.length === 0) {
-                          // Templates are data — don't assume 'front' exists.
-                          const target = slots.includes('front') ? 'front' : (slots[0] || 'front');
-                          setPrints([{ slot: target, artworkId: art.id }]);
-                          setSlot(target);
-                          invalidateComposite();
-                        } else {
-                          setPrintArtwork(slot, art.id);
-                        }
-                      }}
-                      title={!selectable ? 'Formatet kan inte förhandsgranskas i studion (bildmått saknas)' : undefined}
-                      className={`flex w-full items-center gap-3 border-b border-admin-border-soft px-4 py-2.5 text-left ${
-                        active ? 'bg-admin-info-bg/60' : 'hover:bg-admin-surface-2'
-                      } ${selectable ? '' : 'cursor-not-allowed opacity-45'}`}
-                    >
-                      {art.previewUrl ? (
-                        <img src={art.previewUrl} alt="" className="h-11 w-11 shrink-0 rounded-[6px] border border-admin-border object-cover" />
-                      ) : (
-                        <div className="grid h-11 w-11 shrink-0 place-items-center rounded-[6px] border border-admin-border bg-admin-surface-2 text-admin-text-faint">
-                          <PhotoIcon className="h-5 w-5" />
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[13px] font-medium text-admin-text">
-                          {art.label || art.fileName}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-2">
-                          <StatusPill tone={tierTone(art.validation?.tier)}>
-                            {tierLabel(art.validation?.tier)}
-                          </StatusPill>
-                          {!selectable && (
-                            <span className="text-[11px] text-admin-text-faint">kan inte användas</span>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </CardSection>
+    <div className="flex flex-col gap-4">
 
-        {/* Template picker */}
-        <CardSection title="Plagg" bodyClassName="p-0">
-          {templatesLoading ? (
-            <p className="px-4 py-4 text-[13px] text-admin-text-muted">Laddar mallar…</p>
-          ) : templates.length === 0 ? (
-            <p className="px-4 py-4 text-[13px] text-admin-text-muted">
-              Inga plaggmallar ännu. Plattformen behöver seeda mockup-mallarna.
-            </p>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 p-4">
+      {/* ── 1 · PLAGG — a one-time choice, sized like one (critique P2:
+          the old 2-col aspect-square cards dominated whole screen-heights). */}
+      <CardSection title="1 · Plagg" bodyClassName="p-4">
+        {templatesLoading ? (
+          <p className="text-[13px] text-admin-text-muted">Laddar mallar…</p>
+        ) : templates.length === 0 ? (
+          <p className="text-[13px] text-admin-text-muted">
+            Inga plaggmallar ännu. Plattformen behöver seeda mockup-mallarna.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
               {templates.map((t) => {
                 const active = t.id === selectedTemplateId;
                 const thumbColorway = t.colorways?.[0] || null;
@@ -737,179 +686,243 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                     key={t.id}
                     type="button"
                     onClick={() => setSelectedTemplateId(t.id)}
-                    className={`rounded-[var(--radius-admin)] border p-2 text-left transition ${
+                    title={t.label}
+                    className={`rounded-[var(--radius-admin-el)] border p-1.5 text-left transition ${
                       active
                         ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
                         : 'border-admin-border hover:bg-admin-surface-2'
                     }`}
                   >
-                    <div className="grid aspect-square place-items-center overflow-hidden rounded-[6px] bg-admin-surface-2">
+                    <div className="grid aspect-square place-items-center overflow-hidden rounded-[4px] bg-admin-surface-2">
                       <div className="h-[88%] w-[88%]">
                         <GarmentThumb template={t} colorway={thumbColorway} />
                       </div>
                     </div>
-                    <div className="mt-1.5 truncate text-[12px] font-medium text-admin-text">{t.label}</div>
+                    <div className="mt-1 truncate text-center text-[11px] font-medium text-admin-text">{t.label}</div>
                   </button>
                 );
               })}
             </div>
-          )}
-        </CardSection>
-      </div>
-
-      {/* ── MAIN AREA ─────────────────────────────────────────────────────── */}
-      <CardSection
-        title="Förhandsgranskning"
-        bodyClassName="p-4"
-      >
-        {meta.provisional && (
-          <p className="mb-3 text-[12px] text-admin-text-faint">
-            Generiska plaggmallar (preliminära) — ersätts när tryckeriets riktiga plagg finns.
-          </p>
-        )}
-
-        {/* ── TRYCKLISTAN — the design's print rows (slice A). Sits ABOVE the
-            canvas: the list drives what the canvas shows. Each row = one
-            physical print (position + motif); the active row is highlighted. */}
-        <div className="mb-4 rounded-[var(--radius-admin)] border border-admin-border-soft p-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[12px] font-medium text-admin-text">Tryck på plagget</span>
-            {prints.length === 0 && (
-              <span className="text-[11px] text-admin-text-faint">Inga tryck ännu — lägg till ett för att börja</span>
+            {meta.provisional && (
+              <p className="mt-2 text-[11px] text-admin-text-faint">
+                Generiska plaggmallar (preliminära) — ersätts när tryckeriets riktiga plagg finns.
+              </p>
             )}
+          </>
+        )}
+      </CardSection>
+
+      {/* ── 2 · TRYCK & PLACERING — canvas and trycklista SIDE BY SIDE so a
+          row and its zone on the garment are one glance apart (critique P1). */}
+      <CardSection title="2 · Tryck & placering" bodyClassName="p-4">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr,360px]">
+          <div className="min-w-0">
+            <CompositorCanvas
+              template={effTemplate}
+              colorway={selectedColorway}
+              slot={slot}
+              artwork={canvasArtwork}
+              profile={profile}
+              locked={slot === 'pocket'}
+              placement={slot === 'pocket' ? null : (placements[slot] || null)}
+              ghostAreas={ghostAreas}
+              onGhostClick={setSlot}
+              onPlacementChange={(p) => {
+                if (slot === 'pocket') return; // locked — geometry is deterministic
+                setPlacements((prev) => ({ ...prev, [slot]: p }));
+                // Moving the artwork changes the composite: generated mockups
+                // are stale (they'd publish the OLD placement while the mapping
+                // readout instructs the NEW one) and every colourway must be
+                // re-seen.
+                invalidateComposite();
+              }}
+            />
           </div>
 
-          {prints.length > 0 && (
-            <ul className="mt-2 flex flex-col gap-1.5">
-              {prints.map((p) => {
-                const art = artworkById(p.artworkId);
-                const active = p.slot === slot;
-                const label = p.slot === 'pocket'
-                  ? `${slotLabel(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
-                  : slotLabel(p.slot);
-                return (
-                  <li
-                    key={p.slot}
-                    className={`flex items-center gap-2 rounded-[var(--radius-admin-el)] border px-2 py-1.5 ${
-                      active ? 'border-admin-info-dot bg-admin-info-bg/40' : 'border-admin-border-soft'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setSlot(p.slot)}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          {/* Trycklista — every row OWNS its motif via the inline picker;
+              choosing a motif never leaves this panel (critique P0). */}
+          <div className="flex min-w-0 flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] font-semibold text-admin-text">Tryck på plagget</span>
+              {prints.length === 0 && (
+                <span className="text-[11px] text-admin-text-faint">Inga tryck ännu</span>
+              )}
+            </div>
+
+            {prints.length > 0 && (
+              <ul className="flex flex-col gap-1.5">
+                {prints.map((p) => {
+                  const art = artworkById(p.artworkId);
+                  const active = p.slot === slot;
+                  const pickerOpen = motifPickerSlot === p.slot;
+                  const label = p.slot === 'pocket'
+                    ? `${slotLabel(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
+                    : slotLabel(p.slot);
+                  return (
+                    <li
+                      key={p.slot}
+                      className={`rounded-[var(--radius-admin-el)] border ${
+                        active ? 'border-admin-info-dot bg-admin-info-bg/40' : 'border-admin-border-soft'
+                      }`}
                     >
-                      {art?.previewUrl ? (
-                        <img src={art.previewUrl} alt="" className="h-8 w-8 shrink-0 rounded-[4px] border border-admin-border object-cover" />
-                      ) : (
-                        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-[4px] border border-dashed border-admin-border text-admin-text-faint">
-                          <PhotoIcon className="h-4 w-4" />
+                      <div className="flex items-center gap-2 px-2 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() => { setSlot(p.slot); setMotifPickerSlot(pickerOpen ? null : p.slot); }}
+                          aria-expanded={pickerOpen}
+                          aria-label={art ? `Byt motiv för ${label}` : `Välj motiv för ${label}`}
+                          className="shrink-0"
+                        >
+                          {art?.previewUrl ? (
+                            <img src={art.previewUrl} alt="" className="h-9 w-9 rounded-[4px] border border-admin-border object-cover" />
+                          ) : (
+                            <span className="grid h-9 w-9 place-items-center rounded-[4px] border border-dashed border-admin-caution-dot text-admin-caution-text">
+                              <PhotoIcon className="h-4 w-4" />
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSlot(p.slot)}
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <span className="block truncate text-[12px] font-medium text-admin-text">{label}</span>
+                          <span className={`block truncate text-[11px] ${art ? 'text-admin-text-muted' : 'text-admin-caution-text'}`}>
+                            {art ? (art.label || art.fileName) : 'Motiv saknas — välj här'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setSlot(p.slot); setMotifPickerSlot(pickerOpen ? null : p.slot); }}
+                          aria-expanded={pickerOpen}
+                          className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1 text-[11px] text-admin-text hover:bg-admin-surface-2"
+                        >
+                          {art ? 'Byt motiv' : 'Välj motiv'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removePrint(p.slot)}
+                          aria-label={`Ta bort trycket: ${slotLabel(p.slot)}`}
+                          className="shrink-0 rounded-[var(--radius-admin-el)] px-1.5 py-1 text-[11px] text-admin-text-faint hover:bg-admin-surface-2 hover:text-admin-text"
+                        >
+                          Ta bort
+                        </button>
+                      </div>
+
+                      {/* INLINE MOTIF PICKER — the motif is chosen IN the row;
+                          no scroll round-trip to a distant library list. */}
+                      {pickerOpen && (
+                        <div className="border-t border-admin-border-soft p-2">
+                          {loading ? (
+                            <p className="text-[12px] text-admin-text-muted">Laddar original…</p>
+                          ) : artwork.length === 0 ? (
+                            <p className="text-[12px] text-admin-text-muted">
+                              Inga original ännu — ladda upp under fliken Original.
+                              Designen ligger kvar här under tiden.
+                            </p>
+                          ) : (
+                            <div className="grid grid-cols-[repeat(auto-fill,minmax(52px,1fr))] gap-1.5">
+                              {artwork.map((a) => {
+                                const selectable = isSelectableArtwork(a);
+                                const isCurrent = a.id === p.artworkId;
+                                return (
+                                  <button
+                                    key={a.id}
+                                    type="button"
+                                    disabled={!selectable}
+                                    onClick={() => setPrintArtwork(p.slot, a.id)}
+                                    title={`${a.label || a.fileName}${selectable ? '' : ' — kan inte förhandsgranskas i studion'}`}
+                                    className={`relative overflow-hidden rounded-[4px] border ${
+                                      isCurrent
+                                        ? 'border-admin-info-dot ring-1 ring-admin-info-dot/50'
+                                        : 'border-admin-border hover:border-admin-text-faint'
+                                    } ${selectable ? '' : 'cursor-not-allowed opacity-40'}`}
+                                  >
+                                    {a.previewUrl ? (
+                                      <img src={a.previewUrl} alt={a.label || a.fileName} className="aspect-square w-full object-cover" />
+                                    ) : (
+                                      <span className="grid aspect-square w-full place-items-center bg-admin-surface-2 text-admin-text-faint">
+                                        <PhotoIcon className="h-4 w-4" />
+                                      </span>
+                                    )}
+                                    {/* Advisory validation tier (WARN/FAIL) as a
+                                        caution dot — tiers never block here. */}
+                                    {a.validation?.tier && a.validation.tier !== 'pass' && (
+                                      <span
+                                        className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full border border-admin-surface bg-admin-caution-dot"
+                                        title={tierLabel(a.validation.tier)}
+                                      />
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       )}
-                      <span className="min-w-0">
-                        <span className="block truncate text-[12px] font-medium text-admin-text">{label}</span>
-                        <span className={`block truncate text-[11px] ${art ? 'text-admin-text-muted' : 'text-admin-caution-text'}`}>
-                          {art ? (art.label || art.fileName) : 'Motiv saknas — välj i listan Original'}
-                        </span>
-                      </span>
-                    </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {slots.some((s) => slotAvailability(s).available) && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[12px] text-admin-text-muted">Lägg till tryck:</span>
+                {slots.map((s) => {
+                  const { available, reason } = slotAvailability(s);
+                  if (printBySlot[s]) return null;
+                  return (
                     <button
+                      key={s}
                       type="button"
-                      onClick={() => removePrint(p.slot)}
-                      aria-label={`Ta bort trycket: ${slotLabel(p.slot)}`}
-                      className="shrink-0 rounded-[var(--radius-admin-el)] px-2 py-1 text-[12px] text-admin-text-faint hover:bg-admin-surface-2 hover:text-admin-text"
+                      disabled={!available}
+                      title={!available ? reason : undefined}
+                      onClick={() => addPrint(s)}
+                      className="rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1.5 text-[12px] text-admin-text hover:bg-admin-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      Ta bort
+                      + {slotLabel(s)}
                     </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+                  );
+                })}
+              </div>
+            )}
 
-          {slots.some((s) => slotAvailability(s).available) && (
-            <div className="mt-2.5 flex flex-wrap items-center gap-2">
-              <span className="text-[12px] text-admin-text-muted">Lägg till tryck:</span>
-              {slots.map((s) => {
-                const { available, reason } = slotAvailability(s);
-                if (printBySlot[s]) return null;
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    disabled={!available}
-                    title={!available ? reason : undefined}
-                    onClick={() => addPrint(s)}
-                    className="rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1 text-[12px] text-admin-text hover:bg-admin-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    + {slotLabel(s)}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Pocket position — discrete choice (left/center/right, wearer's
-              perspective); the fixed 10×10 cm spot has no free placement. */}
-          {slot === 'pocket' && selectedTemplate?.pocketPositions && (
-            <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-admin-border-soft pt-2.5">
-              <span className="text-[12px] text-admin-text-muted">Fickposition:</span>
-              {POCKET_POSITIONS.map((p) => {
-                const active = p.id === pocketPosition;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => {
-                      setPocketPosition(p.id);
-                      invalidateComposite(); // the pocket rect moved
-                    }}
-                    className={`rounded-[var(--radius-admin-el)] px-2.5 py-1 text-[12px] ${
-                      active
-                        ? 'bg-black/[0.08] font-medium text-admin-text'
-                        : 'text-admin-text-muted hover:bg-black/[0.06]'
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                );
-              })}
-              <span className="text-[11px] text-admin-text-faint">(sett från bäraren)</span>
-            </div>
-          )}
+            {/* Pocket position — discrete choice (left/center/right, wearer's
+                perspective); the fixed 10×10 cm spot has no free placement. */}
+            {slot === 'pocket' && selectedTemplate?.pocketPositions && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-admin-border-soft pt-2">
+                <span className="text-[12px] text-admin-text-muted">Fickposition:</span>
+                {POCKET_POSITIONS.map((pp) => {
+                  const ppActive = pp.id === pocketPosition;
+                  return (
+                    <button
+                      key={pp.id}
+                      type="button"
+                      onClick={() => {
+                        setPocketPosition(pp.id);
+                        invalidateComposite(); // the pocket rect moved
+                      }}
+                      className={`rounded-[var(--radius-admin-el)] px-2.5 py-1 text-[12px] ${
+                        ppActive
+                          ? 'bg-black/[0.08] font-medium text-admin-text'
+                          : 'text-admin-text-muted hover:bg-black/[0.06]'
+                      }`}
+                    >
+                      {pp.label}
+                    </button>
+                  );
+                })}
+                <span className="text-[11px] text-admin-text-faint">(sett från bäraren)</span>
+              </div>
+            )}
+          </div>
         </div>
+      </CardSection>
 
-        <CompositorCanvas
-          template={effTemplate}
-          colorway={selectedColorway}
-          slot={slot}
-          artwork={canvasArtwork}
-          profile={profile}
-          locked={slot === 'pocket'}
-          placement={slot === 'pocket' ? null : (placements[slot] || null)}
-          onPlacementChange={(p) => {
-            if (slot === 'pocket') return; // locked — geometry is deterministic
-            setPlacements((prev) => ({ ...prev, [slot]: p }));
-            // Moving the artwork changes the composite: generated mockups are
-            // stale (they'd publish the OLD placement while the mapping readout
-            // instructs the NEW one) and every colourway must be re-seen.
-            invalidateComposite();
-          }}
-        />
-
-        {/* 3D-vy (beta): photo-displacement mockup with the FRONT slot's resolved
-            artwork. READ-ONLY (slice C): it FOLLOWS the live print placement and
-            the model's calibrated tuning — sellers can't diverge the render from
-            what gets printed. WebGL-gated; pixi lazy-loads. */}
-        <Studio3DSection
-          artwork={resolveArtwork('front', colorwayId)}
-          placement={resolveArtwork('front', colorwayId)
-            ? effectivePlacementFor('front', resolveArtwork('front', colorwayId))
-            : null}
-          models={models3d}
-        />
-
-        {/* Colourway strip: composited per-colour previews + artwork override. */}
+      {/* ── 3 · FÄRGER & MOCKUPER — the review gate lives here; the 3D beta
+          sits BELOW the strip so it never buries the gate (critique P1). */}
+      <CardSection title="3 · Färger & mockuper" bodyClassName="p-4">
         {selectedTemplate && (
           <ColorwayStrip
             template={effTemplate}
@@ -928,6 +941,16 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           />
         )}
 
+        {/* 3D-vy (beta): READ-ONLY — follows the live print placement and the
+            model's calibrated tuning. WebGL-gated; pixi lazy-loads. */}
+        <Studio3DSection
+          artwork={resolveArtwork('front', colorwayId)}
+          placement={resolveArtwork('front', colorwayId)
+            ? effectivePlacementFor('front', resolveArtwork('front', colorwayId))
+            : null}
+          models={models3d}
+        />
+
         {/* Generated mockups: per-colourway rasterized previews + hero pick. */}
         <MockupPanel
           mockups={mockups}
@@ -938,8 +961,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           error={mockupError}
           canGenerate={Boolean(selectedTemplate) && designedSlots(selectedTemplate).some((s) => isComposable(printArtwork(s))) && !publishing}
         />
+      </CardSection>
 
-        {/* Publish: pick colourways + sizes, price, and create the real product. */}
+      {/* ── 4 · PUBLICERA ─────────────────────────────────────────────────── */}
+      <CardSection title="4 · Publicera" bodyClassName="p-4">
         <PublishPanel
           mockups={mockups}
           template={selectedTemplate}
