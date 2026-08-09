@@ -715,33 +715,13 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
       {/* ── 2 · TRYCK & PLACERING — canvas and trycklista SIDE BY SIDE so a
           row and its zone on the garment are one glance apart (critique P1). */}
       <CardSection title="2 · Tryck & placering" bodyClassName="p-4">
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr,360px]">
-          <div className="min-w-0">
-            <CompositorCanvas
-              template={effTemplate}
-              colorway={selectedColorway}
-              slot={slot}
-              artwork={canvasArtwork}
-              profile={profile}
-              locked={slot === 'pocket'}
-              placement={slot === 'pocket' ? null : (placements[slot] || null)}
-              ghostAreas={ghostAreas}
-              onGhostClick={setSlot}
-              onPlacementChange={(p) => {
-                if (slot === 'pocket') return; // locked — geometry is deterministic
-                setPlacements((prev) => ({ ...prev, [slot]: p }));
-                // Moving the artwork changes the composite: generated mockups
-                // are stale (they'd publish the OLD placement while the mapping
-                // readout instructs the NEW one) and every colourway must be
-                // re-seen.
-                invalidateComposite();
-              }}
-            />
-          </div>
-
+        {/* NOTE: track lists use UNDERSCORES ([1fr_360px]) — a comma is not a
+            valid CSS grid separator; [1fr,360px] emits an invalid rule the
+            browser drops, silently collapsing to one column (shipped bug). */}
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_360px]">
           {/* Trycklista — every row OWNS its motif via the inline picker;
               choosing a motif never leaves this panel (critique P0). */}
-          <div className="flex min-w-0 flex-col gap-2">
+          <div className="flex min-w-0 flex-col gap-2 lg:order-2">
             <div className="flex items-center justify-between">
               <span className="text-[13px] font-semibold text-admin-text">Tryck på plagget</span>
               {prints.length === 0 && (
@@ -917,6 +897,29 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
               </div>
             )}
           </div>
+          <div className="min-w-0 lg:order-1">
+            <CompositorCanvas
+              template={effTemplate}
+              colorway={selectedColorway}
+              slot={slot}
+              artwork={canvasArtwork}
+              profile={profile}
+              locked={slot === 'pocket'}
+              placement={slot === 'pocket' ? null : (placements[slot] || null)}
+              ghostAreas={ghostAreas}
+              onGhostClick={setSlot}
+              onPlacementChange={(p) => {
+                if (slot === 'pocket') return; // locked — geometry is deterministic
+                setPlacements((prev) => ({ ...prev, [slot]: p }));
+                // Moving the artwork changes the composite: generated mockups
+                // are stale (they'd publish the OLD placement while the mapping
+                // readout instructs the NEW one) and every colourway must be
+                // re-seen.
+                invalidateComposite();
+              }}
+            />
+          </div>
+
         </div>
       </CardSection>
 

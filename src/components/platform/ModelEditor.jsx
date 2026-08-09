@@ -589,7 +589,7 @@ const ModelEditor = ({
             </div>
 
             {/* Pixel calibration with live overlay. */}
-            <div className="grid gap-4 md:grid-cols-[1fr,240px]">
+            <div className="grid gap-4 md:grid-cols-[1fr_240px]">
               <div className="flex justify-center rounded-lg bg-gray-800 p-2">
                 {firstPhotoUrl ? (
                   // Wrapper shrink-wraps the rendered image so the overlay's
