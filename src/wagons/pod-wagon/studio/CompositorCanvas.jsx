@@ -26,7 +26,6 @@
 //   • profile    — the template's print profile (podProfiles) for DPI thresholds.
 //   • placement  — { xMm, yMm, wMm } for THIS slot, or null (→ default used).
 //   • onPlacementChange — (placement) => void on every move/resize/nudge.
-//   • onResult   — reserved for slice 3 (mockup export calls back here). Unused.
 import React, { useMemo, useRef, useState } from 'react';
 import TemplateBackground, { templateViewBox } from './TemplateBackground';
 import {
@@ -84,9 +83,9 @@ const CmField = ({ label, mm, onCommit, disabled = false }) => {
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-        className="w-16 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-right text-[12px] text-admin-text focus:border-admin-info-dot focus:outline-none disabled:opacity-50"
+        className="w-16 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-right text-[12px] text-admin-text focus:outline-none focus:border-admin-info-dot focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)] disabled:opacity-50"
       />
-      <span className="text-admin-text-faint">cm</span>
+      <span className="text-admin-text-muted">cm</span>
     </label>
   );
 };
@@ -124,16 +123,16 @@ const DegField = ({ label, deg, onCommit, disabled = false }) => {
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-        className="w-14 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-right text-[12px] text-admin-text focus:border-admin-info-dot focus:outline-none disabled:opacity-50"
+        className="w-14 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-right text-[12px] text-admin-text focus:outline-none focus:border-admin-info-dot focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)] disabled:opacity-50"
       />
-      <span className="text-admin-text-faint">°</span>
+      <span className="text-admin-text-muted">°</span>
     </label>
   );
 };
 
 const CompositorCanvas = ({
   template, colorway, slot = 'front', artwork = null, profile = null,
-  placement = null, onPlacementChange = () => {}, onResult, // eslint-disable-line no-unused-vars
+  placement = null, onPlacementChange = () => {},
   // locked: fixed-geometry slots (pocket — POD_PRINT_SPEC: discrete position,
   // no free placement). Renders the default placement read-only: no drag,
   // resize, nudge or cm fields; readout + DPI verdict stay.
@@ -298,7 +297,7 @@ const CompositorCanvas = ({
             style={rectToPercent(areaRect, viewBox)}
           >
             {areaMm && (
-              <span className="absolute -top-6 right-0 whitespace-nowrap rounded-[6px] bg-admin-surface/85 px-1.5 py-0.5 text-[11px] text-admin-text-faint">
+              <span className="absolute -top-6 right-0 whitespace-nowrap rounded-[6px] bg-admin-surface/85 px-1.5 py-0.5 text-[11px] text-admin-text-muted">
                 Tryckyta {formatCm(areaMm.w)} × {formatCm(areaMm.h)} cm
               </span>
             )}
@@ -335,7 +334,7 @@ const CompositorCanvas = ({
             }`}
             style={rectToPercent(g.rect, viewBox)}
           >
-            <span className="absolute left-1 top-1 rounded-[4px] bg-admin-surface/85 px-1 py-0.5 text-[10px] text-admin-text-muted">
+            <span className="absolute left-1 top-1 rounded-[4px] bg-admin-surface/85 px-1 py-0.5 text-[11px] text-admin-text-muted">
               {g.label}
             </span>
           </button>
@@ -399,7 +398,7 @@ const CompositorCanvas = ({
             {!locked && (
               <div
                 role="presentation"
-                className="absolute -bottom-2.5 -right-2.5 grid h-5 w-5 cursor-nwse-resize touch-none place-items-center"
+                className="absolute -bottom-4 -right-4 grid h-8 w-8 cursor-nwse-resize touch-none place-items-center"
                 onPointerDown={(e) => startDrag(e, 'resize')}
                 onPointerMove={onPointerMove}
                 onPointerUp={endDrag}
@@ -420,11 +419,11 @@ const CompositorCanvas = ({
             <span className="text-[12px] font-medium text-admin-text">
               {placementReadout(effective, template, slot, artwork)}
             </span>
-            <span className="text-[11px] text-admin-text-faint">Mått inom tryckytan</span>
+            <span className="text-[11px] text-admin-text-muted">Mått inom tryckytan</span>
           </div>
 
           {locked ? (
-            <p className="mt-2 text-[12px] text-admin-text-faint">
+            <p className="mt-2 text-[12px] text-admin-text-muted">
               Fast tryckyta — motivet placeras automatiskt (contain, centrerat). Välj position ovan.
             </p>
           ) : (

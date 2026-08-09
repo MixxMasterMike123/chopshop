@@ -39,7 +39,7 @@ import { tierLabel } from '../components/podTier';
 import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, templateWithPocketPosition } from './placementMath';
 import { renderMockup } from './mockupRender';
 import { uploadMockup } from './mockupUpload';
-import TemplateBackground from './TemplateBackground';
+import TemplateBackground, { viewForSlot } from './TemplateBackground';
 import CompositorCanvas from './CompositorCanvas';
 import ColorwayStrip from './ColorwayStrip';
 import MockupPanel from './MockupPanel';
@@ -229,10 +229,16 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
   };
 
   // Any composite-affecting change invalidates generated mockups + reviews.
+  // Called per pointermove during drags — every setter bails with the SAME
+  // reference when already at the target so React skips those re-renders.
   const invalidateComposite = () => {
-    setMockups([]);
-    setHeroKey(null);
-    resetReviews();
+    setMockups((prev) => (prev.length ? [] : prev));
+    setHeroKey((prev) => (prev === null ? prev : null));
+    setReviewedColorways((prev) => {
+      if (colorwayId && prev.size === 1 && prev.has(colorwayId)) return prev;
+      if (!colorwayId && prev.size === 0) return prev;
+      return colorwayId ? new Set([colorwayId]) : new Set();
+    });
   };
 
   const addPrint = (s) => {
@@ -334,14 +340,12 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
         ? clampPlacement(placements[s], effTemplate, s, art, profile?.min_dpi ?? null)
         : defaultPlacement(effTemplate, s, art, profile?.min_dpi ?? null)));
 
-  // Which flat a slot renders on (POD_PRINT_SPEC §5: sleeves + pocket draw on
-  // the FRONT flat; only 'back' has its own view). Ghost outlines on the canvas
-  // only make sense for designed slots sharing the ACTIVE slot's flat — they
-  // are the row↔garment linkage the critique flagged (clicking one activates
-  // that print's row).
-  const viewOfSlot = (s) => (s === 'back' ? 'back' : 'front');
+  // Ghost outlines on the canvas only make sense for designed slots sharing
+  // the ACTIVE slot's flat (slot→view mapping = TemplateBackground's
+  // viewForSlot, the single source) — they are the row↔garment linkage
+  // (clicking one activates that print's row).
   const ghostAreas = designedSlots(selectedTemplate)
-    .filter((s) => s !== slot && viewOfSlot(s) === viewOfSlot(slot))
+    .filter((s) => s !== slot && viewForSlot(s) === viewForSlot(slot))
     .map((s) => ({ slot: s, label: slotLabel(s), rect: effTemplate?.printAreas?.[s] || null }))
     .filter((g) => g.rect);
 
@@ -353,6 +357,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
     setMockupError(null);
     const next = [];
     const urls = [];
+    const uploadPromises = [];
     let uploadFailures = 0;
     let renderSkips = 0;
     try {
@@ -376,25 +381,32 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           }
           const objectUrl = URL.createObjectURL(blob);
           urls.push(objectUrl);
-          let uploaded = null;
-          if (shopId) {
-            try {
-              uploaded = await uploadMockup({
-                blob, type, shopId,
-                templateId: selectedTemplate.id, slot: s, colorwayId: cw.id,
-              });
-            } catch (e) {
-              uploadFailures += 1;
-              console.warn('DesignStudio: mockup upload failed', cw.id, s, e?.message);
-            }
-          }
-          next.push({
+          const entry = {
             key: `${cw.id}:${s}`, colorwayId: cw.id, colorwayLabel: cw.label,
             slot: s, objectUrl, type,
-            url: uploaded?.url || null, storagePath: uploaded?.storagePath || null,
-          });
+            url: null, storagePath: null,
+          };
+          next.push(entry);
+          // Uploads overlap the remaining renders (fire-and-collect): render
+          // stays serial (one canvas rasterization at a time), but the ~0.3-0.8s
+          // Storage round-trips no longer serialize the whole generation.
+          if (shopId) {
+            uploadPromises.push(
+              uploadMockup({
+                blob, type, shopId,
+                templateId: selectedTemplate.id, slot: s, colorwayId: cw.id,
+              }).then((uploaded) => {
+                entry.url = uploaded?.url || null;
+                entry.storagePath = uploaded?.storagePath || null;
+              }).catch((e) => {
+                uploadFailures += 1;
+                console.warn('DesignStudio: mockup upload failed', cw.id, s, e?.message);
+              })
+            );
+          }
         }
       }
+      await Promise.all(uploadPromises);
       replaceObjectUrls(urls);
       setMockups(next);
       resetReviews(); // regenerated composites — the seller must re-scan the strip
@@ -503,15 +515,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
 
       // Upload the published mockups (in mockups-array order → gallery order).
       // Track the FRONT mockup url per colourway for its variant group image.
-      const galleryUrls = [];
+      // Parallel uploads — Promise.all preserves input order, so galleryUrls[i]
+      // still corresponds to pubMockups[i] (the index-join below depends on it).
+      const galleryUrls = await Promise.all(pubMockups.map((m) =>
+        uploadBlobToPublicPath(m.objectUrl, m.type, publicPath, `mockup_${m.colorwayId}_${m.slot}`)
+      ));
       const frontUrlByColorway = {};
-      for (const m of pubMockups) {
-        const url = await uploadBlobToPublicPath(
-          m.objectUrl, m.type, publicPath, `mockup_${m.colorwayId}_${m.slot}`
-        );
-        galleryUrls.push(url);
-        if (m.slot === 'front') frontUrlByColorway[m.colorwayId] = url;
-      }
+      pubMockups.forEach((m, i) => {
+        if (m.slot === 'front') frontUrlByColorway[m.colorwayId] = galleryUrls[i];
+      });
 
       // 3. Build resolved variant groups — one per SELECTED colourway. Its image is
       // that colourway's FRONT mockup (fallback: any mockup for it, then hero).
@@ -598,13 +610,18 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
       // Group sku per COLORWAY ID (index-aligned with publishedIds) — an id join,
       // not a label join, so duplicate colorway labels can never cross-target.
       const groupSkuByColorwayId = new Map(publishedIds.map((id, i) => [id, cleanGroups[i]?.sku]));
+      // All mapping rows in PARALLEL: every setMapping call targets a distinct
+      // upsert key (shopId, sku, slot) — parent rows use the product sku,
+      // override rows a group sku — so the read-then-write upserts can't race
+      // each other. Was a serial O(slots × colorways) round-trip chain.
+      const mappingWrites = [];
       for (const s of publishSlots) {
         const baseArt = printArtwork(s);
         const effective = effectivePlacementFor(s, baseArt);
         const readout = placementReadout(effective, effTemplate, s, baseArt);
         const isPocket = s === 'pocket';
         const posLabel = pocketPositionLabel(pocketPosition);
-        await setMapping({
+        mappingWrites.push(setMapping({
           shopId,
           sku: resolvedSku,
           artworkId: baseArt.id,
@@ -614,33 +631,30 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
           placement: isPocket ? `${posLabel} · ${readout}` : readout,
           placementSlot: s,
           ...(isPocket ? { position: pocketPosition } : {}),
-        });
-      }
+        }));
 
-      // OVERRIDE row per (designed slot, colourway that has an override AND is
-      // published): targets that colourway's GROUP sku so it wins over the parent.
-      for (const s of publishSlots) {
+        // OVERRIDE row per (designed slot, colourway that has an override AND is
+        // published): targets that colourway's GROUP sku so it wins over the parent.
         const slotOverrides = overrides[s] || {};
         for (const [cwId, overrideArtworkId] of Object.entries(slotOverrides)) {
           if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
           const groupSku = groupSkuByColorwayId.get(cwId);
           if (!groupSku) continue;
           const overrideArt = artworkById(overrideArtworkId) || printArtwork(s);
-          const effective = effectivePlacementFor(s, overrideArt);
-          const readout = placementReadout(effective, effTemplate, s, overrideArt);
-          const isPocket = s === 'pocket';
-          const posLabel = pocketPositionLabel(pocketPosition);
-          await setMapping({
+          const effectiveO = effectivePlacementFor(s, overrideArt);
+          const readoutO = placementReadout(effectiveO, effTemplate, s, overrideArt);
+          mappingWrites.push(setMapping({
             shopId,
             sku: groupSku,
             artworkId: overrideArtworkId,
             profileId: selectedTemplate.profileId,
-            placement: isPocket ? `${posLabel} · ${readout}` : readout,
+            placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
             placementSlot: s,
             ...(isPocket ? { position: pocketPosition } : {}),
-          });
+          }));
         }
       }
+      await Promise.all(mappingWrites);
 
       setPublishResult({ name: cleanName, sku: resolvedSku });
     } catch (e) {
@@ -686,6 +700,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                     key={t.id}
                     type="button"
                     onClick={() => setSelectedTemplateId(t.id)}
+                    aria-pressed={active}
                     title={t.label}
                     className={`rounded-[var(--radius-admin-el)] border p-1.5 text-left transition ${
                       active
@@ -704,7 +719,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
               })}
             </div>
             {meta.provisional && (
-              <p className="mt-2 text-[11px] text-admin-text-faint">
+              <p className="mt-2 text-[11px] text-admin-text-muted">
                 Generiska plaggmallar (preliminära) — ersätts när tryckeriets riktiga plagg finns.
               </p>
             )}
@@ -717,15 +732,17 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
       <CardSection title="2 · Tryck & placering" bodyClassName="p-4">
         {/* NOTE: track lists use UNDERSCORES ([1fr_360px]) — a comma is not a
             valid CSS grid separator; [1fr,360px] emits an invalid rule the
-            browser drops, silently collapsing to one column (shipped bug). */}
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_360px]">
+            browser drops, silently collapsing to one column (shipped bug).
+            Split at xl, not lg: below ~1280px the fixed rail starves the
+            canvas (~330px at 1024 with the admin sidebar). */}
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_360px]">
           {/* Trycklista — every row OWNS its motif via the inline picker;
               choosing a motif never leaves this panel (critique P0). */}
-          <div className="flex min-w-0 flex-col gap-2 lg:order-2">
+          <div className="flex min-w-0 flex-col gap-2 xl:order-2">
             <div className="flex items-center justify-between">
               <span className="text-[13px] font-semibold text-admin-text">Tryck på plagget</span>
               {prints.length === 0 && (
-                <span className="text-[11px] text-admin-text-faint">Inga tryck ännu</span>
+                <span className="text-[11px] text-admin-text-muted">Inga tryck ännu</span>
               )}
             </div>
 
@@ -742,7 +759,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                     <li
                       key={p.slot}
                       className={`rounded-[var(--radius-admin-el)] border ${
-                        active ? 'border-admin-info-dot bg-admin-info-bg/40' : 'border-admin-border-soft'
+                        active ? 'border-admin-info-dot bg-admin-info-bg/40 dark:bg-admin-surface-2' : 'border-admin-border-soft'
                       }`}
                     >
                       <div className="flex items-center gap-2 px-2 py-1.5">
@@ -754,7 +771,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                           className="shrink-0"
                         >
                           {art?.previewUrl ? (
-                            <img src={art.previewUrl} alt="" className="h-9 w-9 rounded-[4px] border border-admin-border object-cover" />
+                            <img src={art.previewUrl} alt="" loading="lazy" decoding="async" className="h-9 w-9 rounded-[4px] border border-admin-border object-cover" />
                           ) : (
                             <span className="grid h-9 w-9 place-items-center rounded-[4px] border border-dashed border-admin-caution-dot text-admin-caution-text">
                               <PhotoIcon className="h-4 w-4" />
@@ -764,6 +781,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                         <button
                           type="button"
                           onClick={() => setSlot(p.slot)}
+                          aria-pressed={active}
                           className="min-w-0 flex-1 text-left"
                         >
                           <span className="block truncate text-[12px] font-medium text-admin-text">{label}</span>
@@ -775,7 +793,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                           type="button"
                           onClick={() => { setSlot(p.slot); setMotifPickerSlot(pickerOpen ? null : p.slot); }}
                           aria-expanded={pickerOpen}
-                          className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1 text-[11px] text-admin-text hover:bg-admin-surface-2"
+                          className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1.5 text-[11px] text-admin-text hover:bg-admin-surface-2"
                         >
                           {art ? 'Byt motiv' : 'Välj motiv'}
                         </button>
@@ -783,7 +801,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                           type="button"
                           onClick={() => removePrint(p.slot)}
                           aria-label={`Ta bort trycket: ${slotLabel(p.slot)}`}
-                          className="shrink-0 rounded-[var(--radius-admin-el)] px-1.5 py-1 text-[11px] text-admin-text-faint hover:bg-admin-surface-2 hover:text-admin-text"
+                          className="shrink-0 rounded-[var(--radius-admin-el)] px-2 py-1.5 text-[11px] text-admin-text-muted hover:bg-admin-surface-2 hover:text-admin-text"
                         >
                           Ta bort
                         </button>
@@ -811,6 +829,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                                     type="button"
                                     disabled={!selectable}
                                     onClick={() => setPrintArtwork(p.slot, a.id)}
+                                    aria-pressed={isCurrent}
+                                    aria-label={`${a.label || a.fileName}${a.validation?.tier && a.validation.tier !== 'pass' ? ` — ${tierLabel(a.validation.tier)}` : ''}${selectable ? '' : ' — kan inte förhandsgranskas'}`}
                                     title={`${a.label || a.fileName}${selectable ? '' : ' — kan inte förhandsgranskas i studion'}`}
                                     className={`relative overflow-hidden rounded-[4px] border ${
                                       isCurrent
@@ -819,9 +839,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                                     } ${selectable ? '' : 'cursor-not-allowed opacity-40'}`}
                                   >
                                     {a.previewUrl ? (
-                                      <img src={a.previewUrl} alt={a.label || a.fileName} className="aspect-square w-full object-cover" />
+                                      <img src={a.previewUrl} alt="" loading="lazy" decoding="async" className="aspect-square w-full object-cover" />
                                     ) : (
-                                      <span className="grid aspect-square w-full place-items-center bg-admin-surface-2 text-admin-text-faint">
+                                      <span className="grid aspect-square w-full place-items-center bg-admin-surface-2 text-admin-text-muted">
                                         <PhotoIcon className="h-4 w-4" />
                                       </span>
                                     )}
@@ -856,10 +876,12 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                     <button
                       key={s}
                       type="button"
-                      disabled={!available}
+                      aria-disabled={!available}
                       title={!available ? reason : undefined}
                       onClick={() => addPrint(s)}
-                      className="rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1.5 text-[12px] text-admin-text hover:bg-admin-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+                      className={`rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1.5 text-[12px] text-admin-text ${
+                        available ? 'hover:bg-admin-surface-2' : 'cursor-not-allowed opacity-40'
+                      }`}
                     >
                       + {slotLabel(s)}
                     </button>
@@ -883,21 +905,22 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null }) => {
                         setPocketPosition(pp.id);
                         invalidateComposite(); // the pocket rect moved
                       }}
-                      className={`rounded-[var(--radius-admin-el)] px-2.5 py-1 text-[12px] ${
+                      aria-pressed={ppActive}
+                      className={`rounded-[var(--radius-admin-el)] px-2.5 py-1.5 text-[12px] ${
                         ppActive
-                          ? 'bg-black/[0.08] font-medium text-admin-text'
-                          : 'text-admin-text-muted hover:bg-black/[0.06]'
+                          ? 'bg-admin-surface-3 font-medium text-admin-text'
+                          : 'text-admin-text-muted hover:bg-admin-surface-2'
                       }`}
                     >
                       {pp.label}
                     </button>
                   );
                 })}
-                <span className="text-[11px] text-admin-text-faint">(sett från bäraren)</span>
+                <span className="text-[11px] text-admin-text-muted">(sett från bäraren)</span>
               </div>
             )}
           </div>
-          <div className="min-w-0 lg:order-1">
+          <div className="min-w-0 xl:order-1">
             <CompositorCanvas
               template={effTemplate}
               colorway={selectedColorway}

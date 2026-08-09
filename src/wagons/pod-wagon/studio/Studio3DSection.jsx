@@ -212,8 +212,8 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <span className="text-[12px] font-medium text-admin-text">3D-vy</span>
-          <span className="ml-1.5 rounded-full bg-admin-info-bg px-1.5 py-0.5 text-[10px] font-medium text-admin-info-text">beta</span>
-          <span className="ml-2 text-[11px] text-admin-text-faint">
+          <span className="ml-1.5 rounded-full bg-admin-info-bg px-1.5 py-0.5 text-[11px] font-medium text-admin-info-text">beta</span>
+          <span className="ml-2 text-[11px] text-admin-text-muted">
             Motivet följer tygets veck på ett riktigt plaggfoto
           </span>
         </div>
@@ -221,12 +221,13 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
             className="rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1 text-[12px] text-admin-text hover:bg-admin-surface-2"
           >
             {open ? 'Dölj 3D-vy' : 'Visa 3D-vy'}
           </button>
         ) : (
-          <span className="text-[11px] text-admin-text-faint">
+          <span className="text-[11px] text-admin-text-muted">
             Din webbläsare saknar WebGL — 3D-vyn kan inte visas här.
           </span>
         )}
@@ -242,7 +243,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
               {/* Canvas — 2/3 */}
               <div className="lg:col-span-2">
-                <Suspense fallback={<div className="grid aspect-[4/5] w-full place-items-center rounded-xl bg-admin-surface-2 text-[12px] text-admin-text-muted">Laddar 3D-motorn…</div>}>
+                <Suspense fallback={<div className="grid aspect-[4/5] w-full place-items-center rounded-[var(--radius-admin)] bg-admin-surface-2 text-[12px] text-admin-text-muted">Laddar 3D-motorn…</div>}>
                   <DisplacementPreview
                     ref={previewRef}
                     garment={garment}
@@ -257,7 +258,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
               </div>
 
               {/* Controls rail — 1/3 */}
-              <div className="flex flex-col gap-5 rounded-xl border border-admin-border-soft bg-admin-surface p-4 lg:col-span-1">
+              <div className="flex flex-col gap-5 rounded-[var(--radius-admin)] border border-admin-border-soft bg-admin-surface p-4 lg:col-span-1">
                 {/* Model + colourway picker — the render-ready library models. The
                     model <select> only appears with >1 model (a single model shows
                     its label as static text); the colourway <select> only with >1
@@ -268,14 +269,14 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                     <img
                       src={garment.views.front.colorways[effColorwayId]?.photoUrl}
                       alt=""
-                      className="h-7 w-7 rounded-lg object-cover"
+                      className="h-7 w-7 rounded-[var(--radius-admin-el)] object-cover"
                     />
                     {garments.length > 1 ? (
                       <select
                         value={garment.id}
                         onChange={(e) => setModelId(e.target.value)}
                         aria-label="Modell"
-                        className="rounded-[10px] border border-admin-border bg-admin-surface px-2.5 py-1.5 text-[13px] font-medium text-admin-text focus:border-admin-info-dot focus:outline-none"
+                        className="rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1.5 text-[13px] font-medium text-admin-text focus:outline-none focus:border-admin-info-dot focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
                       >
                         {garments.map((g) => (
                           <option key={g.id} value={g.id}>{g.label || g.id}</option>
@@ -293,7 +294,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                       value={effColorwayId}
                       onChange={(e) => setColorwayId(e.target.value)}
                       aria-label="Färg"
-                      className="rounded-[10px] border border-admin-border bg-admin-surface px-2.5 py-1.5 text-[13px] font-medium text-admin-text focus:border-admin-info-dot focus:outline-none"
+                      className="rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1.5 text-[13px] font-medium text-admin-text focus:outline-none focus:border-admin-info-dot focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
                     >
                       {colorwayIds.map((cwId) => (
                         <option key={cwId} value={cwId}>
@@ -315,7 +316,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                     type="button"
                     onClick={downloadPNG}
                     disabled={busy}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-admin-text px-4 py-3 text-[14px] font-medium text-admin-surface transition-shadow hover:shadow-lg disabled:opacity-40"
+                    className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-admin)] bg-admin-text px-4 py-3 text-[13px] font-medium text-admin-surface hover:opacity-90 disabled:opacity-40"
                   >
                     {busy ? 'Skapar…' : 'Ladda ner 3D-bild (PNG)'}
                   </button>
@@ -328,7 +329,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                         value={targetProductId}
                         onChange={(e) => setTargetProductId(e.target.value)}
                         aria-label="Välj produkt att lägga bilden på"
-                        className="min-w-0 flex-1 rounded-[10px] border border-admin-border bg-admin-surface px-2.5 py-2 text-[13px] text-admin-text focus:border-admin-info-dot focus:outline-none"
+                        className="min-w-0 flex-1 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-2 text-[13px] text-admin-text focus:outline-none focus:border-admin-info-dot focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
                       >
                         <option value="">Lägg till i produkt…</option>
                         {products.map((p) => (
@@ -339,14 +340,14 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                         type="button"
                         onClick={addToProduct}
                         disabled={!targetProductId || adding}
-                        className="shrink-0 rounded-[10px] border border-admin-border px-3 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface-2 disabled:opacity-40"
+                        className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border px-3 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface-2 disabled:opacity-40"
                       >
                         {adding ? 'Lägger till…' : 'Lägg till'}
                       </button>
                     </div>
                   )}
 
-                  <p className="mt-3 text-[12px] leading-relaxed text-admin-text-faint">
+                  <p className="mt-3 text-[12px] leading-relaxed text-admin-text-muted">
                     3D-vyn är en illustration och följer tryckplaceringen i arbetsytan — trycket följer den platta mockupen.
                     {products.length > 0 && ' Bilden läggs till som extra produktbild, aldrig som huvudbild.'}
                   </p>

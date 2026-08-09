@@ -46,6 +46,8 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
         <img
           src={artwork.previewUrl}
           alt=""
+          loading="lazy"
+          decoding="async"
           draggable={false}
           className="pointer-events-none absolute object-fill"
           style={{
@@ -92,7 +94,7 @@ const ColorwayStrip = ({
         <span className="text-[13px] font-semibold text-admin-text">Färger</span>
         {/* Live review-gate progress — the gate blocks publish, so its state
             must be visible HERE, not first as a scolding in the publish step. */}
-        <span className={`text-[11px] ${allSeen ? 'text-admin-success-text' : 'text-admin-text-faint'}`}>
+        <span className={`text-[11px] ${allSeen ? 'text-admin-success-text' : 'text-admin-text-muted'}`}>
           {allSeen
             ? `Alla ${colorways.length} färger granskade ✓`
             : `${reviewedCount} av ${colorways.length} färger granskade — klicka på varje färg; det du ser är det som trycks`}
@@ -109,6 +111,7 @@ const ColorwayStrip = ({
               key={cw.id}
               type="button"
               onClick={() => onSelect(cw.id)}
+              aria-pressed={isActive}
               className={`w-[86px] shrink-0 rounded-[var(--radius-admin)] border p-1.5 text-left transition ${
                 isActive
                   ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
@@ -138,7 +141,7 @@ const ColorwayStrip = ({
                 )}
               </div>
               {hasOverride && (
-                <div className="mt-0.5 text-[10px] text-admin-info-text">eget motiv</div>
+                <div className="mt-0.5 text-[11px] text-admin-info-text">eget motiv</div>
               )}
             </button>
           );
@@ -156,7 +159,7 @@ const ColorwayStrip = ({
             id="cw-override"
             value={activeOverride}
             onChange={(e) => onOverrideChange(active.id, e.target.value || null)}
-            className="rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-[12px] text-admin-text focus:border-admin-info-dot focus:outline-none"
+            className="rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-[12px] text-admin-text focus:outline-none focus:border-admin-info-dot focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
           >
             <option value="">{baseArtworkLabel} (standard)</option>
             {artworkOptions.map((a) => (

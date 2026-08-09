@@ -183,9 +183,9 @@ const PublishPanel = ({
   };
 
   const inputCls =
-    'w-full rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-3 py-1.5 text-[13px] text-admin-text placeholder:text-admin-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]';
+    'w-full rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-3 py-1.5 text-[13px] text-admin-text placeholder:text-admin-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]';
   const smallInputCls =
-    'rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-[12px] text-admin-text placeholder:text-admin-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]';
+    'rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-[12px] text-admin-text placeholder:text-admin-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]';
   const labelCls = 'block text-[13px] font-medium text-admin-text mb-1';
   const checkboxCls =
     'h-4 w-4 rounded-[4px] border-admin-border text-[var(--color-admin-primary)] focus:ring-[var(--color-admin-primary)]';
@@ -207,7 +207,7 @@ const PublishPanel = ({
               publish, slice A). */}
           {printSummary.length > 0 && (
             <div className="rounded-[var(--radius-admin-el)] bg-admin-surface-2 px-3 py-2.5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-admin-text-faint">Detta trycks</span>
+              <span className="text-[11px] font-medium uppercase tracking-wide text-admin-text-muted">Detta trycks</span>
               <ul className="mt-1 space-y-0.5">
                 {printSummary.map((p) => (
                   <li key={p.slot} className="text-[12px] text-admin-text">
@@ -221,8 +221,9 @@ const PublishPanel = ({
 
           {/* 2. Product name */}
           <div>
-            <label className={labelCls}>Produktnamn</label>
+            <label className={labelCls} htmlFor="pub-name">Produktnamn</label>
             <input
+              id="pub-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -265,7 +266,7 @@ const PublishPanel = ({
                   <button
                     type="button"
                     onClick={() => removeSize(s)}
-                    className="text-admin-text-faint hover:text-admin-text"
+                    className="px-1.5 py-1 -my-1 text-admin-text-muted hover:text-admin-text"
                     aria-label={`Ta bort ${s}`}
                   >
                     ×
@@ -277,6 +278,7 @@ const PublishPanel = ({
                 value={newSize}
                 onChange={(e) => setNewSize(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSize(); } }}
+                aria-label="Lägg till storlek"
                 placeholder="+ storlek"
                 className={`${smallInputCls} w-20`}
               />
@@ -302,6 +304,7 @@ const PublishPanel = ({
                           <td key={s} className="px-2 py-1 text-center">
                             <input
                               type="checkbox"
+                              aria-label={`${c.label} storlek ${s}`}
                               checked={sizeOptOut[c.id]?.[s] !== true}
                               onChange={() => toggleSizeCell(c.id, s)}
                               className={checkboxCls}
@@ -315,7 +318,7 @@ const PublishPanel = ({
               </div>
             )}
             {anySizeless && (
-              <p className="mt-1.5 text-[12px] text-admin-text-faint">
+              <p className="mt-1.5 text-[12px] text-admin-text-muted">
                 En färg utan valda storlekar publiceras utan storleksval (en enda variant).
               </p>
             )}
@@ -323,9 +326,10 @@ const PublishPanel = ({
 
           {/* 5. Pricing */}
           <div>
-            <label className={labelCls}>Pris (SEK, inkl. moms)</label>
+            <label className={labelCls} htmlFor="pub-price">Pris (SEK, inkl. moms)</label>
             <div className="flex flex-wrap items-center gap-2">
               <input
+                id="pub-price"
                 type="number"
                 min="0"
                 step="1"
@@ -334,13 +338,14 @@ const PublishPanel = ({
                 placeholder="0"
                 className={`${inputCls} w-32`}
               />
-              <span className="text-admin-text-faint">·</span>
+              <span className="text-admin-text-muted">·</span>
               <span className="text-[12px] text-admin-text-muted">Marginal</span>
               <input
                 type="number"
                 min="0"
                 step="1"
                 value={margin}
+                aria-label="Marginal i procent"
                 onChange={(e) => setMargin(e.target.value)}
                 className={`${smallInputCls} w-16`}
                 disabled={cost == null}
@@ -387,6 +392,7 @@ const PublishPanel = ({
                             min="0"
                             step="1"
                             value={rowPrices[c.id] || ''}
+                            aria-label={`Pris för ${c.label}`}
                             onChange={(e) => setRowPrices((prev) => ({ ...prev, [c.id]: e.target.value }))}
                             placeholder={validPrice ? fmtSek(priceNum) : '—'}
                             className={`${smallInputCls} w-24`}
@@ -401,7 +407,7 @@ const PublishPanel = ({
               </table>
             </div>
             {cost == null && (
-              <p className="mt-1.5 text-[12px] text-admin-text-faint">
+              <p className="mt-1.5 text-[12px] text-admin-text-muted">
                 Produktionskostnad saknas för den här mallen — vinst och marginal visas när priset är satt av tryckeriet.
               </p>
             )}
@@ -440,7 +446,7 @@ const PublishPanel = ({
                   type="button"
                   onClick={submit}
                   disabled={!canPublish}
-                  className="rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
+                  className="rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
                 >
                   {publishing ? 'Skapar…' : 'Skapa produkt'}
                 </button>
@@ -451,7 +457,7 @@ const PublishPanel = ({
                 </p>
               )}
               {!hasArtwork && shopId && (
-                <p className="mt-2 text-[12px] text-admin-text-faint">
+                <p className="mt-2 text-[12px] text-admin-text-muted">
                   Lägg till minst ett tryck med motiv innan du publicerar (varje tryckrad behöver ett motiv).
                 </p>
               )}

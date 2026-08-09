@@ -19,7 +19,7 @@ import { GARMENT_FLATS, GARMENT_VIEWBOX } from './garments';
 // slot (front/pocket/sleeves) is visible on the front view. A garment without a
 // back flat falls back to front (v1 behavior for photo templates too — one photo
 // set per colourway, no per-view photos yet).
-const viewForSlot = (slot) => (slot === 'back' ? 'back' : 'front');
+export const viewForSlot = (slot) => (slot === 'back' ? 'back' : 'front');
 
 /** Resolve the flat COMPONENT for a garment + slot. GARMENT_FLATS values are
  *  view maps ({ front, back? }); missing back view → front. Null when unknown. */
@@ -114,7 +114,7 @@ const TemplateBackground = ({ template, colorway, slot = 'front', className = ''
     }
     return (
       <div
-        className={`grid w-full place-items-center bg-admin-surface-2 text-[11px] text-admin-text-faint ${className}`}
+        className={`grid w-full place-items-center bg-admin-surface-2 text-[11px] text-admin-text-muted ${className}`}
         style={vb ? { aspectRatio: `${vb.w} / ${vb.h}` } : undefined}
       >
         Foto saknas
