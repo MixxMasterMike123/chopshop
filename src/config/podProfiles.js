@@ -55,3 +55,10 @@ export const clearPodProfilesCache = () => {
   _cache = null;
   _meta = { version: 0, provisional: true };
 };
+
+/** DEV-ONLY: pre-seed the cache so the untracked studio harness can mount the
+ *  FULL DesignStudio without Firestore. No-op in production builds. */
+export const seedPodProfilesCacheForDev = (profiles) => {
+  if (!import.meta.env.DEV) return;
+  _cache = Array.isArray(profiles) ? profiles : [];
+};

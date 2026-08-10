@@ -87,10 +87,13 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // The ACTIVE print row's slot (drives canvas/strip). Reconciled against
   // `prints` — when the list is empty it idles on 'front' with no artwork.
   const [slot, setSlot] = useState('front');
-  // Which row's INLINE motif picker is open (slot id | null). The picker lives
-  // in the row itself — choosing a motif never means leaving the trycklista
-  // (critique P0: the old left-rail picker forced a scroll round-trip).
-  const [motifPickerSlot, setMotifPickerSlot] = useState(null);
+  // WIZARD (Kent's chain, 2026-08-10): one decision at a time, as pages —
+  // 1 Plagg · 2 Tryckytor · 3 Motiv (one surface at a time) · 4 Placering
+  // (one surface at a time) · 5 Färger & mockuper · 6 Publicera. Steps are
+  // VIEWS over the same design state, so going back never loses work.
+  const [step, setStep] = useState(1);
+  const [motifCursor, setMotifCursor] = useState(0); // step 3: index into prints
+  const [placeCursor, setPlaceCursor] = useState(0); // step 4: index into prints
   // Pocket position (left/center/right, wearer's perspective) — 'pocket' is a
   // fixed-size discrete-position slot, not free placement (docs/POD_PRINT_SPEC.md).
   const [pocketPosition, setPocketPosition] = useState(DEFAULT_POCKET_POSITION);
@@ -246,14 +249,12 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     setPrints((prev) => [...prev, { slot: s, artworkId: null }]);
     if (s === 'pocket') setPocketPosition(DEFAULT_POCKET_POSITION);
     setSlot(s);
-    setMotifPickerSlot(s); // a motif-less row's next step is ALWAYS picking one
   };
 
   const removePrint = (s) => {
     setPrints((prev) => prev.filter((p) => p.slot !== s));
     setPlacements((prev) => { const n = { ...prev }; delete n[s]; return n; });
     setOverrides((prev) => { const n = { ...prev }; delete n[s]; return n; });
-    setMotifPickerSlot((cur) => (cur === s ? null : cur));
     invalidateComposite();
     if (slot === s) {
       const remaining = prints.filter((p) => p.slot !== s);
@@ -266,7 +267,6 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const setPrintArtwork = (s, artId) => {
     setPrints((prev) => prev.map((p) => (p.slot === s ? { ...p, artworkId: artId } : p)));
     setPlacements((prev) => { const n = { ...prev }; delete n[s]; return n; });
-    setMotifPickerSlot(null);
     invalidateComposite();
   };
 
@@ -874,6 +874,95 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
   const canvasArtwork = resolveArtwork(slot, colorwayId);
 
+  // ── Wizard chrome: gates + navigation ─────────────────────────────────────
+  // A step is enterable once every earlier step is done; completed steps stay
+  // clickable (the pages are views over shared state — going back loses nothing).
+  const s1done = Boolean(selectedTemplateId);
+  const s2done = prints.length > 0;
+  const s3done = s2done && prints.every((p) => p.artworkId);
+  const s5done = mockups.length > 0;
+  const STEP_META = [
+    { n: 1, label: 'Plagg', done: s1done },
+    { n: 2, label: 'Tryckytor', done: s2done },
+    { n: 3, label: 'Motiv', done: s3done },
+    { n: 4, label: 'Placering', done: s3done }, // auto-placement = always valid
+    { n: 5, label: 'Färger & mockuper', done: s5done },
+    { n: 6, label: 'Publicera', done: Boolean(publishResult) },
+  ];
+  const canEnterStep = (n) => STEP_META.slice(0, n - 1).every((m) => m.done);
+  const goStep = (n) => {
+    if (n < 1 || n > 6 || !canEnterStep(n)) return;
+    // Entering a one-surface-at-a-time page: land the cursor somewhere useful
+    // (first motif-less surface for Motiv; clamped last position for
+    // Placering) and point the canvas/strip at that row's slot.
+    if (n === 3) {
+      const firstEmpty = prints.findIndex((p) => !p.artworkId);
+      const i = firstEmpty >= 0 ? firstEmpty : Math.min(motifCursor, Math.max(0, prints.length - 1));
+      setMotifCursor(i);
+      if (prints[i]) setSlot(prints[i].slot);
+    }
+    if (n === 4) {
+      const i = Math.min(placeCursor, Math.max(0, prints.length - 1));
+      setPlaceCursor(i);
+      if (prints[i]) setSlot(prints[i].slot);
+    }
+    setStep(n);
+  };
+  // Surface cursors (steps 3 & 4 walk the prints ONE at a time, in list order —
+  // "bröst först, sedan rygg, sist ärm"). Clamped against list edits.
+  const mi = Math.min(motifCursor, Math.max(0, prints.length - 1));
+  const pi = Math.min(placeCursor, Math.max(0, prints.length - 1));
+  const goMotif = (i) => { const p = prints[i]; if (!p) return; setMotifCursor(i); setSlot(p.slot); };
+  const goPlace = (i) => { const p = prints[i]; if (!p) return; setPlaceCursor(i); setSlot(p.slot); };
+  // Picking a motif auto-advances to the next motif-less surface (still one
+  // decision at a time — the next decision just presents itself).
+  const pickMotif = (art) => {
+    const cur = prints[mi];
+    if (!cur) return;
+    setPrintArtwork(cur.slot, art.id);
+    const nextIdx = prints.findIndex((p, j) => j !== mi && !p.artworkId);
+    if (nextIdx >= 0) goMotif(nextIdx);
+  };
+
+  // Shared step-footer nav (Tillbaka · primary Klar/Nästa).
+  const StepNav = ({ nextLabel, nextEnabled, onNext, hint = null }) => (
+    <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-admin-border-soft pt-4">
+      {step > 1 && (
+        <button
+          type="button"
+          onClick={() => goStep(step - 1)}
+          className="rounded-[var(--radius-admin-el)] border border-admin-border px-3.5 py-2 text-[13px] text-admin-text hover:bg-admin-surface-2"
+        >
+          ‹ Tillbaka
+        </button>
+      )}
+      {nextLabel && (
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={!nextEnabled}
+          className="rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
+        >
+          {nextLabel} ›
+        </button>
+      )}
+      {hint && !nextEnabled && (
+        <span className="text-[12px] text-admin-text-muted">{hint}</span>
+      )}
+    </div>
+  );
+
+  // A state edit can retro-invalidate the CURRENT page's prerequisites
+  // (a template switch drops print rows; page 2 can empty the trycklistan):
+  // fall back to the deepest still-enterable page instead of a locked one.
+  useEffect(() => {
+    if (canEnterStep(step)) return;
+    let n = step - 1;
+    while (n > 1 && !canEnterStep(n)) n -= 1;
+    setStep(n);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, s1done, s2done, s3done, s5done]);
+
   const designForProduct = designForProductId
     ? products.find((p) => p.id === designForProductId) || null
     : null;
@@ -892,8 +981,48 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         </div>
       )}
 
-      {/* ── 1 · PLAGG — a one-time choice, sized like one (critique P2:
-          the old 2-col aspect-square cards dominated whole screen-heights). */}
+      {/* Wizard chrome — persistent step header: ✓ done (clickable to revisit),
+          current, or locked (dimmed until every earlier gate is met). Steps
+          are VIEWS over shared state — no routes, tab switches lose nothing. */}
+      <div className="flex flex-wrap items-center gap-1.5" role="navigation" aria-label="Designstudions steg">
+        {STEP_META.map((m) => {
+          const current = m.n === step;
+          const enterable = canEnterStep(m.n);
+          return (
+            <button
+              key={m.n}
+              type="button"
+              onClick={() => goStep(m.n)}
+              disabled={!enterable}
+              aria-current={current ? 'step' : undefined}
+              className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition ${
+                current
+                  ? 'border-admin-info-dot bg-admin-info-bg font-medium text-admin-info-text'
+                  : enterable
+                    ? 'border-admin-border text-admin-text hover:bg-admin-surface-2'
+                    : 'cursor-default border-admin-border-soft text-admin-text-faint'
+              }`}
+            >
+              <span
+                className={`grid h-[18px] w-[18px] place-items-center rounded-full text-[10px] font-semibold ${
+                  m.done && !current
+                    ? 'bg-admin-success-bg text-admin-success-text'
+                    : current
+                      ? 'bg-admin-info-dot text-white'
+                      : 'bg-admin-surface-2 text-admin-text-muted'
+                }`}
+              >
+                {m.done && !current ? '✓' : m.n}
+              </span>
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── 1 · PLAGG — page 1 of the wizard (Kents kedja 2026-08-10): the
+          one-time garment choice, compact cards (critique P2). */}
+      {step === 1 && (
       <CardSection title="1 · Plagg" bodyClassName="p-4">
         {templatesLoading ? (
           <p className="text-[13px] text-admin-text-muted">Laddar mallar…</p>
@@ -937,230 +1066,268 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             )}
           </>
         )}
+        <StepNav nextLabel="Nästa: Tryckytor" nextEnabled={s1done} onNext={() => goStep(2)} hint="Välj ett plagg" />
       </CardSection>
+      )}
 
-      {/* ── 2 · TRYCK & PLACERING — canvas and trycklista SIDE BY SIDE so a
-          row and its zone on the garment are one glance apart (critique P1). */}
-      <CardSection title="2 · Tryck & placering" bodyClassName="p-4">
-        {/* NOTE: track lists use UNDERSCORES ([1fr_360px]) — a comma is not a
-            valid CSS grid separator; [1fr,360px] emits an invalid rule the
-            browser drops, silently collapsing to one column (shipped bug).
-            Split at xl, not lg: below ~1280px the fixed rail starves the
-            canvas (~330px at 1024 with the admin sidebar). */}
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_360px]">
-          {/* Trycklista — every row OWNS its motif via the inline picker;
-              choosing a motif never leaves this panel (critique P0). */}
-          <div className="flex min-w-0 flex-col gap-2 xl:order-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[13px] font-semibold text-admin-text">Tryck på plagget</span>
-              {prints.length === 0 && (
-                <span className="text-[11px] text-admin-text-muted">Inga tryck ännu</span>
-              )}
-            </div>
+      {/* ── 2 · TRYCKYTOR — big toggle cards, one per physical surface. The
+          bröst+ficka collision (beslut 1) is explained ON the blocked card. */}
+      {step === 2 && (
+      <CardSection title="2 · Tryckytor" bodyClassName="p-4">
+        <p className="text-[13px] text-admin-text-muted">
+          Välj var på plagget det ska tryckas. Varje yta blir ett eget tryck med eget motiv.
+        </p>
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {slots.map((s) => {
+            const row = printBySlot[s];
+            const selected = Boolean(row);
+            const { available, reason } = slotAvailability(s);
+            const blocked = !selected && !available;
+            const art = row ? artworkById(row.artworkId) : null;
+            const mm = selectedTemplate?.printAreaMm?.[s];
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => (selected ? removePrint(s) : addPrint(s))}
+                disabled={blocked}
+                aria-pressed={selected}
+                title={blocked ? reason : undefined}
+                className={`rounded-[var(--radius-admin-el)] border p-3 text-left transition ${
+                  selected
+                    ? 'border-admin-info-dot bg-admin-info-bg/40 ring-1 ring-admin-info-dot/40 dark:bg-admin-surface-2'
+                    : blocked
+                      ? 'cursor-not-allowed border-admin-border-soft opacity-50'
+                      : 'border-admin-border hover:bg-admin-surface-2'
+                }`}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-medium text-admin-text">{slotLabel(s)}</span>
+                  {selected && <span className="shrink-0 text-[11px] font-medium text-admin-info-text">✓ Valt</span>}
+                </span>
+                <span className={`mt-0.5 block text-[11px] ${blocked ? 'text-admin-caution-text' : 'text-admin-text-muted'}`}>
+                  {blocked
+                    ? reason
+                    : art
+                      ? `Motiv: ${art.label || art.fileName}`
+                      : mm
+                        ? `Yta upp till ${Math.round(mm.w / 10)} × ${Math.round(mm.h / 10)} cm`
+                        : 'Egen tryckyta'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <StepNav nextLabel="Nästa: Motiv" nextEnabled={s2done} onNext={() => goStep(3)} hint="Välj minst en tryckyta" />
+      </CardSection>
+      )}
 
-            {prints.length > 0 && (
-              <ul className="flex flex-col gap-1.5">
-                {prints.map((p) => {
-                  const art = artworkById(p.artworkId);
-                  const active = p.slot === slot;
-                  const pickerOpen = motifPickerSlot === p.slot;
-                  const label = p.slot === 'pocket'
-                    ? `${slotLabel(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
-                    : slotLabel(p.slot);
-                  return (
-                    <li
-                      key={p.slot}
-                      className={`rounded-[var(--radius-admin-el)] border ${
-                        active ? 'border-admin-info-dot bg-admin-info-bg/40 dark:bg-admin-surface-2' : 'border-admin-border-soft'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 px-2 py-1.5">
-                        <button
-                          type="button"
-                          onClick={() => { setSlot(p.slot); setMotifPickerSlot(pickerOpen ? null : p.slot); }}
-                          aria-expanded={pickerOpen}
-                          aria-label={art ? `Byt motiv för ${label}` : `Välj motiv för ${label}`}
-                          className="shrink-0"
-                        >
-                          {art?.previewUrl ? (
-                            <img src={art.previewUrl} alt="" loading="lazy" decoding="async" className="h-9 w-9 rounded-[4px] border border-admin-border object-cover" />
-                          ) : (
-                            <span className="grid h-9 w-9 place-items-center rounded-[4px] border border-dashed border-admin-caution-dot text-admin-caution-text">
-                              <PhotoIcon className="h-4 w-4" />
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSlot(p.slot)}
-                          aria-pressed={active}
-                          className="min-w-0 flex-1 text-left"
-                        >
-                          <span className="block truncate text-[12px] font-medium text-admin-text">{label}</span>
-                          <span className={`block truncate text-[11px] ${art ? 'text-admin-text-muted' : 'text-admin-caution-text'}`}>
-                            {art ? (art.label || art.fileName) : 'Motiv saknas — välj här'}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { setSlot(p.slot); setMotifPickerSlot(pickerOpen ? null : p.slot); }}
-                          aria-expanded={pickerOpen}
-                          className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1.5 text-[11px] text-admin-text hover:bg-admin-surface-2"
-                        >
-                          {art ? 'Byt motiv' : 'Välj motiv'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removePrint(p.slot)}
-                          aria-label={`Ta bort trycket: ${slotLabel(p.slot)}`}
-                          className="shrink-0 rounded-[var(--radius-admin-el)] px-2 py-1.5 text-[11px] text-admin-text-muted hover:bg-admin-surface-2 hover:text-admin-text"
-                        >
-                          Ta bort
-                        </button>
-                      </div>
+      {/* ── 3 · MOTIV — ONE surface at a time (Kents kedja): full-width motif
+          grid for the cursor's surface, chips to jump between surfaces (✓ =
+          has motif), and a pick auto-advances to the next motif-less surface. */}
+      {step === 3 && prints[mi] && (
+      <CardSection title="3 · Motiv" bodyClassName="p-4">
+        {prints.length > 1 && (
+          <div className="mb-3 flex flex-wrap items-center gap-1.5">
+            {prints.map((p, i) => {
+              const hasMotif = Boolean(p.artworkId);
+              const activeChip = i === mi;
+              return (
+                <button
+                  key={p.slot}
+                  type="button"
+                  onClick={() => goMotif(i)}
+                  aria-pressed={activeChip}
+                  className={`rounded-full border px-3 py-1.5 text-[12px] ${
+                    activeChip
+                      ? 'border-admin-info-dot bg-admin-info-bg font-medium text-admin-info-text'
+                      : 'border-admin-border text-admin-text-muted hover:bg-admin-surface-2'
+                  }`}
+                >
+                  {hasMotif ? '✓ ' : ''}{slotLabel(p.slot)}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <p className="text-[13px] font-semibold text-admin-text">
+          Motiv för {slotLabel(prints[mi].slot)}{prints.length > 1 ? ` — ${mi + 1} av ${prints.length}` : ''}
+        </p>
+        {loading ? (
+          <p className="mt-2 text-[13px] text-admin-text-muted">Laddar original…</p>
+        ) : artwork.length === 0 ? (
+          <p className="mt-2 text-[13px] text-admin-text-muted">
+            Inga original ännu — ladda upp under fliken Original.
+            Designen ligger kvar här under tiden.
+          </p>
+        ) : (
+          <div className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
+            {artwork.map((a) => {
+              const selectable = isSelectableArtwork(a);
+              const isCurrent = a.id === prints[mi].artworkId;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  disabled={!selectable}
+                  onClick={() => pickMotif(a)}
+                  aria-pressed={isCurrent}
+                  aria-label={`${a.label || a.fileName}${a.validation?.tier && a.validation.tier !== 'pass' ? ` — ${tierLabel(a.validation.tier)}` : ''}${selectable ? '' : ' — kan inte förhandsgranskas'}`}
+                  title={`${a.label || a.fileName}${selectable ? '' : ' — kan inte förhandsgranskas i studion'}`}
+                  className={`relative overflow-hidden rounded-[var(--radius-admin-el)] border p-1 text-left ${
+                    isCurrent
+                      ? 'border-admin-info-dot ring-1 ring-admin-info-dot/50'
+                      : 'border-admin-border hover:border-admin-text-faint'
+                  } ${selectable ? '' : 'cursor-not-allowed opacity-40'}`}
+                >
+                  {a.previewUrl ? (
+                    <img src={a.previewUrl} alt="" loading="lazy" decoding="async" className="aspect-square w-full rounded-[4px] object-cover" />
+                  ) : (
+                    <span className="grid aspect-square w-full place-items-center rounded-[4px] bg-admin-surface-2 text-admin-text-muted">
+                      <PhotoIcon className="h-4 w-4" />
+                    </span>
+                  )}
+                  <span className="mt-1 block truncate text-[11px] text-admin-text">{a.label || a.fileName}</span>
+                  {/* Advisory validation tier (WARN/FAIL) as a caution dot —
+                      tiers never block here (podValidation's contract). */}
+                  {a.validation?.tier && a.validation.tier !== 'pass' && (
+                    <span
+                      className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full border border-admin-surface bg-admin-caution-dot"
+                      title={tierLabel(a.validation.tier)}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <StepNav nextLabel="Nästa: Placering" nextEnabled={s3done} onNext={() => goStep(4)} hint="Alla ytor behöver ett motiv" />
+      </CardSection>
+      )}
 
-                      {/* INLINE MOTIF PICKER — the motif is chosen IN the row;
-                          no scroll round-trip to a distant library list. */}
-                      {pickerOpen && (
-                        <div className="border-t border-admin-border-soft p-2">
-                          {loading ? (
-                            <p className="text-[12px] text-admin-text-muted">Laddar original…</p>
-                          ) : artwork.length === 0 ? (
-                            <p className="text-[12px] text-admin-text-muted">
-                              Inga original ännu — ladda upp under fliken Original.
-                              Designen ligger kvar här under tiden.
-                            </p>
-                          ) : (
-                            <div className="grid grid-cols-[repeat(auto-fill,minmax(52px,1fr))] gap-1.5">
-                              {artwork.map((a) => {
-                                const selectable = isSelectableArtwork(a);
-                                const isCurrent = a.id === p.artworkId;
-                                return (
-                                  <button
-                                    key={a.id}
-                                    type="button"
-                                    disabled={!selectable}
-                                    onClick={() => setPrintArtwork(p.slot, a.id)}
-                                    aria-pressed={isCurrent}
-                                    aria-label={`${a.label || a.fileName}${a.validation?.tier && a.validation.tier !== 'pass' ? ` — ${tierLabel(a.validation.tier)}` : ''}${selectable ? '' : ' — kan inte förhandsgranskas'}`}
-                                    title={`${a.label || a.fileName}${selectable ? '' : ' — kan inte förhandsgranskas i studion'}`}
-                                    className={`relative overflow-hidden rounded-[4px] border ${
-                                      isCurrent
-                                        ? 'border-admin-info-dot ring-1 ring-admin-info-dot/50'
-                                        : 'border-admin-border hover:border-admin-text-faint'
-                                    } ${selectable ? '' : 'cursor-not-allowed opacity-40'}`}
-                                  >
-                                    {a.previewUrl ? (
-                                      <img src={a.previewUrl} alt="" loading="lazy" decoding="async" className="aspect-square w-full object-cover" />
-                                    ) : (
-                                      <span className="grid aspect-square w-full place-items-center bg-admin-surface-2 text-admin-text-muted">
-                                        <PhotoIcon className="h-4 w-4" />
-                                      </span>
-                                    )}
-                                    {/* Advisory validation tier (WARN/FAIL) as a
-                                        caution dot — tiers never block here. */}
-                                    {a.validation?.tier && a.validation.tier !== 'pass' && (
-                                      <span
-                                        className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full border border-admin-surface bg-admin-caution-dot"
-                                        title={tierLabel(a.validation.tier)}
-                                      />
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-
-            {slots.some((s) => slotAvailability(s).available) && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[12px] text-admin-text-muted">Lägg till tryck:</span>
-                {slots.map((s) => {
-                  const { available, reason } = slotAvailability(s);
-                  if (printBySlot[s]) return null;
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      aria-disabled={!available}
-                      title={!available ? reason : undefined}
-                      onClick={() => addPrint(s)}
-                      className={`rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1.5 text-[12px] text-admin-text ${
-                        available ? 'hover:bg-admin-surface-2' : 'cursor-not-allowed opacity-40'
-                      }`}
-                    >
-                      + {slotLabel(s)}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
+      {/* ── 4 · PLACERING — ONE print at a time in list order; the canvas
+          composites ALL designed prints on the flat (d004250). Pocket rows get
+          the discrete position picker ONLY (beslut 2 — no free placement). */}
+      {step === 4 && prints[pi] && (
+      <CardSection title="4 · Placering" bodyClassName="p-4">
+        {prints.length > 1 && (
+          <div className="mb-3 flex flex-wrap items-center gap-1.5">
+            {prints.map((p, i) => {
+              const activeChip = i === pi;
+              const chipLabel = p.slot === 'pocket'
+                ? `${slotLabel(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
+                : slotLabel(p.slot);
+              return (
+                <button
+                  key={p.slot}
+                  type="button"
+                  onClick={() => goPlace(i)}
+                  aria-pressed={activeChip}
+                  className={`rounded-full border px-3 py-1.5 text-[12px] ${
+                    activeChip
+                      ? 'border-admin-info-dot bg-admin-info-bg font-medium text-admin-info-text'
+                      : 'border-admin-border text-admin-text-muted hover:bg-admin-surface-2'
+                  }`}
+                >
+                  {chipLabel}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <p className="mb-2 text-[13px] font-semibold text-admin-text">
+          Placering för {slotLabel(prints[pi].slot)}{prints.length > 1 ? ` — ${pi + 1} av ${prints.length}` : ''}
+        </p>
+        {prints[pi].slot === 'pocket' ? (
+          <div className="flex flex-col gap-2">
             {/* Pocket position — discrete choice (left/center/right, wearer's
                 perspective); the fixed 10×10 cm spot has no free placement. */}
-            {slot === 'pocket' && selectedTemplate?.pocketPositions && (
-              <div className="flex flex-wrap items-center gap-2 border-t border-admin-border-soft pt-2">
-                <span className="text-[12px] text-admin-text-muted">Fickposition:</span>
-                {POCKET_POSITIONS.map((pp) => {
-                  const ppActive = pp.id === pocketPosition;
-                  return (
-                    <button
-                      key={pp.id}
-                      type="button"
-                      onClick={() => {
-                        setPocketPosition(pp.id);
-                        invalidateComposite(); // the pocket rect moved
-                      }}
-                      aria-pressed={ppActive}
-                      className={`rounded-[var(--radius-admin-el)] px-2.5 py-1.5 text-[12px] ${
-                        ppActive
-                          ? 'bg-admin-surface-3 font-medium text-admin-text'
-                          : 'text-admin-text-muted hover:bg-admin-surface-2'
-                      }`}
-                    >
-                      {pp.label}
-                    </button>
-                  );
-                })}
-                <span className="text-[11px] text-admin-text-muted">(sett från bäraren)</span>
-              </div>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[12px] text-admin-text-muted">Fickposition:</span>
+              {POCKET_POSITIONS.map((pp) => {
+                const ppActive = pp.id === pocketPosition;
+                return (
+                  <button
+                    key={pp.id}
+                    type="button"
+                    onClick={() => {
+                      setPocketPosition(pp.id);
+                      invalidateComposite(); // the pocket rect moved
+                    }}
+                    aria-pressed={ppActive}
+                    className={`rounded-[var(--radius-admin-el)] px-2.5 py-1.5 text-[12px] ${
+                      ppActive
+                        ? 'bg-admin-surface-3 font-medium text-admin-text'
+                        : 'text-admin-text-muted hover:bg-admin-surface-2'
+                    }`}
+                  >
+                    {pp.label}
+                  </button>
+                );
+              })}
+              <span className="text-[11px] text-admin-text-muted">(sett från bäraren)</span>
+            </div>
+            <p className="text-[12px] text-admin-text-muted">
+              Fickmotivet placeras automatiskt i vald position — fast yta 10 × 10 cm, ingen fri dragning.
+            </p>
           </div>
-          <div className="min-w-0 xl:order-1">
-            <CompositorCanvas
-              template={effTemplate}
-              colorway={selectedColorway}
-              slot={slot}
-              artwork={canvasArtwork}
-              profile={profile}
-              locked={slot === 'pocket'}
-              placement={slot === 'pocket' ? null : (placements[slot] || null)}
-              ghostAreas={ghostAreas}
-              onGhostClick={setSlot}
-              onPlacementChange={(p) => {
-                if (slot === 'pocket') return; // locked — geometry is deterministic
-                setPlacements((prev) => ({ ...prev, [slot]: p }));
-                // Moving the artwork changes the composite: generated mockups
-                // are stale (they'd publish the OLD placement while the mapping
-                // readout instructs the NEW one) and every colourway must be
-                // re-seen.
-                invalidateComposite();
-              }}
-            />
-          </div>
-
-        </div>
+        ) : (
+          <CompositorCanvas
+            template={effTemplate}
+            colorway={selectedColorway}
+            slot={slot}
+            artwork={canvasArtwork}
+            profile={profile}
+            locked={false}
+            placement={placements[slot] || null}
+            ghostAreas={ghostAreas}
+            onGhostClick={(s) => {
+              const i = prints.findIndex((p) => p.slot === s);
+              if (i >= 0) goPlace(i);
+            }}
+            onPlacementChange={(p) => {
+              setPlacements((prev) => ({ ...prev, [slot]: p }));
+              // Moving the artwork changes the composite: generated mockups
+              // are stale (they'd publish the OLD placement while the mapping
+              // readout instructs the NEW one) and every colourway must be
+              // re-seen.
+              invalidateComposite();
+            }}
+          />
+        )}
+        <StepNav
+          nextLabel={pi < prints.length - 1 ? 'Klar — nästa tryck' : 'Nästa: Färger & mockuper'}
+          nextEnabled={s3done}
+          onNext={() => (pi < prints.length - 1 ? goPlace(pi + 1) : goStep(5))}
+        />
       </CardSection>
+      )}
 
-      {/* ── 3 · FÄRGER & MOCKUPER — the review gate lives here; the 3D beta
-          sits BELOW the strip so it never buries the gate (critique P1). */}
-      <CardSection title="3 · Färger & mockuper" bodyClassName="p-4">
+      {/* ── 5 · FÄRGER & MOCKUPER — the review gate lives here; overrides
+          ("byt motiv per färg") stay on this page, out of the main flow. The
+          3D beta sits BELOW the strip so it never buries the gate. */}
+      {step === 5 && (
+      <CardSection title="5 · Färger & mockuper" bodyClassName="p-4">
+        {designedSlots(selectedTemplate).length > 1 && (
+          <div className="mb-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-[12px] text-admin-text-muted">Förhandsvisa yta:</span>
+            {designedSlots(selectedTemplate).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setSlot(s)}
+                aria-pressed={s === slot}
+                className={`rounded-[var(--radius-admin-el)] px-2.5 py-1.5 text-[12px] ${
+                  s === slot
+                    ? 'bg-admin-surface-3 font-medium text-admin-text'
+                    : 'text-admin-text-muted hover:bg-admin-surface-2'
+                }`}
+              >
+                {slotLabel(s)}
+              </button>
+            ))}
+          </div>
+        )}
         {selectedTemplate && (
           <ColorwayStrip
             template={effTemplate}
@@ -1199,10 +1366,13 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           error={mockupError}
           canGenerate={Boolean(selectedTemplate) && designedSlots(selectedTemplate).some((s) => isComposable(printArtwork(s))) && !publishing}
         />
+        <StepNav nextLabel="Nästa: Publicera" nextEnabled={s5done} onNext={() => goStep(6)} hint="Generera mockuper först" />
       </CardSection>
+      )}
 
-      {/* ── 4 · PUBLICERA ─────────────────────────────────────────────────── */}
-      <CardSection title="4 · Publicera" bodyClassName="p-4">
+      {/* ── 6 · PUBLICERA ─────────────────────────────────────────────────── */}
+      {step === 6 && (
+      <CardSection title="6 · Publicera" bodyClassName="p-4">
         <PublishPanel
           mockups={mockups}
           template={selectedTemplate}
@@ -1226,7 +1396,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           initialTargetProductId={designForProductId}
           onReset={resetPublishForm}
         />
+        <StepNav nextLabel={null} nextEnabled={false} onNext={() => {}} />
       </CardSection>
+      )}
     </div>
   );
 };

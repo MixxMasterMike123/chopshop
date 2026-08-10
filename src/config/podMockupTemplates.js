@@ -134,3 +134,11 @@ export const clearPodMockupTemplatesCache = () => {
   _cache = null;
   _meta = { version: 0, provisional: true };
 };
+
+/** DEV-ONLY: pre-seed the cache so the untracked studio harness can mount the
+ *  FULL DesignStudio without Firestore. No-op in production builds. */
+export const seedPodMockupTemplatesCacheForDev = (templates, meta = {}) => {
+  if (!import.meta.env.DEV) return;
+  _cache = Array.isArray(templates) ? templates : [];
+  _meta = { version: meta.version ?? 999, provisional: meta.provisional !== false };
+};
