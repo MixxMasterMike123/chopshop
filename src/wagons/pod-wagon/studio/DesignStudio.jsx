@@ -340,13 +340,23 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         ? clampPlacement(placements[s], effTemplate, s, art, profile?.min_dpi ?? null)
         : defaultPlacement(effTemplate, s, art, profile?.min_dpi ?? null)));
 
-  // Ghost outlines on the canvas only make sense for designed slots sharing
-  // the ACTIVE slot's flat (slot→view mapping = TemplateBackground's
-  // viewForSlot, the single source) — they are the row↔garment linkage
-  // (clicking one activates that print's row).
+  // OTHER designed prints sharing the ACTIVE slot's flat (slot→view mapping =
+  // TemplateBackground's viewForSlot, the single source). They render as REAL
+  // composites — artwork at its effective placement — so switching rows never
+  // makes a designed print "disappear" (bug report 2026-08-10); the dashed
+  // rect stays as the clickable row↔garment link (activates that print's row).
   const ghostAreas = designedSlots(selectedTemplate)
     .filter((s) => s !== slot && viewForSlot(s) === viewForSlot(slot))
-    .map((s) => ({ slot: s, label: slotLabel(s), rect: effTemplate?.printAreas?.[s] || null }))
+    .map((s) => {
+      const art = resolveArtwork(s, colorwayId);
+      return {
+        slot: s,
+        label: slotLabel(s),
+        rect: effTemplate?.printAreas?.[s] || null,
+        artwork: art,
+        placement: art ? effectivePlacementFor(s, art) : null,
+      };
+    })
     .filter((g) => g.rect);
 
   const generateMockups = async () => {

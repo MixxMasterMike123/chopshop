@@ -137,9 +137,11 @@ const CompositorCanvas = ({
   // no free placement). Renders the default placement read-only: no drag,
   // resize, nudge or cm fields; readout + DPI verdict stay.
   locked = false,
-  // ghostAreas: other DESIGNED slots on the SAME flat — [{ slot, label, rect }]
-  // in viewBox px. Dashed outlines that link the trycklista's rows to their
-  // physical zones; clicking one calls onGhostClick(slot) to activate it.
+  // ghostAreas: other DESIGNED slots on the SAME flat — [{ slot, label, rect,
+  // artwork, placement }] (rect in viewBox px, placement in mm). Their artwork
+  // COMPOSITES on the flat (a designed print never disappears when another row
+  // is active); the dashed outline links the trycklista's rows to their zones —
+  // clicking one calls onGhostClick(slot) to activate it.
   ghostAreas = [],
   onGhostClick = null,
 }) => {
@@ -320,25 +322,45 @@ const CompositorCanvas = ({
           </div>
         )}
 
-        {/* Ghost zones — other designed prints on this flat, as clickable
-            dashed outlines (the row↔garment linkage). */}
-        {ghostAreas.map((g) => (
-          <button
-            key={g.slot}
-            type="button"
-            onClick={onGhostClick ? () => onGhostClick(g.slot) : undefined}
-            title={`Visa ${g.label}`}
-            aria-label={`Visa trycket: ${g.label}`}
-            className={`absolute rounded-[4px] border border-dashed border-admin-text-faint/60 ${
-              onGhostClick ? 'cursor-pointer hover:border-admin-info-dot hover:bg-admin-info-bg/20' : 'pointer-events-none'
-            }`}
-            style={rectToPercent(g.rect, viewBox)}
-          >
-            <span className="absolute left-1 top-1 rounded-[4px] bg-admin-surface/85 px-1 py-0.5 text-[11px] text-admin-text-muted">
-              {g.label}
-            </span>
-          </button>
-        ))}
+        {/* Other designed prints on this flat: their artwork composites for
+            real (never disappears when another row is active), and a clickable
+            dashed zone on top links back to the trycklista row. */}
+        {ghostAreas.map((g) => {
+          const gRect = g.artwork && isComposable(g.artwork) && g.placement
+            ? placementToViewBoxRect(g.placement, template, g.slot, g.artwork)
+            : null;
+          return (
+            <React.Fragment key={g.slot}>
+              {gRect && (
+                <img
+                  src={g.artwork.previewUrl}
+                  alt=""
+                  draggable={false}
+                  className="pointer-events-none absolute object-fill"
+                  style={{
+                    ...rectToPercent(gRect, viewBox),
+                    transform: `rotate(${g.placement.rotationDeg || 0}deg)`,
+                    transformOrigin: 'center',
+                  }}
+                />
+              )}
+              <button
+                type="button"
+                onClick={onGhostClick ? () => onGhostClick(g.slot) : undefined}
+                title={`Redigera ${g.label}`}
+                aria-label={`Redigera trycket: ${g.label}`}
+                className={`absolute rounded-[4px] border border-dashed border-admin-text-faint/50 ${
+                  onGhostClick ? 'cursor-pointer hover:border-admin-info-dot hover:bg-admin-info-bg/20' : 'pointer-events-none'
+                }`}
+                style={rectToPercent(g.rect, viewBox)}
+              >
+                <span className="absolute left-1 top-1 rounded-[4px] bg-admin-surface/85 px-1 py-0.5 text-[11px] text-admin-text-muted">
+                  {g.label}
+                </span>
+              </button>
+            </React.Fragment>
+          );
+        })}
 
         {/* Centre guides — visible only while a drag is snapped to that axis. */}
         {dragUi?.snappedX && areaRect && (
