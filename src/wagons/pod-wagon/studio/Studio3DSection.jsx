@@ -3,13 +3,18 @@
 // the studio's live front placement (position/scale/rotation in mm — the same
 // object the flat canvas edits).
 //
-// READ-ONLY BY DESIGN (slice C, decided 2026-08-08): sellers get NO placement
-// or appearance controls here. The render always follows the flat canvas's
-// print placement, and tuning comes from the platform-calibrated model
-// (pod3dModels defaults + perColorway overrides, edited in ModelEditor).
-// Rationale: these renders can be downloaded and added to the customer-facing
-// product gallery — if the seller could move/style the motif in 3D, the
-// published photo could show a placement that will never be printed.
+// The render FOLLOWS the flat canvas's print placement by default (slice C,
+// 2026-08-08: renders can end up in the customer-facing gallery, so an
+// untouched 3D view must never diverge from what gets printed).
+//
+// ALL sliders are back under "Avancerat" (Mikaels beslut 2026-08-10: restore
+// everything for the test phase, prune later): appearance (displacement/
+// kontrast/opacitet/blend, seeded from the platform-calibrated pod3dModels
+// tuning) AND placement (bredd/vänster/uppifrån/rotation, seeded from the
+// LIVE print placement). ⚠️ Placement sliders re-open the slice-C risk (a
+// downloaded render can show a placement that won't print) — accepted for
+// now; the panel says so explicitly. Adjustments are session-local and reset
+// on model/colourway switch (the seeds change under them).
 //
 // GATES:
 //   • WebGL — the displacement warp needs it; without WebGL Pixi silently falls
@@ -51,6 +56,23 @@ const renderReady = (models = []) =>
     return v?.w && v?.h && v?.printArea?.w > 0 && v?.printArea?.h > 0 &&
       pa?.w > 0 && pa?.h > 0 && readyColorwayIds(m).length > 0;
   });
+
+// Appearance-slider row ("Avancerat"): label · range · value readout.
+const KnobSlider = ({ label, min, max, step, value, onChange, fmt = (v) => v }) => (
+  <label className="flex items-center gap-2 text-[12px] text-admin-text-muted">
+    <span className="w-24 shrink-0">{label}</span>
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      onChange={(e) => onChange(parseFloat(e.target.value))}
+      className="min-w-0 flex-1 accent-[var(--color-admin-primary)]"
+    />
+    <span className="w-11 shrink-0 text-right tabular-nums text-admin-text">{fmt(value)}</span>
+  </label>
+);
 
 const hasWebGL = () => {
   try {
@@ -116,10 +138,9 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
   // (prevents a compositorConfigFor-null error flash on model switch).
   const effColorwayId = colorwayIds.includes(colorwayId) ? colorwayId : (colorwayIds[0] || null);
 
-  // Tuning is READ-ONLY, derived from the platform-calibrated model: garment
-  // defaults with the per-colourway overrides merged over them (both edited in
-  // the platform ModelEditor). No live seller overrides.
-  const tuning = useMemo(() => {
+  // CALIBRATED tuning, derived from the platform model: garment defaults with
+  // the per-colourway overrides merged over them (both edited in ModelEditor).
+  const calibrated = useMemo(() => {
     const per = garment?.perColorway?.[effColorwayId] || {};
     return {
       displacementScale: per.displacementScale ?? garment?.displacementScale ?? 30,
@@ -129,6 +150,18 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
     };
   }, [garment, effColorwayId]);
 
+  // "Avancerat" adjustments — session-local overrides ON TOP of the seeds
+  // (null = untouched → follows the seed live). Appearance seeds from the
+  // calibration; placement seeds from the LIVE print placement. Both reset on
+  // model/colourway switch: the seeds change and stale absolutes would fight.
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [adjust, setAdjust] = useState(null);           // appearance overrides
+  const [placeAdjust, setPlaceAdjust] = useState(null); // placement overrides (3D image ONLY)
+  useEffect(() => { setAdjust(null); setPlaceAdjust(null); }, [garment?.id, effColorwayId]);
+  const tuning = adjust ? { ...calibrated, ...adjust } : calibrated;
+  const setKnob = (key, value) => setAdjust((prev) => ({ ...(prev || {}), [key]: value }));
+  const setPlaceKnob = (key, value) => setPlaceAdjust((prev) => ({ ...(prev || {}), [key]: value }));
+
   if (garments.length === 0 || !garment) return null;
 
   // The render FOLLOWS the flat canvas's print placement live (DesignStudio
@@ -137,6 +170,14 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
   // canvas would (aspect-fitted defaultPlacement against the model's area) —
   // never an invented width that could overflow what actually prints.
   const effectivePlacement = placement || defaultPlacement(garment, 'front', artwork, null);
+  // What the 3D image actually shows: the live print placement until the
+  // seller touches a placement slider, then their override on top of it.
+  // The PRINT is untouched either way — mockups/publish never read this.
+  const shownPlacement = placeAdjust
+    ? { ...effectivePlacement, ...placeAdjust }
+    : effectivePlacement;
+  // Slider ranges from the model's physical print area (cm).
+  const paMm = garment?.printAreaMm?.front || { w: 300, h: 400 };
 
   const downloadPNG = async () => {
     setBusy(true);
@@ -197,7 +238,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                     viewId="front"
                     colorwayId={effColorwayId}
                     artworkUrl={artwork.previewUrl}
-                    placement={effectivePlacement}
+                    placement={shownPlacement}
                     tuning={tuning}
                     className="w-full"
                   />
@@ -252,10 +293,100 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                   </div>
                 )}
 
-                {/* No placement/appearance controls here BY DESIGN: the render
-                    follows the flat canvas placement and the model's calibrated
-                    tuning, so a downloaded/gallery-added 3D image can never show
-                    a placement or look that won't be printed. */}
+                {/* "Avancerat": ALL the original sliders restored (Mikaels
+                    beslut 2026-08-10, test phase) — placement seeds from the
+                    live print placement, appearance from the calibration.
+                    Placement sliders affect the 3D IMAGE only, and the panel
+                    caption says so; the flat mockup/print never reads them. */}
+                <div className="border-t border-admin-border-soft pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvanced((v) => !v)}
+                    aria-expanded={showAdvanced}
+                    className="flex w-full items-center justify-between gap-2 text-left text-[13px] font-medium text-admin-text hover:text-admin-text"
+                  >
+                    <span>Avancerat: finjustera 3D-bilden</span>
+                    <span aria-hidden="true" className="text-admin-text-muted">{showAdvanced ? '▴' : '▾'}</span>
+                  </button>
+                  {showAdvanced && (
+                    <div className="mt-3 flex flex-col gap-2.5">
+                      {/* PLACERING — moves the motif in the 3D IMAGE only;
+                          seeded from (and following) the live print placement. */}
+                      <span className="text-[11px] font-medium uppercase tracking-wide text-admin-text-muted">Placering (endast 3D-bilden)</span>
+                      <KnobSlider
+                        label="Bredd" min={2} max={paMm.w / 10} step={0.5}
+                        value={shownPlacement?.wMm != null ? shownPlacement.wMm / 10 : paMm.w / 20}
+                        onChange={(v) => setPlaceKnob('wMm', v * 10)}
+                        fmt={(v) => `${v} cm`}
+                      />
+                      <KnobSlider
+                        label="Från vänster" min={0} max={paMm.w / 10} step={0.5}
+                        value={shownPlacement?.xMm != null ? shownPlacement.xMm / 10 : 0}
+                        onChange={(v) => setPlaceKnob('xMm', v * 10)}
+                        fmt={(v) => `${v} cm`}
+                      />
+                      <KnobSlider
+                        label="Uppifrån" min={0} max={paMm.h / 10} step={0.5}
+                        value={shownPlacement?.yMm != null ? shownPlacement.yMm / 10 : 0}
+                        onChange={(v) => setPlaceKnob('yMm', v * 10)}
+                        fmt={(v) => `${v} cm`}
+                      />
+                      <KnobSlider
+                        label="Rotation" min={-30} max={30} step={0.5}
+                        value={shownPlacement?.rotationDeg || 0}
+                        onChange={(v) => setPlaceKnob('rotationDeg', v)}
+                        fmt={(v) => `${v}°`}
+                      />
+                      {/* UTSEENDE — how "printed-on" the motif looks. */}
+                      <span className="mt-1 text-[11px] font-medium uppercase tracking-wide text-admin-text-muted">Utseende</span>
+                      <KnobSlider
+                        label="Displacement" min={0} max={100} step={1}
+                        value={tuning.displacementScale}
+                        onChange={(v) => setKnob('displacementScale', v)}
+                      />
+                      <KnobSlider
+                        label="Kontrast" min={0.5} max={4} step={0.1}
+                        value={tuning.displacementContrast}
+                        onChange={(v) => setKnob('displacementContrast', v)}
+                        fmt={(v) => Number(v).toFixed(1)}
+                      />
+                      <KnobSlider
+                        label="Opacitet" min={0} max={1} step={0.05}
+                        value={tuning.alpha}
+                        onChange={(v) => setKnob('alpha', v)}
+                        fmt={(v) => Number(v).toFixed(2)}
+                      />
+                      <label className="flex items-center gap-2 text-[12px] text-admin-text-muted">
+                        <span className="w-24 shrink-0">Blend</span>
+                        <select
+                          value={tuning.blend}
+                          onChange={(e) => setKnob('blend', e.target.value)}
+                          className="min-w-0 flex-1 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-[12px] text-admin-text focus:outline-none focus:border-admin-info-dot"
+                        >
+                          <option value="multiply">multiply</option>
+                          <option value="screen">screen</option>
+                          <option value="overlay">overlay</option>
+                          <option value="normal">normal</option>
+                          <option value="add">add</option>
+                        </select>
+                      </label>
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-[11px] text-admin-text-muted">
+                          Reglagen ändrar bara 3D-bilden — trycket följer alltid arbetsytans placering.
+                        </span>
+                        {(adjust || placeAdjust) && (
+                          <button
+                            type="button"
+                            onClick={() => { setAdjust(null); setPlaceAdjust(null); }}
+                            className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1 text-[11px] text-admin-text hover:bg-admin-surface-2"
+                          >
+                            Återställ
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 {/* Download — full-width dark button, per reference */}
                 <div className="mt-1 border-t border-admin-border-soft pt-4">
