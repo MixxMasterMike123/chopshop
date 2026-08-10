@@ -9,8 +9,14 @@
 // viewBox) and the background rendering — nothing in placementMath moves.
 //
 // PHOTO TEMPLATE shape (see podMockupTemplates.js SHAPE comment):
-//   { id, label, profileId, photo: { w, h, urls: { [colorwayId]: url } },
-//     colorways, printAreas (px IN PHOTO COORDS), printAreaMm }
+//   { id, label, profileId, photo: { w, h, urls: { [colorwayId]: url },
+//     backUrls?: { [colorwayId]: url } }, colorways,
+//     printAreas (px IN PHOTO COORDS), printAreaMm }
+// backUrls (2026-08-10, B&C packshots have real back photos): the BACK view's
+// photo per colourway. Optional — a colourway without one falls back to its
+// front photo (the pre-backUrls behavior). Front and back photos MUST share
+// the same pixel dimensions (photo.w/h is the single coordinate space that
+// printAreas for ALL slots live in).
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { GARMENT_FLATS, GARMENT_VIEWBOX } from './garments';
@@ -49,9 +55,17 @@ export const templateViewBox = (template) => {
 };
 
 /** The blank-garment photo url for a colourway on a PHOTO template, or null when
- *  that colourway has no photo yet. Not used for flat templates. */
-export const backgroundUrl = (template, colorway) =>
-  isPhotoTemplate(template) && colorway ? (template.photo.urls?.[colorway.id] || null) : null;
+ *  that colourway has no photo yet. Not used for flat templates. The BACK view
+ *  (slot 'back') uses photo.backUrls when present, else falls back to the front
+ *  photo (pre-backUrls behavior — a back design still gets SOME backdrop). */
+export const backgroundUrl = (template, colorway, slot = 'front') => {
+  if (!isPhotoTemplate(template) || !colorway) return null;
+  const front = template.photo.urls?.[colorway.id] || null;
+  if (viewForSlot(slot) === 'back') {
+    return template.photo.backUrls?.[colorway.id] || front;
+  }
+  return front;
+};
 
 // SVG flat → data URL for canvas rasterization. Explicit width/height attrs are
 // REQUIRED — Safari rasterizes a dimensionless SVG image at 0×0. Moved here from
@@ -75,7 +89,7 @@ const flatToDataUrl = (garment, slot, hex, widthPx, heightPx) => {
  */
 export const backgroundImageSource = (template, colorway, { widthPx, heightPx, slot = 'front' } = {}) => {
   if (isPhotoTemplate(template)) {
-    const url = backgroundUrl(template, colorway);
+    const url = backgroundUrl(template, colorway, slot);
     return url
       ? Promise.resolve(url)
       : Promise.reject(new Error(`Foto saknas för färgen ${colorway?.label || colorway?.id || ''} — ladda upp ett plaggfoto för den färgen.`));
@@ -101,7 +115,7 @@ const TemplateBackground = ({ template, colorway, slot = 'front', className = ''
   const vb = templateViewBox(template);
 
   if (isPhotoTemplate(template)) {
-    const url = backgroundUrl(template, colorway);
+    const url = backgroundUrl(template, colorway, slot);
     if (url) {
       return (
         <img

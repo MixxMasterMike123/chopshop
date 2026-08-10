@@ -702,21 +702,42 @@ const VerifyBench = () => {
 // Real tee template (copy of scripts/seed-pod-mockup-templates.cjs v3: front/
 // back/pocket/sleeves + pocketPositions) so every wizard page is exercisable:
 // tryckytor-cards incl. bröst↔ficka-blocking, per-surface motiv, pocket picker.
+// MIRROR of the B&C E150 photo template in scripts/seed-pod-mockup-templates.cjs
+// (keep in sync when recalibrating) — photos served from public/pod-garments/.
+const WIZARD_TEE_COLORWAYS = [
+  { id: 'white', label: 'Vit', hex: '#f3f3f3' },
+  { id: 'black', label: 'Svart', hex: '#363435' },
+  { id: 'navy', label: 'Marinblå', hex: '#3e3f53' },
+  { id: 'sport-grey', label: 'Gråmelerad', hex: '#a5a5a5' },
+  { id: 'ash', label: 'Ljusgrå', hex: '#cacaca' },
+  { id: 'red', label: 'Röd', hex: '#cf0d25' },
+  { id: 'royal-blue', label: 'Kungsblå', hex: '#124c8c' },
+  { id: 'bottle-green', label: 'Flaskgrön', hex: '#415d47' },
+  { id: 'burgundy', label: 'Vinröd', hex: '#6a3844' },
+  { id: 'sand', label: 'Sand', hex: '#d3bda5' },
+];
+const wizardTeeUrls = (view) =>
+  Object.fromEntries(WIZARD_TEE_COLORWAYS.map((c) => [c.id, `/pod-garments/tee/${c.id}_${view}.jpg`]));
 const WIZARD_TEE = {
-  id: 'tee_flat',
+  id: 'tee_bc_e150',
   label: 'T-shirt',
-  garment: 'tee',
   profileId: 'apparel_dtg',
-  costSek: 149,
-  colorways: COLORWAYS,
-  printAreas: {
-    front: { x: 280, y: 210, w: 240, h: 336 },
-    back: { x: 280, y: 186, w: 240, h: 320 },
-    pocket: { x: 440, y: 210, w: 80, h: 80 },
-    left_sleeve: { x: 636, y: 280, w: 56, h: 56 },
-    right_sleeve: { x: 108, y: 280, w: 56, h: 56 },
+  costSek: 100,
+  photo: {
+    w: 615,
+    h: 700,
+    urls: wizardTeeUrls('front'),
+    backUrls: wizardTeeUrls('back'),
   },
-  pocketPositions: { left: { x: 440 }, center: { x: 360 }, right: { x: 280 } },
+  colorways: WIZARD_TEE_COLORWAYS,
+  printAreas: {
+    front: { x: 215, y: 153, w: 185, h: 259 },
+    back: { x: 196, y: 123, w: 222, h: 296 },
+    pocket: { x: 345, y: 153, w: 74, h: 74 },
+    left_sleeve: { x: 505, y: 190, w: 59, h: 59 },
+    right_sleeve: { x: 51, y: 190, w: 59, h: 59 },
+  },
+  pocketPositions: { left: { x: 345 }, center: { x: 270 }, right: { x: 195 } },
   printAreaMm: {
     front: { w: 250, h: 350 },
     back: { w: 300, h: 400 },

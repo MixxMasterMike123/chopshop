@@ -69,34 +69,59 @@ const APPAREL_COLORWAYS = [
 // printAreas are SVG viewBox (800×900) pixel rects; printAreaMm is the physical
 // print size ↔ podProfiles apparel_dtg (300×400 mm, 3:4). The rects share that 3:4
 // aspect so preview scale ↔ physical scale stay consistent.
+// ── T-SHIRT: REAL PHOTO TEMPLATE (2026-08-10) ────────────────────────────────
+// B&C Exact 150 (TU01T) — Kim's actual blank. Official B&C ghost-mannequin
+// packshots (615×700, uniformly framed → ONE printArea calibration for every
+// colourway), front + back per colour, served from hosting /pod-garments/tee/.
+// 10 colourways: svart+vit = Kim's ALWAYS-IN-STOCK tier (XS–XXL); the other 8
+// are limited stock ("mindre antal", Kim 2026-08-10). Hexes are sampled from
+// the actual photos (40×40 chest patch average) — used for strip/publish dots.
+// 'navy' photo = B&C "urban navy" (the P-series has no plain navy packshot).
+const TEE_PHOTO = '/pod-garments/tee';
+const TEE_COLORWAYS = [
+  { id: 'white', label: 'Vit', hex: '#f3f3f3' },
+  { id: 'black', label: 'Svart', hex: '#363435' },
+  { id: 'navy', label: 'Marinblå', hex: '#3e3f53' },
+  { id: 'sport-grey', label: 'Gråmelerad', hex: '#a5a5a5' },
+  { id: 'ash', label: 'Ljusgrå', hex: '#cacaca' },
+  { id: 'red', label: 'Röd', hex: '#cf0d25' },
+  { id: 'royal-blue', label: 'Kungsblå', hex: '#124c8c' },
+  { id: 'bottle-green', label: 'Flaskgrön', hex: '#415d47' },
+  { id: 'burgundy', label: 'Vinröd', hex: '#6a3844' },
+  { id: 'sand', label: 'Sand', hex: '#d3bda5' },
+];
+const teePhotoUrls = (view) =>
+  Object.fromEntries(TEE_COLORWAYS.map((c) => [c.id, `${TEE_PHOTO}/${c.id}_${view}.jpg`]));
+
 const TEMPLATES = [
   {
-    id: 'tee_flat',
+    id: 'tee_bc_e150',
     label: 'T-shirt',
-    garment: 'tee',
     profileId: 'apparel_dtg',
-    // PROVISIONAL production cost until the printshop price matrix (Kent checklist #2).
-    costSek: 149,
-    colorways: APPAREL_COLORWAYS,
-    // Front chest 250×350 mm (spec: starts 60–70 mm below the neck seam): centred
-    // (x 280..520 on the 196..604 torso), below the ribbed collar (~y158).
-    // 240×336 px = 5:7 ↔ 250×350 mm.
-    // Back 300×400 mm (starts 80–90 mm below the seam — HIGHER than the front
-    // rect since the back neckline sits higher): renders on TeeBackFlat.
-    // Pocket 100×100 mm = 80×80 px, chest height; positions are WEARER-side
-    // (left = viewer RIGHT). Sleeves 80×80 mm = 56×56 px on the front flat.
+    // Kim's price list 2026-08-10: blank tee 60:- + ett stort tryck 40:- = 100.
+    // Static per-product cost until per-slot costing lands (plan beslut 3).
+    costSek: 100,
+    photo: {
+      w: 615,
+      h: 700,
+      urls: teePhotoUrls('front'),
+      backUrls: teePhotoUrls('back'),
+    },
+    colorways: TEE_COLORWAYS,
+    // CALIBRATION (measured on black_front.jpg): torso x 155..458 (center 307),
+    // collar seam ~y105, hem y667. Worn-shape photo → compromise scale
+    // ~0.74 px/mm (chest-derived and length-derived scales disagree on a worn
+    // garment; 0.74 makes a 250 mm print read visually right on the chest).
+    // Aspect guard: every px rect matches its mm aspect within 1%.
     printAreas: {
-      front: { x: 280, y: 210, w: 240, h: 336 },
-      back: { x: 280, y: 186, w: 240, h: 320 },
-      pocket: { x: 440, y: 210, w: 80, h: 80 },
-      // Sleeve rects calibrated against TeeFlat's outer sleeve edges
-      // ((748,250)→(672,388) and mirror): ≥7,6 px inside the silhouette at the
-      // rect's worst corner (measured).
-      left_sleeve: { x: 636, y: 280, w: 56, h: 56 },   // wearer LEFT = viewer right
-      right_sleeve: { x: 108, y: 280, w: 56, h: 56 },  // wearer RIGHT = viewer left
+      front: { x: 215, y: 153, w: 185, h: 259 },  // 250×350 mm (5:7)
+      back: { x: 196, y: 123, w: 222, h: 296 },   // 300×400 mm (3:4), back photo
+      pocket: { x: 345, y: 153, w: 74, h: 74 },   // 100×100 mm
+      left_sleeve: { x: 505, y: 190, w: 59, h: 59 },  // wearer LEFT = viewer right
+      right_sleeve: { x: 51, y: 190, w: 59, h: 59 },  // wearer RIGHT = viewer left
     },
     // Discrete pocket positions (wearer's perspective): x offsets only, same y/w/h.
-    pocketPositions: { left: { x: 440 }, center: { x: 360 }, right: { x: 280 } },
+    pocketPositions: { left: { x: 345 }, center: { x: 270 }, right: { x: 195 } },
     printAreaMm: {
       front: { w: 250, h: 350 },
       back: { w: 300, h: 400 },
