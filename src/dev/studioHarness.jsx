@@ -19,6 +19,11 @@ import { renderMockup } from '../wagons/pod-wagon/studio/mockupRender';
 import { isComposable } from '../wagons/pod-wagon/studio/placementMath';
 import { DEV_3D_GARMENTS } from '../wagons/pod-wagon/studio/pixi/displacement3dConfig';
 import Studio3DSection from '../wagons/pod-wagon/studio/Studio3DSection';
+// FULL-STUDIO wizard bench (?wizard=1): mounts the real DesignStudio with the
+// template/profile caches pre-seeded (DEV-only seeds — no Firestore round-trip).
+import DesignStudio from '../wagons/pod-wagon/studio/DesignStudio';
+import { seedPodMockupTemplatesCacheForDev } from '../config/podMockupTemplates';
+import { seedPodProfilesCacheForDev } from '../config/podProfiles';
 
 // Lazy: pixi.js stays in its own chunk, loaded only when the 3D testbed opens.
 const DisplacementPreview = React.lazy(() => import('../wagons/pod-wagon/studio/pixi/DisplacementPreview'));
@@ -693,12 +698,65 @@ const VerifyBench = () => {
   );
 };
 
+// ── Wizard bench (?wizard=1) — the FULL DesignStudio component ───────────────
+// Real tee template (copy of scripts/seed-pod-mockup-templates.cjs v3: front/
+// back/pocket/sleeves + pocketPositions) so every wizard page is exercisable:
+// tryckytor-cards incl. bröst↔ficka-blocking, per-surface motiv, pocket picker.
+const WIZARD_TEE = {
+  id: 'tee_flat',
+  label: 'T-shirt',
+  garment: 'tee',
+  profileId: 'apparel_dtg',
+  costSek: 149,
+  colorways: COLORWAYS,
+  printAreas: {
+    front: { x: 280, y: 210, w: 240, h: 336 },
+    back: { x: 280, y: 186, w: 240, h: 320 },
+    pocket: { x: 440, y: 210, w: 80, h: 80 },
+    left_sleeve: { x: 636, y: 280, w: 56, h: 56 },
+    right_sleeve: { x: 108, y: 280, w: 56, h: 56 },
+  },
+  pocketPositions: { left: { x: 440 }, center: { x: 360 }, right: { x: 280 } },
+  printAreaMm: {
+    front: { w: 250, h: 350 },
+    back: { w: 300, h: 400 },
+    pocket: { w: 100, h: 100 },
+    left_sleeve: { w: 80, h: 80 },
+    right_sleeve: { w: 80, h: 80 },
+  },
+};
+
+const WizardBench = () => {
+  const arts = useMemo(() => [
+    makeArtwork('art-dark', 'Mörkt motiv 1200×1600', 1200, 1600, '#e2574c', '#2c4b6e', '#ffffff'),
+    makeArtwork('art-light', 'Ljust motiv 1200×1600', 1200, 1600, '#f5d76e', '#eeeeee', '#1a1a1a'),
+    makeArtwork('art-square', 'Kvadratiskt motiv 900×900', 900, 900, '#3f8f5f', '#1f2a44', '#ffffff'),
+  ], []);
+  return (
+    <div className="mx-auto max-w-[1100px] p-6">
+      <h1 className="mb-1 text-[16px] font-semibold text-admin-text">DesignStudio — wizardbänk</h1>
+      <p className="mb-4 text-[12px] text-admin-text-muted">
+        Hela komponenten med seedade mall/profil-cacher — ingen Firestore. Publicera
+        misslyckas (ingen backend); allt före det steget är ögonbart.
+      </p>
+      <DesignStudio artwork={arts} loading={false} shopId={null} products={[]} />
+    </div>
+  );
+};
+
 const HarnessRoot = () => {
   const art = useMemo(() => makeArtwork('bench-art', 'Bänkmotiv', 1200, 1600, '#e2574c', '#2c4b6e', '#ffffff'), []);
   const [show3d, setShow3d] = useState(false);
   // ?verify=contrast → the deterministic Kartkontrast bench ONLY (headless driving).
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('verify') === 'contrast') {
     return <VerifyBench />;
+  }
+  // ?wizard=1 → the FULL DesignStudio (wizard build 2026-08-10). Seed the module
+  // caches BEFORE the studio's mount effect calls the loaders (idempotent).
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('wizard') === '1') {
+    seedPodMockupTemplatesCacheForDev([WIZARD_TEE], { provisional: true });
+    seedPodProfilesCacheForDev([{ id: 'apparel_dtg', label: 'Plagg (DTG)', min_dpi: 150, target_dpi: 300 }]);
+    return <WizardBench />;
   }
   return (
     <>
