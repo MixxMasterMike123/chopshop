@@ -1235,9 +1235,40 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             })}
           </div>
         )}
-        <p className="mb-2 text-[13px] font-semibold text-admin-text">
-          Placering för {slotLabel(prints[pi].slot)}{prints.length > 1 ? ` — ${pi + 1} av ${prints.length}` : ''}
-        </p>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[13px] font-semibold text-admin-text">
+            Placering för {slotLabel(prints[pi].slot)}{prints.length > 1 ? ` — ${pi + 1} av ${prints.length}` : ''}
+          </p>
+          {/* Colour switcher for the WORKING canvas — pick which colourway the
+              placement is previewed on (photo templates make this matter: white
+              vs svart is a different backdrop). Same colorwayId state as step
+              5's strip; the full review gate still lives there. */}
+          {(selectedTemplate?.colorways || []).length > 1 && (
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Förhandsvisningsfärg">
+              {(selectedTemplate?.colorways || []).map((cw) => {
+                const cwActive = cw.id === colorwayId;
+                return (
+                  <button
+                    key={cw.id}
+                    type="button"
+                    onClick={() => setColorwayId(cw.id)}
+                    aria-pressed={cwActive}
+                    aria-label={`Visa på ${cw.label}`}
+                    title={cw.label}
+                    className={`grid h-6 w-6 place-items-center rounded-full border transition ${
+                      cwActive ? 'border-admin-info-dot ring-2 ring-admin-info-dot/40' : 'border-admin-border hover:border-admin-text-faint'
+                    }`}
+                  >
+                    <span
+                      className="h-4 w-4 rounded-full border border-black/10"
+                      style={{ backgroundColor: cw.hex || '#ffffff' }}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         {prints[pi].slot === 'pocket' ? (
           <div className="flex flex-col gap-2">
             {/* Pocket position — discrete choice (left/center/right, wearer's
