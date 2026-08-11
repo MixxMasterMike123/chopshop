@@ -208,6 +208,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
   const slots = templateSlots(selectedTemplate);
 
+  // Surface label for the CURRENT garment. The shared slot vocabulary is
+  // apparel-worded ('front' = "Bröst") — wrong on a keps/mössa/tygkasse
+  // (Kent bug 2026-08-11). Templates can override per slot via `slotLabels`
+  // (seeded on the front-only accessories as "Framsida"); apparel falls
+  // through to the shared labels. Print-portal labels (printProjection.ts)
+  // still use the shared vocabulary — placement text carries the real info.
+  const labelForSlot = (s) => selectedTemplate?.slotLabels?.[s] || slotLabel(s);
+
   // ── Trycklista helpers ────────────────────────────────────────────────────
   const printBySlot = useMemo(
     () => Object.fromEntries(prints.map((p) => [p.slot, p])),
@@ -351,7 +359,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       const art = resolveArtwork(s, colorwayId);
       return {
         slot: s,
-        label: slotLabel(s),
+        label: labelForSlot(s),
         rect: effTemplate?.printAreas?.[s] || null,
         artwork: art,
         placement: art ? effectivePlacementFor(s, art) : null,
@@ -1075,7 +1083,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {step === 2 && (
       <CardSection title="2 · Tryckytor" bodyClassName="p-4">
         <p className="text-[13px] text-admin-text-muted">
-          Välj var på plagget det ska tryckas. Varje yta blir ett eget tryck med eget motiv.
+          Välj var på produkten det ska tryckas. Varje yta blir ett eget tryck med eget motiv.
         </p>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {slots.map((s) => {
@@ -1102,7 +1110,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
                 }`}
               >
                 <span className="flex items-center justify-between gap-2">
-                  <span className="text-[13px] font-medium text-admin-text">{slotLabel(s)}</span>
+                  <span className="text-[13px] font-medium text-admin-text">{labelForSlot(s)}</span>
                   {selected && <span className="shrink-0 text-[11px] font-medium text-admin-info-text">✓ Valt</span>}
                 </span>
                 <span className={`mt-0.5 block text-[11px] ${blocked ? 'text-admin-caution-text' : 'text-admin-text-muted'}`}>
@@ -1144,14 +1152,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
                       : 'border-admin-border text-admin-text-muted hover:bg-admin-surface-2'
                   }`}
                 >
-                  {hasMotif ? '✓ ' : ''}{slotLabel(p.slot)}
+                  {hasMotif ? '✓ ' : ''}{labelForSlot(p.slot)}
                 </button>
               );
             })}
           </div>
         )}
         <p className="text-[13px] font-semibold text-admin-text">
-          Motiv för {slotLabel(prints[mi].slot)}{prints.length > 1 ? ` — ${mi + 1} av ${prints.length}` : ''}
+          Motiv för {labelForSlot(prints[mi].slot)}{prints.length > 1 ? ` — ${mi + 1} av ${prints.length}` : ''}
         </p>
         {loading ? (
           <p className="mt-2 text-[13px] text-admin-text-muted">Laddar original…</p>
@@ -1215,8 +1223,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             {prints.map((p, i) => {
               const activeChip = i === pi;
               const chipLabel = p.slot === 'pocket'
-                ? `${slotLabel(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
-                : slotLabel(p.slot);
+                ? `${labelForSlot(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
+                : labelForSlot(p.slot);
               return (
                 <button
                   key={p.slot}
@@ -1237,7 +1245,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         )}
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <p className="text-[13px] font-semibold text-admin-text">
-            Placering för {slotLabel(prints[pi].slot)}{prints.length > 1 ? ` — ${pi + 1} av ${prints.length}` : ''}
+            Placering för {labelForSlot(prints[pi].slot)}{prints.length > 1 ? ` — ${pi + 1} av ${prints.length}` : ''}
           </p>
           {/* Colour switcher for the WORKING canvas — pick which colourway the
               placement is previewed on (photo templates make this matter: white
@@ -1354,7 +1362,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
                     : 'text-admin-text-muted hover:bg-admin-surface-2'
                 }`}
               >
-                {slotLabel(s)}
+                {labelForSlot(s)}
               </button>
             ))}
           </div>
@@ -1377,15 +1385,21 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           />
         )}
 
-        {/* 3D-vy (beta): READ-ONLY — follows the live print placement and the
-            model's calibrated tuning. WebGL-gated; pixi lazy-loads. */}
-        <Studio3DSection
-          artwork={resolveArtwork('front', colorwayId)}
-          placement={resolveArtwork('front', colorwayId)
-            ? effectivePlacementFor('front', resolveArtwork('front', colorwayId))
-            : null}
-          models={models3d}
-        />
+        {/* 3D-vy (beta): follows the live print placement; pixi lazy-loads.
+            APPAREL ONLY — the 3D model library depicts garments (tees), so a
+            keps/mössa/tygkasse motif would render onto a t-shirt photo, which
+            is a lie. Heuristic: every apparel template defines a 'back' slot;
+            the front-only accessories don't. Replace with an explicit
+            template↔model link when the model library grows. */}
+        {slots.includes('back') && (
+          <Studio3DSection
+            artwork={resolveArtwork('front', colorwayId)}
+            placement={resolveArtwork('front', colorwayId)
+              ? effectivePlacementFor('front', resolveArtwork('front', colorwayId))
+              : null}
+            models={models3d}
+          />
+        )}
 
         {/* Generated mockups: per-colourway rasterized previews + hero pick. */}
         <MockupPanel
@@ -1412,8 +1426,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           printSummary={designedSlots(selectedTemplate).map((s) => ({
             slot: s,
             slotLabel: s === 'pocket'
-              ? `${slotLabel(s)} · ${pocketPositionLabel(pocketPosition)}`
-              : slotLabel(s),
+              ? `${labelForSlot(s)} · ${pocketPositionLabel(pocketPosition)}`
+              : labelForSlot(s),
             artworkLabel: printArtwork(s)?.label || printArtwork(s)?.fileName || '—',
           }))}
           shopId={shopId}

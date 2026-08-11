@@ -775,7 +775,20 @@ const HarnessRoot = () => {
   // ?wizard=1 → the FULL DesignStudio (wizard build 2026-08-10). Seed the module
   // caches BEFORE the studio's mount effect calls the loaders (idempotent).
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('wizard') === '1') {
-    seedPodMockupTemplatesCacheForDev([WIZARD_TEE], { provisional: true });
+    // Keps mirrors seed's cap_flat incl. the slotLabels override (Kent bug
+    // 2026-08-11: 'front' must read "Framsida" here, not "Bröst").
+    const WIZARD_CAP = {
+      id: 'cap_flat',
+      label: 'Keps',
+      garment: 'cap',
+      slotLabels: { front: 'Framsida' },
+      profileId: 'apparel_dtg',
+      costSek: 129,
+      colorways: COLORWAYS,
+      printAreas: { front: { x: 330, y: 330, w: 140, h: 100 } },
+      printAreaMm: { front: { w: 70, h: 50 } },
+    };
+    seedPodMockupTemplatesCacheForDev([WIZARD_TEE, WIZARD_CAP], { provisional: true });
     seedPodProfilesCacheForDev([{ id: 'apparel_dtg', label: 'Plagg (DTG)', min_dpi: 150, target_dpi: 300 }]);
     return <WizardBench />;
   }

@@ -196,6 +196,9 @@ const TEMPLATES = [
     id: 'bag_flat',
     label: 'Tygkasse',
     garment: 'bag',
+    // The apparel slot vocabulary calls 'front' \"Bröst\" — wrong on this
+    // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
+    slotLabels: { front: 'Framsida' },
     profileId: 'bag_dtg',
     costSek: 129, // PROVISIONAL
     colorways: APPAREL_COLORWAYS,
@@ -206,6 +209,9 @@ const TEMPLATES = [
     id: 'cap_flat',
     label: 'Keps',
     garment: 'cap',
+    // The apparel slot vocabulary calls 'front' \"Bröst\" — wrong on this
+    // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
+    slotLabels: { front: 'Framsida' },
     profileId: 'cap_dtg',
     costSek: 129, // PROVISIONAL
     colorways: APPAREL_COLORWAYS,
@@ -216,6 +222,9 @@ const TEMPLATES = [
     id: 'beanie_flat',
     label: 'Mössa',
     garment: 'beanie',
+    // The apparel slot vocabulary calls 'front' \"Bröst\" — wrong on this
+    // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
+    slotLabels: { front: 'Framsida' },
     profileId: 'beanie_dtg',
     costSek: 99, // PROVISIONAL
     colorways: APPAREL_COLORWAYS,
@@ -226,6 +235,9 @@ const TEMPLATES = [
     id: 'flatcap_flat',
     label: 'Flat mössa',
     garment: 'flatcap',
+    // The apparel slot vocabulary calls 'front' \"Bröst\" — wrong on this
+    // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
+    slotLabels: { front: 'Framsida' },
     profileId: 'flatcap_dtg',
     costSek: 99, // PROVISIONAL
     colorways: APPAREL_COLORWAYS,
