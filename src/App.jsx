@@ -30,6 +30,7 @@ import PlatformRoute from './components/auth/PlatformRoute';
 import PrintShopRoute from './components/auth/PrintShopRoute';
 import PrintShopQueue from './pages/print/PrintShopQueue';
 import PrintShopOrderDetail from './pages/print/PrintShopOrderDetail';
+import PrintShopArtwork from './pages/print/PrintShopArtwork';
 import ImpersonationIntake from './components/auth/ImpersonationIntake';
 import AdminShopIdIntake from './components/auth/AdminShopIdIntake';
 import PlatformShops from './pages/platform/PlatformShops';
@@ -315,6 +316,9 @@ function App() {
               } />
               <Route path="/orders/:orderId" element={
                 <PrintShopRoute><PrintShopOrderDetail /></PrintShopRoute>
+              } />
+              <Route path="/artwork" element={
+                <PrintShopRoute><PrintShopArtwork /></PrintShopRoute>
               } />
               <Route path="*" element={<Navigate to="/" replace />} />
             </>

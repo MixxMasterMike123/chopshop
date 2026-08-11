@@ -1,13 +1,14 @@
 // PrintShopLayout — the print-shop surface shell. Its own dark sidebar, siloed
 // from the shop-admin AppLayout and the platform console (same visual family as
-// PlatformLayout, different identity). Nav: Print-kö only in v1.
+// PlatformLayout, different identity). Nav: Print-kö + Original (artwork library).
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { PrinterIcon, ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline';
+import { PrinterIcon, PhotoIcon, ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline';
 
 const NAV = [
   { name: 'Print-kö', path: '/', icon: PrinterIcon, live: true },
+  { name: 'Original', path: '/artwork', icon: PhotoIcon, live: true },
 ];
 
 const PrintShopLayout = ({ children }) => {

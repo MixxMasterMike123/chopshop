@@ -205,6 +205,8 @@ export {
   getPrintQueue,
   getPrintJob,
   getPrintQueueExport,
+  getPrintArtworkLibrary,
+  getPrintArtworkDownload,
   createPrintShopUser,
 } from './print/functions';
 

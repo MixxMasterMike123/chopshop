@@ -64,7 +64,7 @@ function safeImageUrl(u: unknown): string | null {
 // Mint a short-lived signed read URL for a Storage object. Falls back to the
 // stored download URL if signing isn't available (the Functions service account
 // needs roles/iam.serviceAccountTokenCreator to sign — a project-config item).
-async function signedUrlFor(storagePath: string, fallbackUrl: string | null): Promise<string | null> {
+export async function signedUrlFor(storagePath: string, fallbackUrl: string | null): Promise<string | null> {
   if (!storagePath) return fallbackUrl;
   try {
     const [url] = await getStorage()

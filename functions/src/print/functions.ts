@@ -14,7 +14,7 @@ import { db } from '../config/database';
 import { appUrls } from '../config/app-urls';
 import { requirePlatform } from '../email-orchestrator/functions/authGuard';
 import { getPrintShopContext, assertShopAllowed } from './printGuard';
-import { loadShopMappings, orderHasPodLine, toQueueRow, toPrintJob } from './printProjection';
+import { loadShopMappings, orderHasPodLine, toQueueRow, toPrintJob, signedUrlFor } from './printProjection';
 
 const auth = getAuth();
 
@@ -208,4 +208,70 @@ export const createPrintShopUser = onCall<CreatePrintShopUserRequest>(COMMON, as
   // doc; signed URLs replace any Storage claim). This is intentional, not an omission.
 
   return { success: true, uid, email, printShopShops: shops, wasExisting, tempPassword };
+});
+
+// ---- getPrintArtworkLibrary: the printer's ARTWORK library (2026-08-11) ----
+// The printer needs to re-download and printability-check uploaded originals
+// OUTSIDE the order flow (Mikael request). Same projection discipline as the
+// queue: field-minimized rows for the caller's ASSIGNED shops only — file
+// facts + validation verdict + stored preview thumb. No uploader identity, no
+// signed URLs here (download URLs are minted per file by
+// getPrintArtworkDownload so links stay short-lived).
+export const getPrintArtworkLibrary = onCall(COMMON, async (request) => {
+  const ctx = await getPrintShopContext(request.auth?.uid);
+  const names = await shopNames(ctx.printShopShops);
+  const rows: any[] = [];
+  for (const shopId of ctx.printShopShops) {
+    const snap = await db.collection('podArtwork').where('shopId', '==', shopId).get();
+    snap.docs.forEach((d) => {
+      const a: any = d.data();
+      const shopPrintPrefix = `pod-artwork/${shopId}/print/`;
+      const hasPrintFile =
+        typeof a.printStoragePath === 'string' && a.printStoragePath.startsWith(shopPrintPrefix);
+      rows.push({
+        id: d.id,
+        shopId,
+        shopName: names[shopId] || shopId,
+        fileName: a.fileName || '',
+        label: a.label || '',
+        ext: a.ext || '',
+        tier: a.validation?.tier || null,
+        status: a.status || null,
+        hasPrintFile,
+        widthPx: a.sourceWidthPx || null,
+        heightPx: a.sourceHeightPx || null,
+        previewUrl: typeof a.previewUrl === 'string' ? a.previewUrl : null,
+        createdAt: a.createdAt?.toDate ? a.createdAt.toDate().toISOString() : null,
+      });
+    });
+  }
+  // Newest first across shops.
+  rows.sort((x, y) => String(y.createdAt || '').localeCompare(String(x.createdAt || '')));
+  return { artworks: rows };
+});
+
+// ---- getPrintArtworkDownload: mint ONE short-lived signed URL ----
+// kind 'print' (the gate-verified PNG) or 'original' (the raw upload). Path
+// guards mirror toPrintJob: only server-owned paths inside the artwork's OWN
+// shop folder are honoured — a hand-crafted doc can't route foreign bytes.
+export const getPrintArtworkDownload = onCall(COMMON, async (request) => {
+  const ctx = await getPrintShopContext(request.auth?.uid);
+  const artworkId = String(request.data?.artworkId || '');
+  const kind = request.data?.kind === 'original' ? 'original' : 'print';
+  if (!artworkId) throw new HttpsError('invalid-argument', 'artworkId krävs');
+  const snap = await db.collection('podArtwork').doc(artworkId).get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Originalet finns inte längre');
+  const a: any = snap.data();
+  assertShopAllowed(ctx, String(a.shopId || ''));
+  const shopPrefix = `pod-artwork/${a.shopId}/`;
+  const path = kind === 'print' ? a.printStoragePath : a.originalStoragePath;
+  const fallback = kind === 'print' ? (a.printUrl || null) : (a.originalUrl || null);
+  if (typeof path !== 'string' || !path.startsWith(shopPrefix)) {
+    throw new HttpsError('not-found', kind === 'print'
+      ? 'Tryckfil saknas — be butiken validera om originalet'
+      : 'Originalfilen saknas');
+  }
+  const url = await signedUrlFor(path, fallback);
+  if (!url) throw new HttpsError('internal', 'Kunde inte skapa nedladdningslänk');
+  return { url, kind, fileName: a.fileName || '', ext: kind === 'print' ? 'png' : (a.ext || '') };
 });
