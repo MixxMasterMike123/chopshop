@@ -644,6 +644,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           sku: resolvedSku,
           artworkId: baseArt.id,
           profileId: selectedTemplate.profileId,
+          slotLabel: labelForSlot(s),
           // Pocket rows carry the discrete position FIRST — that's the printer's
           // primary instruction for this slot ("Ficka — Vänster · 2 cm uppifrån…").
           placement: isPocket ? `${posLabel} · ${readout}` : readout,
@@ -666,6 +667,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             sku: groupSku,
             artworkId: overrideArtworkId,
             profileId: selectedTemplate.profileId,
+            slotLabel: labelForSlot(s),
             placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
             placementSlot: s,
             ...(isPocket ? { position: pocketPosition } : {}),
@@ -823,6 +825,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             sku: prod.sku,
             artworkId: baseArt.id,
             profileId: selectedTemplate.profileId,
+            slotLabel: labelForSlot(s),
             placement: isPocket ? `${posLabel} · ${readout}` : readout,
             placementSlot: s,
             ...(isPocket ? { position: pocketPosition } : {}),
@@ -846,6 +849,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
               sku: gSku,
               artworkId: overrideArtworkId,
               profileId: selectedTemplate.profileId,
+              slotLabel: labelForSlot(s),
               placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
               placementSlot: s,
               ...(isPocket ? { position: pocketPosition } : {}),

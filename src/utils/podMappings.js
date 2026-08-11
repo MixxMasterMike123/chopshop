@@ -50,7 +50,7 @@ export const getMappingBySku = async (shopId, sku, placementSlot = DEFAULT_SLOT)
  * tells the caller a slot's previous artwork was overwritten (for the UI toast).
  * Returns { id, replaced }.
  */
-export const setMapping = async ({ shopId, sku, artworkId, profileId, placement, placementSlot, position = null }) => {
+export const setMapping = async ({ shopId, sku, artworkId, profileId, placement, placementSlot, position = null, slotLabel = null }) => {
   const cleanSku = String(sku || '').trim();
   if (!cleanSku) throw new Error('SKU krävs.');
   const slot = slotOf(placementSlot);
@@ -64,6 +64,10 @@ export const setMapping = async ({ shopId, sku, artworkId, profileId, placement,
     // Machine-readable pocket position (left/center/right) — the human text in
     // `placement` carries it too; this field is for future tooling.
     position: position || null,
+    // Garment-correct DISPLAY label for the slot ("Framsida" on a keps — the
+    // shared vocabulary says "Bröst"). Print projection prefers it, falls back
+    // to the shared label when absent (older rows).
+    slotLabel: String(slotLabel || '').trim().slice(0, 40) || null,
     updatedAt: serverTimestamp(),
   };
   if (existing) {

@@ -33,6 +33,18 @@ export function slotLabel(slot: PlacementSlot): string {
   return SLOT_LABELS[slot] || SLOT_LABELS[DEFAULT_SLOT];
 }
 
+// Display label for a mapping's slot. The studio writes a garment-correct
+// label on the mapping ("Framsida" on a keps — the shared vocabulary above is
+// apparel-worded and says "Bröst"; Kent bug 2026-08-11). Older rows lack the
+// field → shared label. Client-authored text that renders in the OPERATOR
+// portal/email, so sanitize: strip control chars, cap length.
+export function mappingSlotLabel(mapping: any, slot: PlacementSlot): string {
+  const raw = typeof mapping?.slotLabel === 'string' ? mapping.slotLabel : '';
+  // eslint-disable-next-line no-control-regex
+  const clean = raw.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 40);
+  return clean || slotLabel(slot);
+}
+
 // Sanitize a client-influenced image URL before it may render in the PRINT
 // OPERATOR's portal: https only (kills javascript:/data: stored XSS) and
 // platform storage hosts only (kills off-platform tracking beacons). Product
@@ -156,7 +168,7 @@ export function toPrintNotificationLines(
         productName: typeof it.name === 'string' ? it.name : (it.name?.['sv-SE'] || it.sku),
         sku: it.sku,
         quantity: it.quantity || 0,
-        placement: detail ? `${slotLabel(slot)} — ${detail}` : slotLabel(slot),
+        placement: detail ? `${mappingSlotLabel(mapping, slot)} — ${detail}` : mappingSlotLabel(mapping, slot),
       });
     }
   }
@@ -244,14 +256,14 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
       const mapping = slots.get(slot);
       const detail = String(mapping.placement || '').trim();
       // "Bröst — Centrerat på bröstet" (slot label + optional free-text detail).
-      const placement = detail ? `${slotLabel(slot)} — ${detail}` : slotLabel(slot);
+      const placement = detail ? `${mappingSlotLabel(mapping, slot)} — ${detail}` : mappingSlotLabel(mapping, slot);
       const base = {
         productName: typeof it.name === 'string' ? it.name : (it.name?.['sv-SE'] || it.sku),
         sku: it.sku,
         variantLabel: it.label || null,
         quantity: it.quantity || 0,
         placementSlot: slot,
-        slotLabel: slotLabel(slot),
+        slotLabel: mappingSlotLabel(mapping, slot),
         placement,
         profileId: mapping.profileId || null,
         // The bought colourway's product mockup (front view) — the printer's
