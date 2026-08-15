@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 2 ready to commit
+**Last updated:** 2026-08-16, checkpoint 3 ready to commit
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,10 +8,11 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `4a70cba` — `docs: plan Cloudflare migration`
+- Last pushed commit: `0de5e79` — `chore: scaffold Cloudflare migration foundation`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
-- No Cloudflare resources, DNS records, secrets, routes, or deployments have been created.
+- Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
+- No production resources, DNS records, custom routes, secrets, queues, R2 buckets, Containers, Stripe endpoints, or email integrations have been created.
 - The user's personal Cloudflare account is designated for staging/non-production.
 - A separate Cloudflare production account is required before cutover, but does not need to exist yet.
 
@@ -78,7 +79,31 @@ Pinned toolchain:
 
 The initially scaffolded Vitest configuration used the obsolete pre-Vitest-4 `defineWorkersConfig` API. Current Cloudflare documentation and installed package exports showed the new `cloudflareTest()` plugin contract; the configuration and test imports were corrected before commit.
 
-No Cloudflare resource or deployment has been created.
+Checkpoint 2 was committed and pushed as `0de5e79`.
+
+## Checkpoint 3 — Staging tenancy/data foundation
+
+### Version-controlled implementation
+
+- Added `migrations/0001_platform_foundation.sql` with tenant, domain, audit, idempotency, and outbox foundations.
+- Added immutable-tenant triggers, append-only audit triggers, uniqueness/check constraints, and operational indexes.
+- Added a typed D1 binding and pinned the non-secret personal staging account ID in `wrangler.jsonc`.
+- Added `/ready`, which verifies the required migration and fails closed with a generic `503` if D1 is unavailable or behind.
+- Added Workers-runtime D1 migration setup and adversarial tests for hostname normalization, tenant re-homing, append-only audit records, and duplicate idempotency/outbox keys.
+
+### Staging infrastructure and evidence
+
+- Wrangler identity verified for the personal staging account before resource creation.
+- Account ID: `0d392e5c79e386966a98a214ac91a133` (non-secret configuration identifier; credentials remain outside Git).
+- D1: `meteorshop-stg-db`, ID `d709e702-17f6-4107-ad45-060f2b24dc89`, primary region WEUR.
+- Remote migration applied successfully: 23 commands; readback confirmed five application tables, ten indexes, and six triggers.
+- Worker: `meteorshop-stg-api`, version `2ab9878c-fec8-4a54-a4fd-5cca643731d9`.
+- Staging URL: `https://meteorshop-stg-api.micke-ohlen.workers.dev`.
+- `/health` returned `200`, `/ready` returned `200`, unknown and wrong-method routes returned fail-closed JSON `404` responses.
+- Deployed bundle: 2.03 KiB / 0.89 KiB gzip; startup time reported as 5 ms.
+- No tenant, shop, product, customer, payment, or other business records were seeded.
+
+An initially added fake `preview_database_id` made the dry run report a local-only binding. It was removed before deployment; the reviewed bundle and live Worker bind the real staging D1 database.
 
 ## Verification and research completed
 
@@ -103,17 +128,17 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Commit and push the documentation + validated local foundation as checkpoint 2.
-2. Authenticate Wrangler against the personal staging account and verify the selected account identity.
-3. Record the account name and non-secret account ID in an operations record; do not put credentials in Git.
-4. Create and locally test the first D1 migration for identity/tenancy, idempotency, audit, and outbox foundations.
-5. Add a D1 binding only after the migration and two-tenant adversarial tests pass locally.
-6. Update this handover before every commit/push and before any remote resource creation.
+1. Commit and push checkpoint 3 after the final local verification pass.
+2. Verify and lock the current Better Auth version and its official Cloudflare D1 schema/migration workflow.
+3. Add identity/session schema only through the supported auth tooling; do not invent password or session tables.
+4. Implement the tenant resolver/repository boundary and prove two-tenant API isolation before porting a business route.
+5. Create R2 buckets and Queues only when their contracts and local tests are ready.
+6. Keep Firebase as the sole production side-effect owner throughout these staging waves.
 
 ## Known blockers and approvals
 
 - No implementation blocker at this checkpoint.
-- Browser-based `wrangler login` will require the user's Cloudflare session when remote staging setup begins. Authentication is not a deployment and must be followed by `wrangler whoami` before resource creation.
+- Wrangler is authenticated through its local credential store. Re-run `wrangler whoami` before each new remote resource group or if the session/account changes.
 - The production account, DNS zone, Cloudflare Email onboarding, Stripe webhook cutover, and secret entry remain later owner checkpoints.
 
 ## Recovery if the current agent stops unexpectedly
@@ -122,4 +147,4 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 2. Do not discard uncommitted files under `cloudflare/` or `docs/`.
 3. Read the files listed above and compare `git diff` against the last pushed checkpoint shown near the top.
 4. Re-run `npm run check` from `cloudflare/` before modifying bindings or migrations.
-5. Do not run `wrangler deploy`, create remote resources, or touch DNS until the account identity is verified and the relevant checklist approval is satisfied.
+5. The user has approved routine migration commands, staging resources, non-production deploys, commits, and pushes. Still stop for production DNS/traffic cutover, live Stripe side-effect switching, destructive deletion, or secret values only the user can supply.

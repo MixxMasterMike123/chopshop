@@ -25,4 +25,16 @@ describe("API foundation", () => {
       },
     });
   });
+
+  it("reports the required D1 migration as ready", async () => {
+    const response = await exports.default.fetch("https://api.test/ready");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      database: "ready",
+      migration: "0001_platform_foundation.sql",
+      status: "ok",
+    });
+  });
 });

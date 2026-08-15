@@ -24,7 +24,7 @@ Do not make a production DNS change, register a production Stripe webhook, retir
 
 - [ ] Enable MFA on every human account with access; retain recovery codes in the approved password manager.
 - [ ] Use the `meteorshop-stg-*` prefix for every migration resource. Existing unrelated personal-account resources remain out of scope; naming is an operational guard, not a security boundary.
-- [ ] Record the account ID in the team password manager / secure operations record, not in the repository.
+- [x] Pin the non-secret account ID in the reviewed staging Wrangler configuration. Keep OAuth/API credentials only in Wrangler's credential store or the approved secret manager.
 - [ ] Use `wrangler login` for interactive local work; verify the selected account before every destructive or remote command with `npx wrangler whoami`.
 - [ ] Create a separate non-production CI API token. Limit it to this account and only the permissions needed to deploy the reviewed configuration (Workers, D1, R2, Queues, and Workers Containers as applicable). It must have no zone/DNS permission until a non-production custom domain actually needs it.
 - [ ] Store that CI token only in the repository's protected non-production environment/secret store. Do not put it in `.dev.vars`, `.env`, a shell profile, or a CI log.

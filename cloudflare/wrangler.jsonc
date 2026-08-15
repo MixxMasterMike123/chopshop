@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "meteorshop-stg-api",
+  "account_id": "0d392e5c79e386966a98a214ac91a133",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
@@ -10,6 +11,14 @@
     "APP_ENV": "staging",
     "SERVICE_NAME": "meteorshop-stg-api"
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "meteorshop-stg-db",
+      "database_id": "d709e702-17f6-4107-ad45-060f2b24dc89",
+      "migrations_dir": "migrations"
+    }
+  ],
   "observability": {
     "enabled": true,
     "logs": {
