@@ -7,6 +7,11 @@ export declare function signedUrlFor(storagePath: string, fallbackUrl: string | 
 export declare function loadShopMappings(shopId: string): Promise<Map<string, any[]>>;
 export declare function resolveSlots(sku: string, mappingsBySku: Map<string, any[]>): Map<PlacementSlot, any>;
 export declare function resolveMapping(sku: string, mappingsBySku: Map<string, any[]>): any | null;
+export declare function artworkDeliverable(art: any, shopId: string): {
+    deliverable: boolean;
+    reason?: string;
+};
+export declare function findUnresolvedPodLines(order: any, mappingsBySku: Map<string, any[]>, dbRef: FirebaseFirestore.Firestore): Promise<string[]>;
 export declare function orderHasPodLine(order: any, mappingsBySku: Map<string, any[]>): boolean;
 export declare function toPrintNotificationLines(order: any, mappingsBySku: Map<string, any[]>): Array<{
     productName: string;
@@ -52,7 +57,7 @@ export declare function toPrintJob(orderId: string, order: any, shopName: string
         purpose: any;
         artwork: {
             unresolved: boolean;
-            reason: string;
+            reason: string | undefined;
             tier?: undefined;
             fileName?: undefined;
             ext?: undefined;

@@ -20,9 +20,14 @@ const printGuard_1 = require("./printGuard");
 const printProjection_1 = require("./printProjection");
 const auth = (0, auth_1.getAuth)();
 // A printer must NEVER print a finished or dead order (a refunded order shipped
-// again is money lost). These statuses are hidden from the queue by default; the
-// includeAll flag surfaces them (for reference / a printer double-checking history).
-const HIDDEN_STATUSES = new Set(['cancelled', 'refunded', 'shipped', 'delivered', 'completed']);
+// again is money lost) — NOR an UNPAID one (P1-12: a pending/invoiced B2B order
+// must not enter production, and its artwork must not be downloadable, before
+// payment; it appears in the queue when the shop marks it 'paid'). These
+// statuses are hidden from the queue by default; the includeAll flag surfaces
+// them (for reference / a printer double-checking history). NOTE:
+// 'partially_refunded' is intentionally NOT hidden — the remaining goods still
+// get produced (matches setPrintJobStatus.ALLOWED_FROM).
+const HIDDEN_STATUSES = new Set(['pending', 'invoiced', 'cancelled', 'refunded', 'shipped', 'delivered', 'completed']);
 // `as const` keeps memory:'256MiB' as the literal MemoryOption type (an inline
 // object widens it to string, which onCall rejects — same reason createShopUser
 // passes options inline).
@@ -79,6 +84,13 @@ exports.getPrintJob = (0, https_1.onCall)(COMMON, async (request) => {
     const order = snap.data();
     // CRUX: the order's shop must be one this printer may fulfil.
     (0, printGuard_1.assertShopAllowed)(ctx, order.shopId);
+    // P1-12: an UNPAID order (pending/invoiced B2B) must not expose its artwork
+    // or production view — the job appears when the shop marks it paid. (The
+    // status transition is separately blocked by setPrintJobStatus.ALLOWED_FROM.)
+    const st = String(order.status || '');
+    if (st === 'pending' || st === 'invoiced') {
+        throw new https_1.HttpsError('failed-precondition', 'Ordern är inte betald ännu — produktionsvyn låses upp när butiken markerat den som betald.');
+    }
     const mappings = await (0, printProjection_1.loadShopMappings)(order.shopId);
     const names = await shopNames([order.shopId]);
     return (0, printProjection_1.toPrintJob)(orderId, order, names[order.shopId], mappings);

@@ -259,7 +259,14 @@ async function loadShopOrders(shopId) {
     const snap = await database_1.db.collection('orders').where('shopId', '==', shopId).get();
     return snap.docs.map((d) => {
         const o = d.data();
-        return { total: o.total, status: o.status, createdAt: o.createdAt, source: o.source };
+        return {
+            total: o.total,
+            status: o.status,
+            createdAt: o.createdAt,
+            source: o.source,
+            // Partial-refund carve-out (aggregate subtracts what was refunded).
+            refundedTotalSek: o.payment?.refundedTotalSek,
+        };
     });
 }
 exports.exportDac7Report = (0, https_1.onCall)(COMMON, async (request) => {

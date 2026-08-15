@@ -15,6 +15,7 @@ import LabelPrintInstructions from '../../components/LabelPrintInstructions';
 import { getEnhancedOrderDistribution, getDisplayColor, getDisplaySize } from '../../utils/orderUtils';
 import { formatPaymentMethodName } from '../../utils/paymentMethods';
 import { formatPickupDate } from '../../utils/pickupDates';
+import { escapeHtml } from '../../utils/escapeHtml';
 import { Page, Card, CardSection, RightRail, Button, StatusPill, toneForOrderStatus } from '../../components/admin/ui';
 import { TruckIcon, MapPinIcon, PrinterIcon, TrashIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 
@@ -362,13 +363,18 @@ const AdminOrderDetail = () => {
   const handlePrint = () => {
     // Create a simple print window with order data
     const printWindow = window.open('', '_blank', 'width=800,height=600');
-    
+
+    // P1-10: every customer-controlled string is escaped before interpolation —
+    // a buyer-crafted name/address/note must render as TEXT in the admin's
+    // print window, never as markup.
+    const esc = escapeHtml;
+
     // Basic HTML template
     const printHTML = `
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Order_${order.orderNumber || order.id}</title>
+        <title>Order_${esc(order.orderNumber || order.id)}</title>
         <style>
           body { font-family: Arial, sans-serif; margin: 20px; color: #333; }
           .header { border-bottom: 2px solid #333; margin-bottom: 20px; padding-bottom: 10px; }
@@ -384,30 +390,30 @@ const AdminOrderDetail = () => {
       </head>
       <body>
         <div class="header">
-          <div class="title">Order ${order.orderNumber || order.id}</div>
+          <div class="title">Order ${esc(order.orderNumber || order.id)}</div>
         </div>
 
         <div class="section">
           <div class="section-title">Customer Information</div>
-          <p><strong>Company:</strong> ${displayUser.companyName}</p>
-          <p><strong>Contact:</strong> ${displayUser.contactPerson}</p>
-          <p><strong>Email:</strong> ${displayUser.email}</p>
-          <p><strong>Role:</strong> ${displayUser.role}</p>
+          <p><strong>Company:</strong> ${esc(displayUser.companyName)}</p>
+          <p><strong>Contact:</strong> ${esc(displayUser.contactPerson)}</p>
+          <p><strong>Email:</strong> ${esc(displayUser.email)}</p>
+          <p><strong>Role:</strong> ${esc(displayUser.role)}</p>
         </div>
 
         <div class="section">
           <div class="section-title">Order Information</div>
-          <p><strong>Date:</strong> ${formatDate(order.createdAt)}</p>
-          <p><strong>Status:</strong> ${order.status}</p>
-          <p><strong>Payment Method:</strong> ${formatPaymentMethodName(order.payment) || order.paymentMethod || 'Invoice'}</p>
+          <p><strong>Date:</strong> ${esc(formatDate(order.createdAt))}</p>
+          <p><strong>Status:</strong> ${esc(order.status)}</p>
+          <p><strong>Payment Method:</strong> ${esc(formatPaymentMethodName(order.payment) || order.paymentMethod || 'Invoice')}</p>
           ${order.source ? `<p><strong>Source:</strong> ${order.source === 'b2c' ? 'B2C Shop' : 'B2B Portal'}</p>` : ''}
         </div>
 
         <div class="section">
           <div class="section-title">Delivery Address</div>
-          <p><strong>Company:</strong> ${displayAddress.company}</p>
-          <p><strong>Contact:</strong> ${displayAddress.contactPerson}</p>
-          <p><strong>Address:</strong> ${displayAddress.address}</p>
+          <p><strong>Company:</strong> ${esc(displayAddress.company)}</p>
+          <p><strong>Contact:</strong> ${esc(displayAddress.contactPerson)}</p>
+          <p><strong>Address:</strong> ${esc(displayAddress.address)}</p>
         </div>
 
         <div class="section">
@@ -425,10 +431,10 @@ const AdminOrderDetail = () => {
             <tbody>
               ${getEnhancedOrderDistribution(order).map(item => `
                 <tr>
-                  <td>${item.name || 'Produkt'}</td>
-                  <td>${item.label || getDisplayColor(item.color)}</td>
-                  <td>${item.sku || getDisplaySize(item.size)}</td>
-                  <td>${item.quantity} st</td>
+                  <td>${esc(item.name || 'Produkt')}</td>
+                  <td>${esc(item.label || getDisplayColor(item.color))}</td>
+                  <td>${esc(item.sku || getDisplaySize(item.size))}</td>
+                  <td>${esc(item.quantity)} st</td>
                   <td class="text-right">${item.price ? item.price.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) + ' kr' : (order.prisInfo?.produktPris ? order.prisInfo.produktPris.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) + ' kr' : '')}</td>
                 </tr>
               `).join('')}
@@ -445,7 +451,7 @@ const AdminOrderDetail = () => {
         ${order.note ? `
           <div class="section">
             <div class="section-title">Notes</div>
-            <p>${order.note}</p>
+            <p>${esc(order.note)}</p>
           </div>
         ` : ''}
       </body>

@@ -108,5 +108,26 @@ console.log('\n=== mergeReportedRecord (transparency, replace-by-year, no dupes)
   ok(a.map((e) => e.year).join(',') === '2024,2025,2026', 'always sorted ascending by year');
 }
 
+console.log('\n=== Partial refunds — consideration RETAINED (P1-08, 2026-08-15) ===');
+{
+  const partial = { ...order(500, 2026, 'partially_refunded'), refundedTotalSek: 490 };
+  const a = aggregateSellerYear([partial], 2026, 0.1);
+  ok(a.grossConsiderationSek === 10, 'partially refunded order counts only the RETAINED amount (500-490=10)');
+  ok(a.transactionCount === 1, 'partially refunded order still counts as a transaction');
+}
+{
+  const fullViaPartialField = { ...order(500, 2026, 'confirmed'), refundedTotalSek: 500 };
+  const a = aggregateSellerYear([fullViaPartialField], 2026, 0.1);
+  ok(a.transactionCount === 0 && a.grossConsiderationSek === 0, 'fully-refunded-by-amount order (retained 0) is excluded entirely');
+}
+{
+  const a = aggregateSellerYear([{ ...order(500, 2026), refundedTotalSek: undefined }], 2026, 0.1);
+  ok(a.grossConsiderationSek === 500, 'absent refundedTotalSek → full total counts (legacy orders unchanged)');
+}
+{
+  const a = aggregateSellerYear([order(500, 2026, 'refunded')], 2026, 0.1);
+  ok(a.transactionCount === 0, 'status refunded still excluded by status (unchanged)');
+}
+
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

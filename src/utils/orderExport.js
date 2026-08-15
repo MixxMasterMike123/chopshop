@@ -51,7 +51,8 @@ const getStatusLabel = (status) => {
     'shipped': 'Skickad',
     'delivered': 'Levererad',
     'cancelled': 'Avbruten',
-    'refunded': 'Återbetald'
+    'refunded': 'Återbetald',
+    'partially_refunded': 'Delvis återbetald'
   };
   return statusMap[status] || status || 'Okänd';
 };

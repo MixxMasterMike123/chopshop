@@ -232,3 +232,63 @@ export function summarizeConnectBalance(balance: any, currency: string = 'sek'):
     negative: availableOre < 0,
   };
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Cumulative refund accounting (P1-08, 2026-08-15 audit) — pure, unit-tested.
+//
+// A PARTIAL refund must NOT mark the whole order refunded: doing so blocked
+// any follow-up refund and fired a FULL affiliate-commission reversal for a
+// 10 kr goodwill refund. These helpers make refunds cumulative:
+//   • validateRefundRequest — the request may only refund what REMAINS.
+//   • refundStateAfter      — the order's status after a successful refund:
+//     'refunded' only when the cumulative total covers the charge, otherwise
+//     'partially_refunded' (which keeps the refund button usable and does NOT
+//     fire the commission-reversal trigger — POLICY: affiliate commission
+//     reverses only on FULL refund/cancel, a partial goodwill refund keeps it).
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface RefundValidation {
+  ok: boolean;
+  error?: string;
+  remainingSek: number; // what may still be refunded
+}
+
+export function validateRefundRequest(
+  chargedSek: number,
+  refundedBeforeSek: number,
+  requestedAmount?: number | null
+): RefundValidation {
+  const charged = Number(chargedSek) || 0;
+  const before = Number(refundedBeforeSek) || 0;
+  const remainingSek = Math.round((charged - before) * 100) / 100;
+  if (remainingSek <= 0.005) {
+    return { ok: false, error: 'Order is already fully refunded', remainingSek: 0 };
+  }
+  if (requestedAmount === undefined || requestedAmount === null) {
+    return { ok: true, remainingSek }; // absent amount = refund the remainder
+  }
+  const amt = Number(requestedAmount);
+  if (!Number.isFinite(amt) || amt <= 0 || amt > remainingSek + 0.005) {
+    return { ok: false, error: `Refund amount must be between 0 and ${remainingSek} SEK`, remainingSek };
+  }
+  return { ok: true, remainingSek };
+}
+
+export interface RefundState {
+  refundedTotalSek: number;
+  isFull: boolean;
+  status: 'refunded' | 'partially_refunded';
+}
+
+export function refundStateAfter(
+  chargedSek: number,
+  refundedBeforeSek: number,
+  refundNowSek: number
+): RefundState {
+  const charged = Number(chargedSek) || 0;
+  const refundedTotalSek = Math.round(((Number(refundedBeforeSek) || 0) + (Number(refundNowSek) || 0)) * 100) / 100;
+  // A zero/unknown charge with a successful Stripe refund counts as full —
+  // never strand an order in partially_refunded on missing legacy data.
+  const isFull = charged <= 0 || refundedTotalSek >= charged - 0.005;
+  return { refundedTotalSek, isFull, status: isFull ? 'refunded' : 'partially_refunded' };
+}

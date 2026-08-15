@@ -48,6 +48,7 @@ const STATUS_LABELS = {
   delivered: 'Levererad',
   cancelled: 'Avbruten',
   refunded: 'Återbetald',
+  partially_refunded: 'Delvis återbetald',
 };
 const statusLabel = (s) => STATUS_LABELS[s] || s || 'Okänd';
 

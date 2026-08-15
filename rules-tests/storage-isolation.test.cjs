@@ -22,7 +22,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
-const { ref, uploadBytes, getBytes } = require('firebase/storage');
+const { ref, uploadBytes, getBytes, deleteObject } = require('firebase/storage');
 
 const PROJECT_ID = 'demo-rules-test';
 const RULES = fs.readFileSync(path.join(__dirname, '..', 'storage.rules'), 'utf8');
@@ -99,6 +99,31 @@ async function run() {
     uploadBytes(ref(customer('c1'), 'products/shopA/p1/img.jpg'), BYTES)));
   await check('anon CANNOT write branding', assertFails(
     uploadBytes(ref(anon(), 'branding/shopA/logo.png'), BYTES)));
+
+  // ── P1-17 (2026-08-15 audit): print/ files are fully SERVER-OWNED — client
+  //    delete is denied (a same-shop client could otherwise strand a paid
+  //    order's production file). Library cleanup OUTSIDE print/ stays allowed. ──
+  console.log('\n=== POD print/ partition — server-owned (create/update/DELETE) ===');
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const s = ctx.storage();
+    await uploadBytes(ref(s, 'pod-artwork/shopA/print/art1.png'), BYTES);      // server-minted print file
+    await uploadBytes(ref(s, 'pod-artwork/shopA/originals/art1.tiff'), BYTES); // seller library original
+  });
+  await check('shopA admin CANNOT delete own shop print/ file (server-owned)', assertFails(
+    deleteObject(ref(shopAAdmin(), 'pod-artwork/shopA/print/art1.png'))));
+  await check('platform via client SDK CANNOT delete print/ file either', assertFails(
+    deleteObject(ref(platform(), 'pod-artwork/shopA/print/art1.png'))));
+  await check('shopA admin CANNOT upload into print/ (pre-existing gate holds)', assertFails(
+    uploadBytes(ref(shopAAdmin(), 'pod-artwork/shopA/print/injected.png'), BYTES)));
+  await check('shopA admin deletes own LIBRARY original (cleanup still allowed)', assertSucceeds(
+    deleteObject(ref(shopAAdmin(), 'pod-artwork/shopA/originals/art1.tiff'))));
+  await check('shopB admin CANNOT delete shopA print file (cross-shop + server-owned)', assertFails(
+    deleteObject(ref(shopBAdmin(), 'pod-artwork/shopA/print/art1.png'))));
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await uploadBytes(ref(ctx.storage(), 'pod-artwork/shopA/originals/art2.tiff'), BYTES);
+  });
+  await check('shopB admin CANNOT delete shopA LIBRARY original (cross-shop)', assertFails(
+    deleteObject(ref(shopBAdmin(), 'pod-artwork/shopA/originals/art2.tiff'))));
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
   await env.cleanup();

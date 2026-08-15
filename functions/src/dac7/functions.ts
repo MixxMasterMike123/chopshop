@@ -314,7 +314,14 @@ async function loadShopOrders(shopId: string): Promise<Dac7Order[]> {
   const snap = await db.collection('orders').where('shopId', '==', shopId).get();
   return snap.docs.map((d) => {
     const o = d.data() as any;
-    return { total: o.total, status: o.status, createdAt: o.createdAt, source: o.source };
+    return {
+      total: o.total,
+      status: o.status,
+      createdAt: o.createdAt,
+      source: o.source,
+      // Partial-refund carve-out (aggregate subtracts what was refunded).
+      refundedTotalSek: o.payment?.refundedTotalSek,
+    };
   });
 }
 

@@ -29,6 +29,7 @@ const STATUS_LABEL = {
   ready_for_pickup: 'Redo att hämtas',
   cancelled: 'Avbruten',
   refunded: 'Återbetald',
+  partially_refunded: 'Delvis återbetald',
   completed: 'Slutförd',
 };
 const STATUS_CHIP = {
@@ -38,6 +39,7 @@ const STATUS_CHIP = {
   completed: 'bg-emerald-500/15 text-emerald-300',
   cancelled: 'bg-red-500/15 text-red-300',
   refunded: 'bg-red-500/15 text-red-300',
+  partially_refunded: 'bg-orange-500/15 text-orange-300',
 };
 // Statuses past which the printer can no longer advance (mirrors the callable).
 const TERMINAL = ['shipped', 'delivered', 'cancelled', 'refunded', 'completed'];

@@ -121,12 +121,16 @@ service firebase.storage {
     // printer downloads without any Storage rule grant or custom claim.
     //
     // print/ is SERVER-OWNED (docs/POD_PRINT_SPEC.md): only the processPodArtwork
-    // callable (Admin SDK) may create/update the gate-verified print PNG the
-    // printer receives — a client-writable print file would let a tenant swap in
-    // ungated bytes AFTER approval. Delete stays allowed (library cleanup).
+    // callable (Admin SDK) may create/update/DELETE the gate-verified print PNG
+    // the printer receives — a client-writable print file would let a tenant swap
+    // in ungated bytes AFTER approval, and a client-DELETABLE one (P1-17,
+    // 2026-08-15 audit) would let any same-shop client strand a paid order's
+    // production file. Library cleanup outside print/ stays client-deletable;
+    // print-file cleanup is reference-aware server code only.
     match /pod-artwork/{shopId}/{allPaths=**} {
       allow read: if isAdminOfShop(shopId);
-      allow delete: if isAdminOfShop(shopId);
+      allow delete: if isAdminOfShop(shopId)
+        && !resource.name.matches('pod-artwork/[^/]+/print/.*');
       allow create, update: if isAdminOfShop(shopId)
         && !request.resource.name.matches('pod-artwork/[^/]+/print/.*');
     }

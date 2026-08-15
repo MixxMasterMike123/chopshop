@@ -63,8 +63,15 @@ function aggregateSellerYear(orders, year, sekToEurRate) {
         const total = Number(o?.total);
         if (!Number.isFinite(total) || total <= 0)
             continue; // skip non-positive/garbage
+        // PARTIAL refunds (P1-08 → 2026-08-15 audit): consideration is what the
+        // seller RETAINED, so the cumulatively-refunded portion never counts.
+        // Clamped to ≥0; a fully-refunded order is excluded above by status.
+        const refunded = Number(o?.refundedTotalSek);
+        const retained = Number.isFinite(refunded) && refunded > 0 ? Math.max(0, total - refunded) : total;
+        if (retained <= 0)
+            continue;
         count += 1;
-        grossSek += total;
+        grossSek += retained;
     }
     // Round SEK to ören-free krona for reporting; EUR to cents.
     const grossConsiderationSek = Math.round(grossSek * 100) / 100;

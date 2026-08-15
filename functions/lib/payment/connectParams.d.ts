@@ -79,3 +79,15 @@ export interface ConnectBalanceSummary {
  * @param currency  ISO code to report (default 'sek')
  */
 export declare function summarizeConnectBalance(balance: any, currency?: string): ConnectBalanceSummary;
+export interface RefundValidation {
+    ok: boolean;
+    error?: string;
+    remainingSek: number;
+}
+export declare function validateRefundRequest(chargedSek: number, refundedBeforeSek: number, requestedAmount?: number | null): RefundValidation;
+export interface RefundState {
+    refundedTotalSek: number;
+    isFull: boolean;
+    status: 'refunded' | 'partially_refunded';
+}
+export declare function refundStateAfter(chargedSek: number, refundedBeforeSek: number, refundNowSek: number): RefundState;

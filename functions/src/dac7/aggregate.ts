@@ -27,6 +27,7 @@ export interface Dac7Order {
   status?: string;            // order status
   createdAt?: any;            // Firestore Timestamp | Date | ISO string | ms
   source?: string;            // 'b2c' | 'b2b' (both are the seller's sales)
+  refundedTotalSek?: number;  // cumulative refunded amount (P1-08 partial refunds)
 }
 
 export interface Dac7YearAggregate {
@@ -74,8 +75,14 @@ export function aggregateSellerYear(
     if (NON_COUNTING_STATUSES.has(status)) continue;          // refunded/cancelled don't count
     const total = Number(o?.total);
     if (!Number.isFinite(total) || total <= 0) continue;      // skip non-positive/garbage
+    // PARTIAL refunds (P1-08 → 2026-08-15 audit): consideration is what the
+    // seller RETAINED, so the cumulatively-refunded portion never counts.
+    // Clamped to ≥0; a fully-refunded order is excluded above by status.
+    const refunded = Number(o?.refundedTotalSek);
+    const retained = Number.isFinite(refunded) && refunded > 0 ? Math.max(0, total - refunded) : total;
+    if (retained <= 0) continue;
     count += 1;
-    grossSek += total;
+    grossSek += retained;
   }
 
   // Round SEK to ören-free krona for reporting; EUR to cents.

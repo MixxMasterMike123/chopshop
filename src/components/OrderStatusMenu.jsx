@@ -28,6 +28,8 @@ const getStatusStyles = (status) => {
       return 'bg-red-100 text-red-800 border-red-200'; // Cancelled
     case 'refunded':
       return 'bg-rose-100 text-rose-800 border-rose-200'; // Refunded (set by the refund flow, not selectable)
+    case 'partially_refunded':
+      return 'bg-orange-100 text-orange-800 border-orange-200'; // Part of the charge refunded; order still live
     default:
       return 'bg-gray-100 text-gray-800 border-gray-200'; // Unknown status
   }
@@ -67,6 +69,9 @@ const OrderStatusMenu = ({ currentStatus, onStatusChange, disabled, className = 
   // selectable option in the menu.
   const getCurrentStatusLabel = () => {
     if (currentStatus === 'refunded') return t('order_status.refunded', 'Återbetald');
+    // 'partially_refunded' is likewise set by the (cumulative) refund flow —
+    // display-only, never selectable.
+    if (currentStatus === 'partially_refunded') return t('order_status.partially_refunded', 'Delvis återbetald');
     // 'printed' is set by the print shop, not selectable in the admin menu — show
     // its label so the pill reads "Tryckt" instead of falling through to "Okänd".
     if (currentStatus === 'printed') return t('order_status.printed', 'Tryckt');

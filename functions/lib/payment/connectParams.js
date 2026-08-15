@@ -10,7 +10,7 @@
  * transfer reversal). Fee arithmetic lives in connectFee.ts.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.summarizeConnectBalance = exports.buildDisputeReTransferParams = exports.buildDisputeReversalParams = exports.buildRefundParams = exports.buildConnectChargeParams = void 0;
+exports.refundStateAfter = exports.validateRefundRequest = exports.summarizeConnectBalance = exports.buildDisputeReTransferParams = exports.buildDisputeReversalParams = exports.buildRefundParams = exports.buildConnectChargeParams = void 0;
 const connectFee_1 = require("./connectFee");
 /**
  * Decide the destination-charge params for a checkout. A shop is "Connect-
@@ -172,4 +172,30 @@ function summarizeConnectBalance(balance, currency = 'sek') {
     };
 }
 exports.summarizeConnectBalance = summarizeConnectBalance;
+function validateRefundRequest(chargedSek, refundedBeforeSek, requestedAmount) {
+    const charged = Number(chargedSek) || 0;
+    const before = Number(refundedBeforeSek) || 0;
+    const remainingSek = Math.round((charged - before) * 100) / 100;
+    if (remainingSek <= 0.005) {
+        return { ok: false, error: 'Order is already fully refunded', remainingSek: 0 };
+    }
+    if (requestedAmount === undefined || requestedAmount === null) {
+        return { ok: true, remainingSek }; // absent amount = refund the remainder
+    }
+    const amt = Number(requestedAmount);
+    if (!Number.isFinite(amt) || amt <= 0 || amt > remainingSek + 0.005) {
+        return { ok: false, error: `Refund amount must be between 0 and ${remainingSek} SEK`, remainingSek };
+    }
+    return { ok: true, remainingSek };
+}
+exports.validateRefundRequest = validateRefundRequest;
+function refundStateAfter(chargedSek, refundedBeforeSek, refundNowSek) {
+    const charged = Number(chargedSek) || 0;
+    const refundedTotalSek = Math.round(((Number(refundedBeforeSek) || 0) + (Number(refundNowSek) || 0)) * 100) / 100;
+    // A zero/unknown charge with a successful Stripe refund counts as full —
+    // never strand an order in partially_refunded on missing legacy data.
+    const isFull = charged <= 0 || refundedTotalSek >= charged - 0.005;
+    return { refundedTotalSek, isFull, status: isFull ? 'refunded' : 'partially_refunded' };
+}
+exports.refundStateAfter = refundStateAfter;
 //# sourceMappingURL=connectParams.js.map

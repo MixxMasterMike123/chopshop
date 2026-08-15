@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.toPrintJob = exports.toQueueRow = exports.toPrintNotificationLines = exports.orderHasPodLine = exports.resolveMapping = exports.resolveSlots = exports.loadShopMappings = exports.signedUrlFor = exports.mappingSlotLabel = exports.slotLabel = exports.slotOf = exports.DEFAULT_SLOT = void 0;
+exports.toPrintJob = exports.toQueueRow = exports.toPrintNotificationLines = exports.orderHasPodLine = exports.findUnresolvedPodLines = exports.artworkDeliverable = exports.resolveMapping = exports.resolveSlots = exports.loadShopMappings = exports.signedUrlFor = exports.mappingSlotLabel = exports.slotLabel = exports.slotOf = exports.DEFAULT_SLOT = void 0;
 // printProjection.ts — builds the FIELD-MINIMISED production view of a POD order
 // for the print shop. This is the data-minimisation boundary: the printer (an
 // external sub-processor) gets ship-to + production fields ONLY — never customer
@@ -145,6 +145,55 @@ function resolveMapping(sku, mappingsBySku) {
     return slots.get(exports.DEFAULT_SLOT) || slots.values().next().value;
 }
 exports.resolveMapping = resolveMapping;
+// P1-13: is this artwork doc DELIVERABLE for the given shop? Mirrors toPrintJob's
+// delivery decision exactly: the gate-verified print PNG must live inside THIS
+// shop's server-owned print/ folder; a legacy doc (no status field) may fall
+// back to its original. Kept as ONE predicate so the production view and the
+// status-transition gate can never drift apart.
+function artworkDeliverable(art, shopId) {
+    const shopPrintPrefix = `pod-artwork/${String(shopId || '')}/print/`;
+    const isPrintFile = typeof art?.printStoragePath === 'string' && art.printStoragePath.startsWith(shopPrintPrefix);
+    if (!isPrintFile && art?.status !== undefined) {
+        return { deliverable: false, reason: 'Tryckfil saknas — be butiken validera om originalet' };
+    }
+    return { deliverable: true };
+}
+exports.artworkDeliverable = artworkDeliverable;
+// P1-13: list every POD production line (item × resolved slot) whose artwork
+// does NOT resolve to a deliverable artifact. An order may only be marked
+// printed/shipped when this list is EMPTY — one resolvable line must not carry
+// an order whose other line would silently ship without its print.
+async function findUnresolvedPodLines(order, mappingsBySku, dbRef) {
+    const items = Array.isArray(order.items) ? order.items : [];
+    const artCache = new Map();
+    const unresolved = [];
+    for (const it of items) {
+        if (!it || !it.sku)
+            continue;
+        const slots = resolveSlots(it.sku, mappingsBySku);
+        for (const [slot, mapping] of slots) {
+            const label = `${it.sku} (${slotLabel(slot)})`;
+            if (!mapping.artworkId) {
+                unresolved.push(`${label}: ingen artworkId i kopplingen`);
+                continue;
+            }
+            if (!artCache.has(mapping.artworkId)) {
+                const s = await dbRef.collection('podArtwork').doc(mapping.artworkId).get();
+                artCache.set(mapping.artworkId, s.exists ? s.data() : null);
+            }
+            const art = artCache.get(mapping.artworkId);
+            if (!art) {
+                unresolved.push(`${label}: originalet är borttaget`);
+                continue;
+            }
+            const d = artworkDeliverable(art, order.shopId);
+            if (!d.deliverable)
+                unresolved.push(`${label}: ${d.reason}`);
+        }
+    }
+    return unresolved;
+}
+exports.findUnresolvedPodLines = findUnresolvedPodLines;
 // Is this order a POD order for the given shop? (any line's sku resolves any slot)
 function orderHasPodLine(order, mappingsBySku) {
     const items = Array.isArray(order.items) ? order.items : [];
@@ -286,16 +335,15 @@ async function toPrintJob(orderId, order, shopName, mappingsBySku) {
             const art = artSnap.data();
             // DELIVERY = the gate-verified print PNG (docs/POD_PRINT_SPEC.md: always
             // transparent PNG, RGB, ≥300 DPI). The print/ storage path is SERVER-OWNED
-            // (storage.rules denies client create/update), and we only honour a path
-            // inside THIS shop's print/ folder — so a hand-crafted doc can never route
-            // ungated or cross-tenant bytes to the printer.
+            // (storage.rules denies client create/update/delete), and we only honour a
+            // path inside THIS shop's print/ folder — so a hand-crafted doc can never
+            // route ungated or cross-tenant bytes to the printer. The decision lives
+            // in artworkDeliverable() — SHARED with the setPrintJobStatus gate (P1-13).
             const shopPrintPrefix = `pod-artwork/${String(order.shopId || '')}/print/`;
             const isPrintFile = typeof art.printStoragePath === 'string' && art.printStoragePath.startsWith(shopPrintPrefix);
-            // Legacy docs (created before the gate pipeline — no status field) fall back
-            // to the raw original for continuity. A doc that CLAIMS a status but lacks a
-            // valid print file is not deliverable — surface it instead of shipping it.
-            if (!isPrintFile && art.status !== undefined) {
-                lines.push({ ...base, purpose: art.purpose || mapping.profileId || null, artwork: { unresolved: true, reason: 'Tryckfil saknas — be butiken validera om originalet' } });
+            const delivery = artworkDeliverable(art, order.shopId);
+            if (!delivery.deliverable) {
+                lines.push({ ...base, purpose: art.purpose || mapping.profileId || null, artwork: { unresolved: true, reason: delivery.reason } });
                 continue;
             }
             const downloadUrl = isPrintFile

@@ -32,6 +32,8 @@ export const ORDER_STATUS_TONE = {
   shipped: 'success',
   delivered: 'positive',
   cancelled: 'danger',
+  refunded: 'danger',
+  partially_refunded: 'attention',
 };
 export const PAYMENT_STATUS_TONE = { paid: 'success', pending: 'warning', unpaid: 'warning', refunded: 'neutral', failed: 'danger' };
 export const FULFILLMENT_STATUS_TONE = { fulfilled: 'success', unfulfilled: 'warning', partial: 'attention', cancelled: 'danger' };

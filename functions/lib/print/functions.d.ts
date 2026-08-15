@@ -27,7 +27,7 @@ export declare const getPrintJob: import("firebase-functions/v2/https").Callable
         purpose: any;
         artwork: {
             unresolved: boolean;
-            reason: string;
+            reason: string | undefined;
             tier?: undefined;
             fileName?: undefined;
             ext?: undefined;

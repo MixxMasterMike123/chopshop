@@ -13,6 +13,7 @@ import { sv } from 'date-fns/locale';
 // "jsPDF is not a constructor" at runtime, invisible to the build).
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
+import { escapeHtml } from './escapeHtml';
 
 /**
  * Format date for verification documents
@@ -96,13 +97,15 @@ const calculateOrderTotals = (order) => {
 export const createOrderVerificationHTML = (order) => {
   const totals = calculateOrderTotals(order);
   const isB2C = order.source === 'b2c';
-  
-  // Customer information
+
+  // Customer information. P1-10: every customer-controlled string is HTML-
+  // escaped HERE, at derivation — the template below may interpolate these
+  // freely without re-auditing each site.
   let companyName = '';
   let contactPerson = '';
   let email = '';
   let address = '';
-  
+
   if (isB2C && order.customerInfo) {
     companyName = order.customerInfo.companyName || '';
     contactPerson = `${order.customerInfo.firstName || ''} ${order.customerInfo.lastName || ''}`.trim();
@@ -116,6 +119,14 @@ export const createOrderVerificationHTML = (order) => {
     email = order.userEmail || order.email || '';
     address = `${order.address || ''}, ${order.postalCode || ''} ${order.city || ''}, ${order.country || ''}`.trim();
   }
+  companyName = escapeHtml(companyName);
+  contactPerson = escapeHtml(contactPerson);
+  email = escapeHtml(email);
+  address = escapeHtml(address);
+  const orderNumber = escapeHtml(order.orderNumber || order.id);
+  const shopName = escapeHtml(order.shopName || order.sellerName || 'Webbutik');
+  const sellerLegalName = escapeHtml(order.sellerLegalName || '');
+  const sellerOrgNumber = escapeHtml(order.sellerOrgNumber || '');
   
   // Order date
   const orderDate = formatDate(order.createdAt);
@@ -130,7 +141,7 @@ export const createOrderVerificationHTML = (order) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Orderverifikation ${order.orderNumber || order.id}</title>
+  <title>Orderverifikation ${orderNumber}</title>
   <style>
     @media print {
       @page { margin: 2cm; }
@@ -313,13 +324,13 @@ export const createOrderVerificationHTML = (order) => {
 <body>
   <div class="header">
     <div class="company-info">
-      <div class="company-name">${order.shopName || order.sellerName || 'Webbutik'}</div>
-      ${order.sellerLegalName ? `<div>${order.sellerLegalName}</div>` : ''}
-      ${order.sellerOrgNumber ? `<div>Org.nr: ${order.sellerOrgNumber}</div>` : ''}
+      <div class="company-name">${shopName}</div>
+      ${sellerLegalName ? `<div>${sellerLegalName}</div>` : ''}
+      ${sellerOrgNumber ? `<div>Org.nr: ${sellerOrgNumber}</div>` : ''}
     </div>
     <div class="verification-info">
       <div class="verification-label">ORDERVERIFIKATION</div>
-      <div class="verification-number">#${order.orderNumber || order.id}</div>
+      <div class="verification-number">#${orderNumber}</div>
       <div style="margin-top: 10px;">${orderDate}</div>
     </div>
   </div>
@@ -340,25 +351,27 @@ export const createOrderVerificationHTML = (order) => {
     <div class="section-title">Orderdetaljer</div>
     <div class="info-grid">
       <div class="info-label">Ordernummer:</div>
-      <div class="info-value">${order.orderNumber || order.id}</div>
+      <div class="info-value">${orderNumber}</div>
       <div class="info-label">Orderdatum:</div>
       <div class="info-value">${orderDate}</div>
       <div class="info-label">Status:</div>
       <div class="info-value">
-        <span class="status-badge status-${order.status || 'pending'}">
+        <span class="status-badge status-${escapeHtml(order.status || 'pending')}">
           ${order.status === 'confirmed' ? 'Bekräftad' : 
             order.status === 'pending' ? 'Väntar' :
             order.status === 'processing' ? 'Behandlas' :
             order.status === 'shipped' ? 'Skickad' :
             order.status === 'delivered' ? 'Levererad' :
-            order.status === 'cancelled' ? 'Avbruten' : 'Okänd'}
+            order.status === 'cancelled' ? 'Avbruten' :
+            order.status === 'refunded' ? 'Återbetald' :
+            order.status === 'partially_refunded' ? 'Delvis återbetald' : 'Okänd'}
         </span>
       </div>
       <div class="info-label">Betalmetod:</div>
-      <div class="info-value">${paymentMethod === 'stripe' ? 'Stripe (Kort/Swish)' : 
-                                   paymentMethod === 'klarna' ? 'Klarna' : 
-                                   paymentMethod === 'swish' ? 'Swish' : 
-                                   paymentMethod}</div>
+      <div class="info-value">${paymentMethod === 'stripe' ? 'Stripe (Kort/Swish)' :
+                                   paymentMethod === 'klarna' ? 'Klarna' :
+                                   paymentMethod === 'swish' ? 'Swish' :
+                                   escapeHtml(paymentMethod)}</div>
       <div class="info-label">Källa:</div>
       <div class="info-value">${isB2C ? 'B2C (Privatkund)' : 'B2B (Återförsäljare)'}</div>
     </div>
@@ -377,10 +390,12 @@ export const createOrderVerificationHTML = (order) => {
       </thead>
       <tbody>
         ${(order.items || []).map(item => {
-          const name = getProductName(item.name || item.productName);
+          // P1-10: item fields originate from the (historically client-written)
+          // order snapshot — escape before interpolation.
+          const name = escapeHtml(getProductName(item.name || item.productName));
           const details = [];
-          if (item.color) details.push(item.color);
-          if (item.size) details.push(item.size);
+          if (item.color) details.push(escapeHtml(item.color));
+          if (item.size) details.push(escapeHtml(item.size));
           const detailsStr = details.length > 0 ? `<br><small style="color: #666;">${details.join(', ')}</small>` : '';
           const quantity = item.quantity || 0;
           const price = item.price || 0;
@@ -425,17 +440,17 @@ export const createOrderVerificationHTML = (order) => {
       <div class="section-title">Affiliateinformation</div>
       <div class="info-grid">
         <div class="info-label">Affiliatekod:</div>
-        <div class="info-value">${order.affiliate.code}</div>
+        <div class="info-value">${escapeHtml(order.affiliate.code)}</div>
         ${order.affiliate.discountPercentage ? `
           <div class="info-label">Rabatt:</div>
-          <div class="info-value">${order.affiliate.discountPercentage}%</div>
+          <div class="info-value">${escapeHtml(order.affiliate.discountPercentage)}%</div>
         ` : ''}
       </div>
     </div>
   ` : ''}
 
   <div class="footer">
-    <p><strong>${order.shopName || order.sellerName || 'Webbutik'}${order.sellerLegalName ? ` - ${order.sellerLegalName}` : ''}</strong></p>
+    <p><strong>${shopName}${sellerLegalName ? ` - ${sellerLegalName}` : ''}</strong></p>
     <p>Detta är en orderverifikation för bokföring enligt Bokföringslagen (BFL 1999:1078)</p>
     <p>Spara detta dokument i minst 7 år enligt Skatteverkets krav</p>
   </div>

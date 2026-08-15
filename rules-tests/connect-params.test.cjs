@@ -12,7 +12,7 @@
  */
 const path = require('path');
 const LIB = path.join(__dirname, '..', 'functions', 'lib', 'payment');
-const { buildConnectChargeParams, buildRefundParams, summarizeConnectBalance } = require(path.join(LIB, 'connectParams'));
+const { buildConnectChargeParams, buildRefundParams, summarizeConnectBalance, validateRefundRequest, refundStateAfter } = require(path.join(LIB, 'connectParams'));
 
 let pass = 0, fail = 0;
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -183,6 +183,60 @@ console.log('\n=== Connected-account balance summary (Slice B / payout risk) ===
   const balance = { available: [{ amount: 1000, currency: 'sek' }, { amount: 500, currency: 'sek' }], pending: [] };
   const s = summarizeConnectBalance(balance, 'sek');
   ok(s.availableOre === 1500, 'multiple same-currency available entries sum (1500)');
+}
+
+console.log('\n=== Cumulative partial refunds (P1-08, 2026-08-15 audit) ===');
+
+// validateRefundRequest — refunds may only cover what REMAINS.
+{
+  const v = validateRefundRequest(500, 0, 100);
+  ok(v.ok === true && v.remainingSek === 500, 'first partial 100 of 500 → ok, remaining 500');
+}
+{
+  const v = validateRefundRequest(500, 400, 100);
+  ok(v.ok === true && v.remainingSek === 100, 'final partial exactly covers remainder → ok');
+}
+{
+  const v = validateRefundRequest(500, 400, 200);
+  ok(v.ok === false, 'partial LARGER than remainder (200 > 100 left) → rejected');
+}
+{
+  const v = validateRefundRequest(500, 500, 100);
+  ok(v.ok === false && v.remainingSek === 0, 'already fully refunded → any further refund rejected');
+}
+{
+  const v = validateRefundRequest(500, 200, null);
+  ok(v.ok === true && v.remainingSek === 300, 'absent amount after a partial → ok (refund the remainder)');
+}
+{
+  const v = validateRefundRequest(500, 0, -5);
+  ok(v.ok === false, 'negative amount → rejected');
+  const v2 = validateRefundRequest(500, 0, NaN);
+  ok(v2.ok === false, 'NaN amount → rejected');
+}
+
+// refundStateAfter — 'refunded' ONLY when the cumulative total covers the charge.
+{
+  const s = refundStateAfter(500, 0, 100);
+  ok(s.status === 'partially_refunded' && s.isFull === false, 'partial 100/500 → partially_refunded (NOT refunded)');
+  ok(s.refundedTotalSek === 100, 'cumulative total tracked (100)');
+}
+{
+  const s = refundStateAfter(500, 400, 100);
+  ok(s.status === 'refunded' && s.isFull === true, 'second refund completing the total → refunded');
+  ok(s.refundedTotalSek === 500, 'cumulative total = 500');
+}
+{
+  const s = refundStateAfter(500, 0, 500);
+  ok(s.status === 'refunded', 'single full refund → refunded');
+}
+{
+  const s = refundStateAfter(500, 0, 499.999);
+  ok(s.status === 'refunded', 'öre-rounding tolerance: 499.999 of 500 counts as full');
+}
+{
+  const s = refundStateAfter(0, 0, 100);
+  ok(s.status === 'refunded', 'unknown/zero charged amount + successful refund → full (never stranded partial)');
 }
 
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);

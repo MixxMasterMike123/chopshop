@@ -32,9 +32,11 @@ const printProjection_1 = require("./printProjection");
 //    shipped before payment ('paid' is the B2B post-payment status).
 //  - 'ready_for_pickup': pickup orders are handed over by the shop, never
 //    "shipped" by the printer (the printer may still mark them 'printed' earlier).
+// INCLUDES 'partially_refunded' (P1-08): a partial goodwill refund does not
+// cancel the order — the remaining goods still get produced and shipped.
 const ALLOWED_FROM = {
-    printed: ['confirmed', 'processing', 'paid'],
-    shipped: ['confirmed', 'processing', 'paid', 'printed'],
+    printed: ['confirmed', 'processing', 'paid', 'partially_refunded'],
+    shipped: ['confirmed', 'processing', 'paid', 'printed', 'partially_refunded'],
 };
 // Best-effort customer order-status email, sent under the SHOP's identity (shopId
 // threaded → the orchestrator resolves from-name + logo + reply-to). Swallows every
@@ -110,8 +112,25 @@ exports.setPrintJobStatus = (0, https_1.onCall)({
         throw new https_1.HttpsError('permission-denied', 'This order has no POD lines you can fulfil');
     }
     const previousStatus = order.status || 'pending';
+    // Fast pre-check (nice error before any further reads); the TRANSACTION
+    // below re-checks authoritatively against the then-current status (P1-14).
     if (!ALLOWED_FROM[action].includes(previousStatus)) {
         throw new https_1.HttpsError('failed-precondition', `Ordern har status "${previousStatus}" och kan inte markeras som ${action === 'printed' ? 'tryckt' : 'skickad'}.`);
+    }
+    // P1-13: EVERY POD production line (item × slot) must resolve a deliverable
+    // artwork before the order may advance. One resolvable line must not carry an
+    // order whose OTHER line would ship without its print — that triggers customer
+    // "skickad" email for a physically incomplete parcel.
+    //
+    // EXCEPTION: 'shipped' from 'printed' skips the gate — production is already
+    // DONE, and a shop deleting/replacing an artwork after printing must not
+    // strand a physically shipped parcel un-shippable (verifier finding, 2026-08-15).
+    const productionAlreadyDone = action === 'shipped' && previousStatus === 'printed';
+    if (!productionAlreadyDone) {
+        const unresolvedLines = await (0, printProjection_1.findUnresolvedPodLines)(order, mappings, database_1.db);
+        if (unresolvedLines.length > 0) {
+            throw new https_1.HttpsError('failed-precondition', `Ordern har olösta tryckrader och kan inte markeras som ${action === 'printed' ? 'tryckt' : 'skickad'}: ${unresolvedLines.join('; ')}`);
+        }
     }
     // Pickup orders are handed over by the shop — the printer never "ships" them.
     if (action === 'shipped' && order.deliveryMethod === 'pickup') {
@@ -129,31 +148,50 @@ exports.setPrintJobStatus = (0, https_1.onCall)({
     catch {
         // keep the fallback label
     }
-    // Mirror OrderContext.updateOrderStatus: a plain-object statusHistory entry with
-    // a JS Date (arrays can't hold serverTimestamp), appended to the existing array.
-    const statusChange = {
-        from: previousStatus,
-        to: action,
-        changedBy: ctx.uid,
-        changedAt: new Date(),
-        displayName,
-        via: 'setPrintJobStatus',
-    };
-    const update = {
-        status: action,
-        updatedAt: firestore_1.FieldValue.serverTimestamp(),
-        statusHistory: [...(Array.isArray(order.statusHistory) ? order.statusHistory : []), statusChange],
-    };
-    if (action === 'shipped' && trackingNumber) {
-        update.trackingNumber = trackingNumber;
-    }
-    await database_1.db.collection('orders').doc(orderId).update(update);
-    // 'shipped' → send the customer status email (best-effort). 'printed' is an
-    // internal milestone: NO customer email. The reviews onDocumentUpdated trigger
-    // fires automatically on the 'shipped' write — nothing to do here for that.
+    // P1-14 (TOCTOU): the transition is a TRANSACTION — re-read the order and
+    // re-check the from-status against the CURRENT value, then write once. Two
+    // concurrent operators can both pass the pre-check above, but only ONE
+    // commits here; the loser gets a clean failed-precondition instead of
+    // duplicating the history entry and the customer shipment email.
+    const orderRef = database_1.db.collection('orders').doc(orderId);
+    let committedFrom = previousStatus;
+    await database_1.db.runTransaction(async (tx) => {
+        const fresh = await tx.get(orderRef);
+        if (!fresh.exists)
+            throw new https_1.HttpsError('not-found', 'Order not found');
+        const cur = fresh.data();
+        const curStatus = cur.status || 'pending';
+        if (!ALLOWED_FROM[action].includes(curStatus)) {
+            throw new https_1.HttpsError('failed-precondition', `Ordern har status "${curStatus}" och kan inte markeras som ${action === 'printed' ? 'tryckt' : 'skickad'}.`);
+        }
+        committedFrom = curStatus;
+        // Mirror OrderContext.updateOrderStatus: a plain-object statusHistory entry
+        // with a JS Date (arrays can't hold serverTimestamp), appended to the array.
+        const statusChange = {
+            from: curStatus,
+            to: action,
+            changedBy: ctx.uid,
+            changedAt: new Date(),
+            displayName,
+            via: 'setPrintJobStatus',
+        };
+        const update = {
+            status: action,
+            updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            statusHistory: [...(Array.isArray(cur.statusHistory) ? cur.statusHistory : []), statusChange],
+        };
+        if (action === 'shipped' && trackingNumber) {
+            update.trackingNumber = trackingNumber;
+        }
+        tx.update(orderRef, update);
+    });
+    // 'shipped' → send the customer status email (best-effort), AFTER the commit —
+    // only the transaction winner reaches this line, so the email fires exactly
+    // once. 'printed' is an internal milestone: NO customer email. The reviews
+    // onDocumentUpdated trigger fires automatically on the 'shipped' write.
     if (action === 'shipped') {
-        await sendCustomerStatusEmail(orderId, order, previousStatus, action, trackingNumber || undefined);
+        await sendCustomerStatusEmail(orderId, order, committedFrom, action, trackingNumber || undefined);
     }
-    return { success: true, orderId, status: action, from: previousStatus };
+    return { success: true, orderId, status: action, from: committedFrom };
 });
 //# sourceMappingURL=setPrintJobStatus.js.map

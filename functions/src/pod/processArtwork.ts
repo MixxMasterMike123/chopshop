@@ -31,7 +31,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getStorage } from 'firebase-admin/storage';
 import { FieldValue } from 'firebase-admin/firestore';
 import { randomUUID } from 'crypto';
-import sharp from 'sharp';
+import sharp, { type Metadata } from 'sharp';
 import { db } from '../config/database';
 import { appUrls } from '../config/app-urls';
 import { requireAdminOfShop } from '../email-orchestrator/functions/authGuard';
@@ -142,7 +142,7 @@ async function runPipeline(shopId: string, originalStoragePath: string, profile:
   // metadata() only reads headers, so NO pixel limit here — an oversized image
   // must reach the px_too_large branch below (actionable "Skala ner" message),
   // not die in this try as "korrupt fil". Decode ops keep the limit as backstop.
-  let meta: sharp.Metadata;
+  let meta: Metadata;
   try {
     meta = await sharp(buf, { limitInputPixels: false }).metadata();
   } catch (e: any) {

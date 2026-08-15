@@ -3,6 +3,8 @@
  * Formats addresses for 40x60mm labels and handles printing via Web Bluetooth API
  */
 
+import { escapeHtml } from './escapeHtml';
+
 class LabelPrinterService {
   constructor() {
     this.printer = null;
@@ -264,7 +266,7 @@ class LabelPrinterService {
     const html = `<!DOCTYPE html>
 <html>
 <head>
-  <title>Fraktetikett - ${labelData.orderNumber}</title>
+  <title>Fraktetikett - ${escapeHtml(labelData.orderNumber)}</title>
   <meta charset="utf-8">
   <style>
     @page {
@@ -348,20 +350,21 @@ class LabelPrinterService {
 </head>
 <body>
   <div class="order-header">
-    Order: ${labelData.orderNumber}
+    Order: ${escapeHtml(labelData.orderNumber)}
   </div>
-  
+
   <div class="address-section">
     ${labelData.lines.map((line, index) => {
       // Detect postal code + city line
       const isPostalLine = /^\d{5}\s+/.test(line);
       const isCountryLine = line.length <= 8 && line.toUpperCase() === line;
-      
+
       let className = 'address-line';
       if (isPostalLine) className = 'postal-line';
       if (isCountryLine) className = 'country-line';
-      
-      return `<div class="${className}">${line}</div>`;
+
+      // P1-10: address lines are customer-written — escape before interpolation.
+      return `<div class="${className}">${escapeHtml(line)}</div>`;
     }).join('')}
   </div>
 </body>
@@ -442,8 +445,8 @@ class LabelPrinterService {
       
       html += `
         <div class="label">
-          <div class="order-number">Order: ${labelData.orderNumber}</div>
-          ${labelData.lines.map(line => `<div class="address-line">${line}</div>`).join('')}
+          <div class="order-number">Order: ${escapeHtml(labelData.orderNumber)}</div>
+          ${labelData.lines.map(line => `<div class="address-line">${escapeHtml(line)}</div>`).join('')}
         </div>
       `;
     });
