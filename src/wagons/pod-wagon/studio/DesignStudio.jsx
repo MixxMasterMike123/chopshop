@@ -1437,6 +1437,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             onApplyOverrideToColorways={printArtwork(slot)
               ? (cwIds, artId) => setOverrideForColorways(slot, cwIds, artId)
               : null}
+            onApproveAll={() => setReviewedColorways(new Set(selectedColorwayIds))}
           />
         )}
         <StepNav nextLabel="Nästa: Mockuper" nextEnabled={s6done} onNext={() => goStep(7)} hint="Granska varje vald färg" />

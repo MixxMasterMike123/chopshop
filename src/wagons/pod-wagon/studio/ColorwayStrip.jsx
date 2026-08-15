@@ -12,6 +12,7 @@
 //
 // Pure presentational: state (active colourway, overrides) lives in DesignStudio.
 import React, { useEffect, useState } from 'react';
+import { CheckIcon } from '@heroicons/react/24/outline';
 import TemplateBackground, { templateViewBox } from './TemplateBackground';
 import { analyzeArtworkContrast, classifyHexTone } from './contrastGuard';
 import {
@@ -76,12 +77,14 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
  *   reviewedColorwayIds     — Set|array of colourway ids the seller has SEEN (review gate)
  *   colorwayIds             — ids selected in step 5 (omitted = all template colours)
  *   onApplyOverrideToColorways(ids, artworkId) — optional bulk light/dark action
+ *   onApproveAll()          — optional: mark every colour reviewed at once (the
+ *                             guided per-colour path stays primary)
  */
 const ColorwayStrip = ({
   template, slot, activeColorwayId, onSelect, placement,
   resolveArtwork, overrides = {}, onOverrideChange, artworkOptions = [], baseArtworkLabel = 'Standardmotiv',
   reviewedColorwayIds = [], minDpi = null, locked = false, colorwayIds = null,
-  onApplyOverrideToColorways = null,
+  onApplyOverrideToColorways = null, onApproveAll = null,
 }) => {
   const selectedSet = colorwayIds ? new Set(colorwayIds) : null;
   const colorways = (template?.colorways || []).filter((cw) => !selectedSet || selectedSet.has(cw.id));
@@ -121,15 +124,23 @@ const ColorwayStrip = ({
 
   return (
     <div className="mt-4">
-      <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <span className="text-[13px] font-semibold text-admin-text">Färger</span>
+      <div className="mb-1 flex items-baseline justify-between gap-3">
+        <span className="text-[13px] font-semibold text-admin-text">Granska varje färg</span>
         {/* Live review-gate progress — the gate blocks publish, so its state
             must be visible HERE, not first as a scolding in the publish step. */}
-        <span className={`text-[11px] ${allSeen ? 'text-admin-success-text' : 'text-admin-text-muted'}`}>
-          {allSeen
-            ? `Alla ${colorways.length} färger granskade ✓`
-            : `${reviewedCount} av ${colorways.length} färger granskade — klicka på varje färg; det du ser är det som trycks`}
+        <span className={`text-[12px] font-medium ${allSeen ? 'text-admin-success-text' : 'text-admin-text'}`}>
+          {reviewedCount} av {colorways.length} granskade
         </span>
+      </div>
+      <p className="mb-2 text-[12px] text-admin-text-muted">
+        Det du ser är det som trycks. Varje färg måste ses innan du kan gå vidare.
+      </p>
+      {/* Progress bar — glanceable gate state, mirrors the counter above. */}
+      <div className="mb-2 h-1 overflow-hidden rounded-full bg-admin-surface-3" aria-hidden="true">
+        <div
+          className={`h-full rounded-full transition-all ${allSeen ? 'bg-admin-success-dot' : 'bg-admin-info-dot'}`}
+          style={{ width: `${colorways.length ? (reviewedCount / colorways.length) * 100 : 0}%` }}
+        />
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1">
@@ -147,10 +158,12 @@ const ColorwayStrip = ({
               className={`w-[86px] shrink-0 rounded-[var(--radius-admin)] border p-1.5 text-left transition ${
                 isActive
                   ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
+                  : isReviewed
+                  ? 'border-admin-success-dot/50 hover:bg-admin-surface-2'
                   : 'border-admin-border hover:bg-admin-surface-2'
               }`}
             >
-              <div className="overflow-hidden rounded-[6px] bg-admin-surface-2 p-1">
+              <div className="relative overflow-hidden rounded-[6px] bg-admin-surface-2 p-1">
                 <MiniMockup
                   template={template}
                   slot={slot}
@@ -160,6 +173,18 @@ const ColorwayStrip = ({
                   locked={locked}
                   minDpi={minDpi}
                 />
+                {/* Review badge ON the mockup — the same check-circle pattern as
+                    step 5 (ColorSelectionPanel), so "checked" reads identically
+                    across the wizard and can't be missed at chip size. */}
+                {isReviewed && (
+                  <span
+                    className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-admin-success-dot text-white"
+                    title="Granskad"
+                    aria-label="Granskad"
+                  >
+                    <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                  </span>
+                )}
               </div>
               <div className="mt-1 flex items-center gap-1">
                 <span
@@ -167,11 +192,10 @@ const ColorwayStrip = ({
                   style={{ backgroundColor: cw.hex }}
                 />
                 <span className="truncate text-[11px] font-medium text-admin-text">{cw.label}</span>
-                {/* Review gate: a subtle "sedd" tick — reviewed colourways only. */}
-                {isReviewed && (
-                  <span className="shrink-0 text-[11px] leading-none text-admin-success-dot" title="Granskad" aria-label="Granskad">✓</span>
-                )}
               </div>
+              {!isReviewed && (
+                <div className="mt-0.5 text-[11px] font-medium text-admin-caution-text">Ej granskad</div>
+              )}
               {hasOverride && (
                 <div className="mt-0.5 text-[11px] text-admin-info-text">eget motiv</div>
               )}
@@ -181,6 +205,45 @@ const ColorwayStrip = ({
             </button>
           );
         })}
+      </div>
+
+      {/* Guided review: one click per colour, in order. onSelect drives the
+          seen-marking in DesignStudio (the active colourway = seen), so this
+          button IS the review mechanic — no separate approve action to learn.
+          Random access by clicking chips still works. */}
+      <div className="mt-2">
+        {allSeen ? (
+          <p className="flex items-center gap-1.5 text-[13px] font-medium text-admin-success-text">
+            <span className="grid h-5 w-5 place-items-center rounded-full bg-admin-success-dot text-white">
+              <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            </span>
+            Alla {colorways.length} färger granskade
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const next = colorways.find((cw) => !reviewedSet.has(cw.id) && cw.id !== activeColorwayId);
+                if (next) onSelect(next.id);
+              }}
+              className="rounded-[var(--radius-admin-el)] bg-admin-primary px-3.5 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover"
+            >
+              Nästa färg att granska ({colorways.length - reviewedCount} kvar)
+            </button>
+            {/* Shortcut for sellers who trust the combination — deliberately the
+                QUIET secondary so the look-at-each-colour path stays the default. */}
+            {onApproveAll && (
+              <button
+                type="button"
+                onClick={onApproveAll}
+                className="rounded-[var(--radius-admin-el)] border border-admin-border px-3.5 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface-2"
+              >
+                Godkänn alla {colorways.length} färger
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {active && activeContrast?.warning && (
