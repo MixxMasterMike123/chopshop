@@ -12,6 +12,7 @@
 // this stays pure.
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import HelpPopover from './HelpPopover';
 
 const DEFAULT_SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
 
@@ -291,11 +292,16 @@ const PublishPanel = ({
                     </option>
                   ))}
                 </select>
-                <label className={`flex items-center gap-2 text-[13px] ${targetHasSku ? 'cursor-pointer text-admin-text' : 'cursor-not-allowed text-admin-text-muted'}`}>
-                  <input type="checkbox" checked={connectPrint && targetHasSku} disabled={!targetHasSku}
-                    onChange={(e) => setConnectPrint(e.target.checked)} className={checkboxCls} />
-                  Koppla trycket till produkten (krävs för POD-beställningar)
-                </label>
+                <div className="flex items-center gap-0.5">
+                  <label className={`flex items-center gap-2 text-[13px] ${targetHasSku ? 'cursor-pointer text-admin-text' : 'cursor-not-allowed text-admin-text-muted'}`}>
+                    <input type="checkbox" checked={connectPrint && targetHasSku} disabled={!targetHasSku}
+                      onChange={(e) => setConnectPrint(e.target.checked)} className={checkboxCls} />
+                    Koppla trycket för POD-beställningar
+                  </label>
+                  <HelpPopover label="POD-koppling">
+                    Kopplingen talar om för tryckeriet vilket motiv och vilken placering som hör till produktens SKU. Utan koppling läggs bilderna till, men POD-beställningar kan inte skapas automatiskt.
+                  </HelpPopover>
+                </div>
                 {targetProduct && targetHasSku &&
                   products.filter((p) => p.hasSku && p.sku === targetProduct.sku).length > 1 && (
                   <p className="text-[12px] text-admin-caution-text">
@@ -450,7 +456,12 @@ const PublishPanel = ({
                 className={`${inputCls} w-32`}
               />
               <span className="text-admin-text-muted">·</span>
-              <span className="text-[12px] text-admin-text-muted">Marginal</span>
+              <span className="flex items-center gap-0.5 text-[12px] text-admin-text-muted">
+                Marginal
+                <HelpPopover label="Så beräknas marginalen">
+                  Marginalen räknas på priset exklusive moms: vinst delat med pris exklusive moms. Vinsten är priset exklusive moms minus produktionskostnaden.
+                </HelpPopover>
+              </span>
               <input
                 type="number"
                 min="0"

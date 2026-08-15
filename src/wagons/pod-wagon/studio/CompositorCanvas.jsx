@@ -28,6 +28,7 @@
 //   • onPlacementChange — (placement) => void on every move/resize/nudge.
 import React, { useMemo, useRef, useState } from 'react';
 import TemplateBackground, { templateViewBox } from './TemplateBackground';
+import HelpPopover from './HelpPopover';
 import {
   MIN_ART_WIDTH_MM, SNAP_SCREEN_PX, MAX_ROTATION_DEG,
   pxPerMm, isComposable, maxWidthAtMm, maxWidthForRotationMm, maxWidthForDpiMm, clampRotationDeg,
@@ -441,7 +442,12 @@ const CompositorCanvas = ({
             <span className="text-[12px] font-medium text-admin-text">
               {placementReadout(effective, template, slot, artwork)}
             </span>
-            <span className="text-[11px] text-admin-text-muted">Mått inom tryckytan</span>
+            <span className="flex items-center gap-0.5 text-[11px] text-admin-text-muted">
+              Mått inom tryckytan
+              <HelpPopover label="Tryckkvalitet och DPI">
+                DPI visar hur tätt bildens pixlar trycks. Ett större tryck ger lägre DPI. Förminska motivet eller ladda upp en större fil om trycket kan bli suddigt.
+              </HelpPopover>
+            </span>
           </div>
 
           {locked ? (
