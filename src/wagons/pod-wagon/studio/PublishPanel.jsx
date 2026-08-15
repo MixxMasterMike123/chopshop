@@ -13,6 +13,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
+import { sellerProfitExVat, sellerMargin, priceFloor, FEE_RATE, FEE_FIXED } from '../podPricing';
 
 const DEFAULT_SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
 
@@ -59,7 +60,7 @@ const roundUpTo9 = (value) => {
  *                     products (shared library load) — the "Uppdatera befintlig
  *                     produkt" target picker
  *   onUpdateExisting(form) — form = { productId, selectedColorwayIds,
- *                     connectPrint, replaceImages } — attach mockups (+ POD
+ *                     replaceImages } — attach mockups (+ POD
  *                     mappings) to an EXISTING product instead of creating one
  *   initialTargetProductId — preselects target='existing' with this product
  *                     (the ?designFor deep link from the product form)
@@ -104,7 +105,6 @@ const PublishPanel = ({
   // (attach mockups + POD mappings to a product built content-first).
   const [target, setTarget] = useState(initialTargetProductId ? 'existing' : 'new');
   const [targetProductId, setTargetProductId] = useState(initialTargetProductId || '');
-  const [connectPrint, setConnectPrint] = useState(true);   // mappings = printability
   const [replaceImages, setReplaceImages] = useState(false); // never silently replace
   const [margin, setMargin] = useState('40');
   const [sizes, setSizes] = useState(DEFAULT_SIZES);
@@ -141,23 +141,26 @@ const PublishPanel = ({
     const m = parseFloat(margin);
     if (cost == null || !(m >= 0)) return;
     const target = cost * (1 + m / 100) * (1 + vatRate);
-    setPrice(String(roundUpTo9(target)));
+    // Never suggest below break-even — the floor wins over a low margin target.
+    setPrice(String(Math.max(roundUpTo9(target), floor ?? 0)));
   };
 
-  // Profit/margin for a given inkl-moms price (ex moms − cost).
-  const profitFor = (inklMoms) => {
-    if (cost == null || !(inklMoms > 0)) return null;
-    return inklMoms / (1 + vatRate) - cost;
-  };
-  const marginFor = (inklMoms) => {
-    const exMoms = inklMoms > 0 ? inklMoms / (1 + vatRate) : 0;
-    const p = profitFor(inklMoms);
-    if (p == null || !(exMoms > 0)) return null;
-    return p / exMoms;
-  };
+  // Seller profit/margin (fee-aware, exkl. moms) + the break-even PRICE FLOOR —
+  // the single podPricing source, so Studio, product edit and Kent's brief agree.
+  const profitFor = (inklMoms) => sellerProfitExVat(inklMoms, cost ?? NaN, vatRate);
+  const marginFor = (inklMoms) => sellerMargin(inklMoms, cost ?? NaN, vatRate);
+  const floor = cost == null ? null : priceFloor(cost, vatRate);
 
   const validName = name.trim().length > 0;
-  const validPrice = priceNum > 0;
+  const validPrice = priceNum > 0 && (floor == null || priceNum >= floor);
+  // Per-colourway override prices must respect the floor too — an override row
+  // below break-even would undercut the platform's base revenue on that colour.
+  const belowFloorColorways = floor == null ? [] : selectedColorways.filter((c) => {
+    const rp = (rowPrices[c.id] || '').trim();
+    if (rp === '') return false;
+    const n = parseFloat(rp);
+    return Number.isFinite(n) && n > 0 && n < floor;
+  });
   const hasColorways = selectedColorwayIds.length > 0;
   // A colour with EVERY size unchecked is almost always an accident — block it
   // (Codex/impeccable 2026-08-15). But an EMPTY global size list is the
@@ -175,12 +178,15 @@ const PublishPanel = ({
   // Success + validity gates. Review is the LAST gate — everything else keeps its
   // priority so the hint only surfaces once the form is otherwise publishable.
   const canPublish =
-    !publishing && validName && validPrice && hasColorways && hasArtwork && !!shopId && allReviewed && !anySizeless;
+    !publishing && validName && validPrice && hasColorways && hasArtwork && !!shopId && allReviewed && !anySizeless && belowFloorColorways.length === 0;
 
   const targetProduct = products.find((p) => p.id === targetProductId) || null;
   const targetHasSku = Boolean(targetProduct?.hasSku);
+  const targetSkuConflict = Boolean(
+    targetProduct?.sku && products.some((p) => p.id !== targetProduct.id && p.hasSku && p.sku === targetProduct.sku)
+  );
   const canUpdate =
-    !publishing && !!targetProductId && hasColorways && hasArtwork && !!shopId && allReviewed;
+    !publishing && !!targetProductId && targetHasSku && !targetSkuConflict && hasColorways && hasArtwork && !!shopId && allReviewed;
 
   const publishBlocker = (() => {
     if (!shopId) return 'Välj en butik och öppna Designstudion från butikens admin.';
@@ -188,9 +194,18 @@ const PublishPanel = ({
     if (!hasColorways) return 'Gå tillbaka och välj minst en färg.';
     if (!allReviewed) return `Gå tillbaka till Godkänn och granska ${unreviewedColorways.map((c) => c.label).join(', ')}.`;
     if (target === 'existing' && !targetProductId) return 'Välj produkten som ska uppdateras.';
+    if (target === 'existing' && !targetHasSku) return 'Ge produkten en unik SKU under Produkter och försök igen.';
+    if (target === 'existing' && targetSkuConflict) return `SKU ”${targetProduct.sku}” används av flera produkter. Ge varje produkt en unik SKU under Produkter.`;
     if (target === 'new' && !validName) return 'Ange ett produktnamn.';
     if (target === 'new' && anySizeless) return 'Välj minst en storlek för varje färg.';
-    if (target === 'new' && !validPrice) return 'Ange ett pris större än 0 kr.';
+    if (target === 'new' && !validPrice) {
+      return floor != null && priceNum > 0 && priceNum < floor
+        ? `Priset måste vara minst prisgolvet ${floor} kr — under det tjänar du 0 kr.`
+        : 'Ange ett pris större än 0 kr.';
+    }
+    if (target === 'new' && belowFloorColorways.length > 0) {
+      return `Priset för ${belowFloorColorways.map((c) => c.label).join(', ')} ligger under prisgolvet ${floor} kr.`;
+    }
     return null;
   })();
 
@@ -199,8 +214,6 @@ const PublishPanel = ({
     onUpdateExisting?.({
       productId: targetProductId,
       selectedColorwayIds,
-      // Print connection needs a product SKU to key the mappings on.
-      connectPrint: connectPrint && targetHasSku,
       replaceImages,
     });
   };
@@ -238,6 +251,9 @@ const PublishPanel = ({
       <p className="text-[13px] text-admin-text-muted">
         Kontrollera uppgifterna nedan. En ny produkt blir köpbar direkt när du skapar den.
       </p>
+      <div className="mt-3 rounded-[var(--radius-admin-el)] bg-admin-success-bg px-3 py-2 text-[12px] text-admin-success-text">
+        Tryckkoppling ingår. Motivet och placeringen kopplas automatiskt till just den här produkten och följer med till Printkön vid beställning.
+      </div>
 
       {mockups.length === 0 ? (
         <p className="mt-3 text-[12px] text-admin-text-muted">Generera mockuper först.</p>
@@ -292,28 +308,14 @@ const PublishPanel = ({
                     </option>
                   ))}
                 </select>
-                <div className="flex items-center gap-0.5">
-                  <label className={`flex items-center gap-2 text-[13px] ${targetHasSku ? 'cursor-pointer text-admin-text' : 'cursor-not-allowed text-admin-text-muted'}`}>
-                    <input type="checkbox" checked={connectPrint && targetHasSku} disabled={!targetHasSku}
-                      onChange={(e) => setConnectPrint(e.target.checked)} className={checkboxCls} />
-                    Koppla trycket för POD-beställningar
-                  </label>
-                  <HelpPopover label="POD-koppling">
-                    Kopplingen talar om för tryckeriet vilket motiv och vilken placering som hör till produktens SKU. Utan koppling läggs bilderna till, men POD-beställningar kan inte skapas automatiskt.
-                  </HelpPopover>
-                </div>
-                {targetProduct && targetHasSku &&
-                  products.filter((p) => p.hasSku && p.sku === targetProduct.sku).length > 1 && (
-                  <p className="text-[12px] text-admin-caution-text">
-                    Fler produkter delar SKU ”{targetProduct.sku}” — tryckkopplingen gäller
-                    ALLA produkter med det SKU:t. Ge produkterna unika SKU:n om de ska
-                    tryckas olika.
+                {targetProduct && targetSkuConflict && (
+                  <p className="text-[12px] text-admin-critical-text">
+                    Flera produkter delar SKU ”{targetProduct.sku}”. De kan därför inte ha olika motiv. Ge varje produkt en unik SKU under Produkter innan du fortsätter.
                   </p>
                 )}
                 {targetProduct && !targetHasSku && (
                   <p className="text-[12px] text-admin-caution-text">
-                    Produkten saknar SKU — bilderna läggs till, men trycket kan inte kopplas.
-                    Ge produkten ett SKU under Produkter först.
+                    Produkten saknar SKU. Ge den en unik SKU under Produkter innan du fortsätter.
                   </p>
                 )}
                 <label className="flex cursor-pointer items-center gap-2 text-[13px] text-admin-text">
@@ -459,7 +461,7 @@ const PublishPanel = ({
               <span className="flex items-center gap-0.5 text-[12px] text-admin-text-muted">
                 Marginal
                 <HelpPopover label="Så beräknas marginalen">
-                  Marginalen räknas på priset exklusive moms: vinst delat med pris exklusive moms. Vinsten är priset exklusive moms minus produktionskostnaden.
+                  Vinsten är priset exklusive moms minus produktionskostnaden och transaktionsavgiften ({Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr på slutpriset). Marginalen är vinsten delad med priset exklusive moms. Prisgolvet är där vinsten blir 0 kr.
                 </HelpPopover>
               </span>
               <input
@@ -483,8 +485,18 @@ const PublishPanel = ({
                 Sätt pris från marginal
               </button>
             </div>
+            {floor != null && (
+              <p className="mt-1 text-[12px] text-admin-text-muted">
+                Prisgolv: <span className="font-medium text-admin-text">{floor} kr</span> — vid det priset tjänar du 0 kr
+                (produktionskostnad {fmtSek(cost)} kr + avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr är inräknade).
+              </p>
+            )}
             {!validPrice && (
-              <p className="mt-1 text-[12px] text-admin-caution-text">Ange ett pris större än 0.</p>
+              <p className="mt-1 text-[12px] text-admin-caution-text">
+                {floor != null && priceNum > 0 && priceNum < floor
+                  ? `Priset måste vara minst prisgolvet ${floor} kr.`
+                  : 'Ange ett pris större än 0.'}
+              </p>
             )}
 
             {/* Per-colourway pricing table */}
@@ -517,7 +529,7 @@ const PublishPanel = ({
                             aria-label={`Pris för ${c.label}`}
                             onChange={(e) => setRowPrices((prev) => ({ ...prev, [c.id]: e.target.value }))}
                             placeholder={validPrice ? fmtSek(priceNum) : '—'}
-                            className={`${smallInputCls} w-24`}
+                            className={`${smallInputCls} w-24 ${floor != null && rp !== '' && parseFloat(rp) > 0 && parseFloat(rp) < floor ? 'border-admin-critical-dot' : ''}`}
                           />
                         </td>
                         <td className="px-2 py-1.5 text-admin-text-muted">{fmtKr(profitFor(effective))}</td>
@@ -541,19 +553,12 @@ const PublishPanel = ({
             <div className="rounded-[var(--radius-admin)] border border-admin-success-dot/40 bg-admin-success-bg px-4 py-3">
               <p className="text-[13px] font-medium text-admin-success-text">
                 {result.updated
-                  ? `Produkten ”${result.name}” uppdaterades med dina mockuper${result.connected ? ' och trycket kopplades' : ''}.`
+                  ? `Produkten ”${result.name}” uppdaterades med dina mockuper och trycket kopplades automatiskt.`
                   : `Produkten ”${result.name}” skapades.`}
               </p>
               <p className="mt-1 text-[12px] text-admin-success-text">
                 {result.sku ? `SKU: ${result.sku} · ` : ''}den är {result.updated ? 'uppdaterad' : 'nu LIVE'} i butiken.
               </p>
-              {result.skippedOverrides?.length > 0 && (
-                <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
-                  Obs: eget motiv för {result.skippedOverrides.join(', ')} kunde INTE kopplas
-                  (ingen variant med matchande namn på produkten) — de färgerna trycks med
-                  standardmotivet. Kontrollera under Produktkoppling.
-                </p>
-              )}
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 <Link to="/admin/products" className="text-[12px] font-medium text-admin-info-text hover:underline">
                   Öppna Produkter

@@ -20,11 +20,8 @@ import { loadPodProfiles, getProfileById } from '../../../config/podProfiles';
 import { readImageDimensions, uploadPodOriginal, extOf, sha256Hex } from '../../../utils/podUpload';
 import { gateArtwork, normalizeExt } from '../../../utils/podValidation';
 import { createArtwork, replaceArtworkFile } from '../../../utils/podArtwork';
-import { setMapping } from '../../../utils/podMappings';
-import { POD_SLOTS, slotLabel } from '../../../config/podSlots';
 import { auth, functions } from '../../../firebase/config';
 import { tierTone, tierLabel } from './podTier';
-import PodProductPicker from './PodProductPicker';
 
 // Checkerboard behind the preview so all-white/light motifs read as motifs, not
 // as "empty" (spec §8 Färg) — and so transparency is visibly transparent.
@@ -40,7 +37,7 @@ const CHECKER_STYLE = {
 // artwork's, confirming updates that doc in place (same id → all products +
 // unshipped queue orders get the new file); no post-upload mapping prompt.
 // `artwork`: the shop's existing library (duplicate detection via sha256).
-const ArtworkUploadModal = ({ shopId, products = [], artwork = [], onClose, onCreated, replaceTarget = null }) => {
+const ArtworkUploadModal = ({ shopId, artwork = [], onClose, onCreated, onUseInStudio, replaceTarget = null }) => {
   const isReplace = !!replaceTarget;
   const [profiles, setProfiles] = useState([]);
   const [profileId, setProfileId] = useState('');
@@ -54,13 +51,9 @@ const ArtworkUploadModal = ({ shopId, products = [], artwork = [], onClose, onCr
   const [serverReject, setServerReject] = useState(null); // [{code,message}] from the authoritative gate
   const [notices, setNotices] = useState([]);             // server notices after PASS
 
-  // Post-upload "koppla nu?" step. NEVER blocks — the artwork is already saved.
+  // Successful uploads lead into Studio; product-specific mappings are created
+  // automatically only when the design is published.
   const [createdArtworkId, setCreatedArtworkId] = useState(null);
-  const [mapSku, setMapSku] = useState('');
-  const [mapSlot, setMapSlot] = useState('front');
-  const [mapPlacement, setMapPlacement] = useState('');
-  const [manualSku, setManualSku] = useState(false);
-  const [mapping, setMappingSaving] = useState(false);
 
   useEffect(() => {
     loadPodProfiles().then((p) => {
@@ -215,25 +208,6 @@ const ArtworkUploadModal = ({ shopId, products = [], artwork = [], onClose, onCr
     }
   };
 
-  const handleMap = async () => {
-    if (mapping) return;
-    const cleanSku = mapSku.trim();
-    if (!cleanSku) { toast.error('Välj en produkt eller ange en SKU.'); return; }
-    setMappingSaving(true);
-    try {
-      const { replaced } = await setMapping({
-        shopId, sku: cleanSku, artworkId: createdArtworkId, profileId: profile?.id || null,
-        placement: mapPlacement, placementSlot: mapSlot,
-      });
-      toast.success(replaced ? `Ersatte tidigare koppling för ${slotLabel(mapSlot)}` : 'Koppling sparad');
-      onCreated?.();
-      onClose?.();
-    } catch (e) {
-      toast.error(e?.message || 'Kunde inte spara kopplingen.');
-      setMappingSaving(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
@@ -242,7 +216,7 @@ const ArtworkUploadModal = ({ shopId, products = [], artwork = [], onClose, onCr
       >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-[15px] font-semibold">
-            {createdArtworkId ? 'Koppla till en produkt nu?' : isReplace ? 'Ersätt fil' : 'Ladda upp original'}
+            {createdArtworkId ? 'Original sparat' : isReplace ? 'Ersätt fil' : 'Ladda upp original'}
           </h2>
           <button onClick={onClose} className="text-admin-text-faint hover:text-admin-text">
             <XMarkIcon className="h-5 w-5" />
@@ -258,55 +232,22 @@ const ArtworkUploadModal = ({ shopId, products = [], artwork = [], onClose, onCr
                 ))}
               </ul>
             )}
-            {products.length === 0 ? (
-              <>
-                <p className="text-[13px] text-admin-text-muted">
-                  Du har inga produkter ännu — koppla originalet senare under Produktkoppling.
-                </p>
-                <div className="flex justify-end">
-                  <Button variant="primary" onClick={onClose}>Stäng</Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-[13px] text-admin-text-muted">
-                  Ett original måste kopplas till en produkt innan ordrar kan nå tryckeriet.
-                  Du kan göra det nu eller senare under Produktkoppling.
-                </p>
-                {profile && ['poster_large', 'sticker_diecut', 'mug_wrap'].includes(profile.id) && (
-                  <p className="text-[12px] text-admin-text-faint">
-                    Detta original är av typen <span className="font-medium">{profile.label}</span> — kontrollera att
-                    du kopplar det till rätt sorts produkt.
-                  </p>
-                )}
-                <Field label="Produkt" htmlFor="pod-map-pick-product">
-                  <PodProductPicker
-                    products={products}
-                    value={mapSku}
-                    onChange={setMapSku}
-                    manual={manualSku}
-                    onToggleManual={setManualSku}
-                    idPrefix="pod-map-pick"
-                  />
-                </Field>
-                <Field label="Placering" htmlFor="pod-map-slot">
-                  <Select id="pod-map-slot" value={mapSlot} onChange={(e) => setMapSlot(e.target.value)}>
-                    {POD_SLOTS.map((s) => (
-                      <option key={s.id} value={s.id}>{s.label}</option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Detalj (valfritt)" htmlFor="pod-map-place">
-                  <Input id="pod-map-place" value={mapPlacement} onChange={(e) => setMapPlacement(e.target.value)} placeholder="t.ex. Centrerat på bröstet, 25 cm" />
-                </Field>
-                <div className="flex justify-end gap-2 pt-1">
-                  <Button variant="secondary" onClick={onClose}>Senare</Button>
-                  <Button variant="primary" onClick={handleMap} disabled={mapping}>
-                    {mapping ? 'Kopplar…' : 'Koppla'}
-                  </Button>
-                </div>
-              </>
+            <p className="text-[13px] text-admin-text-muted">
+              Originalet finns nu i biblioteket. Välj det i Designstudion; motiv och placering kopplas automatiskt till produkten när du publicerar.
+            </p>
+            {profile && ['poster_large', 'sticker_diecut', 'mug_wrap'].includes(profile.id) && (
+              <p className="text-[12px] text-admin-text-faint">
+                Originalets tryckprofil är <span className="font-medium">{profile.label}</span>. Välj en produkt som passar den profilen.
+              </p>
             )}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="secondary" onClick={onClose}>Stäng</Button>
+              {onUseInStudio && (
+                <Button variant="primary" onClick={() => { onClose?.(); onUseInStudio(); }}>
+                  Fortsätt till Designstudion
+                </Button>
+              )}
+            </div>
           </div>
         ) : (
         <>

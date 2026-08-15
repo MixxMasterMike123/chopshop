@@ -2,12 +2,12 @@
 
 POD is **one add-on among many** — the platform is not POD-exclusive. It is enabled
 **per shop** through the existing add-on (wagon) system. A shop owner who enables it
-can upload their own print artwork, validate it against print specs, map artwork to a
-product SKU, and an external print shop downloads print-ready files + production
+can upload their own print artwork, validate it against print specs, publish a product
+through Design Studio with its print connection created automatically, and an external print shop downloads print-ready files + production
 metadata per order.
 
-Out of scope (separate builds): design/placement canvas editor, customer-facing
-upload, automated printer-API fulfilment + tracking.
+Out of scope (separate builds): customer-facing product customization/upload and
+automated printer-API fulfilment + tracking.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ upload, automated printer-API fulfilment + tracking.
 | Print profiles (config) | `settings/podProfiles` + `src/config/podProfiles.js` (cached loader) + `scripts/seed-pod-profiles.cjs` | 4 **provisional** profiles. Thresholds derive from this doc — change size/DPI/formats in config → validation changes, no code. Seeded by an Admin-SDK script (settings write is platform-only). |
 | Artwork library | `src/utils/podUpload.js`, `src/utils/podArtwork.js`, `src/wagons/pod-wagon/components/ArtworkLibrary.jsx` + `ArtworkUploadModal.jsx` | Originals stored **byte-for-byte** at `pod-artwork/{shopId}/originals/…` (NEVER through `imageUpload.js` compression). A separate ~800px webp preview is generated for the UI. |
 | Validation engine | `src/utils/podValidation.js` (pure fn) | 3-tier PASS/WARN/FAIL + effective DPI. **Advisory** — WARN/FAIL never blocks; the printer decides. |
-| SKU→artwork mapping | `src/utils/podMappings.js`, `…/ProductMapping.jsx` | `podMappings/{id}` keyed `(shopId, sku)`. **Products are a separate entity — never edited.** |
+| SKU→artwork mapping | `src/utils/podMappings.js`, Design Studio, `…/ProductMapping.jsx` | `podMappings/{id}` keyed `(shopId, sku, placementSlot)`. Design Studio creates these automatically on publish; the manual UI is an advanced repair path. **Products are a separate entity.** |
 | Print-shop access | `functions/src/print/` callables + `print.*` surface (`src/pages/print/`, `PrintShopRoute`, `PrintShopLayout`) + `PlatformPrinters` | See **Print-shop = callable projection** below. |
 
 ## LEGAL FIREWALL (non-negotiable)
@@ -28,9 +28,9 @@ withdrawal. `isPersonalized` (in `src/utils/withdrawal.js` + Checkout + the serv
 re-derivation in `createPaymentIntent.ts`) removes withdrawal and is **only** for
 customer-supplied input, which this add-on does not do.
 
-**No POD code path reads or writes `isPersonalized`.** The design never touches
-products, the cart, or checkout, so the firewall is structural, not a convention.
-(The only mention of `isPersonalized` in POD code is a documentation comment.)
+Design Studio explicitly writes `isPersonalized: false` on every product it creates.
+The buyer never supplies artwork in this flow, so the cart and checkout keep the
+ordinary withdrawal-right behavior.
 
 ## The order ↔ artwork join (products stay separate)
 
@@ -45,6 +45,13 @@ deletes a mapped artwork, the join breaks — so breakage is made **visible** (n
 silent printer-no-file): `ProductMapping.jsx` flags orphaned rows; `getPrintJob`
 returns the line with `artwork:{unresolved:true,reason}`; `deleteArtwork` soft-guards
 against still-mapped artwork.
+
+Normal sellers never create this bridge manually. Publishing a new or existing
+product from Design Studio upserts one mapping per print position, plus any
+colour-specific override mappings. Existing products must have a unique SKU;
+missing or shared SKUs block Studio publishing so two products cannot resolve to
+the same artwork. The manual mapping view remains under **Avancerat** for legacy
+products and repair only.
 
 ## Print-shop = callable projection (zero direct DB/Storage access)
 

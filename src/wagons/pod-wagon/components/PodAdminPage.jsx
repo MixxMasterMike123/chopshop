@@ -1,8 +1,7 @@
 // PodAdminPage — the admin surface for the Print on Demand add-on.
 //
-// Two sections, switched by a simple tab:
-//   • Original (Slice 3): the artwork library — upload + validate print files.
-//   • Produktkoppling (Slice 4): map a validated artwork → product SKU + placement.
+// Three sections, switched by a simple tab. Studio owns the normal product→print
+// connection; the manual mapping surface remains under Avancerat for legacy repair.
 //
 // Design: wraps <AppLayout> (REQUIRED — an admin page without it loses the menu)
 // on the Admin-Neutral design system (Page / CardSection / Button + admin-* tokens).
@@ -12,9 +11,8 @@
 // useShopFeatures() defensively and useShopId() to scope all data to the shop.
 import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import AppLayout from '../../../components/layout/AppLayout';
-import { Page, CardSection, Button } from '../../../components/admin/ui';
+import { Page, CardSection } from '../../../components/admin/ui';
 import { useShopId } from '../../../contexts/ShopContext';
 import { useShopFeatures } from '../../../contexts/ShopFeaturesContext';
 import ArtworkLibrary from './ArtworkLibrary';
@@ -36,27 +34,9 @@ const ProvisionalBanner = () => (
 
 const TABS = [
   { key: 'library', label: 'Original' },
-  { key: 'mapping', label: 'Produktkoppling' },
   { key: 'studio', label: 'Studio' },
+  { key: 'mapping', label: 'Avancerat' },
 ];
-
-// UnmappedBanner — LOUD page-level alert (visible on ANY tab). An unmapped original
-// means orders for it never reach the print queue, so this must be impossible to
-// miss. Reuses the provisional-banner amber pattern. Hidden when count is 0.
-const UnmappedBanner = ({ count, onFix }) => {
-  if (!count) return null;
-  return (
-    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-[var(--radius-admin)] border border-admin-caution-dot/30 bg-admin-caution-bg px-4 py-3 text-[13px] text-admin-caution-text">
-      <ExclamationTriangleIcon className="h-5 w-5 shrink-0" />
-      <span className="min-w-0 flex-1">
-        <span className="font-semibold">{count} original</span> är inte kopplade till någon
-        produkt — de skickas <span className="font-semibold">ALDRIG</span> till tryckeriet
-        förrän de kopplas.
-      </span>
-      <Button variant="secondary" onClick={onFix}>Koppla nu</Button>
-    </div>
-  );
-};
 
 const PodAdminPage = () => {
   const shopId = useShopId();
@@ -65,17 +45,16 @@ const PodAdminPage = () => {
   // opens the STUDIO tab with that product preselected as publish target.
   const [searchParams] = useSearchParams();
   const designForProductId = searchParams.get('designFor') || null;
-  const [tab, setTab] = useState(designForProductId ? 'studio' : 'library');
-  // When set, the mapping tab preselects this original in its add-row.
-  const [prefillArtworkId, setPrefillArtworkId] = useState(null);
-
+  // ?tab= deep link (the product form's live-gate banner links straight to the
+  // Avancerat repair surface); ?designFor= wins — it targets the Studio.
+  const requestedTab = searchParams.get('tab');
+  const [tab, setTab] = useState(
+    designForProductId ? 'studio'
+      : TABS.some((tDef) => tDef.key === requestedTab) ? requestedTab
+      : 'library'
+  );
   // ONE shared load for the banner + both tabs (no per-tab duplicate reads).
   const lib = usePodLibrary(shopId);
-
-  const jumpToMapping = (artworkId = null) => {
-    setPrefillArtworkId(artworkId);
-    setTab('mapping');
-  };
 
   // Defensive: the route guard already blocks a non-entitled shop, but never
   // render the tooling if the add-on is off (belt-and-suspenders).
@@ -97,8 +76,6 @@ const PodAdminPage = () => {
     <AppLayout>
       <Page title="Print on demand">
         <ProvisionalBanner />
-
-        <UnmappedBanner count={lib.unmappedArtwork.length} onFix={() => jumpToMapping(null)} />
 
         {/* Tab switch */}
         <div className="mb-4 flex gap-1">
@@ -126,12 +103,10 @@ const PodAdminPage = () => {
             shopId={shopId}
             artwork={lib.artwork}
             profiles={lib.profiles}
-            products={lib.products}
             mappings={lib.mappings}
-            mappedArtworkIds={lib.mappedArtworkIds}
             loading={lib.loading}
             onChanged={lib.refresh}
-            onMapArtwork={(artworkId) => jumpToMapping(artworkId)}
+            onUseInStudio={() => setTab('studio')}
           />
         )}
         {tab === 'mapping' && (
@@ -144,7 +119,6 @@ const PodAdminPage = () => {
             productSkus={lib.productSkus}
             loading={lib.loading}
             onChanged={lib.refresh}
-            prefillArtworkId={prefillArtworkId}
           />
         )}
         {/* The studio stays MOUNTED across tab switches (hidden with CSS, not

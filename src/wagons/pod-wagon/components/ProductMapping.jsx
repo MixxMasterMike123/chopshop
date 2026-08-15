@@ -3,7 +3,7 @@
 // renames — surface breakage): a mapping whose SKU no longer matches any current
 // product, or whose artworkId no longer resolves, is flagged so the seller fixes it
 // before an order silently arrives with no file.
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { TrashIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { CardSection, Button, Field, Input, Select } from '../../../components/admin/ui';
@@ -31,7 +31,6 @@ const ProductMapping = ({
   productSkus = new Set(),
   loading = false,
   onChanged,
-  prefillArtworkId,
 }) => {
   const [saving, setSaving] = useState(false);
 
@@ -43,12 +42,6 @@ const ProductMapping = ({
   const [manualSku, setManualSku] = useState(false); // freetext escape hatch (variant SKUs)
 
   const refresh = () => onChanged?.();
-
-  // When jumped here from the library's "Koppla…" action, preselect that original
-  // so the seller lands with the add-row primed (they just pick the product).
-  useEffect(() => {
-    if (prefillArtworkId) setArtworkId(prefillArtworkId);
-  }, [prefillArtworkId]);
 
   const artworkById = (id) => artwork.find((a) => a.id === id) || null;
   const purposeLabel = (id) => getProfileById(profiles, id)?.label || id;
@@ -104,11 +97,10 @@ const ProductMapping = ({
   const selectableArtwork = artwork;
 
   return (
-    <CardSection title="Produktkoppling">
+    <CardSection title="Manuella tryckkopplingar">
       <p className="mb-3 text-[13px] text-admin-text-muted">
-        Koppla ett original till en produkt-SKU (eller variant-SKU) och ange placering.
-        När en order kommer in hämtar tryckeriet rätt original via SKU:n. Produkterna
-        själva ändras inte.
+        Designstudion kopplar motiv och placering automatiskt när en produkt skapas eller uppdateras.
+        Använd bara den här avancerade vyn för att reparera en äldre produkt eller koppla en produkt som inte skapats i Designstudion.
       </p>
 
       {/* Add-row form. A product can carry SEVERAL originals — one per placering

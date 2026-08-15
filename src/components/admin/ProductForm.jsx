@@ -68,6 +68,8 @@ import 'react-quill/dist/quill.snow.css';
 import SortableImageGallery from './SortableImageGallery';
 import { withShopId } from '../../config/withShopId';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
+import { listMappings } from '../../utils/podMappings';
+import { priceFloor, FEE_RATE, FEE_FIXED } from '../../wagons/pod-wagon/podPricing';
 import { CardSection, RightRail, Button } from './ui';
 import { skuFromName, uniqueSku } from '../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../utils/variantDerivation';
@@ -223,6 +225,12 @@ const emptyForm = () => ({
   // b2c: live storefront query filter. b2b: wholesale-catalog filter (B2B
   // add-on). Both default-ON: a product without the key is available.
   availability: { b2c: true, b2b: true },
+  // POD marker: a print-on-demand product MUST have a print connection
+  // (podMappings row for its SKU) before it may go live in the storefront —
+  // an unconnected POD product would take orders the printer never sees.
+  // Stamped true by Design Studio on publish; editable here to mark legacy
+  // products created before the automatic flow.
+  isPodProduct: false,
   descriptions: { b2c: '', b2cMoreInfo: '' },
   // Right-of-withdrawal (POD). A "personalized" / made-to-order product (buyer
   // supplies own image/text/measurements) is a specialtillverkad vara → consumer
@@ -289,6 +297,7 @@ const formFromProduct = (p) => ({
     ? new Date(p.launchDate.toDate ? p.launchDate.toDate() : p.launchDate).toISOString().slice(0, 16)
     : '',
   availability: { b2c: p.availability?.b2c !== false, b2b: p.availability?.b2b !== false },
+  isPodProduct: p.isPodProduct === true,
   // Right-of-withdrawal: default false (a normal product retains 14-day withdrawal).
   isPersonalized: p.isPersonalized === true,
   sizeGuide: p.sizeGuide || '',
@@ -334,6 +343,34 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   // non-B2B shop simply never sees the extra field.
   const { isEnabled } = useShopFeatures();
   const b2bEnabled = isEnabled('b2b');
+  const podEnabled = isEnabled('pod');
+
+  // ── POD live-gate state ────────────────────────────────────────────────────
+  // The SKUs that have a print connection (podMappings). null = not loaded yet.
+  // Connection is checked against the SAVED product's SKUs (mappings key on what
+  // is in the database, not on unsaved form edits).
+  const [podMappingSkus, setPodMappingSkus] = useState(null);
+  useEffect(() => {
+    if (!podEnabled || !shopId) return;
+    let alive = true;
+    listMappings(shopId)
+      .then((ms) => { if (alive) setPodMappingSkus(new Set(ms.map((m) => m.sku).filter(Boolean))); })
+      .catch(() => { if (alive) setPodMappingSkus(new Set()); });
+    return () => { alive = false; };
+  }, [podEnabled, shopId]);
+  const savedPodSkus = product
+    ? [product.sku, ...(Array.isArray(product.variantGroups) ? product.variantGroups.map((g) => g?.sku) : [])].filter(Boolean)
+    : [];
+  const podConnected = savedPodSkus.some((sku) => podMappingSkus?.has(sku));
+  // Gate: a POD product without a connection can be SAVED but never LIVE.
+  // (Only asserted once mappings have loaded — no false alarm during the fetch.)
+  const podGateActive = podEnabled && formData.isPodProduct && podMappingSkus !== null && !podConnected;
+  // Break-even price floor (podPricing.js) — computable when the Studio stamped
+  // the template's cost on the product. Legacy POD products without the stamp
+  // simply get no floor here (the Studio enforces it on their next publish).
+  const podFloor = podEnabled && formData.isPodProduct && Number.isFinite(product?.podCostSek)
+    ? priceFloor(product.podCostSek)
+    : null;
 
   // Main B2C image.
   const [mainImageFile, setMainImageFile] = useState(null);
@@ -606,6 +643,23 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
       return;
     }
 
+    // POD price floor (break-even, podPricing.js): a price below it means the
+    // seller LOSES money on every sale — block, name the floor, name the fix.
+    if (podFloor != null) {
+      const mainPrice = parseFloat(formData.price) || 0;
+      if (mainPrice > 0 && mainPrice < podFloor) {
+        toast.error(`Priset ${mainPrice} kr ligger under prisgolvet ${podFloor} kr — vid golvet tjänar du 0 kr. Höj priset.`);
+        return;
+      }
+      const lowGroups = (formData.variantGroups || [])
+        .filter((g) => String(g?.price ?? '').trim() !== '' && parseFloat(g.price) > 0 && parseFloat(g.price) < podFloor)
+        .map((g) => g.label || g.sku || 'variant');
+      if (lowGroups.length > 0) {
+        toast.error(`Priset för ${lowGroups.join(', ')} ligger under prisgolvet ${podFloor} kr.`);
+        return;
+      }
+    }
+
     // SKU is the lookup key (URL/cart/checkout/POD). Guarantee a non-empty,
     // per-shop-UNIQUE SKU before saving — auto-derive from the title if the
     // field is empty; block save only if there's no title to derive from.
@@ -739,8 +793,15 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
         imageUrl: mainImageUrl || formData.imageUrl || '',
         b2cImageUrl: mainImageUrl || '',
         b2cImageGallery: gallery,
+        // POD marker — always written so unchecking persists.
+        isPodProduct: formData.isPodProduct === true,
         availability: {
-          b2c: formData.availability.b2c !== false,
+          // LIVE-GATE (enforced at save, not only in the UI): an unconnected POD
+          // product is never written live. podMappingSkus === null (load raced
+          // the save) counts as unconnected — fail CLOSED, the seller can re-save
+          // once the connection exists.
+          b2c: formData.availability.b2c !== false
+            && !(podEnabled && formData.isPodProduct === true && !podConnected),
           // Only carry the b2b availability flag for B2B shops, so a non-B2B
           // shop's products never gain a stray key.
           ...(b2bEnabled ? { b2b: formData.availability.b2b !== false } : {}),
@@ -784,6 +845,9 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
         toast.success('Produkt uppdaterad');
       }
 
+      if (formData.availability.b2c !== false && podEnabled && formData.isPodProduct === true && !podConnected) {
+        toast('Sparad som utkast — produkten visas i webbshoppen först när tryckkopplingen finns.', { icon: '🔒' });
+      }
       onSaved?.();
     } catch (err) {
       console.error('Error saving product:', err);
@@ -1118,6 +1182,12 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
               <div className="max-w-xs">
                 <label className={labelCls}>Pris (SEK, inkl. moms)</label>
                 <input type="number" name="price" min="0" step="0.01" value={formData.price} onChange={handleInput} className={inputCls} />
+                {podFloor != null && (
+                  <p className={`mt-1 text-[12px] ${parseFloat(formData.price) > 0 && parseFloat(formData.price) < podFloor ? 'text-admin-critical-text' : 'text-admin-text-muted'}`}>
+                    Prisgolv: <span className="font-medium">{podFloor} kr</span> — vid det priset tjänar du 0 kr
+                    (produktion {product.podCostSek} kr + avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr inräknat).
+                  </p>
+                )}
               </div>
               <div className="max-w-xs">
                 <label className={labelCls}>Ordinarie pris / REA (valfritt)</label>
@@ -1258,11 +1328,74 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                 availability object (never replace it) so the b2c toggle can't
                 clobber the sibling b2b key, and vice versa. */}
             <CardSection title="Publicering" bodyClassName="space-y-3">
-              <label className="flex items-center gap-2 text-[13px] text-admin-text">
-                <input id="avB2c" type="checkbox" checked={formData.availability.b2c} onChange={(e) => setField('availability', { ...formData.availability, b2c: e.target.checked })} className={checkboxCls} />
+              {podEnabled && (
+                <>
+                  <label className="flex items-center gap-2 text-[13px] text-admin-text">
+                    <input
+                      id="isPodProduct"
+                      type="checkbox"
+                      checked={formData.isPodProduct}
+                      onChange={(e) => setField('isPodProduct', e.target.checked)}
+                      className={checkboxCls}
+                    />
+                    Print on demand-produkt
+                  </label>
+                  <p className={helpCls}>
+                    Trycks per beställning. Kräver en tryckkoppling (motiv + placering) innan produkten kan visas i webbshoppen.
+                  </p>
+                </>
+              )}
+              {/* THE LIVE-GATE: an unconnected POD product can be saved but never
+                  shown — orders for it would silently never reach the printer.
+                  The block says WHY and offers both fixes. */}
+              {podGateActive && (
+                <div className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2.5">
+                  <p className="text-[13px] font-semibold text-admin-caution-text">
+                    Produkten kan inte visas i webbshoppen än — tryckkoppling saknas.
+                  </p>
+                  <p className="mt-1 text-[12px] text-admin-caution-text">
+                    Utan koppling vet tryckeriet inte vilket motiv och vilken placering som ska tryckas,
+                    så beställningar skulle fastna. Produkten går bra att spara som utkast.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {product && (product.documentId || product.id) && (
+                      <Link
+                        to={`/admin/pod?designFor=${product.documentId || product.id}`}
+                        className="rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-3 py-1.5 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2"
+                      >
+                        Designa i studion (kopplas automatiskt)
+                      </Link>
+                    )}
+                    <Link
+                      to="/admin/pod?tab=mapping"
+                      className="rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-3 py-1.5 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2"
+                    >
+                      Koppla manuellt (Avancerat)
+                    </Link>
+                  </div>
+                </div>
+              )}
+              {podEnabled && formData.isPodProduct && podConnected && (
+                <p className="text-[12px] text-admin-success-text">
+                  ✓ Tryckkoppling finns — produkten kan visas i webbshoppen.
+                </p>
+              )}
+              <label className={`flex items-center gap-2 text-[13px] ${podGateActive ? 'cursor-not-allowed text-admin-text-muted' : 'text-admin-text'}`}>
+                <input
+                  id="avB2c"
+                  type="checkbox"
+                  checked={formData.availability.b2c && !podGateActive}
+                  disabled={podGateActive}
+                  onChange={(e) => setField('availability', { ...formData.availability, b2c: e.target.checked })}
+                  className={checkboxCls}
+                />
                 Tillgänglig i webbshoppen
               </label>
-              <p className={helpCls}>Avmarkera för att dölja produkten i webbshoppen utan att inaktivera den.</p>
+              <p className={helpCls}>
+                {podGateActive
+                  ? 'Låst tills produkten har en tryckkoppling — se rutan ovan.'
+                  : 'Avmarkera för att dölja produkten i webbshoppen utan att inaktivera den.'}
+              </p>
               {/* B2B-availability gate — only for shops with the B2B add-on. Lets
                   an admin offer a product wholesale-only or hide it from B2B
                   while keeping it in the consumer shop (independent of b2c). */}

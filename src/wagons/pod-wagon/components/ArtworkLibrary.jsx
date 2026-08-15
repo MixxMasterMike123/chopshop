@@ -1,14 +1,11 @@
 // ArtworkLibrary — the seller's print-artwork library: upload + validate + list +
 // delete. Shop-scoped. Admin-Neutral design.
 //
-// UNMAPPED VISIBILITY: an unmapped artwork means orders never reach the print queue
-// — this state MUST be loud. Each row shows either an amber "Inte kopplad till
-// produkt" chip + a "Koppla…" action (jumps to Produktkoppling prefilled), or the
-// SKU(s) it's mapped to as small chips. The mapping data comes from the shared
-// usePodLibrary load (ONE listMappings call, not N).
+// Artwork is a reusable library asset. It becomes product-specific only when the
+// seller publishes through Studio, which creates the print connection automatically.
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
-import { TrashIcon, PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, PhotoIcon } from '@heroicons/react/24/outline';
 import { httpsCallable } from 'firebase/functions';
 import { CardSection, Button } from '../../../components/admin/ui';
 import StatusPill from '../../../components/admin/ui/StatusPill';
@@ -27,11 +24,10 @@ const ArtworkLibrary = ({
   shopId,
   artwork = [],
   profiles = [],
-  products = [],
   mappings = [],
   loading = false,
   onChanged,
-  onMapArtwork,
+  onUseInStudio,
 }) => {
   const [uploadOpen, setUploadOpen] = useState(false);
   // When set, the upload modal opens in REPLACE mode for this artwork (profile
@@ -191,16 +187,12 @@ const ArtworkLibrary = ({
                       Ej transparent
                     </span>
                   )}
-                  {isMapped ? (
+                  {isMapped && (
                     mappedPills.map((p) => (
-                      <span key={p.id || `${p.sku}-${p.slot}`} className="inline-flex items-center rounded-full border border-admin-border-soft bg-admin-surface-2 px-2 py-0.5 font-mono text-[11px] text-admin-text-muted">
-                        {p.sku} · {slotLabel(p.slot)}
+                      <span key={p.id || `${p.sku}-${p.slot}`} className="inline-flex items-center rounded-full border border-admin-border-soft bg-admin-surface-2 px-2 py-0.5 text-[11px] text-admin-text-muted">
+                        Används av&nbsp;<span className="font-mono">{p.sku}</span>&nbsp;· {slotLabel(p.slot)}
                       </span>
                     ))
-                  ) : (
-                    <span className="inline-flex items-center gap-1 rounded-full border border-admin-caution-dot/30 bg-admin-caution-bg px-2 py-0.5 text-[11px] font-medium text-admin-caution-text">
-                      <ExclamationTriangleIcon className="h-3 w-3" /> Inte kopplad till produkt
-                    </span>
                   )}
                 </div>
                 <div className="truncate text-[12px] text-admin-text-faint">
@@ -222,14 +214,6 @@ const ArtworkLibrary = ({
                   title="Kör filen genom den nya tryckpipelinen (PNG + 300 DPI-krav)"
                 >
                   {revalidatingIds.has(art.id) ? 'Validerar…' : 'Validera om'}
-                </button>
-              )}
-              {!isMapped && onMapArtwork && (
-                <button
-                  onClick={() => onMapArtwork(art.id)}
-                  className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2"
-                >
-                  Koppla…
                 </button>
               )}
               <button
@@ -264,17 +248,16 @@ const ArtworkLibrary = ({
       {uploadOpen && (
         <ArtworkUploadModal
           shopId={shopId}
-          products={products}
           artwork={items}
           onClose={() => setUploadOpen(false)}
           onCreated={refresh}
+          onUseInStudio={onUseInStudio}
         />
       )}
 
       {replaceTarget && (
         <ArtworkUploadModal
           shopId={shopId}
-          products={products}
           artwork={items}
           replaceTarget={replaceTarget}
           onClose={() => setReplaceTarget(null)}

@@ -646,6 +646,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         // LEGAL FIREWALL: studio-authored products are NEVER personalized. The
         // 14-day withdrawal right stays; isPersonalized is order-flow-derived only.
         isPersonalized: false,
+        // POD marker + economics: lets the product form gate "live" on a print
+        // connection and compute the break-even price floor (podPricing.js)
+        // without loading the template. costSek is the platform's base revenue.
+        isPodProduct: true,
+        ...(Number.isFinite(selectedTemplate?.costSek) ? { podCostSek: selectedTemplate.costSek } : {}),
         sizeGuide: '',
         weight: { value: 0, unit: 'g' },
         dimensions: {
@@ -743,7 +748,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // EXACT colourway-label matches — and, the part that makes it PRINTABLE,
   // the same podMappings rows the create flow writes, keyed on the product's
   // own sku. Variants/prices/copy stay untouched (no variant surgery in v1).
-  const updateProduct = async ({ productId, selectedColorwayIds, connectPrint, replaceImages }) => {
+  const updateProduct = async ({ productId, selectedColorwayIds, replaceImages }) => {
     if (publishing || publishingRef.current) return;
     setPublishError(null);
     setPublishResult(null);
@@ -771,6 +776,40 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       if (!prodSnap.exists()) throw new Error('Produkten finns inte längre.');
       const prod = prodSnap.data();
       if (prod.shopId !== shopId) throw new Error('Produkten tillhör en annan butik.');
+      if (!String(prod.sku || '').trim()) {
+        throw new Error('Produkten saknar SKU. Ge den en unik SKU under Produkter innan du fortsätter.');
+      }
+      // A mapping is keyed by SKU. Two products sharing one SKU would also share
+      // one artwork in Printkön, violating the studio's product-specific contract.
+      // Re-check authoritatively at submit time; the picker data may be stale.
+      const productSnap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
+      const duplicateSku = productSnap.docs.some((d) =>
+        d.id !== productId && String(d.data()?.sku || '').trim() === String(prod.sku).trim());
+      if (duplicateSku) {
+        throw new Error(`SKU ”${prod.sku}” används av flera produkter. Ge varje produkt en unik SKU under Produkter.`);
+      }
+      const norm = (x) => String(x || '').trim().toLowerCase();
+      const groupSkuByLabel = new Map(
+        (Array.isArray(prod.variantGroups) ? prod.variantGroups : [])
+          .filter((g) => g?.sku && g?.label)
+          .map((g) => [norm(g.label), g.sku])
+      );
+      const cwLabelOf = (id) =>
+        (selectedTemplate?.colorways || []).find((c) => c.id === id)?.label || null;
+      // A colour-specific motif must have an exact variant-group target. Block
+      // before uploads rather than publish a mockup that differs from Printkön.
+      const missingOverrideLabels = new Set();
+      for (const s of publishSlots) {
+        for (const [cwId, overrideArtworkId] of Object.entries(overrides[s] || {})) {
+          if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
+          if (!groupSkuByLabel.has(norm(cwLabelOf(cwId)))) {
+            missingOverrideLabels.add(cwLabelOf(cwId) || cwId);
+          }
+        }
+      }
+      if (missingOverrideLabels.size > 0) {
+        throw new Error(`Motivet för ${[...missingOverrideLabels].join(', ')} kan inte kopplas eftersom färgnamnet saknas på produkten. Uppdatera produktens färger eller skapa en ny produkt.`);
+      }
 
       const publicPath = `products/${shopId}/${productId}`;
       const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
@@ -799,7 +838,6 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
       // Variant-group images on EXACT label matches (case-insensitive):
       // fill empty groups always, replace populated ones only on opt-in.
-      const norm = (x) => String(x || '').trim().toLowerCase();
       const frontUrlByLabel = {};
       pubMockups.forEach((m, i) => {
         if (m.slot === 'front') frontUrlByLabel[norm(m.colorwayLabel)] = galleryUrls[i];
@@ -842,82 +880,66 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // KNOWN WINDOW: getDoc → uploads → updateDoc is a seconds-long
       // read-modify-write; a concurrent ProductForm save in that window loses
       // its group edits to this snapshot. Accepted for v1 (single-admin shops).
+      // Same POD stamps as the create path — an existing product that gets a
+      // studio design IS a POD product from now on.
+      updates.isPodProduct = true;
+      if (Number.isFinite(selectedTemplate?.costSek)) updates.podCostSek = selectedTemplate.costSek;
       await updateDoc(prodRef, updates);
       docTouched = true;
 
-      // Print connection — identical mapping rows to the create flow, keyed on
+      // Automatic print connection — identical mapping rows to the create flow, keyed on
       // the product's OWN sku; override rows target group skus whose label
       // EXACTLY matches the overridden colourway's label (decision 2026-08-09:
       // exact matches only, nothing fuzzy).
-      let connected = false;
-      const skippedOverrides = [];
-      if (connectPrint && prod.sku) {
-        const groupSkuByLabel = new Map(
-          (Array.isArray(prod.variantGroups) ? prod.variantGroups : [])
-            .filter((g) => g?.sku && g?.label)
-            .map((g) => [norm(g.label), g.sku])
-        );
-        const cwLabelOf = (id) =>
-          (selectedTemplate?.colorways || []).find((c) => c.id === id)?.label || null;
-        const writes = [];
-        for (const s of publishSlots) {
-          const baseArt = printArtwork(s);
-          const effective = effectivePlacementFor(s, baseArt);
-          const readout = placementReadout(effective, effTemplate, s, baseArt);
-          const isPocket = s === 'pocket';
-          const posLabel = pocketPositionLabel(pocketPosition);
+      const writes = [];
+      for (const s of publishSlots) {
+        const baseArt = printArtwork(s);
+        const effective = effectivePlacementFor(s, baseArt);
+        const readout = placementReadout(effective, effTemplate, s, baseArt);
+        const isPocket = s === 'pocket';
+        const posLabel = pocketPositionLabel(pocketPosition);
+        writes.push(setMapping({
+          shopId,
+          sku: prod.sku,
+          artworkId: baseArt.id,
+          profileId: selectedTemplate.profileId,
+          slotLabel: labelForSlot(s),
+          placement: isPocket ? `${posLabel} · ${readout}` : readout,
+          placementSlot: s,
+          ...(isPocket ? { position: pocketPosition } : {}),
+        }));
+        const slotOverrides = overrides[s] || {};
+        for (const [cwId, overrideArtworkId] of Object.entries(slotOverrides)) {
+          if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
+          const gSku = groupSkuByLabel.get(norm(cwLabelOf(cwId)));
+          if (!gSku) continue; // preflight above blocks this mismatch
+          const overrideArt = artworkById(overrideArtworkId) || printArtwork(s);
+          const effO = effectivePlacementFor(s, overrideArt);
+          const readoutO = placementReadout(effO, effTemplate, s, overrideArt);
           writes.push(setMapping({
             shopId,
-            sku: prod.sku,
-            artworkId: baseArt.id,
+            sku: gSku,
+            artworkId: overrideArtworkId,
             profileId: selectedTemplate.profileId,
             slotLabel: labelForSlot(s),
-            placement: isPocket ? `${posLabel} · ${readout}` : readout,
+            placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
             placementSlot: s,
             ...(isPocket ? { position: pocketPosition } : {}),
           }));
-          const slotOverrides = overrides[s] || {};
-          for (const [cwId, overrideArtworkId] of Object.entries(slotOverrides)) {
-            if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
-            const gSku = groupSkuByLabel.get(norm(cwLabelOf(cwId)));
-            if (!gSku) {
-              // No matching variant group on the target → this colourway's
-              // override CANNOT be connected: the gallery would show the
-              // override motif while the printer gets the base one. Surface it.
-              skippedOverrides.push(cwLabelOf(cwId) || cwId);
-              continue;
-            }
-            const overrideArt = artworkById(overrideArtworkId) || printArtwork(s);
-            const effO = effectivePlacementFor(s, overrideArt);
-            const readoutO = placementReadout(effO, effTemplate, s, overrideArt);
-            writes.push(setMapping({
-              shopId,
-              sku: gSku,
-              artworkId: overrideArtworkId,
-              profileId: selectedTemplate.profileId,
-              slotLabel: labelForSlot(s),
-              placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
-              placementSlot: s,
-              ...(isPocket ? { position: pocketPosition } : {}),
-            }));
-          }
         }
-        await Promise.all(writes);
-        connected = true;
       }
+      await Promise.all(writes);
 
       setPublishResult({
         name: prod.name || '(namnlös produkt)',
         sku: prod.sku || '',
         updated: true,
-        connected,
-        skippedOverrides,
       });
       onChanged?.();
     } catch (e) {
       console.error('DesignStudio: update product failed', e);
       setPublishError(docTouched
-        ? 'Bilderna lades till men tryckkopplingen kan vara ofullständig — kontrollera under Produktkoppling.'
+        ? 'Bilderna lades till men tryckkopplingen kan vara ofullständig. Kontrollera produkten och försök igen.'
         : (e?.message || 'Uppdateringen misslyckades.'));
     } finally {
       publishingRef.current = false;
@@ -1511,6 +1533,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             overrides={overrides[slot] || {}}
             onOverrideChange={printArtwork(slot) ? (cwId, artId) => setOverride(slot, cwId, artId) : null}
             artworkOptions={overrideOptions}
+            baseArtwork={printArtwork(slot)}
             baseArtworkLabel={printArtwork(slot)?.label || printArtwork(slot)?.fileName || 'Standardmotiv'}
             reviewedColorwayIds={reviewedColorways}
             colorwayIds={[...selectedColorwayIds]}
