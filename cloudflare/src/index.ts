@@ -1,8 +1,11 @@
 import { jsonResponse } from "./lib/http";
 import { handleDisabledAuthEmailQueue } from "./email/disabled-email-queue";
+import { getPublicStorefront } from "./storefront/public-storefront";
+import { resolveRequestTenant } from "./tenancy/resolve-tenant";
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
+const STOREFRONT_PATH = "/v1/storefront";
 const REQUIRED_MIGRATION = "0004_email_delivery_fingerprint.sql";
 
 async function readinessResponse(env: Env): Promise<Response> {
@@ -60,6 +63,26 @@ export default {
 
     if (request.method === "GET" && url.pathname === READINESS_PATH) {
       return readinessResponse(env);
+    }
+
+    if (request.method === "GET" && url.pathname === STOREFRONT_PATH) {
+      const tenant = await resolveRequestTenant(env.DB, request);
+      if (tenant !== null) {
+        const storefront = await getPublicStorefront(env.DB, tenant);
+        if (storefront !== null) {
+          return jsonResponse({ storefront });
+        }
+      }
+
+      return jsonResponse(
+        {
+          error: {
+            code: "not_found",
+            message: "Storefront not found",
+          },
+        },
+        404,
+      );
     }
 
     return jsonResponse(

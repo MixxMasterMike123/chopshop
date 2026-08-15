@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 9 ready to commit
+**Last updated:** 2026-08-16, checkpoint 10 locally complete — handover to Fable
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `9f8e631` — `feat: add email delivery leases`
+- Last pushed commit: `88ee458` — `feat: bind staging auth email queue`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -186,6 +186,16 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Local gate passed: generated Queue binding current, TypeScript clean, 36/36 tests green, and deployment dry-run shows only the expected staging Queue/D1/non-secret vars.
 - No messages were enqueued, and no Email Sending binding, auth secret, or auth route exists.
 
+## Checkpoint 10 — First tenant-bound read route (not deployed)
+
+- Added `GET /v1/storefront` as the first business-facing Cloudflare route.
+- Tenant context comes only from the verified active request hostname; hostile `X-Shop-Id` and forwarded-host headers are ignored.
+- The repository query binds the resolved tenant ID and rechecks active status.
+- Response fields are an explicit allowlist: storefront name, locale, and currency. Internal tenant ID, support email, and `settings_json` are not selected or serialized.
+- Unknown hosts and wrong HTTP methods fail closed with JSON 404 responses.
+- Local gate passed: generated bindings current, TypeScript clean, 39/39 Workers/D1 tests green, and deploy dry-run passed at 4.69 KiB / 1.62 KiB gzip.
+- This checkpoint has **not** been deployed. The live staging Worker remains version `7099d7e1-4a18-4f12-baba-5d977c2b7a8f` from checkpoint 9.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -209,8 +219,8 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Commit and push checkpoint 9.
-2. Port the first read-only tenant route only after its repository query is tenant-bound and adversarially tested.
+1. Review commit for checkpoint 10, then deploy it only to `meteorshop-stg-api` if accepted.
+2. Smoke `/health`, `/ready`, unknown-host `/v1/storefront`, and confirm `/api/auth/*` remains 404.
 3. Decide whether to mount sign-in only before sign-up; do not enable either until a staging secret and provisioning policy are in place.
 4. Onboard a MeteorShop sending domain only at the explicit DNS/provider canary checkpoint; the unrelated existing domain stays untouched.
 5. Create R2 buckets only when their object ownership contracts and local tests are ready.
