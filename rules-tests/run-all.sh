@@ -14,6 +14,8 @@
 #   - storage-isolation.test.cjs      → STORAGE emulator (port 9199), own exec.
 #   - connect-params.test.cjs         } PURE unit tests (no emulator); need
 #   - dispute-recovery.test.cjs       } functions/lib compiled (tsc) first.
+#   - print-outbox.test.cjs           } durable printer-notify decision/lease core.
+#   - production-snapshot.test.cjs    } immutable paid-order artwork/mapping core.
 #
 # Local run:
 #   JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
@@ -58,6 +60,10 @@ echo "==> [1/3] wave2-invariants (pure unit test — SSRF hosts + print partitio
 node rules-tests/wave2-invariants.test.cjs
 echo "==> [1/3] projection (pure unit test — P1-11 public catalogue allowlist)"
 node rules-tests/projection.test.cjs
+echo "==> [1/3] print-outbox (pure unit test — durable printer notification)"
+node rules-tests/print-outbox.test.cjs
+echo "==> [1/3] production-snapshot (pure unit test — immutable paid-order artwork)"
+node rules-tests/production-snapshot.test.cjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"

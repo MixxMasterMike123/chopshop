@@ -5,6 +5,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.sendOrderStatusUpdateEmail = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const app_urls_1 = require("../../config/app-urls");
+const database_1 = require("../../config/database");
 const EmailOrchestrator_1 = require("../core/EmailOrchestrator");
 const authGuard_1 = require("./authGuard");
 exports.sendOrderStatusUpdateEmail = (0, https_1.onCall)({
@@ -15,48 +16,64 @@ exports.sendOrderStatusUpdateEmail = (0, https_1.onCall)({
     cors: app_urls_1.appUrls.CORS_ORIGINS
 }, async (request) => {
     try {
-        // SECURITY: privileged mailer - admin only
-        await (0, authGuard_1.requireAdmin)(request.auth?.uid);
+        const orderId = String(request.data.orderId || '').trim();
+        if (!orderId)
+            throw new https_1.HttpsError('invalid-argument', 'Order id is required');
+        const orderSnap = await database_1.db.collection('orders').doc(orderId).get();
+        if (!orderSnap.exists)
+            throw new https_1.HttpsError('not-found', 'Order not found');
+        const order = orderSnap.data();
+        await (0, authGuard_1.requireAdminOfShop)(order.shopId, request.auth?.uid);
+        // This callable is a notification side effect, not an alternate order
+        // mutation API. Recipient, status and content all come from the persisted
+        // tenant-scoped order; the client may only identify which order to notify.
+        const storedStatus = String(order.status || '');
+        if (!storedStatus || String(request.data.newStatus || '') !== storedStatus) {
+            throw new https_1.HttpsError('failed-precondition', 'Order status does not match stored order');
+        }
+        const recipientEmail = String(order.customerInfo?.email || order.customerEmail || order.email || '').trim();
+        if (!recipientEmail)
+            throw new https_1.HttpsError('failed-precondition', 'Order has no customer email');
+        const recipientName = String(order.customerInfo?.name ||
+            [order.customerInfo?.firstName, order.customerInfo?.lastName].filter(Boolean).join(' ') ||
+            order.customerName || '').trim();
         console.log('📧 sendOrderStatusUpdateEmail: Starting unified status update');
         console.log('📧 Request data:', {
-            orderNumber: request.data.orderData.orderNumber,
-            newStatus: request.data.newStatus,
+            orderId,
+            orderNumber: order.orderNumber,
+            newStatus: storedStatus,
             previousStatus: request.data.previousStatus,
-            userEmail: request.data.userData.email,
-            userId: request.data.userId,
-            b2cCustomerId: request.data.b2cCustomerId
         });
         // Validate required data
-        if (!request.data.orderData?.orderNumber) {
+        if (!order.orderNumber) {
             throw new Error('Order number is required');
-        }
-        if (!request.data.userData?.email) {
-            throw new Error('User email is required');
-        }
-        if (!request.data.newStatus) {
-            throw new Error('New status is required');
         }
         // Initialize EmailOrchestrator
         const orchestrator = new EmailOrchestrator_1.EmailOrchestrator();
         // Prepare context for orchestrator
         const emailContext = {
             emailType: 'ORDER_STATUS_UPDATE',
-            userId: request.data.userId,
-            b2cCustomerId: request.data.b2cCustomerId,
+            userId: order.userId,
+            b2cCustomerId: order.b2cCustomerId,
             customerInfo: {
-                email: request.data.userData.email,
-                name: request.data.userData.contactPerson || request.data.userData.companyName
+                email: recipientEmail,
+                name: recipientName
             },
-            orderId: request.data.orderId,
-            language: request.data.language,
-            orderData: request.data.orderData,
+            orderId,
+            language: order.customerInfo?.preferredLang || order.language,
+            orderData: {
+                orderNumber: String(order.orderNumber),
+                status: storedStatus,
+                totalAmount: Number(order.totalAmount ?? order.total ?? 0),
+                items: Array.isArray(order.items) ? order.items : [],
+            },
             additionalData: {
-                newStatus: request.data.newStatus,
+                newStatus: storedStatus,
                 previousStatus: request.data.previousStatus,
-                trackingNumber: request.data.trackingNumber,
-                estimatedDelivery: request.data.estimatedDelivery,
-                notes: request.data.notes,
-                pickupLocationName: request.data.pickupLocationName
+                trackingNumber: order.trackingNumber || order.tracking?.number,
+                estimatedDelivery: order.estimatedDelivery,
+                notes: order.statusNotes || order.notes,
+                pickupLocationName: order.pickupLocation?.name,
             },
             adminEmail: false
         };
@@ -77,6 +94,8 @@ exports.sendOrderStatusUpdateEmail = (0, https_1.onCall)({
     }
     catch (error) {
         console.error('❌ sendOrderStatusUpdateEmail: Fatal error:', error);
+        if (error instanceof https_1.HttpsError)
+            throw error;
         throw new Error(error instanceof Error ? error.message : 'Unknown error in status update email');
     }
 });

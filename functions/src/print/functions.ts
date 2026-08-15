@@ -14,7 +14,7 @@ import { db } from '../config/database';
 import { appUrls } from '../config/app-urls';
 import { requirePlatform } from '../email-orchestrator/functions/authGuard';
 import { getPrintShopContext, assertShopAllowed } from './printGuard';
-import { loadShopMappings, orderHasPodLine, toQueueRow, toPrintJob, signedUrlFor } from './printProjection';
+import { loadShopMappings, orderHasPodLine, productionSnapshotPending, toQueueRow, toPrintJob, signedUrlFor } from './printProjection';
 
 const auth = getAuth();
 
@@ -56,13 +56,13 @@ export const getPrintQueue = onCall(COMMON, async (request) => {
   // Per-shop (avoids the 30-item `in` cap and lets us load each shop's mappings once).
   for (const shopId of ctx.printShopShops) {
     const mappings = await loadShopMappings(shopId);
-    if (mappings.size === 0) continue; // shop has no POD mappings → no POD orders
     const snap = await db.collection('orders').where('shopId', '==', shopId).get();
     snap.docs.forEach((d) => {
       const order = d.data();
       const createdMs = order.createdAt?.toDate ? order.createdAt.toDate().getTime() : 0;
       if (createdMs && createdMs < sinceMs) return;
       if (!includeAll && HIDDEN_STATUSES.has(String(order.status || ''))) return;
+      if (productionSnapshotPending(order)) return; // paid transition still freezing production inputs
       if (!orderHasPodLine(order, mappings)) return;
       jobs.push(toQueueRow(d.id, order, names[shopId], mappings));
     });
@@ -91,6 +91,9 @@ export const getPrintJob = onCall(COMMON, async (request) => {
   if (st === 'pending' || st === 'invoiced') {
     throw new HttpsError('failed-precondition', 'Ordern är inte betald ännu — produktionsvyn låses upp när butiken markerat den som betald.');
   }
+  if (productionSnapshotPending(order)) {
+    throw new HttpsError('unavailable', 'Produktionsunderlaget låses just nu — försök igen om en liten stund.');
+  }
 
   const mappings = await loadShopMappings(order.shopId);
   const names = await shopNames([order.shopId]);
@@ -111,13 +114,13 @@ export const getPrintQueueExport = onCall(COMMON, async (request) => {
   const rows: any[] = [];
   for (const shopId of targetShops) {
     const mappings = await loadShopMappings(shopId);
-    if (mappings.size === 0) continue;
     const snap = await db.collection('orders').where('shopId', '==', shopId).get();
     for (const d of snap.docs) {
       const order = d.data() as any;
       const createdMs = order.createdAt?.toDate ? order.createdAt.toDate().getTime() : 0;
       if (createdMs && createdMs < sinceMs) continue;
       if (!includeAll && HIDDEN_STATUSES.has(String(order.status || ''))) continue;
+      if (productionSnapshotPending(order)) continue;
       if (!orderHasPodLine(order, mappings)) continue;
       const job = await toPrintJob(d.id, order, names[shopId], mappings);
       job.lines.forEach((ln: any) => {
@@ -277,14 +280,15 @@ export const getPrintArtworkDownload = onCall(COMMON, async (request) => {
   const a: any = snap.data();
   assertShopAllowed(ctx, String(a.shopId || ''));
   const shopPrefix = `pod-artwork/${a.shopId}/`;
+  const allowedPrefix = kind === 'print' ? `${shopPrefix}print/` : `${shopPrefix}originals/`;
   const path = kind === 'print' ? a.printStoragePath : a.originalStoragePath;
   const fallback = kind === 'print' ? (a.printUrl || null) : (a.originalUrl || null);
-  if (typeof path !== 'string' || !path.startsWith(shopPrefix)) {
+  if (typeof path !== 'string' || !path.startsWith(allowedPrefix)) {
     throw new HttpsError('not-found', kind === 'print'
       ? 'Tryckfil saknas — be butiken validera om originalet'
       : 'Originalfilen saknas');
   }
-  const url = await signedUrlFor(path, fallback, shopPrefix);
+  const url = await signedUrlFor(path, fallback, allowedPrefix);
   if (!url) throw new HttpsError('internal', 'Kunde inte skapa nedladdningslänk');
   return { url, kind, fileName: a.fileName || '', ext: kind === 'print' ? 'png' : (a.ext || '') };
 });

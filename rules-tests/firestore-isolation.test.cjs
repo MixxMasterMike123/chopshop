@@ -156,6 +156,13 @@ async function seed() {
     await setDoc(doc(db, 'productsPublic/prodA'), { shopId: 'shopA', isActive: true, availability: { b2c: true }, name: 'A tee', b2cPrice: 199 });
     await setDoc(doc(db, 'productGroups/pgA'), { shopId: 'shopA', name: 'Legacy group' });
 
+    // Durable printer-email outbox. This is backend infrastructure, not an
+    // admin collection: even platform users must go through server functions.
+    await setDoc(doc(db, 'printNotifications/orderA'), {
+      orderId: 'orderA', shopId: 'shopA', status: 'pending', attempts: 0,
+      createdAt: new Date(), nextAttemptAt: new Date(), lines: [],
+    });
+
     // CMS pages: published is public, draft is admin-only (P1-11).
     await setDoc(doc(db, 'pages/pubPageA'), { shopId: 'shopA', slug: 'om-oss', status: 'published', title: 'Om oss' });
     await setDoc(doc(db, 'pages/draftPageA'), { shopId: 'shopA', slug: 'hemlig', status: 'draft', title: 'Hemlig kampanj', createdBy: 'adminA' });
@@ -543,6 +550,12 @@ async function run() {
     updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { total: 0.01 })));
   await check('shop admin CANNOT touch payment.* (refund markers)', assertFails(
     updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { 'payment.refundedTotalSek': 99999 })));
+  await check('shop admin CANNOT replace immutable productionSnapshot', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), {
+      productionSnapshot: { version: 1, lines: [] },
+    })));
+  await check('shop admin CANNOT disable the productionSnapshotRequired lock', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { productionSnapshotRequired: false })));
   await check('shop admin CANNOT rewrite customer PII on the order', assertFails(
     updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { 'customerInfo.email': 'evil@x.com' })));
   await check('shop admin CANNOT self-mark status refunded (commission-reversal without money)', assertFails(
@@ -617,6 +630,29 @@ async function run() {
     deleteDoc(doc(platformDb(), 'impersonationAudit/aud1'))));
   await check('shop admin CANNOT read audit records', assertFails(
     getDoc(doc(shopAAdminDb(), 'impersonationAudit/aud1'))));
+
+  // ── P1-15: printNotifications is a strictly server-only outbox. The broad
+  //    default-deny rule must cover every client role and operation. ──
+  console.log('\n=== P1-15: printNotifications server-only outbox ===');
+  const anonDb = env.unauthenticatedContext().firestore();
+  await check('anon CANNOT read a print notification', assertFails(
+    getDoc(doc(anonDb, 'printNotifications/orderA'))));
+  await check('anon CANNOT list print notifications', assertFails(
+    getDocs(collection(anonDb, 'printNotifications'))));
+  await check('anon CANNOT create a print notification', assertFails(
+    setDoc(doc(anonDb, 'printNotifications/anon'), { status: 'sent' })));
+  for (const [label, actorDb] of [['shop admin', shopAAdminDb()], ['platform admin', platformDb()]]) {
+    await check(`${label} CANNOT read a print notification`, assertFails(
+      getDoc(doc(actorDb, 'printNotifications/orderA'))));
+    await check(`${label} CANNOT list print notifications`, assertFails(
+      getDocs(collection(actorDb, 'printNotifications'))));
+    await check(`${label} CANNOT create a print notification`, assertFails(
+      setDoc(doc(actorDb, `printNotifications/${label.replace(' ', '-')}`), { status: 'sent' })));
+    await check(`${label} CANNOT update a print notification`, assertFails(
+      updateDoc(doc(actorDb, 'printNotifications/orderA'), { status: 'sent' })));
+    await check(`${label} CANNOT delete a print notification`, assertFails(
+      deleteDoc(doc(actorDb, 'printNotifications/orderA'))));
+  }
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
   await env.cleanup();

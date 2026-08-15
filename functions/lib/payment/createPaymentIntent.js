@@ -7,7 +7,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createPaymentIntentV2 = exports.validateCartLine = exports.resolvePickupLocation = exports.shopCheckoutBlockReason = void 0;
+exports.createPaymentIntentV2 = exports.validateCartLine = exports.withdrawalConsentBlockReason = exports.resolvePickupLocation = exports.shopCheckoutBlockReason = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firebase_functions_1 = require("firebase-functions");
 const stripe_1 = __importDefault(require("stripe"));
@@ -20,6 +20,7 @@ const connectParams_1 = require("./connectParams");
 const platformConfig_1 = require("./platformConfig");
 const writeCheckoutDoc_1 = require("../checkout-recovery/writeCheckoutDoc");
 const durableRateLimit_1 = require("../protection/rate-limiting/durableRateLimit");
+const printProjection_1 = require("../print/printProjection");
 /**
  * Server-side price computation. NEVER trust client-supplied amounts:
  * prices come from the products collection, the discount from the affiliate
@@ -55,7 +56,7 @@ exports.shopCheckoutBlockReason = shopCheckoutBlockReason;
 // the shop actually offers pickup and that the chosen location is one of the
 // shop's configured points — name/address are then taken from the shop config,
 // never from the client payload. Returns null when the location can't resolve.
-function resolvePickupLocation(shop, pickupLocationId) {
+function resolvePickupLocation(shop, pickupLocationId, pickupLocationDate, todayIso = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())) {
     const locations = Array.isArray(shop?.storeIdentity?.pickupLocations)
         ? shop.storeIdentity.pickupLocations
         : [];
@@ -65,9 +66,33 @@ function resolvePickupLocation(shop, pickupLocationId) {
     const loc = locations.find((l) => l && l.id === locId);
     if (!loc)
         return null;
-    return { id: String(loc.id), name: String(loc.name || ''), address: String(loc.address || '') };
+    const dates = Array.isArray(loc.dates)
+        ? loc.dates.map((d) => String(d || '')).filter(Boolean)
+        : [];
+    const requestedDate = String(pickupLocationDate || '');
+    if (dates.length > 0 && (!dates.includes(requestedDate) || requestedDate < todayIso))
+        return null;
+    return {
+        id: String(loc.id),
+        name: String(loc.name || ''),
+        address: String(loc.address || ''),
+        date: dates.length > 0 ? requestedDate : '',
+    };
 }
 exports.resolvePickupLocation = resolvePickupLocation;
+function withdrawalConsentBlockReason(hasPersonalizedItem, consent) {
+    if (!hasPersonalizedItem)
+        return null;
+    if (consent?.accepted !== true)
+        return 'consent-required';
+    if (!String(consent.noticeVersion || '').trim())
+        return 'notice-version-required';
+    if (!/^h[0-9a-f]+$/i.test(String(consent.noticeFingerprint || '').trim())) {
+        return 'notice-fingerprint-invalid';
+    }
+    return null;
+}
+exports.withdrawalConsentBlockReason = withdrawalConsentBlockReason;
 // Validate ONE cart line against the SERVER product doc and derive the
 // authoritative line snapshot. The client contributes only (productId,
 // variantSku, quantity) — tenant, availability, price, SKU, name, label and
@@ -141,6 +166,7 @@ function validateCartLine(product, item, shopId, deliveryMethod) {
         label: variant?.label || '',
         image: variant?.image || product.b2cImageUrl || product.b2cImageGallery?.[0] || product.imageUrl || '',
         isPersonalized: product.isPersonalized === true,
+        isPodProduct: product.isPodProduct === true,
     };
 }
 exports.validateCartLine = validateCartLine;
@@ -346,7 +372,7 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
         // fabricated pickup address onto the order.
         let resolvedPickup = null;
         if (deliveryMethod === 'pickup') {
-            resolvedPickup = resolvePickupLocation(shopSnap.data(), deliveryInfo?.pickupLocationId);
+            resolvedPickup = resolvePickupLocation(shopSnap.data(), deliveryInfo?.pickupLocationId, deliveryInfo?.pickupLocationDate);
             if (!resolvedPickup) {
                 firebase_functions_1.logger.warn('⛔ Checkout blocked — invalid pickup location', { shopId: resolvedShopId });
                 response.status(400).json({ error: 'Invalid pickup location' });
@@ -400,24 +426,25 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
         const amountInOre = Math.round(totals.total * 100);
         // Right-of-withdrawal (POD) proof. The server decides whether the gate was
         // REQUIRED from the live products (totals.hasPersonalizedItem) — never the
-        // client. We record what arrived (locked decision: server backstop =
-        // record-what-arrived) into PI metadata; the webhook stamps order.withdrawal.
+        // client. Fail closed before creating a PaymentIntent if the required
+        // consent proof is absent or malformed.
         const wc = request.body?.withdrawalConsent;
         let withdrawalMeta = {};
+        const consentBlockReason = withdrawalConsentBlockReason(totals.hasPersonalizedItem, wc);
+        if (consentBlockReason) {
+            firebase_functions_1.logger.warn('⛔ Personalized checkout blocked — withdrawal consent invalid', {
+                shopId: resolvedShopId,
+                consentBlockReason,
+            });
+            response.status(400).json({ error: 'Withdrawal consent is required' });
+            return;
+        }
         if (totals.hasPersonalizedItem) {
-            const accepted = wc?.accepted === true;
-            if (!accepted) {
-                // A personalized item with no client consent → the legitimate client
-                // blocks this. Record it (don't silently drop) for evidence/audit.
-                firebase_functions_1.logger.warn('⚠️ POD: personalized item charged WITHOUT recorded withdrawal consent', {
-                    shopId: resolvedShopId,
-                });
-            }
             withdrawalMeta = {
                 withdrawalRequired: 'true',
-                withdrawalConsent: accepted ? 'true' : 'false',
-                withdrawalNoticeVersion: String(wc?.noticeVersion || ''),
-                withdrawalNoticeFingerprint: String(wc?.noticeFingerprint || ''),
+                withdrawalConsent: 'true',
+                withdrawalNoticeVersion: String(wc.noticeVersion).trim(),
+                withdrawalNoticeFingerprint: String(wc.noticeFingerprint).trim(),
                 withdrawalConsentAt: new Date().toISOString(),
             };
         }
@@ -474,7 +501,9 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
             label: line.label,
             price: line.price,
             quantity: line.quantity,
-            image: withImages ? line.image : ''
+            image: withImages ? line.image : '',
+            isPodProduct: line.isPodProduct,
+            isPersonalized: line.isPersonalized,
         })));
         const META_VALUE_MAX = 500;
         const META_TOTAL_KEYS = 50; // Stripe's hard cap on metadata key count
@@ -518,7 +547,7 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
                 pickupLocationId: resolvedPickup.id,
                 pickupLocationName: resolvedPickup.name,
                 pickupLocationAddress: resolvedPickup.address,
-                pickupLocationDate: String(deliveryInfo?.pickupLocationDate || '').slice(0, 40),
+                pickupLocationDate: resolvedPickup.date,
             }),
             // Order Totals (server-computed breakdown — single source of truth)
             subtotal: totals.subtotal.toString(),
@@ -558,6 +587,10 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
             platform: 'meteorpr',
             shopId: resolvedShopId,
             version: 'enhanced_v2',
+            // Webhook must load the graph frozen before this PI's client secret
+            // was released; old in-flight PIs lack this marker and use the
+            // explicit legacy fallback there.
+            productionSnapshotRequired: 'true',
             // Right-of-withdrawal proof (empty {} for standard-options carts)
             ...withdrawalMeta,
             // Stripe Connect (empty for legacy shops → metadata unchanged)
@@ -570,6 +603,43 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
             ?? chunkItemDetails(buildItemDetailsJson(false), chunkBudget);
         if (!itemDetailsMeta) {
             response.status(400).json({ error: 'Cart too large for payment metadata' });
+            return;
+        }
+        // Freeze production identity before the buyer can confirm payment. This
+        // prevents a mapping/artwork edit between checkout and webhook delivery
+        // from changing what the print shop receives.
+        let checkoutProductionSnapshot;
+        try {
+            checkoutProductionSnapshot = await (0, printProjection_1.buildProductionSnapshotAtomically)({
+                shopId: resolvedShopId,
+                items: totals.serverLines,
+            });
+            const unresolvedLines = checkoutProductionSnapshot.lines.filter((line) => line.unresolvedReason);
+            if (unresolvedLines.length > 0) {
+                firebase_functions_1.logger.error('⛔ Checkout blocked — POD production snapshot is unresolved', {
+                    shopId: resolvedShopId,
+                    lines: unresolvedLines.map((line) => ({
+                        sku: line.sku,
+                        placementSlot: line.placementSlot,
+                        reason: line.unresolvedReason,
+                    })),
+                });
+                response.status(409).json({
+                    error: 'A product is temporarily unavailable for production',
+                    success: false,
+                });
+                return;
+            }
+        }
+        catch (snapshotError) {
+            firebase_functions_1.logger.error('❌ Could not freeze checkout production snapshot', {
+                shopId: resolvedShopId,
+                error: snapshotError?.message,
+            });
+            response.status(503).json({
+                error: 'Checkout is temporarily unavailable',
+                success: false,
+            });
             return;
         }
         // Create Payment Intent with simplified configuration for live mode
@@ -615,6 +685,32 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
             currency: paymentIntent.currency,
             status: paymentIntent.status
         });
+        // This rules-locked write is REQUIRED. Until it succeeds, the client must
+        // not receive the secret that can confirm the payment. Cancel the unused
+        // PI on failure so it cannot become a paid order without its snapshot.
+        try {
+            await (0, writeCheckoutDoc_1.writeCheckoutProductionSnapshot)(paymentIntent.id, resolvedShopId, checkoutProductionSnapshot);
+        }
+        catch (snapshotWriteError) {
+            firebase_functions_1.logger.error('❌ Could not persist checkout production snapshot', {
+                paymentIntentId: paymentIntent.id,
+                error: snapshotWriteError?.message,
+            });
+            try {
+                await stripe.paymentIntents.cancel(paymentIntent.id);
+            }
+            catch (cancelError) {
+                firebase_functions_1.logger.error('❌ Could not cancel PaymentIntent after snapshot write failure', {
+                    paymentIntentId: paymentIntent.id,
+                    error: cancelError?.message,
+                });
+            }
+            response.status(503).json({
+                error: 'Checkout is temporarily unavailable',
+                success: false,
+            });
+            return;
+        }
         // Abandoned-checkout recovery: record a checkouts/{piId} doc so the sweep
         // can remind the buyer if no order materializes. STRICTLY best-effort — a
         // failure here must NEVER affect the payment response (which is the whole

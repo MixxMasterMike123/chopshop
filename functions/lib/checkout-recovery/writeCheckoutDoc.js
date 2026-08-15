@@ -1,10 +1,10 @@
 "use strict";
-// Abandoned-checkout recovery: persist a `checkouts/{paymentIntentId}` doc when a
-// PaymentIntent is created (best-effort — the caller wraps this so a write
-// failure NEVER fails the payment). The sweep (sweep.ts) later reminds the buyer
-// if no order materialized. The doc is function-only (rules-locked).
+// Server-only checkout persistence. The immutable production snapshot is a
+// REQUIRED payment invariant; abandoned-checkout recovery fields are layered
+// onto the same rules-locked doc on a best-effort basis. The sweep (sweep.ts)
+// later reminds the buyer if no order materialized.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.writeAbandonedCheckoutDoc = void 0;
+exports.writeAbandonedCheckoutDoc = exports.writeCheckoutProductionSnapshot = void 0;
 const firebase_functions_1 = require("firebase-functions");
 const database_1 = require("../config/database");
 const tokens_1 = require("./tokens");
@@ -13,6 +13,26 @@ const DEFAULT_DELAY_HOURS = 1;
 const MIN_DELAY_HOURS = 1;
 const MAX_DELAY_HOURS = 24;
 const EXPIRY_DAYS = 7;
+const PRODUCTION_SNAPSHOT_RETENTION_DAYS = 30;
+/**
+ * Persist the immutable production graph before the PaymentIntent client secret
+ * is returned. This write is part of payment correctness (not recovery), so its
+ * caller must fail checkout if it cannot complete.
+ */
+async function writeCheckoutProductionSnapshot(paymentIntentId, shopId, productionSnapshot) {
+    const now = new Date();
+    await database_1.db.collection('checkouts').doc(paymentIntentId).set({
+        shopId,
+        paymentIntentId,
+        productionSnapshotRequired: true,
+        productionSnapshot,
+        createdAt: now,
+        productionSnapshotCreatedAt: now,
+        retentionNextAttemptAt: new Date(now.getTime() + PRODUCTION_SNAPSHOT_RETENTION_DAYS * 86400 * 1000),
+        expiresAt: new Date(now.getTime() + EXPIRY_DAYS * 86400 * 1000),
+    }, { merge: true });
+}
+exports.writeCheckoutProductionSnapshot = writeCheckoutProductionSnapshot;
 /**
  * Read a shop's cart-recovery reminder delay (hours), clamped to [1, 24]. Fails
  * open to the default so a transient read error never breaks checkout doc writes.
@@ -92,7 +112,7 @@ async function writeAbandonedCheckoutDoc(params) {
         remindAt,
         expiresAt,
         status: 'open',
-    });
+    }, { merge: true });
 }
 exports.writeAbandonedCheckoutDoc = writeAbandonedCheckoutDoc;
 //# sourceMappingURL=writeCheckoutDoc.js.map

@@ -106,6 +106,7 @@ exports.createB2BOrder = (0, https_1.onCall)({ region: 'us-central1', memory: '2
             quantity: qty,
             lineTotal,
             image: p.imageUrl || p.b2cImageUrl || '',
+            isPodProduct: p.isPodProduct === true,
         });
     }
     // 5. VAT + total. b2bPrice is ex moms; add the configured VAT rate.
@@ -154,6 +155,10 @@ exports.createB2BOrder = (0, https_1.onCall)({ region: 'us-central1', memory: '2
                 country: cust.country || 'Sverige',
             },
         items: orderItems,
+        // P1-16: the order is unpaid, so the immutable artwork snapshot is
+        // created by onOrderProductionReady when status first enters `paid`.
+        // Print callables fail closed while this marker exists without a snapshot.
+        productionSnapshotRequired: true,
         subtotal,
         shipping: 0,
         vat,

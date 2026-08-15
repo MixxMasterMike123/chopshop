@@ -3,7 +3,7 @@
 // EMAIL ORCHESTRATOR SYSTEM - Unified email functions
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getPrintJob = exports.getPrintQueue = exports.scrapeWebsiteMetaV2 = exports.resolveDac7Correction = exports.requestDac7Correction = exports.correctOwnDac7Contact = exports.getOwnDac7 = exports.exportDac7Report = exports.aggregateDac7Year = exports.pullDac7FromStripe = exports.getDac7SellerProfile = exports.saveDac7SellerProfile = exports.refundOrder = exports.setConnectPayoutDelay = exports.getConnectBalance = exports.setShopCommission = exports.createConnectLoginLink = exports.refreshConnectStatus = exports.createConnectAccountLink = exports.createConnectAccount = exports.stripeWebhookV2 = exports.createPaymentIntentV2 = exports.syncAdminClaims = exports.createAdminUserV2 = exports.toggleCustomerActiveStatusV2 = exports.deleteB2CCustomerAccountV2 = exports.deleteCustomerAccountV2 = exports.getGeoDataV2 = exports.syncUserClaimsOnWrite = exports.cancelB2BOrder = exports.createB2BOrder = exports.reverseAffiliateCommissionOnCancel = exports.processB2COrderCompletionHttpV2 = exports.validateDiscountCode = exports.logAffiliateClickV2 = exports.sendAffiliateApplicationEmails = exports.verifyEmailCode = exports.sendCustomEmailVerification = exports.migrateFromWoo = exports.migrateFromShopify = exports.deletePlatformUser = exports.createPlatformSuperAdmin = exports.createShopUser = exports.approveAffiliate = exports.sendAffiliateWelcomeEmail = exports.sendLoginCredentialsEmail = exports.sendPasswordResetEmail = exports.sendOrderNotificationAdmin = exports.sendOrderStatusUpdateEmail = exports.sendOrderConfirmationEmail = void 0;
-exports.confirmPasswordReset = exports.confirmPasswordResetV2 = exports.getHandoffPackage = exports.renderSocialVideo = exports.generateSocialCopy = exports.submitWithdrawal = exports.moderateReview = exports.unsubscribeReviews = exports.submitReview = exports.resolveReviewRequest = exports.sweepReviewRequests = exports.onOrderReviewQualify = exports.syncProductsPublicOnWrite = exports.unsubscribeCheckout = exports.resolveCheckoutRecovery = exports.sweepAbandonedCheckouts = exports.submitLead = exports.processPodArtwork = exports.setPrintJobStatus = exports.createPrintShopUser = exports.getPrintArtworkDownload = exports.getPrintArtworkLibrary = exports.getPrintQueueExport = void 0;
+exports.confirmPasswordReset = exports.confirmPasswordResetV2 = exports.getHandoffPackage = exports.renderSocialVideo = exports.generateSocialCopy = exports.submitWithdrawal = exports.moderateReview = exports.unsubscribeReviews = exports.submitReview = exports.resolveReviewRequest = exports.sweepReviewRequests = exports.onOrderReviewQualify = exports.syncProductsPublicOnWrite = exports.unsubscribeCheckout = exports.resolveCheckoutRecovery = exports.sweepAbandonedCheckouts = exports.submitLead = exports.processPodArtwork = exports.sweepPrintNotifyOutbox = exports.onOrderProductionReady = exports.setPrintJobStatus = exports.createPrintShopUser = exports.getPrintArtworkDownload = exports.getPrintArtworkLibrary = exports.getPrintQueueExport = void 0;
 // Initialize Firebase Admin SDK
 const app_1 = require("firebase-admin/app");
 (0, app_1.initializeApp)();
@@ -133,6 +133,14 @@ Object.defineProperty(exports, "createPrintShopUser", { enumerable: true, get: f
 // because it declares the RESEND_API_KEY secret for the server-side status email.
 var setPrintJobStatus_1 = require("./print/setPrintJobStatus");
 Object.defineProperty(exports, "setPrintJobStatus", { enumerable: true, get: function () { return setPrintJobStatus_1.setPrintJobStatus; } });
+// Durable print-notify outbox (P1-15): the orders/{id} trigger enqueues ONE
+// deduplicated printNotifications/{orderId} event when a POD order first
+// becomes production-ready (B2C webhook create at 'confirmed' AND B2B invoice
+// marked 'paid' — any writer), and the sweep retries undelivered events with
+// capped backoff. Replaces the webhook's lossy fire-and-forget send.
+var notifyOutbox_1 = require("./print/notifyOutbox");
+Object.defineProperty(exports, "onOrderProductionReady", { enumerable: true, get: function () { return notifyOutbox_1.onOrderProductionReady; } });
+Object.defineProperty(exports, "sweepPrintNotifyOutbox", { enumerable: true, get: function () { return notifyOutbox_1.sweepPrintNotifyOutbox; } });
 // processPodArtwork — the server-authoritative artwork pipeline (sharp):
 // convert-to-PNG + trim + sRGB + BLOCKING 300-DPI contain gate (docs/POD_PRINT_SPEC.md).
 var processArtwork_1 = require("./pod/processArtwork");

@@ -51,9 +51,9 @@ const rejects = async (p, m) => {
   await rejects(assertPublicUrl('not a url'), 'assertPublicUrl rejects malformed URL');
 
   console.log('\n=== P1-18: artworkDeliverable partition guard ===');
-  ok(artworkDeliverable({ printStoragePath: 'pod-artwork/shopA/print/a.png', status: 'ready' }, 'shopA').deliverable === true,
+  ok(artworkDeliverable({ printStoragePath: 'pod-artwork/shopA/print/a.png', status: 'ready', validation: { gate: 'PASS' } }, 'shopA').deliverable === true,
     'gated print file in own partition → deliverable');
-  ok(artworkDeliverable({ printStoragePath: 'pod-artwork/shopB/print/a.png', status: 'ready' }, 'shopA').deliverable === false,
+  ok(artworkDeliverable({ printStoragePath: 'pod-artwork/shopB/print/a.png', status: 'ready', validation: { gate: 'PASS' } }, 'shopA').deliverable === false,
     'print file in ANOTHER shop\'s partition → NOT deliverable');
   ok(artworkDeliverable({ status: 'rejected' }, 'shopA').deliverable === false,
     'status doc without print file → NOT deliverable');

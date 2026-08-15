@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.sendAffiliateWelcomeEmail = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const app_urls_1 = require("../../config/app-urls");
+const database_1 = require("../../config/database");
 const EmailOrchestrator_1 = require("../core/EmailOrchestrator");
 const authGuard_1 = require("./authGuard");
 exports.sendAffiliateWelcomeEmail = (0, https_1.onCall)({
@@ -16,52 +17,55 @@ exports.sendAffiliateWelcomeEmail = (0, https_1.onCall)({
     cors: app_urls_1.appUrls.CORS_ORIGINS
 }, async (request) => {
     try {
-        // SECURITY: privileged mailer - admin only
-        await (0, authGuard_1.requireAdmin)(request.auth?.uid);
+        const affiliateCode = String(request.data.affiliateInfo?.affiliateCode || '').trim();
+        if (!affiliateCode)
+            throw new https_1.HttpsError('invalid-argument', 'Affiliate code is required');
+        const affiliateQuery = await database_1.db.collection('affiliates')
+            .where('affiliateCode', '==', affiliateCode)
+            .limit(2)
+            .get();
+        if (affiliateQuery.empty)
+            throw new https_1.HttpsError('not-found', 'Affiliate not found');
+        if (affiliateQuery.size !== 1)
+            throw new https_1.HttpsError('failed-precondition', 'Affiliate code is not unique');
+        const affiliate = affiliateQuery.docs[0].data();
+        await (0, authGuard_1.requireAdminOfShop)(affiliate.shopId, request.auth?.uid);
+        const affiliateEmail = String(affiliate.email || '').trim();
+        const affiliateName = String(affiliate.name || affiliate.contactPerson || '').trim();
+        if (!affiliateEmail || !affiliateName) {
+            throw new https_1.HttpsError('failed-precondition', 'Affiliate contact details are incomplete');
+        }
         console.log('🎉 sendAffiliateWelcomeEmail: Starting affiliate welcome onboarding');
         console.log('🎉 Request data:', {
-            affiliateName: request.data.affiliateInfo.name,
-            affiliateEmail: request.data.affiliateInfo.email,
-            affiliateCode: request.data.affiliateInfo.affiliateCode,
+            affiliateName,
+            affiliateCode,
             wasExistingAuthUser: request.data.wasExistingAuthUser,
             language: request.data.language
         });
         // Validate required data
-        if (!request.data.affiliateInfo?.name) {
-            throw new Error('Affiliate name is required');
-        }
-        if (!request.data.affiliateInfo?.email) {
-            throw new Error('Affiliate email is required');
-        }
-        if (!request.data.affiliateInfo?.affiliateCode) {
-            throw new Error('Affiliate code is required');
-        }
-        if (!request.data.credentials?.email) {
-            throw new Error('Credentials email is required');
-        }
         // Initialize EmailOrchestrator
         const orchestrator = new EmailOrchestrator_1.EmailOrchestrator();
         // Prepare affiliate welcome data
-        const language = request.data.language || request.data.affiliateInfo.preferredLang || 'sv-SE';
+        const language = affiliate.preferredLang || request.data.language || 'sv-SE';
         const wasExistingAuthUser = request.data.wasExistingAuthUser || false;
         // Send email via orchestrator
         const result = await orchestrator.sendEmail({
             emailType: 'AFFILIATE_WELCOME',
             customerInfo: {
-                email: request.data.affiliateInfo.email,
-                name: request.data.affiliateInfo.name
+                email: affiliateEmail,
+                name: affiliateName
             },
             language: language,
             additionalData: {
                 affiliateInfo: {
-                    name: request.data.affiliateInfo.name,
-                    email: request.data.affiliateInfo.email,
-                    affiliateCode: request.data.affiliateInfo.affiliateCode,
-                    commissionRate: request.data.affiliateInfo.commissionRate,
-                    checkoutDiscount: request.data.affiliateInfo.checkoutDiscount
+                    name: affiliateName,
+                    email: affiliateEmail,
+                    affiliateCode,
+                    commissionRate: affiliate.commissionRate,
+                    checkoutDiscount: affiliate.checkoutDiscount
                 },
                 credentials: {
-                    email: request.data.credentials.email,
+                    email: affiliateEmail,
                     temporaryPassword: request.data.credentials.temporaryPassword
                 },
                 wasExistingAuthUser: wasExistingAuthUser
@@ -73,8 +77,8 @@ exports.sendAffiliateWelcomeEmail = (0, https_1.onCall)({
                 success: true,
                 messageId: result.messageId,
                 details: result.details,
-                affiliateCode: request.data.affiliateInfo.affiliateCode,
-                email: request.data.affiliateInfo.email,
+                affiliateCode,
+                email: affiliateEmail,
                 wasExistingAuthUser: wasExistingAuthUser,
                 language: language
             };
@@ -86,6 +90,8 @@ exports.sendAffiliateWelcomeEmail = (0, https_1.onCall)({
     }
     catch (error) {
         console.error('❌ sendAffiliateWelcomeEmail: Fatal error:', error);
+        if (error instanceof https_1.HttpsError)
+            throw error;
         throw new Error(error instanceof Error ? error.message : 'Unknown error in affiliate welcome email');
     }
 });

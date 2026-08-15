@@ -215,6 +215,13 @@ export {
 // because it declares the RESEND_API_KEY secret for the server-side status email.
 export { setPrintJobStatus } from './print/setPrintJobStatus';
 
+// Durable print-notify outbox (P1-15): the orders/{id} trigger enqueues ONE
+// deduplicated printNotifications/{orderId} event when a POD order first
+// becomes production-ready (B2C webhook create at 'confirmed' AND B2B invoice
+// marked 'paid' — any writer), and the sweep retries undelivered events with
+// capped backoff. Replaces the webhook's lossy fire-and-forget send.
+export { onOrderProductionReady, sweepPrintNotifyOutbox } from './print/notifyOutbox';
+
 // processPodArtwork — the server-authoritative artwork pipeline (sharp):
 // convert-to-PNG + trim + sRGB + BLOCKING 300-DPI contain gate (docs/POD_PRINT_SPEC.md).
 export { processPodArtwork } from './pod/processArtwork';

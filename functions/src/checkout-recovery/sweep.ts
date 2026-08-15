@@ -1,5 +1,6 @@
 // Abandoned-checkout recovery: the scheduled sweep. Every 15 minutes it:
-//   1. purges checkouts older than 30 days (retention),
+//   1. purges legacy checkouts after 30 days and safely cancels abandoned
+//      PaymentIntents before deleting their immutable production snapshots,
 //   2. finds 'open' checkouts whose remindAt has passed, and
 //   3. per doc (isolated try/catch so one failure never kills the batch),
 //      re-checks every guard (order-now-exists race, consent, suppression,
@@ -12,12 +13,15 @@
 
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { logger } from 'firebase-functions';
+import Stripe from 'stripe';
 import { db } from '../config/database';
 import { appUrls } from '../config/app-urls';
 import { isShopFeatureEnabled } from '../config/shopFeatures';
 import { suppressionDocId } from './tokens';
 
 const RETENTION_DAYS = 30;
+const RETENTION_BATCH_LIMIT = 10;
+const RETENTION_RETRY_MS = 15 * 60 * 1000;
 const FREQUENCY_CAP_HOURS = 24;
 const BATCH_LIMIT = 50;
 
@@ -44,12 +48,13 @@ export const sweepAbandonedCheckouts = onSchedule(
     region: 'us-central1',
     memory: '256MiB',
     timeoutSeconds: 120,
-    secrets: ['RESEND_API_KEY'],
+    secrets: ['RESEND_API_KEY', 'STRIPE_SECRET_KEY'],
   },
   async () => {
     const now = Date.now();
 
-    // ── 1) Retention purge: delete checkouts created > 30 days ago (any status).
+    // ── 1a) Legacy recovery docs have no production snapshot and can be
+    // deleted directly at the retention boundary.
     try {
       const cutoff = new Date(now - RETENTION_DAYS * 86400 * 1000);
       const stale = await db
@@ -59,12 +64,88 @@ export const sweepAbandonedCheckouts = onSchedule(
         .get();
       if (!stale.empty) {
         const batch = db.batch();
-        stale.docs.forEach((d) => batch.delete(d.ref));
-        await batch.commit();
-        logger.info('checkout-recovery: purged stale checkouts', { count: stale.size });
+        let purgeCount = 0;
+        for (const d of stale.docs) {
+          const checkout = d.data() as any;
+          if (checkout.productionSnapshotRequired === true) continue;
+          batch.delete(d.ref);
+          purgeCount++;
+        }
+        if (purgeCount > 0) {
+          await batch.commit();
+          logger.info('checkout-recovery: purged stale checkouts', { count: purgeCount });
+        }
       }
     } catch (e: any) {
-      logger.warn('checkout-recovery: retention purge failed', { error: e?.message });
+      logger.warn('checkout-recovery: legacy retention purge failed', { error: e?.message });
+    }
+
+    // ── 1b) A pre-payment production snapshot is the only immutable source for
+    // its PaymentIntent, so cancel an abandoned PI before deleting its snapshot.
+    // Due-time ordering plus a short retry timestamp prevents one paid/broken PI
+    // from starving every later retention candidate.
+    try {
+      const dueSnapshots = await db
+        .collection('checkouts')
+        .where('retentionNextAttemptAt', '<=', new Date(now))
+        .orderBy('retentionNextAttemptAt', 'asc')
+        .limit(RETENTION_BATCH_LIMIT)
+        .get();
+      if (!dueSnapshots.empty) {
+        const batch = db.batch();
+        const stripeKey = (process.env.STRIPE_SECRET_KEY || '').trim();
+        const stripe = stripeKey ? new Stripe(stripeKey, { apiVersion: '2023-10-16' }) : null;
+        let purgeCount = 0;
+        for (const d of dueSnapshots.docs) {
+          const checkout = d.data() as any;
+          const piId = String(checkout.paymentIntentId || d.id);
+          const retry = (reason: string) => {
+            batch.set(d.ref, {
+              retentionNextAttemptAt: new Date(now + RETENTION_RETRY_MS),
+              retentionLastError: reason.slice(0, 160),
+            }, { merge: true });
+          };
+          const orderSnap = await db.collection('orders').doc(piId).get();
+          if (!orderSnap.exists) {
+            if (!stripe) {
+              logger.error('checkout-recovery: retaining snapshot — STRIPE_SECRET_KEY unavailable', { piId });
+              retry('stripe_secret_unavailable');
+              continue;
+            }
+            try {
+              const pi = await stripe.paymentIntents.retrieve(piId);
+              if (pi.status === 'succeeded' || pi.status === 'processing') {
+                logger.error('checkout-recovery: retaining stale snapshot for paid/processing PI without order', {
+                  piId,
+                  status: pi.status,
+                });
+                retry(`pi_${pi.status}_without_order`);
+                continue;
+              }
+              if (pi.status !== 'canceled') await stripe.paymentIntents.cancel(piId);
+            } catch (e: any) {
+              // Not-found means the PI can no longer be paid; every other
+              // error retains the snapshot and retries on the next sweep.
+              if (e?.statusCode !== 404 && e?.code !== 'resource_missing') {
+                logger.warn('checkout-recovery: retaining snapshot after PI cancellation failure', {
+                  piId,
+                  error: e?.message,
+                });
+                retry('stripe_cancel_failed');
+                continue;
+              }
+            }
+          }
+          batch.delete(d.ref);
+          purgeCount++;
+        }
+        await batch.commit();
+        if (purgeCount > 0) {
+          logger.info('checkout-recovery: purged stale production snapshots', { count: purgeCount });
+        }
+      }
+    } catch (e: any) {
+      logger.warn('checkout-recovery: production snapshot retention failed', { error: e?.message });
     }
 
     // ── 2) Due 'open' checkouts whose remindAt has passed.

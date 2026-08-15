@@ -26,6 +26,7 @@ export { saveDac7SellerProfile, getDac7SellerProfile, pullDac7FromStripe, aggreg
 export { scrapeWebsiteMeta as scrapeWebsiteMetaV2 };
 export { getPrintQueue, getPrintJob, getPrintQueueExport, getPrintArtworkLibrary, getPrintArtworkDownload, createPrintShopUser, } from './print/functions';
 export { setPrintJobStatus } from './print/setPrintJobStatus';
+export { onOrderProductionReady, sweepPrintNotifyOutbox } from './print/notifyOutbox';
 export { processPodArtwork } from './pod/processArtwork';
 export { submitLead } from './leads/submitLead';
 export { sweepAbandonedCheckouts } from './checkout-recovery/sweep';

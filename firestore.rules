@@ -771,7 +771,7 @@ service cloud.firestore {
 
     // Default deny for everything else (incl. server-only collections:
     // passwordResets, emailVerifications, campaignParticipants,
-    // campaignRevenueTracking)
+    // campaignRevenueTracking, printNotifications)
     match /{document=**} {
       allow read, write: if false;
     }

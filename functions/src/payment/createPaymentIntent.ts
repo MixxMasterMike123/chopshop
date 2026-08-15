@@ -13,8 +13,12 @@ import { DEFAULT_SHOP_ID } from '../config/tenancy';
 import { isShopFeatureEnabled } from '../config/shopFeatures';
 import { buildConnectChargeParams } from './connectParams';
 import { readPlatformConfig } from './platformConfig';
-import { writeAbandonedCheckoutDoc } from '../checkout-recovery/writeCheckoutDoc';
+import {
+  writeAbandonedCheckoutDoc,
+  writeCheckoutProductionSnapshot,
+} from '../checkout-recovery/writeCheckoutDoc';
 import { checkRateLimit, trustedClientIp } from '../protection/rate-limiting/durableRateLimit';
+import { buildProductionSnapshotAtomically } from '../print/printProjection';
 
 /**
  * Server-side price computation. NEVER trust client-supplied amounts:
@@ -50,8 +54,10 @@ export function shopCheckoutBlockReason(shop: any): string | null {
 // never from the client payload. Returns null when the location can't resolve.
 export function resolvePickupLocation(
   shop: any,
-  pickupLocationId: unknown
-): { id: string; name: string; address: string } | null {
+  pickupLocationId: unknown,
+  pickupLocationDate?: unknown,
+  todayIso = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
+): { id: string; name: string; address: string; date: string } | null {
   const locations = Array.isArray(shop?.storeIdentity?.pickupLocations)
     ? shop.storeIdentity.pickupLocations
     : [];
@@ -59,7 +65,30 @@ export function resolvePickupLocation(
   if (!locId) return null;
   const loc = locations.find((l: any) => l && l.id === locId);
   if (!loc) return null;
-  return { id: String(loc.id), name: String(loc.name || ''), address: String(loc.address || '') };
+  const dates = Array.isArray(loc.dates)
+    ? loc.dates.map((d: unknown) => String(d || '')).filter(Boolean)
+    : [];
+  const requestedDate = String(pickupLocationDate || '');
+  if (dates.length > 0 && (!dates.includes(requestedDate) || requestedDate < todayIso)) return null;
+  return {
+    id: String(loc.id),
+    name: String(loc.name || ''),
+    address: String(loc.address || ''),
+    date: dates.length > 0 ? requestedDate : '',
+  };
+}
+
+export function withdrawalConsentBlockReason(
+  hasPersonalizedItem: boolean,
+  consent: any
+): string | null {
+  if (!hasPersonalizedItem) return null;
+  if (consent?.accepted !== true) return 'consent-required';
+  if (!String(consent.noticeVersion || '').trim()) return 'notice-version-required';
+  if (!/^h[0-9a-f]+$/i.test(String(consent.noticeFingerprint || '').trim())) {
+    return 'notice-fingerprint-invalid';
+  }
+  return null;
 }
 
 export interface ServerCartLine {
@@ -72,6 +101,7 @@ export interface ServerCartLine {
   label: string;
   image: string;
   isPersonalized: boolean;
+  isPodProduct: boolean;
 }
 
 // Validate ONE cart line against the SERVER product doc and derive the
@@ -155,6 +185,7 @@ export function validateCartLine(
     label: variant?.label || '',
     image: variant?.image || product.b2cImageUrl || product.b2cImageGallery?.[0] || product.imageUrl || '',
     isPersonalized: product.isPersonalized === true,
+    isPodProduct: product.isPodProduct === true,
   };
 }
 
@@ -465,9 +496,13 @@ export const createPaymentIntentV2 = onRequest(
       // name/address (server truth) is what gets persisted — a crafted request
       // can no longer zero shipping on a shop without pickup, or stamp a
       // fabricated pickup address onto the order.
-      let resolvedPickup: { id: string; name: string; address: string } | null = null;
+      let resolvedPickup: { id: string; name: string; address: string; date: string } | null = null;
       if (deliveryMethod === 'pickup') {
-        resolvedPickup = resolvePickupLocation(shopSnap.data(), deliveryInfo?.pickupLocationId);
+        resolvedPickup = resolvePickupLocation(
+          shopSnap.data(),
+          deliveryInfo?.pickupLocationId,
+          deliveryInfo?.pickupLocationDate
+        );
         if (!resolvedPickup) {
           logger.warn('⛔ Checkout blocked — invalid pickup location', { shopId: resolvedShopId });
           response.status(400).json({ error: 'Invalid pickup location' });
@@ -533,24 +568,25 @@ export const createPaymentIntentV2 = onRequest(
 
       // Right-of-withdrawal (POD) proof. The server decides whether the gate was
       // REQUIRED from the live products (totals.hasPersonalizedItem) — never the
-      // client. We record what arrived (locked decision: server backstop =
-      // record-what-arrived) into PI metadata; the webhook stamps order.withdrawal.
+      // client. Fail closed before creating a PaymentIntent if the required
+      // consent proof is absent or malformed.
       const wc = (request.body as any)?.withdrawalConsent;
       let withdrawalMeta: Record<string, string> = {};
+      const consentBlockReason = withdrawalConsentBlockReason(totals.hasPersonalizedItem, wc);
+      if (consentBlockReason) {
+        logger.warn('⛔ Personalized checkout blocked — withdrawal consent invalid', {
+          shopId: resolvedShopId,
+          consentBlockReason,
+        });
+        response.status(400).json({ error: 'Withdrawal consent is required' });
+        return;
+      }
       if (totals.hasPersonalizedItem) {
-        const accepted = wc?.accepted === true;
-        if (!accepted) {
-          // A personalized item with no client consent → the legitimate client
-          // blocks this. Record it (don't silently drop) for evidence/audit.
-          logger.warn('⚠️ POD: personalized item charged WITHOUT recorded withdrawal consent', {
-            shopId: resolvedShopId,
-          });
-        }
         withdrawalMeta = {
           withdrawalRequired: 'true',
-          withdrawalConsent: accepted ? 'true' : 'false',
-          withdrawalNoticeVersion: String(wc?.noticeVersion || ''),
-          withdrawalNoticeFingerprint: String(wc?.noticeFingerprint || ''),
+          withdrawalConsent: 'true',
+          withdrawalNoticeVersion: String(wc.noticeVersion).trim(),
+          withdrawalNoticeFingerprint: String(wc.noticeFingerprint).trim(),
           withdrawalConsentAt: new Date().toISOString(),
         };
       }
@@ -611,7 +647,9 @@ export const createPaymentIntentV2 = onRequest(
         label: line.label,
         price: line.price,
         quantity: line.quantity,
-        image: withImages ? line.image : ''
+        image: withImages ? line.image : '',
+        isPodProduct: line.isPodProduct,
+        isPersonalized: line.isPersonalized,
       })));
       const META_VALUE_MAX = 500;
       const META_TOTAL_KEYS = 50; // Stripe's hard cap on metadata key count
@@ -657,7 +695,7 @@ export const createPaymentIntentV2 = onRequest(
               pickupLocationId: resolvedPickup.id,
               pickupLocationName: resolvedPickup.name,
               pickupLocationAddress: resolvedPickup.address,
-              pickupLocationDate: String(deliveryInfo?.pickupLocationDate || '').slice(0, 40),
+              pickupLocationDate: resolvedPickup.date,
             }),
             
             // Order Totals (server-computed breakdown — single source of truth)
@@ -704,6 +742,10 @@ export const createPaymentIntentV2 = onRequest(
             platform: 'meteorpr',
             shopId: resolvedShopId, // tenant id — webhook stamps it on the order
             version: 'enhanced_v2', // server-priced metadata
+            // Webhook must load the graph frozen before this PI's client secret
+            // was released; old in-flight PIs lack this marker and use the
+            // explicit legacy fallback there.
+            productionSnapshotRequired: 'true',
 
             // Right-of-withdrawal proof (empty {} for standard-options carts)
             ...withdrawalMeta,
@@ -718,6 +760,43 @@ export const createPaymentIntentV2 = onRequest(
         ?? chunkItemDetails(buildItemDetailsJson(false), chunkBudget);
       if (!itemDetailsMeta) {
         response.status(400).json({ error: 'Cart too large for payment metadata' });
+        return;
+      }
+
+      // Freeze production identity before the buyer can confirm payment. This
+      // prevents a mapping/artwork edit between checkout and webhook delivery
+      // from changing what the print shop receives.
+      let checkoutProductionSnapshot;
+      try {
+        checkoutProductionSnapshot = await buildProductionSnapshotAtomically({
+          shopId: resolvedShopId,
+          items: totals.serverLines,
+        });
+        const unresolvedLines = checkoutProductionSnapshot.lines.filter((line) => line.unresolvedReason);
+        if (unresolvedLines.length > 0) {
+          logger.error('⛔ Checkout blocked — POD production snapshot is unresolved', {
+            shopId: resolvedShopId,
+            lines: unresolvedLines.map((line) => ({
+              sku: line.sku,
+              placementSlot: line.placementSlot,
+              reason: line.unresolvedReason,
+            })),
+          });
+          response.status(409).json({
+            error: 'A product is temporarily unavailable for production',
+            success: false,
+          });
+          return;
+        }
+      } catch (snapshotError: any) {
+        logger.error('❌ Could not freeze checkout production snapshot', {
+          shopId: resolvedShopId,
+          error: snapshotError?.message,
+        });
+        response.status(503).json({
+          error: 'Checkout is temporarily unavailable',
+          success: false,
+        });
         return;
       }
 
@@ -766,6 +845,35 @@ export const createPaymentIntentV2 = onRequest(
         currency: paymentIntent.currency,
         status: paymentIntent.status
       });
+
+      // This rules-locked write is REQUIRED. Until it succeeds, the client must
+      // not receive the secret that can confirm the payment. Cancel the unused
+      // PI on failure so it cannot become a paid order without its snapshot.
+      try {
+        await writeCheckoutProductionSnapshot(
+          paymentIntent.id,
+          resolvedShopId,
+          checkoutProductionSnapshot
+        );
+      } catch (snapshotWriteError: any) {
+        logger.error('❌ Could not persist checkout production snapshot', {
+          paymentIntentId: paymentIntent.id,
+          error: snapshotWriteError?.message,
+        });
+        try {
+          await stripe.paymentIntents.cancel(paymentIntent.id);
+        } catch (cancelError: any) {
+          logger.error('❌ Could not cancel PaymentIntent after snapshot write failure', {
+            paymentIntentId: paymentIntent.id,
+            error: cancelError?.message,
+          });
+        }
+        response.status(503).json({
+          error: 'Checkout is temporarily unavailable',
+          success: false,
+        });
+        return;
+      }
 
       // Abandoned-checkout recovery: record a checkouts/{piId} doc so the sweep
       // can remind the buyer if no order materializes. STRICTLY best-effort — a

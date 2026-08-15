@@ -89,7 +89,7 @@ export const confirmPasswordReset = onCall<PasswordResetConfirmRequest>(
         usedAt: new Date()
       });
 
-      console.log(`✅ Password successfully reset for user: ${resetData.email}`);
+      console.log('✅ Password successfully reset');
 
       return {
         success: true,

@@ -108,6 +108,9 @@ exports.setPrintJobStatus = (0, https_1.onCall)({
     // ...and it must actually be a POD order for that shop (a mapped line) — the
     // printer only ever operates on orders it can see in its own queue.
     const mappings = await (0, printProjection_1.loadShopMappings)(order.shopId);
+    if ((0, printProjection_1.productionSnapshotPending)(order)) {
+        throw new https_1.HttpsError('unavailable', 'Produktionsunderlaget låses just nu — försök igen om en liten stund.');
+    }
     if (!(0, printProjection_1.orderHasPodLine)(order, mappings)) {
         throw new https_1.HttpsError('permission-denied', 'This order has no POD lines you can fulfil');
     }

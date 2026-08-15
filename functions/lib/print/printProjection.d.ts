@@ -11,7 +11,45 @@ export declare function artworkDeliverable(art: any, shopId: string): {
     deliverable: boolean;
     reason?: string;
 };
-export declare function findUnresolvedPodLines(order: any, mappingsBySku: Map<string, any[]>, dbRef: FirebaseFirestore.Firestore): Promise<string[]>;
+export declare const PRODUCTION_SNAPSHOT_VERSION = 1;
+export type ProductionSnapshotLine = {
+    itemIndex: number;
+    productName: string;
+    sku: string;
+    variantLabel: string | null;
+    quantity: number;
+    placementSlot: PlacementSlot;
+    slotLabel: string;
+    placement: string;
+    profileId: string | null;
+    mappingId: string | null;
+    artworkId: string | null;
+    purpose: string | null;
+    artworkVersion: string | null;
+    printStoragePath?: string;
+    fileName?: string;
+    tier?: string | null;
+    unresolvedReason?: string;
+};
+export type ProductionSnapshot = {
+    version: 1;
+    createdAt: Date;
+    lines: ProductionSnapshotLine[];
+};
+/** Returns null only for legacy orders that predate snapshot enforcement. */
+export declare function productionSnapshotLines(order: any): ProductionSnapshotLine[] | null;
+export declare function productionSnapshotPending(order: any): boolean;
+/**
+ * Resolve and freeze every POD item×slot from the live mapping/artwork graph.
+ * Invalid mapped lines are preserved as explicit unresolved rows, never erased.
+ * The returned object contains no undefined values and is safe for Firestore.
+ */
+export declare function buildProductionSnapshot(order: any, mappingsBySku: Map<string, any[]>, dbRef: FirebaseFirestore.Firestore): Promise<ProductionSnapshot>;
+/** Read mappings + artwork through an existing transaction for a consistent graph. */
+export declare function buildProductionSnapshotInTransaction(order: any, tx: FirebaseFirestore.Transaction): Promise<ProductionSnapshot>;
+/** Read mappings + artwork in one Firestore transaction for a consistent graph. */
+export declare function buildProductionSnapshotAtomically(order: any): Promise<ProductionSnapshot>;
+export declare function findUnresolvedPodLines(order: any, mappingsBySku: Map<string, any[]>, dbRef: FirebaseFirestore.Firestore, artifactAccessCheck?: (storagePath: string, allowedPrefix: string) => Promise<boolean>): Promise<string[]>;
 export declare function orderHasPodLine(order: any, mappingsBySku: Map<string, any[]>): boolean;
 export declare function toPrintNotificationLines(order: any, mappingsBySku: Map<string, any[]>): Array<{
     productName: string;

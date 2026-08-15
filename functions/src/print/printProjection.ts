@@ -116,8 +116,12 @@ export async function signedUrlFor(storagePath: string, fallbackUrl: string | nu
 // old one-row-per-sku assumption is gone. Slot resolution happens in resolveSlots.
 export async function loadShopMappings(shopId: string): Promise<Map<string, any[]>> {
   const snap = await db.collection('podMappings').where('shopId', '==', shopId).get();
+  return groupMappings(snap.docs);
+}
+
+function groupMappings(docs: Array<{ id: string; data: () => any }>): Map<string, any[]> {
   const bySku = new Map<string, any[]>();
-  snap.docs.forEach((d) => {
+  docs.forEach((d) => {
     const m = d.data();
     if (!m.sku) return;
     const arr = bySku.get(m.sku) || [];
@@ -181,9 +185,14 @@ export function artworkDeliverable(art: any, shopId: string): { deliverable: boo
   const shopPrefix = `pod-artwork/${String(shopId || '')}/`;
   const isPrintFile =
     typeof art?.printStoragePath === 'string' && art.printStoragePath.startsWith(`${shopPrefix}print/`);
-  if (isPrintFile) return { deliverable: true };
+  // New pipeline docs are mutable during reprocessing. A rejected reprocess
+  // deliberately leaves the previous PNG in storage, but that stale path must
+  // never make a NEW order deliverable. Only the current ready/PASS verdict may
+  // be snapshotted. Existing paid orders use their immutable stored path below.
   if (art?.status !== undefined) {
-    return { deliverable: false, reason: 'Tryckfil saknas — be butiken validera om originalet' };
+    return isPrintFile && art.status === 'ready' && art.validation?.gate === 'PASS'
+      ? { deliverable: true }
+      : { deliverable: false, reason: 'Tryckfilen är inte godkänd — be butiken validera om originalet' };
   }
   // Legacy pre-gate doc (no status field): the raw original may substitute,
   // but ONLY when it lives inside THIS shop's partition (P1-18 fail-closed —
@@ -195,6 +204,174 @@ export function artworkDeliverable(art: any, shopId: string): { deliverable: boo
     : { deliverable: false, reason: 'Originalfilen ligger utanför butikens lagring' };
 }
 
+export const PRODUCTION_SNAPSHOT_VERSION = 1;
+
+export type ProductionSnapshotLine = {
+  itemIndex: number;
+  productName: string;
+  sku: string;
+  variantLabel: string | null;
+  quantity: number;
+  placementSlot: PlacementSlot;
+  slotLabel: string;
+  placement: string;
+  profileId: string | null;
+  mappingId: string | null;
+  artworkId: string | null;
+  purpose: string | null;
+  artworkVersion: string | null;
+  printStoragePath?: string;
+  fileName?: string;
+  tier?: string | null;
+  unresolvedReason?: string;
+};
+
+export type ProductionSnapshot = {
+  version: 1;
+  createdAt: Date;
+  lines: ProductionSnapshotLine[];
+};
+
+/** Returns null only for legacy orders that predate snapshot enforcement. */
+export function productionSnapshotLines(order: any): ProductionSnapshotLine[] | null {
+  const snap = order?.productionSnapshot;
+  return snap?.version === PRODUCTION_SNAPSHOT_VERSION && Array.isArray(snap.lines)
+    ? snap.lines
+    : null;
+}
+
+export function productionSnapshotPending(order: any): boolean {
+  return order?.productionSnapshotRequired === true && productionSnapshotLines(order) === null;
+}
+
+/**
+ * Resolve and freeze every POD item×slot from the live mapping/artwork graph.
+ * Invalid mapped lines are preserved as explicit unresolved rows, never erased.
+ * The returned object contains no undefined values and is safe for Firestore.
+ */
+export async function buildProductionSnapshot(
+  order: any,
+  mappingsBySku: Map<string, any[]>,
+  dbRef: FirebaseFirestore.Firestore
+): Promise<ProductionSnapshot> {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const lines: ProductionSnapshotLine[] = [];
+  const artCache = new Map<string, any | null>();
+  const slotOrder: PlacementSlot[] = ['front', 'back', 'pocket', 'left_sleeve', 'right_sleeve', 'other'];
+
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+    const it = items[itemIndex];
+    if (!it?.sku) continue;
+    const slots = resolveSlots(String(it.sku), mappingsBySku);
+    // A server-derived POD marker means a missing mapping is a production
+    // defect, not proof that the line is non-POD.
+    if (slots.size === 0 && it.isPodProduct === true) {
+      lines.push({
+        itemIndex,
+        productName: typeof it.name === 'string' ? it.name : (it.name?.['sv-SE'] || it.sku),
+        sku: String(it.sku),
+        variantLabel: it.label || null,
+        quantity: Number(it.quantity) || 0,
+        placementSlot: DEFAULT_SLOT,
+        slotLabel: slotLabel(DEFAULT_SLOT),
+        placement: slotLabel(DEFAULT_SLOT),
+        profileId: null,
+        mappingId: null,
+        artworkId: null,
+        purpose: null,
+        artworkVersion: null,
+        unresolvedReason: 'Ingen tryckkoppling finns för POD-produkten',
+      });
+      continue;
+    }
+
+    for (const slot of slotOrder.filter((s) => slots.has(s))) {
+      const mapping = slots.get(slot)!;
+      const detail = String(mapping.placement || '').trim();
+      const label = mappingSlotLabel(mapping, slot);
+      const base: ProductionSnapshotLine = {
+        itemIndex,
+        productName: typeof it.name === 'string' ? it.name : (it.name?.['sv-SE'] || it.sku),
+        sku: String(it.sku),
+        variantLabel: it.label || null,
+        quantity: Number(it.quantity) || 0,
+        placementSlot: slot,
+        slotLabel: label,
+        placement: detail ? `${label} — ${detail}` : label,
+        profileId: mapping.profileId || null,
+        mappingId: mapping.id || null,
+        artworkId: mapping.artworkId || null,
+        purpose: mapping.profileId || null,
+        artworkVersion: null,
+      };
+      if (!mapping.artworkId) {
+        lines.push({ ...base, unresolvedReason: 'Ingen artworkId i kopplingen' });
+        continue;
+      }
+      if (!artCache.has(mapping.artworkId)) {
+        const artSnap = await dbRef.collection('podArtwork').doc(mapping.artworkId).get();
+        artCache.set(mapping.artworkId, artSnap.exists ? artSnap.data() : null);
+      }
+      const art = artCache.get(mapping.artworkId);
+      if (!art) {
+        lines.push({ ...base, unresolvedReason: 'Originalet är borttaget' });
+        continue;
+      }
+      if (art.shopId !== order.shopId) {
+        lines.push({ ...base, unresolvedReason: 'Originalet tillhör en annan butik' });
+        continue;
+      }
+      const delivery = artworkDeliverable(art, order.shopId);
+      if (!delivery.deliverable) {
+        lines.push({
+          ...base,
+          purpose: art.purpose || mapping.profileId || null,
+          unresolvedReason: delivery.reason || 'Tryckfil saknas',
+        });
+        continue;
+      }
+      const printStoragePath = String(art.printStoragePath || '');
+      // Legacy raw-original fallback stays available only to pre-migration
+      // orders. New immutable snapshots require a server-gated print PNG.
+      if (!printStoragePath.startsWith(`pod-artwork/${String(order.shopId || '')}/print/`)) {
+        lines.push({ ...base, unresolvedReason: 'Originalet måste valideras innan ordern kan produceras' });
+        continue;
+      }
+      lines.push({
+        ...base,
+        purpose: art.purpose || mapping.profileId || null,
+        artworkVersion: String(printStoragePath.split('/').pop() || printStoragePath),
+        printStoragePath,
+        ...(art.fileName ? { fileName: String(art.fileName) } : {}),
+        tier: art.validation?.tier || null,
+      });
+    }
+  }
+
+  return { version: PRODUCTION_SNAPSHOT_VERSION, createdAt: new Date(), lines };
+}
+
+/** Read mappings + artwork through an existing transaction for a consistent graph. */
+export async function buildProductionSnapshotInTransaction(
+  order: any,
+  tx: FirebaseFirestore.Transaction
+): Promise<ProductionSnapshot> {
+  const mappingQuery = db.collection('podMappings').where('shopId', '==', String(order?.shopId || ''));
+  const mappingSnap = await tx.get(mappingQuery);
+  const mappings = groupMappings(mappingSnap.docs);
+  const transactionReader = {
+    collection: (name: string) => ({
+      doc: (id: string) => ({ get: () => tx.get(db.collection(name).doc(id)) }),
+    }),
+  } as unknown as FirebaseFirestore.Firestore;
+  return buildProductionSnapshot(order, mappings, transactionReader);
+}
+
+/** Read mappings + artwork in one Firestore transaction for a consistent graph. */
+export async function buildProductionSnapshotAtomically(order: any): Promise<ProductionSnapshot> {
+  return db.runTransaction((tx) => buildProductionSnapshotInTransaction(order, tx));
+}
+
 // P1-13: list every POD production line (item × resolved slot) whose artwork
 // does NOT resolve to a deliverable artifact. An order may only be marked
 // printed/shipped when this list is EMPTY — one resolvable line must not carry
@@ -202,8 +379,41 @@ export function artworkDeliverable(art: any, shopId: string): { deliverable: boo
 export async function findUnresolvedPodLines(
   order: any,
   mappingsBySku: Map<string, any[]>,
-  dbRef: FirebaseFirestore.Firestore
+  dbRef: FirebaseFirestore.Firestore,
+  artifactAccessCheck: (storagePath: string, allowedPrefix: string) => Promise<boolean> = async (
+    storagePath,
+    allowedPrefix
+  ) => {
+    try {
+      const [exists] = await getStorage().bucket().file(storagePath).exists();
+      if (!exists) return false;
+      return !!(await signedUrlFor(storagePath, null, allowedPrefix));
+    } catch {
+      return false;
+    }
+  }
 ): Promise<string[]> {
+  const frozen = productionSnapshotLines(order);
+  if (frozen !== null) {
+    const prefix = `pod-artwork/${String(order?.shopId || '')}/print/`;
+    const unresolved: string[] = [];
+    for (const line of frozen) {
+      const label = `${line.sku} (${line.slotLabel || slotLabel(line.placementSlot)})`;
+      if (line.unresolvedReason) {
+        unresolved.push(`${label}: ${line.unresolvedReason}`);
+        continue;
+      }
+      if (!line.printStoragePath?.startsWith(prefix)) {
+        unresolved.push(`${label}: ogiltig fryst trycksökväg`);
+        continue;
+      }
+      if (!(await artifactAccessCheck(line.printStoragePath, prefix))) {
+        unresolved.push(`${label}: den frysta tryckfilen saknas eller kan inte hämtas`);
+      }
+    }
+    return unresolved;
+  }
+  if (productionSnapshotPending(order)) return ['Produktionssnapshot saknas'];
   const items = Array.isArray(order.items) ? order.items : [];
   const artCache = new Map<string, any | null>();
   const unresolved: string[] = [];
@@ -234,6 +444,9 @@ export async function findUnresolvedPodLines(
 
 // Is this order a POD order for the given shop? (any line's sku resolves any slot)
 export function orderHasPodLine(order: any, mappingsBySku: Map<string, any[]>): boolean {
+  const frozen = productionSnapshotLines(order);
+  if (frozen !== null) return frozen.length > 0;
+  if (productionSnapshotPending(order)) return false;
   const items = Array.isArray(order.items) ? order.items : [];
   return items.some((it: any) => it && it.sku && resolveSlots(it.sku, mappingsBySku).size > 0);
 }
@@ -246,6 +459,16 @@ export function toPrintNotificationLines(
   order: any,
   mappingsBySku: Map<string, any[]>
 ): Array<{ productName: string; sku: string; quantity: number; placement: string }> {
+  const frozen = productionSnapshotLines(order);
+  if (frozen !== null) {
+    return frozen.map((line) => ({
+      productName: line.productName,
+      sku: line.sku,
+      quantity: line.quantity,
+      placement: line.placement,
+    }));
+  }
+  if (productionSnapshotPending(order)) return [];
   const items = Array.isArray(order.items) ? order.items : [];
   const SLOT_ORDER: PlacementSlot[] = ['front', 'back', 'pocket', 'left_sleeve', 'right_sleeve', 'other'];
   const out: Array<{ productName: string; sku: string; quantity: number; placement: string }> = [];
@@ -272,9 +495,12 @@ export function toQueueRow(orderId: string, order: any, shopName: string, mappin
   const items = Array.isArray(order.items) ? order.items : [];
   // MULTI-PLACEMENT: one production line per (item × resolved slot) — a shirt with a
   // front + back print counts as 2 lines. Sum resolved slots across items.
-  let podLineCount = 0;
-  for (const it of items) {
-    if (it && it.sku) podLineCount += resolveSlots(it.sku, mappingsBySku).size;
+  const frozen = productionSnapshotLines(order);
+  let podLineCount = frozen?.length || 0;
+  if (frozen === null && !productionSnapshotPending(order)) {
+    for (const it of items) {
+      if (it && it.sku) podLineCount += resolveSlots(it.sku, mappingsBySku).size;
+    }
   }
   const ship = order.shippingInfo || {};
   const isPickup = order.deliveryMethod === 'pickup';
@@ -307,6 +533,60 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
   const lines = [];
   // Per-order cache for the product-image fallback (one read per productId max).
   const productImageCache = new Map<string, string | null>();
+  const frozen = productionSnapshotLines(order);
+  if (frozen !== null) {
+    const shopPrintPrefix = `pod-artwork/${String(order.shopId || '')}/print/`;
+    for (const snapLine of frozen) {
+      const it = items[snapLine.itemIndex] || {};
+      const base = {
+        productName: snapLine.productName,
+        sku: snapLine.sku,
+        variantLabel: snapLine.variantLabel,
+        quantity: snapLine.quantity,
+        placementSlot: snapLine.placementSlot,
+        slotLabel: snapLine.slotLabel,
+        placement: snapLine.placement,
+        profileId: snapLine.profileId,
+        mockupUrl: safeImageUrl(it.image),
+      };
+      if (snapLine.unresolvedReason || !snapLine.printStoragePath?.startsWith(shopPrintPrefix)) {
+        lines.push({
+          ...base,
+          purpose: snapLine.purpose,
+          artwork: {
+            unresolved: true,
+            reason: snapLine.unresolvedReason || 'Den frysta tryckfilen har en ogiltig sökväg',
+          },
+        });
+        continue;
+      }
+      const downloadUrl = await signedUrlFor(
+        snapLine.printStoragePath,
+        null,
+        shopPrintPrefix
+      );
+      if (!downloadUrl) {
+        lines.push({
+          ...base,
+          purpose: snapLine.purpose,
+          artwork: { unresolved: true, reason: 'Kunde inte skapa nedladdningslänk till den frysta tryckfilen' },
+        });
+        continue;
+      }
+      lines.push({
+        ...base,
+        purpose: snapLine.purpose,
+        artwork: {
+          tier: snapLine.tier || null,
+          fileName: snapLine.fileName || '',
+          ext: 'png',
+          isPrintFile: true,
+          downloadUrl,
+          previewUrl: null,
+        },
+      });
+    }
+  } else if (!productionSnapshotPending(order)) {
   for (const it of items) {
     if (!it || !it.sku) continue;
     const slots = resolveSlots(it.sku, mappingsBySku);
@@ -406,6 +686,7 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
         },
       });
     }
+  }
   }
 
   const deliveryMethod = order.deliveryMethod === 'pickup' ? 'pickup' : 'home';

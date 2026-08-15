@@ -13,6 +13,11 @@ import { DEFAULT_SHOP_ID } from '../config/tenancy';
 import { statusPatch } from './connectOnboarding';
 import { readPlatformConfig } from './platformConfig';
 import { buildDisputeReversalParams, buildDisputeReTransferParams } from './connectParams';
+import {
+  buildProductionSnapshotAtomically,
+  PRODUCTION_SNAPSHOT_VERSION,
+  type ProductionSnapshot,
+} from '../print/printProjection';
 // CORS not needed for webhooks - server-to-server communication
 
 // Initialize Firestore with named database
@@ -277,6 +282,18 @@ export const stripeWebhookV2 = onRequest(
         // the old query-then-add pattern.
         const orderRef = db.collection('orders').doc(paymentIntent.id);
 
+        // Fast idempotency path. create() below remains the authoritative race
+        // guard, but this prevents a late duplicate (after checkout retention
+        // has purged its pre-payment snapshot) from being retried forever.
+        const existingOrder = await orderRef.get();
+        if (existingOrder.exists) {
+          logger.info('✅ Order already exists for payment intent', {
+            paymentIntentId: paymentIntent.id,
+          });
+          response.status(200).json({ received: true, existing: true });
+          return;
+        }
+
         // Expand payment_method so card/Klarna details are actually present
         // (the event payload only carries the payment_method ID as a string).
         // Also expand latest_charge so a Connect destination charge exposes its
@@ -337,6 +354,11 @@ export const stripeWebhookV2 = onRequest(
             itemDetailsHead: String(itemDetailsJson).slice(0, 200),
             itemDetailsLength: String(itemDetailsJson).length
           });
+          response.status(400).json({ error: 'Invalid itemDetails format' });
+          return;
+        }
+
+        if (!Array.isArray(cartItems)) {
           response.status(400).json({ error: 'Invalid itemDetails format' });
           return;
         }
@@ -514,6 +536,33 @@ export const stripeWebhookV2 = onRequest(
         // Create order in Firestore with the deterministic ID; a duplicate
         // delivery fails here atomically and is treated as success
         try {
+          // P1-16: new checkouts freeze this graph BEFORE their client secret is
+          // returned. The webhook must consume that exact server-only snapshot;
+          // rebuilding here would let a mapping edit between pay and webhook
+          // delivery change the production artifact.
+          let productionSnapshot: ProductionSnapshot;
+          if (metadata.productionSnapshotRequired === 'true') {
+            const checkoutSnap = await db.collection('checkouts').doc(paymentIntent.id).get();
+            const checkout = checkoutSnap.data() as any;
+            const candidate = checkout?.productionSnapshot;
+            if (
+              !checkoutSnap.exists ||
+              checkout?.shopId !== orderData.shopId ||
+              candidate?.version !== PRODUCTION_SNAPSHOT_VERSION ||
+              !Array.isArray(candidate?.lines)
+            ) {
+              throw new Error('Required pre-payment production snapshot is missing or invalid');
+            }
+            productionSnapshot = candidate as ProductionSnapshot;
+          } else {
+            // Compatibility only for PaymentIntents already created before this
+            // release. Every new PI carries productionSnapshotRequired=true.
+            logger.warn('P1-16: legacy PaymentIntent missing pre-payment production snapshot marker', {
+              paymentIntentId: paymentIntent.id,
+            });
+            productionSnapshot = await buildProductionSnapshotAtomically(orderData);
+          }
+          Object.assign(orderData, { productionSnapshotRequired: true, productionSnapshot });
           await orderRef.create(orderData);
         } catch (createError: any) {
           if (createError.code === 6 /* ALREADY_EXISTS */) {
@@ -597,45 +646,12 @@ export const stripeWebhookV2 = onRequest(
           // Admin can manually trigger emails if needed
         }
 
-        // 🖨️ POD printer notification: if this order has ≥1 POD line, notify the
-        // shop's assigned printers ("Ny POD-order"). Fire-and-forget with catch —
-        // it must NEVER delay or fail the webhook (mirrors the email calls in
-        // processOrderCompletion). Reuses the print projection's slot-aware
-        // resolution (loadShopMappings + resolveSlots via toPrintNotificationLines)
-        // — no duplication. If no printer is assigned, the orchestrator SKIPS the
-        // send (no platform fallback). RESEND_API_KEY is already bound to this fn.
-        try {
-          const { loadShopMappings, orderHasPodLine, toPrintNotificationLines } = require('../print/printProjection');
-          const podShopId = orderData.shopId || DEFAULT_SHOP_ID;
-          const mappings = await loadShopMappings(podShopId);
-          if (mappings.size > 0 && orderHasPodLine(orderData, mappings)) {
-            const lines = toPrintNotificationLines(orderData, mappings);
-            const { EmailOrchestrator } = require('../email-orchestrator/core/EmailOrchestrator');
-            const orchestrator = new EmailOrchestrator();
-            // TRULY fire-and-forget: no await — the 200 must not wait on the
-            // printer query + Resend HTTP call. The surrounding try/catch covers
-            // synchronous throws; .catch covers async failures.
-            orchestrator.sendEmail({
-              emailType: 'PRINT_ORDER_NOTIFICATION',
-              orderId: orderRef.id,
-              shopId: podShopId,
-              orderData: {
-                orderNumber: orderData.orderNumber || orderNumber,
-                deliveryMethod: orderData.deliveryMethod,
-              },
-              additionalData: { lines },
-            }).then(() => {
-              logger.info('🖨️ PRINT_ORDER_NOTIFICATION dispatched', { orderId: orderRef.id, podLines: lines.length });
-            }).catch((e: any) => {
-              logger.warn('⚠️ PRINT_ORDER_NOTIFICATION send failed (best-effort)', { orderId: orderRef.id, error: e?.message });
-            });
-          }
-        } catch (printNotifyError) {
-          logger.warn('⚠️ PRINT_ORDER_NOTIFICATION failed (best-effort, order unaffected)', {
-            orderId: orderRef.id,
-            error: (printNotifyError as any)?.message,
-          });
-        }
+        // 🖨️ POD printer notification: handled by the durable outbox trigger
+        // (print/notifyOutbox.ts, P1-15) — the order create above lands at
+        // status 'confirmed', which onOrderProductionReady picks up, enqueues
+        // a deduplicated printNotifications/{orderId} event for, and delivers
+        // with retries. The old fire-and-forget send here could be lost on any
+        // Resend hiccup or instance teardown, and B2B had no equivalent at all.
 
         response.status(200).json({
           received: true,

@@ -117,6 +117,7 @@ export const createB2BOrder = onCall<CreateB2BOrderRequest>(
         quantity: qty,
         lineTotal,
         image: p.imageUrl || p.b2cImageUrl || '',
+        isPodProduct: p.isPodProduct === true,
       });
     }
 
@@ -172,6 +173,10 @@ export const createB2BOrder = onCall<CreateB2BOrderRequest>(
           },
 
       items: orderItems,
+      // P1-16: the order is unpaid, so the immutable artwork snapshot is
+      // created by onOrderProductionReady when status first enters `paid`.
+      // Print callables fail closed while this marker exists without a snapshot.
+      productionSnapshotRequired: true,
       subtotal,
       shipping: 0, // v1: no shipping line — shop arranges freight separately
       vat,

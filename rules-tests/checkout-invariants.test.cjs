@@ -24,7 +24,7 @@
 const admin = require('../functions/node_modules/firebase-admin');
 if (!admin.apps.length) admin.initializeApp({ projectId: 'demo-rules-test' });
 
-const { validateCartLine, shopCheckoutBlockReason, resolvePickupLocation } =
+const { validateCartLine, shopCheckoutBlockReason, resolvePickupLocation, withdrawalConsentBlockReason } =
   require('../functions/lib/payment/createPaymentIntent.js');
 
 let pass = 0, fail = 0;
@@ -110,6 +110,10 @@ console.log('\n=== validateCartLine — SERVER-derived snapshot (client metadata
   const line = validateCartLine({ ...productA, isPersonalized: true }, { productId: 'p1', quantity: 1 }, 'shopA', 'home');
   ok(line.isPersonalized === true, 'isPersonalized derives from the LIVE product doc');
 }
+{
+  const line = validateCartLine({ ...productA, isPodProduct: true }, { productId: 'p1', quantity: 1 }, 'shopA', 'home');
+  ok(line.isPodProduct === true, 'isPodProduct derives from the LIVE product doc for snapshot protection');
+}
 
 console.log('\n=== shopCheckoutBlockReason — live-shop gate (P0-03) ===');
 ok(shopCheckoutBlockReason(null) === 'unknown-shop', 'missing shop doc → blocked');
@@ -130,7 +134,32 @@ console.log('\n=== resolvePickupLocation — pickup gate (P1-06) ===');
   ok(resolvePickupLocation(shop, '') === null, 'missing id → null');
   ok(resolvePickupLocation({}, 'loc-1') === null, 'shop WITHOUT pickup config → null (no free-shipping tamper)');
   ok(resolvePickupLocation({ storeIdentity: { pickupLocations: [] } }, 'loc-1') === null, 'empty pickup list → null');
+
+  const datedShop = { storeIdentity: { pickupLocations: [
+    { id: 'loc-1', name: 'Butiken', dates: ['2026-08-16', '2026-08-17'] },
+  ] } };
+  ok(resolvePickupLocation(datedShop, 'loc-1', '2026-08-16', '2026-08-15')?.date === '2026-08-16',
+    'configured future pickup date → accepted and server-resolved');
+  ok(resolvePickupLocation(datedShop, 'loc-1', '2026-08-18', '2026-08-15') === null,
+    'unconfigured pickup date → rejected');
+  ok(resolvePickupLocation(datedShop, 'loc-1', '', '2026-08-15') === null,
+    'location with configured dates requires a date');
+  ok(resolvePickupLocation(datedShop, 'loc-1', '2026-08-16', '2026-08-17') === null,
+    'past configured pickup date → rejected');
+  ok(resolvePickupLocation(shop, 'loc-1', '2099-01-01', '2026-08-15')?.date === '',
+    'dateless location strips a client-authored date');
 }
+
+console.log('\n=== withdrawalConsentBlockReason — personalized charge gate (P1-07) ===');
+ok(withdrawalConsentBlockReason(false, null) === null, 'standard cart needs no consent');
+ok(withdrawalConsentBlockReason(true, null) === 'consent-required', 'personalized cart without consent → blocked');
+ok(withdrawalConsentBlockReason(true, { accepted: false }) === 'consent-required', 'explicitly unaccepted → blocked');
+ok(withdrawalConsentBlockReason(true, { accepted: true, noticeFingerprint: 'h123' }) === 'notice-version-required',
+  'accepted without notice version → blocked');
+ok(withdrawalConsentBlockReason(true, { accepted: true, noticeVersion: 'v1', noticeFingerprint: 'forged' }) === 'notice-fingerprint-invalid',
+  'malformed notice fingerprint → blocked');
+ok(withdrawalConsentBlockReason(true, { accepted: true, noticeVersion: 'v1', noticeFingerprint: 'h1a2b3c' }) === null,
+  'complete accepted consent proof → allowed');
 
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

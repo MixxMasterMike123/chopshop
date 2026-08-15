@@ -71,7 +71,7 @@ exports.confirmPasswordReset = (0, https_1.onCall)({
             used: true,
             usedAt: new Date()
         });
-        console.log(`✅ Password successfully reset for user: ${resetData.email}`);
+        console.log('✅ Password successfully reset');
         return {
             success: true,
             email: resetData.email

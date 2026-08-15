@@ -22,7 +22,7 @@ import { logger } from 'firebase-functions';
 import { db } from '../config/database';
 import { appUrls } from '../config/app-urls';
 import { getPrintShopContext, assertShopAllowed } from './printGuard';
-import { loadShopMappings, orderHasPodLine, findUnresolvedPodLines } from './printProjection';
+import { loadShopMappings, orderHasPodLine, productionSnapshotPending, findUnresolvedPodLines } from './printProjection';
 
 // Allowlist of FROM-statuses per action (not a terminal denylist — an allowlist
 // also blocks statuses we didn't anticipate). Deliberately EXCLUDES:
@@ -123,6 +123,9 @@ export const setPrintJobStatus = onCall<SetPrintJobStatusRequest>(
   // ...and it must actually be a POD order for that shop (a mapped line) — the
   // printer only ever operates on orders it can see in its own queue.
   const mappings = await loadShopMappings(order.shopId);
+  if (productionSnapshotPending(order)) {
+    throw new HttpsError('unavailable', 'Produktionsunderlaget låses just nu — försök igen om en liten stund.');
+  }
   if (!orderHasPodLine(order, mappings)) {
     throw new HttpsError('permission-denied', 'This order has no POD lines you can fulfil');
   }

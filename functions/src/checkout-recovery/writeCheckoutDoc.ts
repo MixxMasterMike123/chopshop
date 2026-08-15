@@ -1,17 +1,19 @@
-// Abandoned-checkout recovery: persist a `checkouts/{paymentIntentId}` doc when a
-// PaymentIntent is created (best-effort — the caller wraps this so a write
-// failure NEVER fails the payment). The sweep (sweep.ts) later reminds the buyer
-// if no order materialized. The doc is function-only (rules-locked).
+// Server-only checkout persistence. The immutable production snapshot is a
+// REQUIRED payment invariant; abandoned-checkout recovery fields are layered
+// onto the same rules-locked doc on a best-effort basis. The sweep (sweep.ts)
+// later reminds the buyer if no order materialized.
 
 import { logger } from 'firebase-functions';
 import { db } from '../config/database';
 import { generateToken } from './tokens';
+import type { ProductionSnapshot } from '../print/printProjection';
 
 // Clamp the per-shop reminder delay to a sane window.
 const DEFAULT_DELAY_HOURS = 1;
 const MIN_DELAY_HOURS = 1;
 const MAX_DELAY_HOURS = 24;
 const EXPIRY_DAYS = 7;
+const PRODUCTION_SNAPSHOT_RETENTION_DAYS = 30;
 
 interface CheckoutItem {
   productId?: string;
@@ -45,6 +47,31 @@ export interface WriteAbandonedCheckoutParams {
   /** JSON string from createPaymentIntent.buildItemDetailsJson(false). */
   itemsJson: string;
   totals?: CheckoutTotals;
+}
+
+/**
+ * Persist the immutable production graph before the PaymentIntent client secret
+ * is returned. This write is part of payment correctness (not recovery), so its
+ * caller must fail checkout if it cannot complete.
+ */
+export async function writeCheckoutProductionSnapshot(
+  paymentIntentId: string,
+  shopId: string,
+  productionSnapshot: ProductionSnapshot
+): Promise<void> {
+  const now = new Date();
+  await db.collection('checkouts').doc(paymentIntentId).set({
+    shopId,
+    paymentIntentId,
+    productionSnapshotRequired: true,
+    productionSnapshot,
+    createdAt: now,
+    productionSnapshotCreatedAt: now,
+    retentionNextAttemptAt: new Date(
+      now.getTime() + PRODUCTION_SNAPSHOT_RETENTION_DAYS * 86400 * 1000
+    ),
+    expiresAt: new Date(now.getTime() + EXPIRY_DAYS * 86400 * 1000),
+  }, { merge: true });
 }
 
 /**
@@ -129,5 +156,5 @@ export async function writeAbandonedCheckoutDoc(params: WriteAbandonedCheckoutPa
     remindAt,
     expiresAt,
     status: 'open',
-  });
+  }, { merge: true });
 }
