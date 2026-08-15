@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 5 ready to commit
+**Last updated:** 2026-08-16, checkpoint 6 ready to commit
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `e9045ba` — `feat: add Cloudflare identity foundation`
+- Last pushed commit: `4398c8f` — `feat: enforce Cloudflare tenant boundaries`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -129,6 +129,17 @@ An initially added fake `preview_database_id` made the dry run report a local-on
 - Local gate passed: generated types current, TypeScript clean, 19/19 Workers/D1 tests green, including hostile tenant headers, unknown/pending/suspended domains, tenant-A-to-B attempts, live revocation, and print assignment scope.
 - No new route was exposed and no staging deployment or remote data mutation was needed for this checkpoint.
 
+## Checkpoint 6 — Session-to-live-principal bridge
+
+- Added Better Auth session resolution from the incoming cookie/header set.
+- Added request guards that combine a valid session with the live platform, tenant-admin, or print authorization query.
+- Tenant-admin request authorization derives the tenant from the verified request hostname; callers cannot supply the privileged tenant context.
+- Session cookie caching remains disabled, so Better Auth reads the current D1 session rather than treating a signed cookie snapshot as authorization.
+- Added explicit server-side session revocation by user ID for demotion, suspension, tenant reassignment, and other privilege changes.
+- Tests create real Better Auth email/password sessions against D1, then prove live access revocation, hostname-bound tenant authorization, session deletion, and anonymous denial.
+- Local gate passed: generated types current, TypeScript clean, 23/23 Workers/D1 tests green.
+- Auth HTTP routes remain unmounted and the remote staging Worker still has no `BETTER_AUTH_SECRET`; no public sign-up/sign-in surface was introduced.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -152,9 +163,9 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Commit and push checkpoint 5.
-2. Add session-to-live-principal resolution and revocation behavior before mounting auth endpoints.
-3. Add verification/reset delivery through the outbox before enabling sign-up or password recovery.
+1. Commit and push checkpoint 6.
+2. Design and test the email outbox/queue contract before enabling verification or password recovery.
+3. Decide whether to mount sign-in only before sign-up; do not enable either until a staging secret and provisioning policy are in place.
 4. Port the first read-only tenant route only after its repository query is tenant-bound and adversarially tested.
 5. Create R2 buckets and Queues only when their contracts and local tests are ready.
 6. Keep Firebase as the sole production side-effect owner throughout these staging waves.
