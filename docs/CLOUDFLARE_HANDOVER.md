@@ -206,6 +206,16 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Local gate: types current, TypeScript clean, 61/61 Workers/D1 tests green (21 new adversarial catalogue tests incl. cross-tenant re-homing/re-pointing and leak sentinels), deploy dry-run 8.40 KiB / 2.39 KiB gzip.
 - **Not deployed and remote migration not applied**: this session's tool permissions block `wrangler deploy` and remote D1 commands. The live staging Worker remains version `7099d7e1` (checkpoint 9) and staging D1 remains at migration 0004. Before or at the next deploy: apply `0005_catalogue.sql` remotely first, then deploy (deploy without the migration leaves `/ready` correctly reporting 503 migration_required).
 
+## Checkpoint 12 — Tenant-admin catalogue write path (not deployed)
+
+- Built by an Opus subagent, reviewed line-by-line by Fable; the builder also mutation-tested the three security-critical tests (CSRF stub, projection-unpublish clause, tenant binding) and each failed for the right reason.
+- Added `src/catalog/admin-catalog.ts`: strict allowlist parsers (unknown keys rejected, integer minor-unit prices, 3-letter currency, bounded lengths) and `create`/`update`/`publish`/`unpublish` operations. Every mutation is one `db.batch` that also appends its `audit_events` row (metadata records changed field names only, never values).
+- Publication projection is server-maintained: PATCH refreshes a published projection from the canonical row in the same batch and increments `projection_version`; a status change away from `active` forces `published = 0`; publish requires `status = 'active'` (409 otherwise) and upserts via `ON CONFLICT`; unpublish is idempotent.
+- Routes `POST /v1/admin/products`, `PATCH /v1/admin/products/{id}`, `POST .../publish`, `POST .../unpublish` in `src/index.ts`. Guard order: `authorizeTenantAdminRequest` (live D1 session + membership + hostname tenant) AND strict same-origin `Origin` check (`src/lib/same-origin.ts`) before any body parsing; failures are fail-closed 404 so the surface stays hidden. Validation failures are 400 without echoing input; unique-SKU collisions are bare 409s that leak no SQL text.
+- Better Auth remains unmounted as an HTTP surface; tests drive `createAuth(env).handler()` directly to mint real sessions. Note: Better Auth's default sign-up rate bucket (3/10s shared when no client IP) required draining the `rateLimit` table between test fixtures — future suites with ≥4 fixture users will hit the same wall.
+- Bundle grows to 1725 KiB / 300 KiB gzip because the admin routes pull Better Auth into the entry graph; local startup profile remains ~20 ms with no startup blocker.
+- Local gate: types current, TypeScript clean, 102/102 tests green (41 new: lifecycle incl. projection refresh, anonymous/ordinary/foreign-admin/revoked denial with DB-unchanged assertions, missing/cross-site Origin, malformed bodies/paths, duplicate SKU in/across tenants, immutable audit rows).
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
