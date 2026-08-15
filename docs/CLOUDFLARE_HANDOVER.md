@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 6.1 ready to commit
+**Last updated:** 2026-08-16, checkpoint 7 ready to commit
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `9569762` — `feat: bind sessions to live authorization`
+- Last pushed commit: `a0c28ce` — `fix: hash auth verification identifiers`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -144,6 +144,17 @@ An initially added fake `preview_database_id` made the dry run report a local-on
 
 Better Auth defaults verification identifiers to plain storage. Password reset is still disabled/unmounted, but the configuration now explicitly selects hashed identifiers before any reset flow is wired. A configuration test prevents this from silently regressing; the full 23/23 test gate remains green.
 
+## Checkpoint 7 — Auth email contract
+
+- Cloudflare Email Sending account readback shows one existing enabled domain, `outpost.mohlenmedia.com`; it is unrelated and must not be reused or changed for MeteorShop.
+- Cloudflare Email Sending is currently marked open beta by Wrangler. Build the provider behind an application contract and retain a rollback provider until a real MeteorShop domain canary passes.
+- No domain onboarding, DNS edit, Email binding, Queue, recipient, or real send is authorized by this checkpoint.
+- Added a versioned verification/reset Queue payload with strict recipient, expiry, purpose, HTTPS-origin, path, credential, and fragment validation.
+- Operational metadata explicitly excludes the raw recipient and action capability; templates always produce both plain text and HTML.
+- Added `0003_email_delivery_ledger.sql`. D1 stores only a normalized recipient hash and delivery/lease metadata—never a raw email address, action URL, token, or payload blob.
+- Remote migration applied successfully to staging D1: seven commands. WEUR readback confirmed the table, three indexes, immutability trigger, exact non-sensitive columns, and zero delivery rows.
+- Local gate passed: generated types current, TypeScript clean, 29/29 Workers/D1 tests green.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -167,8 +178,8 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Commit and push checkpoint 6.
-2. Design and test the email outbox/queue contract before enabling verification or password recovery.
+1. Commit and push checkpoint 7.
+2. Implement and concurrency-test the D1 delivery claim/lease state machine before creating the email Queue.
 3. Decide whether to mount sign-in only before sign-up; do not enable either until a staging secret and provisioning policy are in place.
 4. Port the first read-only tenant route only after its repository query is tenant-bound and adversarially tested.
 5. Create R2 buckets and Queues only when their contracts and local tests are ready.

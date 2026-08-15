@@ -242,11 +242,9 @@ The current `printNotifications/{orderId}` document maps to an outbox event with
 
 ### Email delivery
 
-`email_deliveries`:
+The implemented auth-email ledger stores `delivery_id PK`, immutable nullable `tenant_id`, constrained `kind`, `recipient_hash`, status/attempt/lease/backoff fields, optional provider message ID, expiry, redacted error code, and timestamps. It intentionally has no raw recipient, action URL, token, or generic payload column. The short-lived Queue message carries the verification/reset capability; consumers must never log it and must reject the message after its expiry.
 
-`delivery_id PK`, `tenant_id`, `event_id`, `order_id NULL`, `email_type`, `recipient_ref` (resource/customer reference, not arbitrary request email), `recipient_hash`, `template_version`, `provider_message_id`, `status`, `attempts`, lease/backoff fields, `last_error`, timestamps; `UNIQUE(event_id,email_type,recipient_hash)`.
-
-The recipient and template are derived server-side from the resource and tenant. Customer-facing email payloads contain the minimum required snapshot. Duplicate concurrent sends claim the same delivery row; provider idempotency keys are deterministic. Email failures are visible in D1 and do not roll back an already-created order.
+Order/print/customer email will add resource/event references and template versions when those domains are ported. Their recipients and templates must be derived server-side from the tenant-owned resource, not copied from an arbitrary request address. Duplicate concurrent sends claim the same delivery row; terminal failures remain visible for operator handling.
 
 ### Request/provider idempotency
 
@@ -336,7 +334,7 @@ Migration import should produce a report for: missing tenant, cross-tenant forei
 - **Product/variant shape:** legacy products mix localized names, variant fields, images, and availability objects. Define normalized variant and media ownership before importing.
 - **Tenant versus platform ownership:** settings, translations, marketing materials, activities, DAC7, and customer documents have mixed scopes. Do not infer scope from collection name alone.
 - **Order/payment retention and PII:** define retention, encryption/key management, export, and deletion behavior for customer snapshots, addresses, provider payloads, and legal documents.
-- **Email provider and template versioning:** the current orchestrator has resource-derived recipient logic; map each email type to a versioned template and deterministic dedupe key before queue migration.
+- **Email provider and template versioning:** Cloudflare Email Sending is the staging candidate but is still marked open beta. Onboard a MeteorShop domain only after approval, run a deliverability canary, and retain a rollback provider; resource emails still need versioned templates and deterministic dedupe keys.
 - **Firestore timestamps and IDs:** choose one D1 timestamp/ID normalization policy and keep a source ID column for every imported record needed for audit/reconciliation.
 
 ## Acceptance tests for the data model
