@@ -216,6 +216,15 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Bundle grows to 1725 KiB / 300 KiB gzip because the admin routes pull Better Auth into the entry graph; local startup profile remains ~20 ms with no startup blocker.
 - Local gate: types current, TypeScript clean, 102/102 tests green (41 new: lifecycle incl. projection refresh, anonymous/ordinary/foreign-admin/revoked denial with DB-unchanged assertions, missing/cross-site Origin, malformed bodies/paths, duplicate SKU in/across tenants, immutable audit rows).
 
+## Checkpoint 13 — Platform tenant provisioning (not deployed)
+
+- Built by an Opus subagent, reviewed line-by-line by Fable, including a Fable-run mutation test on the one-kind identity guard (weakening it failed exactly the two guard tests, then it was restored and the full gate re-ran green).
+- Added `src/platform/provision-tenants.ts` + `POST /v1/platform/tenants`, `POST .../{tenantId}/domains`, `POST .../{tenantId}/suspend|activate`, `POST .../{tenantId}/admins`, guarded by `authorizePlatformRequest` AND strict same-origin check before any parsing; fail-closed 404s hide the surface.
+- Strict parsers: tenant IDs `^[a-z0-9][a-z0-9-]*$` ≤64; hostnames normalized (lowercase, root dot stripped) then validated label-by-label ≤253 chars; locale/currency patterns; unknown body keys rejected.
+- Tenant provisioning creates tenant + first storefront domain + audit row in one `db.batch`. Domains are created `verified` because **the platform operator is the verification authority at this stage** — a DNS proof-of-control checkpoint must downgrade the default to `pending` before self-serve domains.
+- Admin grant enforces the one-account-kind boundary: existing `identity_access` of a different kind, or any non-active identity/membership → 409 (no silent re-enable); no existing row → plain INSERT (PK makes a racing grant fail loudly); duplicate active grant is idempotent. Suspension relies on live guards (resolver requires active tenant) and does not touch sessions.
+- Local gate: types current, TypeScript clean, 157/157 tests green (55 new, incl. provision→storefront-resolves→suspend-404→activate-restores E2E and a granted admin exercising the checkpoint 12 write path), deploy dry-run 1740 KiB / 302 KiB gzip.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.

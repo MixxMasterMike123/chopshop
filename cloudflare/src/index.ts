@@ -7,12 +7,30 @@ import {
   unpublishAdminProduct,
   updateAdminProduct,
 } from "./catalog/admin-catalog";
+import type {
+  DomainResult,
+  MembershipResult,
+  TenantResult,
+} from "./platform/provision-tenants";
+import {
+  addTenantDomain,
+  createTenant,
+  grantTenantAdmin,
+  parseAddDomainInput,
+  parseCreateTenantInput,
+  parseGrantAdminInput,
+  parseTenantIdPathSegment,
+  setTenantStatus,
+} from "./platform/provision-tenants";
 import {
   getPublicProduct,
   listPublicProducts,
 } from "./catalog/public-catalog";
 import { jsonResponse } from "./lib/http";
-import { authorizeTenantAdminRequest } from "./auth/request-authorization";
+import {
+  authorizePlatformRequest,
+  authorizeTenantAdminRequest,
+} from "./auth/request-authorization";
 import { handleDisabledAuthEmailQueue } from "./email/disabled-email-queue";
 import { getPublicStorefront } from "./storefront/public-storefront";
 import { isSameOriginRequest } from "./lib/same-origin";
@@ -25,13 +43,22 @@ const PRODUCTS_PATH = "/v1/products";
 const PRODUCT_PATH_PREFIX = "/v1/products/";
 const ADMIN_PRODUCTS_PATH = "/v1/admin/products";
 const ADMIN_PRODUCT_PATH_PREFIX = "/v1/admin/products/";
+const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
+const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
 const REQUIRED_MIGRATION = "0005_catalogue.sql";
 
 type AdminProductAction = "publish" | "unpublish";
 
+type PlatformTenantAction = "activate" | "admins" | "domains" | "suspend";
+
 interface AdminProductRoute {
   action: AdminProductAction | null;
   productId: string;
+}
+
+interface PlatformTenantRoute {
+  action: PlatformTenantAction;
+  tenantId: string;
 }
 
 function notFoundResponse(message: string): Response {
@@ -68,6 +95,18 @@ function conflictResponse(): Response {
       error: {
         code: "conflict",
         message: "Request conflicts with the current product state",
+      },
+    },
+    409,
+  );
+}
+
+function platformConflictResponse(): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "conflict",
+        message: "Request conflicts with the current tenant state",
       },
     },
     409,
@@ -126,6 +165,41 @@ function adminProductRouteFromPath(pathname: string): AdminProductRoute | null {
   }
   if (rawAction === "publish" || rawAction === "unpublish") {
     return { action: rawAction, productId };
+  }
+
+  return null;
+}
+
+function platformTenantRouteFromPath(
+  pathname: string,
+): PlatformTenantRoute | null {
+  if (!pathname.startsWith(PLATFORM_TENANT_PATH_PREFIX)) {
+    return null;
+  }
+
+  const segments = pathname.slice(PLATFORM_TENANT_PATH_PREFIX.length).split("/");
+  const [rawTenantId, rawAction, ...rest] = segments;
+  if (rawTenantId === undefined || rawAction === undefined || rest.length > 0) {
+    return null;
+  }
+
+  const decoded = decodeSegment(rawTenantId);
+  if (decoded === null) {
+    return null;
+  }
+
+  const tenantId = parseTenantIdPathSegment(decoded);
+  if (tenantId === null) {
+    return null;
+  }
+
+  if (
+    rawAction === "activate" ||
+    rawAction === "admins" ||
+    rawAction === "domains" ||
+    rawAction === "suspend"
+  ) {
+    return { action: rawAction, tenantId };
   }
 
   return null;
@@ -263,6 +337,96 @@ async function handleAdminProductRoute(
   );
 }
 
+function platformResultResponse(
+  result: DomainResult | MembershipResult | TenantResult,
+  successStatus: number,
+): Response {
+  if (result.status !== "ok") {
+    return result.status === "conflict"
+      ? platformConflictResponse()
+      : adminNotFoundResponse();
+  }
+  if ("tenant" in result) {
+    return jsonResponse({ tenant: result.tenant }, successStatus);
+  }
+  if ("domain" in result) {
+    return jsonResponse({ domain: result.domain }, successStatus);
+  }
+  return jsonResponse({ membership: result.membership }, successStatus);
+}
+
+async function handlePlatformTenantRoute(
+  env: Env,
+  request: Request,
+  url: URL,
+): Promise<Response> {
+  // Same fail-closed shape as the tenant admin surface: guard and CSRF check
+  // run before any parsing, so a caller without platform rights cannot learn
+  // that the provisioning surface exists at all.
+  const principal = await authorizePlatformRequest(env, request);
+  if (principal === null || !isSameOriginRequest(request)) {
+    return adminNotFoundResponse();
+  }
+
+  if (request.method !== "POST") {
+    return adminNotFoundResponse();
+  }
+
+  const now = Date.now();
+
+  if (url.pathname === PLATFORM_TENANTS_PATH) {
+    const input = parseCreateTenantInput(await readJsonBody(request));
+    if (input === null) {
+      return invalidRequestResponse();
+    }
+
+    return platformResultResponse(
+      await createTenant(env.DB, principal, input, now),
+      201,
+    );
+  }
+
+  const route = platformTenantRouteFromPath(url.pathname);
+  if (route === null) {
+    return adminNotFoundResponse();
+  }
+
+  if (route.action === "domains") {
+    const input = parseAddDomainInput(await readJsonBody(request));
+    if (input === null) {
+      return invalidRequestResponse();
+    }
+
+    return platformResultResponse(
+      await addTenantDomain(env.DB, principal, route.tenantId, input, now),
+      201,
+    );
+  }
+
+  if (route.action === "admins") {
+    const input = parseGrantAdminInput(await readJsonBody(request));
+    if (input === null) {
+      return invalidRequestResponse();
+    }
+
+    return platformResultResponse(
+      await grantTenantAdmin(env.DB, principal, route.tenantId, input, now),
+      201,
+    );
+  }
+
+  return platformResultResponse(
+    await setTenantStatus(
+      env.DB,
+      principal,
+      route.tenantId,
+      route.action === "activate" ? "active" : "suspended",
+      now,
+    ),
+    200,
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -321,6 +485,13 @@ export default {
       url.pathname.startsWith(ADMIN_PRODUCT_PATH_PREFIX)
     ) {
       return handleAdminProductRoute(env, request, url);
+    }
+
+    if (
+      url.pathname === PLATFORM_TENANTS_PATH ||
+      url.pathname.startsWith(PLATFORM_TENANT_PATH_PREFIX)
+    ) {
+      return handlePlatformTenantRoute(env, request, url);
     }
 
     return notFoundResponse("Route not found");
