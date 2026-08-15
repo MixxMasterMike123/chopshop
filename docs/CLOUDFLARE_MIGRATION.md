@@ -47,9 +47,9 @@ Cloudflare resources are account-scoped. Separate accounts therefore provide the
 
 Within each account, still prefix resources consistently:
 
-- `meteor-prod-*`
-- `meteor-stg-*`
-- `meteor-dev-*` only where a shared development resource is actually necessary
+- `meteorshop-prod-*`
+- `meteorshop-stg-*`
+- `meteorshop-dev-*` only where a shared development resource is actually necessary
 
 Never use a Global API Key. Use resource-scoped API tokens and separate deployment credentials per environment.
 
@@ -59,8 +59,8 @@ The personal account is the initial build target. The production account does no
 
 Start with:
 
-- `meteor-prod-db`
-- `meteor-stg-db`
+- `meteorshop-prod-db`
+- `meteorshop-stg-db`
 
 Every tenant-owned table must contain an immutable `shop_id`. All tenant reads and writes go through a repository/service layer that requires a trusted tenant context. Composite indexes and uniqueness constraints must include `shop_id` whenever identity is tenant-relative.
 
@@ -147,12 +147,12 @@ flowchart LR
 
 | Unit | Responsibility | Deploy frequency |
 |---|---|---|
-| `meteor-web` | Vite assets, SPA routing, security headers, four hostnames | UI releases |
-| `meteor-api` | All HTTP API routes, auth, authorization, business services, Stripe webhooks | Backend releases |
-| `meteor-jobs` | Queue consumers and scheduled dispatcher; may begin in the API Worker if limits permit | Backend/job releases |
-| `meteor-media` | Sharp and FFmpeg/FFprobe processing | Media pipeline releases only |
+| `meteorshop-{env}-web` | Vite assets, SPA routing, security headers, four hostnames | UI releases |
+| `meteorshop-{env}-api` | All HTTP API routes, auth, authorization, business services, Stripe webhooks | Backend releases |
+| `meteorshop-{env}-jobs` | Queue consumers and scheduled dispatcher; may begin in the API Worker if limits permit | Backend/job releases |
+| `meteorshop-{env}-media` | Sharp and FFmpeg/FFprobe processing | Media pipeline releases only |
 
-Start with `meteor-api` and `meteor-jobs` in one Worker project if that produces a simpler safe deploy. Split them only if failure domains, bindings, or release cadence justify it. The goal is a small number of coherent units—not a fixed number of Workers.
+Start with the API and jobs handlers in one Worker project if that produces a simpler safe deploy. Split them only if failure domains, bindings, or release cadence justify it. The goal is a small number of coherent units—not a fixed number of Workers.
 
 ### Surface and cookie isolation
 
@@ -334,9 +334,9 @@ Recommended production buckets:
 
 | Bucket | Visibility | Contents |
 |---|---|---|
-| `meteor-prod-public` | Delivered through controlled public/custom domain | Published product images, public shop branding, public page media |
-| `meteor-prod-private` | Worker/Container only | Artwork originals, print-ready files, customer documents, order attachments, exports |
-| `meteor-prod-temp` | Private with lifecycle expiry | Upload staging, render intermediates, imports |
+| `meteorshop-prod-public` | Delivered through controlled public/custom domain | Published product images, public shop branding, public page media |
+| `meteorshop-prod-private` | Worker/Container only | Artwork originals, print-ready files, customer documents, order attachments, exports |
+| `meteorshop-prod-temp` | Private with lifecycle expiry | Upload staging, render intermediates, imports |
 
 Object keys must begin with stable ownership and object identity, for example `shops/{shop_id}/...`, but path naming is not authorization. Store canonical bucket/key metadata in D1 and validate it before every signed or proxied delivery.
 
@@ -350,10 +350,10 @@ Recommended queues:
 
 | Queue | Events |
 |---|---|
-| `meteor-commerce` | Paid order, refund, commission, production-ready, review eligibility |
-| `meteor-email` | Verification, reset, order, print, admin, affiliate transactional mail |
-| `meteor-media` | Artwork validation/rendering, mockups, social video, image derivatives |
-| `meteor-imports` | Shopify/Woo import and metadata extraction |
+| `meteorshop-{env}-commerce` | Paid order, refund, commission, production-ready, review eligibility |
+| `meteorshop-{env}-email` | Verification, reset, order, print, admin, affiliate transactional mail |
+| `meteorshop-{env}-media-jobs` | Artwork validation/rendering, mockups, social video, image derivatives |
+| `meteorshop-{env}-imports` | Shopify/Woo import and metadata extraction |
 
 Rules:
 

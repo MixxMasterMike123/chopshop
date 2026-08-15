@@ -1,0 +1,25 @@
+{
+  "name": "meteorshop-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "check": "npm run types:check && npm run build && npm test",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "deploy:staging": "wrangler deploy",
+    "dev": "wrangler dev --local",
+    "startup": "wrangler check startup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "types": "wrangler types worker-configuration.d.ts",
+    "types:check": "wrangler types worker-configuration.d.ts --check"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.21.3",
+    "@cloudflare/workers-types": "5.20260815.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10",
+    "wrangler": "4.123.0"
+  }
+}
