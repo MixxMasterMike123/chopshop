@@ -25,22 +25,26 @@ const MockupPanel = ({
   mockups = [], heroKey = null, onPickHero, onGenerate, generating = false,
   error = null, canGenerate = false,
 }) => (
-  <div className="mt-5 border-t border-admin-border-soft pt-4">
-    <div className="flex flex-wrap items-center justify-between gap-2">
+  <div>
+    <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <span className="text-[12px] font-medium text-admin-text">Mockuper</span>
-        <span className="ml-2 text-[11px] text-admin-text-muted">
-          Genereras per färg — välj huvudbild inför publicering
-        </span>
+        <p className="text-[13px] font-medium text-admin-text">Skapa produktbilder</p>
+        <p className="mt-0.5 text-[12px] text-admin-text-muted">
+          En mockup skapas för varje vald färg. Du väljer sedan vilken som blir huvudbild.
+        </p>
       </div>
       <button
         type="button"
         onClick={onGenerate}
         disabled={!canGenerate || generating}
-        className="rounded-[var(--radius-admin-el)] bg-admin-primary px-3 py-1.5 text-[12px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
+        className="min-h-10 shrink-0 rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
       >
-        {generating ? 'Genererar…' : mockups.length ? 'Generera om' : 'Generera mockuper'}
+        {generating ? 'Skapar mockuper…' : mockups.length ? 'Skapa om mockuper' : 'Skapa mockuper'}
       </button>
+    </div>
+
+    <div className="sr-only" aria-live="polite">
+      {generating ? 'Mockuper skapas.' : mockups.length ? `${mockups.length} mockuper är klara.` : ''}
     </div>
 
     {error && (
@@ -53,21 +57,25 @@ const MockupPanel = ({
       <div className="mt-3 flex items-center gap-2 rounded-[var(--radius-admin)] border border-dashed border-admin-border bg-admin-surface-2 px-4 py-5 text-[12px] text-admin-text-muted">
         <PhotoIcon className="h-5 w-5 text-admin-text-muted" />
         {canGenerate
-          ? 'Inga mockuper genererade ännu.'
+          ? 'Allt är klart. Klicka på Skapa mockuper för att se de färdiga produktbilderna.'
           : 'Lägg till ett tryck och välj motiv för att kunna generera mockuper.'}
       </div>
     ) : (
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-        {mockups.map((m) => {
-          const isHero = m.key === heroKey;
-          const ext = m.type === 'image/png' ? 'png' : 'webp';
-          return (
-            <div
-              key={m.key}
-              className={`rounded-[var(--radius-admin)] border p-2 ${
-                isHero ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40' : 'border-admin-border'
-              }`}
-            >
+      <div>
+        <p className="mt-3 text-[12px] text-admin-success-text" role="status">
+          {mockups.length} mockuper klara. Välj huvudbild och fortsätt till Publicera.
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {mockups.map((m) => {
+            const isHero = m.key === heroKey;
+            const ext = m.type === 'image/png' ? 'png' : 'webp';
+            return (
+              <div
+                key={m.key}
+                className={`rounded-[var(--radius-admin)] border p-2 ${
+                  isHero ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40' : 'border-admin-border'
+                }`}
+              >
               {/* bg-white is DELIBERATE in both themes: mockups rasterize on
                   white and the swatch must show the garment colour truthfully. */}
               <img
@@ -100,9 +108,10 @@ const MockupPanel = ({
                 />
                 Huvudbild
               </label>
-            </div>
-          );
-        })}
+              </div>
+            );
+          })}
+        </div>
       </div>
     )}
   </div>

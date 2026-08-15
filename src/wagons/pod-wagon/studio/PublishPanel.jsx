@@ -158,7 +158,12 @@ const PublishPanel = ({
   const validName = name.trim().length > 0;
   const validPrice = priceNum > 0;
   const hasColorways = selectedColorwayIds.length > 0;
-  const anySizeless = selectedColorways.some((c) => sizesFor(c.id).length === 0);
+  // A colour with EVERY size unchecked is almost always an accident — block it
+  // (Codex/impeccable 2026-08-15). But an EMPTY global size list is the
+  // deliberate one-size path (kepsar/väskor: one variant per colour, the
+  // documented pre-existing behavior) — that must stay publishable, so only
+  // flag when sizes exist to choose from.
+  const anySizeless = sizes.length > 0 && selectedColorways.some((c) => sizesFor(c.id).length === 0);
 
   // REVIEW GATE (slice 5): every SELECTED colourway must have been seen in the
   // strip. Accepts a Set or array. The unreviewed ones drive the actionable hint.
@@ -169,12 +174,24 @@ const PublishPanel = ({
   // Success + validity gates. Review is the LAST gate — everything else keeps its
   // priority so the hint only surfaces once the form is otherwise publishable.
   const canPublish =
-    !publishing && validName && validPrice && hasColorways && hasArtwork && !!shopId && allReviewed;
+    !publishing && validName && validPrice && hasColorways && hasArtwork && !!shopId && allReviewed && !anySizeless;
 
   const targetProduct = products.find((p) => p.id === targetProductId) || null;
   const targetHasSku = Boolean(targetProduct?.hasSku);
   const canUpdate =
     !publishing && !!targetProductId && hasColorways && hasArtwork && !!shopId && allReviewed;
+
+  const publishBlocker = (() => {
+    if (!shopId) return 'Välj en butik och öppna Designstudion från butikens admin.';
+    if (!hasArtwork) return 'Gå tillbaka och välj ett motiv för varje tryckyta.';
+    if (!hasColorways) return 'Gå tillbaka och välj minst en färg.';
+    if (!allReviewed) return `Gå tillbaka till Godkänn och granska ${unreviewedColorways.map((c) => c.label).join(', ')}.`;
+    if (target === 'existing' && !targetProductId) return 'Välj produkten som ska uppdateras.';
+    if (target === 'new' && !validName) return 'Ange ett produktnamn.';
+    if (target === 'new' && anySizeless) return 'Välj minst en storlek för varje färg.';
+    if (target === 'new' && !validPrice) return 'Ange ett pris större än 0 kr.';
+    return null;
+  })();
 
   const submitExisting = () => {
     if (!canUpdate) return;
@@ -217,8 +234,8 @@ const PublishPanel = ({
     // No own frame/heading — the studio renders this inside its numbered
     // "4 · Publicera" section (the harness mounts it bare, also fine).
     <div>
-      <p className="text-[12px] text-admin-text-muted">
-        Skapa en riktig produkt av dina mockuper — den blir direkt köpbar i butiken.
+      <p className="text-[13px] text-admin-text-muted">
+        Kontrollera uppgifterna nedan. En ny produkt blir köpbar direkt när du skapar den.
       </p>
 
       {mockups.length === 0 ? (
@@ -341,7 +358,7 @@ const PublishPanel = ({
           <div>
             <label className={labelCls}>Storlekar</label>
             <p className="mb-2 text-[12px] text-admin-text-muted">
-              Alla storlekar är tillgängliga från början. Avmarkera en kombination som inte ska erbjudas.
+              Alla storlekar erbjuds från början. Avmarkera en kombination som inte ska säljas. Det ändrar inte lagersaldo.
             </p>
             <div className="flex flex-wrap items-center gap-2">
               {sizes.map((s) => (
@@ -354,9 +371,9 @@ const PublishPanel = ({
                     type="button"
                     onClick={() => removeSize(s)}
                     className="px-1.5 py-1 -my-1 text-admin-text-muted hover:text-admin-text"
-                    aria-label={`Ta bort ${s}`}
+                    aria-label={`Ta bort storlek ${s} från alla färger`}
                   >
-                    ×
+                    Ta bort
                   </button>
                 </span>
               ))}
@@ -391,7 +408,7 @@ const PublishPanel = ({
                           <td key={s} className="px-2 py-1 text-center">
                             <input
                               type="checkbox"
-                              aria-label={`${c.label}, storlek ${s}, tillgänglig`}
+                              aria-label={`${c.label}, storlek ${s}, erbjuds`}
                               checked={sizeOptOut[c.id]?.[s] !== true}
                               onChange={() => toggleSizeCell(c.id, s)}
                               className={checkboxCls}
@@ -405,8 +422,13 @@ const PublishPanel = ({
               </div>
             )}
             {anySizeless && (
-              <p className="mt-1.5 text-[12px] text-admin-text-muted">
-                En färg utan tillgängliga storlekar publiceras utan storleksval (en enda variant), inte som slutsåld.
+              <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
+                Minst en färg saknar storlek. Välj minst en storlek per färg för att kunna skapa produkten.
+              </p>
+            )}
+            {sizes.length === 0 && (
+              <p className="mt-2 text-[12px] text-admin-text-muted">
+                Inga storlekar — produkten publiceras i en storlek (en variant per färg).
               </p>
             )}
           </div>
@@ -545,7 +567,7 @@ const PublishPanel = ({
                   type="button"
                   onClick={target === 'existing' ? submitExisting : submit}
                   disabled={target === 'existing' ? !canUpdate : !canPublish}
-                  className="rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
+                  className="min-h-10 rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
                 >
                   {publishing
                     ? (target === 'existing' ? 'Uppdaterar…' : 'Skapar…')
@@ -557,17 +579,9 @@ const PublishPanel = ({
                   {error}
                 </p>
               )}
-              {!hasArtwork && shopId && (
-                <p className="mt-2 text-[12px] text-admin-text-muted">
-                  Lägg till minst ett tryck med motiv innan du publicerar (varje tryckrad behöver ett motiv).
-                </p>
-              )}
-              {/* Review gate is the LAST gate: shown only when everything else is
-                  valid but not every selected colourway has been seen in the strip. */}
-              {shopId && hasArtwork && (target === 'existing' ? !!targetProductId : (validName && validPrice)) && hasColorways && !allReviewed && (
+              {publishBlocker && !publishing && (
                 <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
-                  Granska färgerna i färglisten innan du publicerar — {selectedColorways.length - unreviewedColorways.length} av {selectedColorways.length} granskade.
-                  {' '}Kvar: {unreviewedColorways.map((c) => c.label).join(', ')}.
+                  För att fortsätta: {publishBlocker}
                 </p>
               )}
             </div>

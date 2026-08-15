@@ -1,7 +1,7 @@
 // DesignStudio.jsx — the Design Studio tab (POD add-on, Mode A / shop-owner studio).
 //
 // LAYOUT: eight numbered task pages in one column — 1·Plagg · 2·Tryckytor ·
-// 3·Motiv · 4·Placering · 5·Färger · 6·Motiv per färg · 7·Mockuper ·
+// 3·Motiv · 4·Placering · 5·Färger · 6·Godkänn · 7·Mockuper ·
 // 8·Publicera. The studio stays MOUNTED across PodAdminPage tab switches
 // (state survives a trip to the Original tab).
 //
@@ -27,11 +27,12 @@ import { CardSection } from '../../../components/admin/ui';
 import { slotLabel, POCKET_POSITIONS, DEFAULT_POCKET_POSITION, pocketPositionLabel } from '../../../config/podSlots';
 import {
   loadPodMockupTemplates,
+  clearPodMockupTemplatesCache,
   getPodMockupTemplatesMeta,
   templateSlots,
 } from '../../../config/podMockupTemplates';
-import { loadPodProfiles, getProfileById } from '../../../config/podProfiles';
-import { loadPod3dModels } from '../../../config/pod3dModels';
+import { loadPodProfiles, clearPodProfilesCache, getProfileById } from '../../../config/podProfiles';
+import { loadPod3dModels, clearPod3dModelsCache } from '../../../config/pod3dModels';
 import { tierLabel } from '../components/podTier';
 import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, templateWithPocketPosition } from './placementMath';
 import { renderMockup } from './mockupRender';
@@ -68,9 +69,11 @@ const GarmentThumb = ({ template, colorway }) => (
   <TemplateBackground template={template} colorway={colorway} />
 );
 
-const DesignStudio = ({ artwork = [], loading = false, shopId = null, products = [], onChanged = null, designForProductId = null }) => {
+const DesignStudio = ({ artwork = [], loading = false, shopId = null, products = [], onChanged = null, onOpenArtworkLibrary = null, designForProductId = null }) => {
   const [templates, setTemplates] = useState([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [templatesError, setTemplatesError] = useState(null);
+  const [templateLoadAttempt, setTemplateLoadAttempt] = useState(0);
   const [meta, setMeta] = useState({ version: 0, provisional: true });
   const [profiles, setProfiles] = useState([]);
   const [models3d, setModels3d] = useState([]);
@@ -90,7 +93,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // `prints` — when the list is empty it idles on 'front' with no artwork.
   const [slot, setSlot] = useState('front');
   // WIZARD: one decision at a time, as pages — 1 Plagg · 2 Tryckytor ·
-  // 3 Motiv · 4 Placering · 5 Färger · 6 Motiv per färg · 7 Mockuper ·
+  // 3 Motiv · 4 Placering · 5 Färger · 6 Godkänn · 7 Mockuper ·
   // 8 Publicera. Steps are
   // VIEWS over the same design state, so going back never loses work.
   const [step, setStep] = useState(1);
@@ -148,28 +151,43 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     let alive = true;
     (async () => {
       setTemplatesLoading(true);
-      const [t, p, m3d] = await Promise.all([loadPodMockupTemplates(), loadPodProfiles(), loadPod3dModels()]);
-      if (!alive) return;
-      setTemplates(t);
-      setProfiles(p);
-      setModels3d(m3d);
-      setMeta(getPodMockupTemplatesMeta());
-      // Default-select the first template + its first colourway so the canvas
-      // isn't empty on open.
-      if (t.length && !selectedTemplateId) {
-        setSelectedTemplateId(t[0].id);
-        setColorwayId(t[0].colorways?.[0]?.id || null);
+      setTemplatesError(null);
+      try {
+        const [t, p, m3d] = await Promise.all([loadPodMockupTemplates(), loadPodProfiles(), loadPod3dModels()]);
+        if (!alive) return;
+        setTemplates(t);
+        setProfiles(p);
+        setModels3d(m3d);
+        setMeta(getPodMockupTemplatesMeta());
+        // Default-select the first template + its first colourway so the canvas
+        // isn't empty on open.
+        if (t.length && !selectedTemplateId) {
+          setSelectedTemplateId(t[0].id);
+          setColorwayId(t[0].colorways?.[0]?.id || null);
+        }
+      } catch (error) {
+        if (!alive) return;
+        console.error('DesignStudio: failed to load studio resources', error);
+        setTemplatesError('Plaggmallarna kunde inte laddas. Kontrollera anslutningen och försök igen.');
+      } finally {
+        if (alive) setTemplatesLoading(false);
       }
-      setTemplatesLoading(false);
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [templateLoadAttempt]);
 
   const selectedTemplate = useMemo(
     () => templates.find((t) => t.id === selectedTemplateId) || null,
     [templates, selectedTemplateId]
   );
+
+  const retryStudioResources = () => {
+    clearPodMockupTemplatesCache();
+    clearPodProfilesCache();
+    clearPod3dModelsCache();
+    setTemplateLoadAttempt((n) => n + 1);
+  };
 
   // Keep the colourway + slot valid whenever the template changes. Design state
   // (placements/overrides/mockups) resets too — it was built against the OLD
@@ -932,7 +950,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     { n: 3, label: 'Motiv', done: s3done },
     { n: 4, label: 'Placering', done: s3done }, // auto-placement = always valid
     { n: 5, label: 'Färger', done: s5done },
-    { n: 6, label: 'Motiv per färg', done: s6done },
+    { n: 6, label: 'Godkänn', done: s6done },
     { n: 7, label: 'Mockuper', done: s7done },
     { n: 8, label: 'Publicera', done: Boolean(publishResult) },
   ];
@@ -973,29 +991,33 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
   // Shared step-footer nav (Tillbaka · primary Klar/Nästa).
   const StepNav = ({ nextLabel, nextEnabled, onNext, hint = null }) => (
-    <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-admin-border-soft pt-4">
-      {step > 1 && (
-        <button
-          type="button"
-          onClick={() => goStep(step - 1)}
-          className="rounded-[var(--radius-admin-el)] border border-admin-border px-3.5 py-2 text-[13px] text-admin-text hover:bg-admin-surface-2"
-        >
-          ‹ Tillbaka
-        </button>
-      )}
-      {nextLabel && (
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={!nextEnabled}
-          className="rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
-        >
-          {nextLabel} ›
-        </button>
-      )}
+    <div className="mt-5 border-t border-admin-border-soft pt-4">
       {hint && !nextEnabled && (
-        <span className="text-[12px] text-admin-text-muted">{hint}</span>
+        <p className="mb-3 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text" role="status">
+          För att fortsätta: {hint}.
+        </p>
       )}
+      <div className="flex flex-wrap items-center gap-3">
+        {step > 1 && (
+          <button
+            type="button"
+            onClick={() => goStep(step - 1)}
+            className="min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3.5 py-2 text-[13px] text-admin-text hover:bg-admin-surface-2"
+          >
+            ‹ Tillbaka
+          </button>
+        )}
+        {nextLabel && (
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={!nextEnabled}
+            className="min-h-10 rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover disabled:cursor-default disabled:opacity-40"
+          >
+            {nextLabel} ›
+          </button>
+        )}
+      </div>
     </div>
   );
 
@@ -1013,9 +1035,32 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const designForProduct = designForProductId
     ? products.find((p) => p.id === designForProductId) || null
     : null;
+  const currentStep = STEP_META[step - 1];
 
   return (
     <div className="flex flex-col gap-4">
+      <div>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h2 className="text-[16px] font-semibold text-admin-text">Designstudio</h2>
+            <p className="mt-1 max-w-[70ch] text-[13px] text-admin-text-muted">
+              Bygg produkten steg för steg. Du kan alltid gå tillbaka utan att förlora dina val.
+            </p>
+          </div>
+          <span className="text-[12px] text-admin-text-muted">Steg {step} av 8</span>
+        </div>
+        <p className="mt-3 text-[13px] text-admin-text">
+          <span className="font-medium">Nu: {currentStep.label}.</span>{' '}
+          {step === 1 && 'Välj produkten som motivet ska tryckas på.'}
+          {step === 2 && 'Välj en eller flera ytor som ska få tryck.'}
+          {step === 3 && 'Välj ett motiv för varje tryckyta.'}
+          {step === 4 && 'Kontrollera placeringen; standardplaceringen är redan redo.'}
+          {step === 5 && 'Behåll bara de färger som ska säljas.'}
+          {step === 6 && 'Kontrollera att motivet fungerar på varje vald färg.'}
+          {step === 7 && 'Skapa produktbilder och välj huvudbild.'}
+          {step === 8 && 'Kontrollera uppgifterna och skapa eller uppdatera produkten.'}
+        </p>
+      </div>
       {/* Way-2 deep link (from the product form): the whole session designs FOR
           an existing product — say so up front, and PublishPanel preselects it. */}
       {designForProductId && (
@@ -1073,10 +1118,22 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       <CardSection title="1 · Plagg" bodyClassName="p-4">
         {templatesLoading ? (
           <p className="text-[13px] text-admin-text-muted">Laddar mallar…</p>
+        ) : templatesError ? (
+          <div className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-3">
+            <p className="text-[13px] text-admin-caution-text">{templatesError}</p>
+            <button type="button" onClick={retryStudioResources} className="mt-2 min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface-2">
+              Försök igen
+            </button>
+          </div>
         ) : templates.length === 0 ? (
-          <p className="text-[13px] text-admin-text-muted">
-            Inga plaggmallar ännu. Plattformen behöver seeda mockup-mallarna.
-          </p>
+          <div className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-3">
+            <p className="text-[13px] text-admin-caution-text">
+              Inga plaggmallar kunde hämtas. Försök igen eller kontakta plattformsadministratören om problemet kvarstår.
+            </p>
+            <button type="button" onClick={retryStudioResources} className="mt-2 min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface-2">
+              Försök igen
+            </button>
+          </div>
         ) : (
           <>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
@@ -1203,10 +1260,27 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         {loading ? (
           <p className="mt-2 text-[13px] text-admin-text-muted">Laddar original…</p>
         ) : artwork.length === 0 ? (
-          <p className="mt-2 text-[13px] text-admin-text-muted">
-            Inga original ännu — ladda upp under fliken Original.
-            Designen ligger kvar här under tiden.
-          </p>
+          <div className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-surface-2 px-3 py-3">
+            <p className="text-[13px] text-admin-text-muted">
+              Inga godkända original finns ännu. Ladda upp en PNG eller JPG; designen ligger kvar här under tiden.
+            </p>
+            {onOpenArtworkLibrary && (
+              <button type="button" onClick={onOpenArtworkLibrary} className="mt-2 min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface">
+                Gå till Original
+              </button>
+            )}
+          </div>
+        ) : !artwork.some(isSelectableArtwork) ? (
+          <div className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-3">
+            <p className="text-[13px] text-admin-caution-text">
+              Originalen kan inte förhandsvisas i studion. Ladda upp en godkänd PNG eller JPG med bildmått.
+            </p>
+            {onOpenArtworkLibrary && (
+              <button type="button" onClick={onOpenArtworkLibrary} className="mt-2 min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface">
+                Gå till Original
+              </button>
+            )}
+          </div>
         ) : (
           <div className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
             {artwork.map((a) => {
@@ -1257,6 +1331,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           the discrete position picker ONLY (beslut 2 — no free placement). */}
       {step === 4 && prints[pi] && (
       <CardSection title="4 · Placering" bodyClassName="p-4">
+        <p className="mb-3 text-[13px] text-admin-text-muted">
+          Standardplaceringen är klar att använda. Dra eller ändra storlek bara om du vill justera resultatet.
+        </p>
         {prints.length > 1 && (
           <div className="mb-3 flex flex-wrap items-center gap-1.5">
             {prints.map((p, i) => {
@@ -1390,14 +1467,17 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           selectedColorwayIds={selectedColorwayIds}
           onToggle={toggleSelectedColorway}
         />
-        <StepNav nextLabel="Nästa: Motiv per färg" nextEnabled={s5done} onNext={() => goStep(6)} hint="Välj minst en färg" />
+        <StepNav nextLabel="Nästa: Godkänn" nextEnabled={s5done} onNext={() => goStep(6)} hint="välj minst en färg" />
       </CardSection>
       )}
 
       {/* ── 6 · MOTIV PER FÄRG — review selected combinations, set explicit
           per-colour overrides and surface advisory contrast warnings. */}
       {step === 6 && (
-      <CardSection title="6 · Motiv per färg" bodyClassName="p-4">
+      <CardSection title="6 · Godkänn" bodyClassName="p-4">
+        <p className="mb-3 text-[13px] text-admin-text-muted">
+          Granska varje färg innan mockuperna skapas. Byt motiv för en viss färg om kontrasten inte fungerar.
+        </p>
         {designedSlots(selectedTemplate).length > 1 && (
           <div className="mb-3 flex flex-wrap items-center gap-1.5">
             <span className="text-[12px] text-admin-text-muted">Förhandsvisa yta:</span>
@@ -1447,6 +1527,18 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {/* ── 7 · MOCKUPER — only selected colourways are generated. */}
       {step === 7 && (
       <CardSection title="7 · Mockuper" bodyClassName="p-4">
+        {/* Generated mockups are the main task and the studio's first concrete
+            output, so keep this action before the optional 3D preview. */}
+        <MockupPanel
+          mockups={mockups}
+          heroKey={heroKey}
+          onPickHero={setHeroKey}
+          onGenerate={generateMockups}
+          generating={generating}
+          error={mockupError}
+          canGenerate={s6done && Boolean(selectedTemplate) && designedSlots(selectedTemplate).some((s) => isComposable(printArtwork(s))) && !publishing}
+        />
+
         {/* 3D-vy (beta): follows the live print placement; pixi lazy-loads.
             APPAREL ONLY — the 3D model library depicts garments (tees), so a
             keps/mössa/tygkasse motif would render onto a t-shirt photo, which
@@ -1463,16 +1555,6 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           />
         )}
 
-        {/* Generated mockups: per-colourway rasterized previews + hero pick. */}
-        <MockupPanel
-          mockups={mockups}
-          heroKey={heroKey}
-          onPickHero={setHeroKey}
-          onGenerate={generateMockups}
-          generating={generating}
-          error={mockupError}
-          canGenerate={s6done && Boolean(selectedTemplate) && designedSlots(selectedTemplate).some((s) => isComposable(printArtwork(s))) && !publishing}
-        />
         <StepNav nextLabel="Nästa: Publicera" nextEnabled={s7done} onNext={() => goStep(8)} hint="Generera en mockup för varje vald färg" />
       </CardSection>
       )}

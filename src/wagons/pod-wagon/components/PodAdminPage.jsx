@@ -162,6 +162,7 @@ const PodAdminPage = () => {
             shopId={shopId}
             products={lib.products}
             onChanged={lib.refresh}
+            onOpenArtworkLibrary={() => setTab('library')}
             designForProductId={designForProductId}
           />
         </div>
