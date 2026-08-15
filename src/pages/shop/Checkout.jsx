@@ -185,7 +185,9 @@ const Checkout = () => {
       try {
         const entries = await Promise.all(
           ids.map(async (id) => {
-            const snap = await getDoc(doc(db, 'products', id));
+            // productsPublic mirrors products/{id} under the SAME doc id; an
+            // unpublished product is simply absent → null → line removed.
+            const snap = await getDoc(doc(db, 'productsPublic', id));
             return [id, snap.exists() ? snap.data() : null];
           })
         );

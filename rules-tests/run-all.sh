@@ -56,6 +56,8 @@ echo "==> [1/3] checkout-invariants (pure unit test — P0-03 tenant/SKU/live-sh
 node rules-tests/checkout-invariants.test.cjs
 echo "==> [1/3] wave2-invariants (pure unit test — SSRF hosts + print partition guards)"
 node rules-tests/wave2-invariants.test.cjs
+echo "==> [1/3] projection (pure unit test — P1-11 public catalogue allowlist)"
+node rules-tests/projection.test.cjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"

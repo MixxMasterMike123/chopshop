@@ -39,9 +39,11 @@ const ProductCollectionPage = () => {
       try {
         // Resolve the collection by shopId + handle. Load products in parallel.
         const [collSnap, prodSnap] = await Promise.all([
-          getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId), where('handle', '==', handle), limit(1))),
+          // published-filter is REQUIRED by rules for anonymous list reads of
+          // collections (drafts are admin-only); the post-read check remains.
+          getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId), where('handle', '==', handle), where('published', '==', true), limit(1))),
           getDocs(query(
-            collection(db, 'products'),
+            collection(db, 'productsPublic'),
             where('shopId', '==', shopId),
             where('isActive', '==', true),
             where('availability.b2c', '==', true)

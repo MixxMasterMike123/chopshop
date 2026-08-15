@@ -36,7 +36,7 @@ const TagPage = () => {
       setLoading(true);
       try {
         const snap = await getDocs(query(
-          collection(db, 'products'),
+          collection(db, 'productsPublic'),
           where('shopId', '==', shopId),
           where('isActive', '==', true),
           where('availability.b2c', '==', true)

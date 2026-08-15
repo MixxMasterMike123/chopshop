@@ -165,20 +165,38 @@ service cloud.firestore {
     }
 
     // ============================================================
-    // PUBLIC STOREFRONT DATA — anonymous visitors browse the shop.
-    // Read stays open (shoppers have no shop identity; per-shop filtering is
-    // done by the query's where('shopId') — Phase 2). Writes are shop-scoped
-    // to the admin's shop (create stamps shopId; update guards the existing one).
+    // PUBLIC STOREFRONT DATA — anonymous visitors browse the shop via the
+    // productsPublic PROJECTION below. The RAW products collection is no
+    // longer publicly readable (P1-11, CODEX audit 2026-08-15): product docs
+    // carry non-public commerce data (b2bPrice, podCostSek, availability.b2b,
+    // isPodProduct) plus drafts, and rules cannot redact fields. Admin list
+    // queries all filter where('shopId'==own), which makes the read rule
+    // provable for list. Writes are shop-scoped as before.
+    // NOTE: the retired B2B catalog (AddonGate feature="b2b", non-admin B2B
+    // customers) read raw products for b2bPrice — that path is dead until the
+    // add-on is rebuilt with a server-side projection/callable.
     // ============================================================
     match /products/{productId} {
-      allow read: if true;
+      allow read: if isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
       allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
       allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
-    match /productGroups/{groupId} {
+    // Server-maintained public catalogue projection (syncProductsPublicOnWrite
+    // trigger; field allowlist in functions/src/catalog/projectProduct.ts).
+    // Contains ONLY published (isActive && availability.b2c) products with
+    // public fields — safe to leave world-readable. NEVER client-writable:
+    // the Admin SDK bypasses rules, so `write: false` locks everyone else out.
+    match /productsPublic/{productId} {
       allow read: if true;
+      allow write: if false;
+    }
+
+    // Legacy collection — no client reader or writer remains (checked
+    // 2026-08-15); read kept for admins only in case of stray tooling.
+    match /productGroups/{groupId} {
+      allow read: if isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
       allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
       allow delete: if isAdminOfShop(resource.data.shopId);
@@ -186,19 +204,24 @@ service cloud.firestore {
 
     // Collections — curated product groups (manual pick or smart tag-rule) that
     // drive the storefront's collection pages + homepage "Populära samlingar"
-    // cards + menu links. Public read (storefront), shop-admin write (same
-    // pattern as products/productGroups).
+    // cards + menu links. PUBLISHED docs are public; drafts are admin-only
+    // (P1-11 draft-disclosure fix). Anonymous LIST queries must therefore
+    // include where('published','==',true) — the storefront does; admin
+    // queries pass via their where('shopId'==own) filter instead.
     match /collections/{collectionId} {
-      allow read: if true;
+      allow read: if resource.data.published == true ||
+        isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
       allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
       allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
-    // CMS pages (legal pages, content pages). Note: drafts are technically
-    // readable; keep secrets out of CMS docs.
+    // CMS pages (legal pages, content pages). PUBLISHED pages are public;
+    // drafts are admin-only (P1-11). All storefront queries already filter
+    // where('status','==','published'); admin reads pass via shopId scoping.
     match /pages/{pageId} {
-      allow read: if true;
+      allow read: if resource.data.status == 'published' ||
+        isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
       allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
       allow delete: if isAdminOfShop(resource.data.shopId);

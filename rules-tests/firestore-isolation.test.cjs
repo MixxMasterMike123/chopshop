@@ -144,10 +144,21 @@ async function seed() {
     await setDoc(doc(db, 'podMappings/mapA'), { shopId: 'shopA', sku: 'TSHIRT-A', artworkId: 'artA', placement: 'Brost' });
     await setDoc(doc(db, 'podMappings/mapB'), { shopId: 'shopB', sku: 'TSHIRT-B', artworkId: 'artB', placement: 'Rygg' });
 
-    // Collections (curated product groups). PUBLIC read (storefront, like products),
-    // shop-admin write. Seed both shops to prove cross-shop write/delete is denied.
+    // Collections (curated product groups). PUBLISHED docs are public read
+    // (storefront); DRAFTS are admin-only (P1-11). Seed both shops + a draft.
     await setDoc(doc(db, 'collections/collA'), { shopId: 'shopA', handle: 'artist-a', title: 'Artist A', type: 'manual', productIds: [], published: true, featured: true });
     await setDoc(doc(db, 'collections/collB'), { shopId: 'shopB', handle: 'artist-b', title: 'Artist B', type: 'smart', rule: { tag: 'b' }, published: true, featured: false });
+    await setDoc(doc(db, 'collections/draftA'), { shopId: 'shopA', handle: 'draft-a', title: 'Unreleased drop', type: 'manual', productIds: [], published: false, featured: false });
+
+    // P1-11 public catalogue projection: raw products (b2bPrice/podCostSek/
+    // drafts) are admin-only; the storefront reads server-written productsPublic.
+    await setDoc(doc(db, 'products/prodA'), { shopId: 'shopA', isActive: true, availability: { b2c: true }, name: 'A tee', b2cPrice: 199, b2bPrice: 90, podCostSek: 60 });
+    await setDoc(doc(db, 'productsPublic/prodA'), { shopId: 'shopA', isActive: true, availability: { b2c: true }, name: 'A tee', b2cPrice: 199 });
+    await setDoc(doc(db, 'productGroups/pgA'), { shopId: 'shopA', name: 'Legacy group' });
+
+    // CMS pages: published is public, draft is admin-only (P1-11).
+    await setDoc(doc(db, 'pages/pubPageA'), { shopId: 'shopA', slug: 'om-oss', status: 'published', title: 'Om oss' });
+    await setDoc(doc(db, 'pages/draftPageA'), { shopId: 'shopA', slug: 'hemlig', status: 'draft', title: 'Hemlig kampanj', createdBy: 'adminA' });
   });
 }
 
@@ -439,6 +450,41 @@ async function run() {
   // A plain customer must not write collections (read is public, write is admin-only).
   await check('plain customer CANNOT create a collection', assertFails(
     setDoc(doc(customerDb('custA'), 'collections/custColl'), { shopId: 'shopA', handle: 'c', title: 'c', type: 'manual', productIds: [] })));
+  // P1-11 draft disclosure: unpublished collections are admin-only.
+  await check('anon CANNOT read a DRAFT collection (P1-11)', assertFails(
+    getDoc(doc(env.unauthenticatedContext().firestore(), 'collections/draftA'))));
+  await check('shopA admin reads OWN draft collection', assertSucceeds(getDoc(doc(shopAAdminDb(), 'collections/draftA'))));
+
+  // ── P1-11 public catalogue projection: the storefront reads productsPublic
+  //    (world-readable, server-written); the RAW products collection — which
+  //    carries b2bPrice, podCostSek and drafts — is admin/platform-only, and
+  //    the mirror is never client-writable (not even platform: the sync
+  //    trigger + backfill write via Admin SDK, which bypasses rules). ──
+  console.log('\n=== P1-11 public catalogue projection ===');
+  await check('anon reads productsPublic (storefront catalogue)', assertSucceeds(
+    getDoc(doc(env.unauthenticatedContext().firestore(), 'productsPublic/prodA'))));
+  await check('anon CANNOT read RAW product (b2bPrice/podCostSek leak — P1-11)', assertFails(
+    getDoc(doc(env.unauthenticatedContext().firestore(), 'products/prodA'))));
+  await check('plain customer CANNOT read RAW product', assertFails(getDoc(doc(customerDb('custA'), 'products/prodA'))));
+  await check('shopA admin reads OWN raw product', assertSucceeds(getDoc(doc(shopAAdminDb(), 'products/prodA'))));
+  await check('shopB admin CANNOT read shopA raw product', assertFails(getDoc(doc(shopBAdminDb(), 'products/prodA'))));
+  await check('platform reads any raw product', assertSucceeds(getDoc(doc(platformDb(), 'products/prodA'))));
+  await check('anon CANNOT write productsPublic', assertFails(
+    setDoc(doc(env.unauthenticatedContext().firestore(), 'productsPublic/hack'), { shopId: 'shopA', name: 'x' })));
+  await check('shopA admin CANNOT write productsPublic (server-only mirror)', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'productsPublic/prodA'), { name: 'x' })));
+  await check('platform CANNOT write productsPublic via client SDK', assertFails(
+    updateDoc(doc(platformDb(), 'productsPublic/prodA'), { name: 'x' })));
+  await check('anon CANNOT read productGroups (legacy, admin-only)', assertFails(
+    getDoc(doc(env.unauthenticatedContext().firestore(), 'productGroups/pgA'))));
+
+  // ── P1-11 CMS pages draft disclosure: published pages stay public. ──
+  await check('anon reads a PUBLISHED page', assertSucceeds(
+    getDoc(doc(env.unauthenticatedContext().firestore(), 'pages/pubPageA'))));
+  await check('anon CANNOT read a DRAFT page (P1-11)', assertFails(
+    getDoc(doc(env.unauthenticatedContext().firestore(), 'pages/draftPageA'))));
+  await check('shopA admin reads OWN draft page', assertSucceeds(getDoc(doc(shopAAdminDb(), 'pages/draftPageA'))));
+  await check('shopB admin CANNOT read shopA draft page', assertFails(getDoc(doc(shopBAdminDb(), 'pages/draftPageA'))));
 
   // ── P0-01 RE-HOMING (2026-08-15 audit): shopId is IMMUTABLE on client
   //    updates. The pre-fix rules authorized updates against the OLD

@@ -116,11 +116,16 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
           return;
         }
 
-        // Get the first (and should be only) matching page
+        // Get the first (and should be only) matching page. Strip the admin
+        // audit fields (createdBy/updatedBy = admin Firebase UIDs) from state.
+        // Hygiene only, not a security boundary: published page docs remain
+        // directly readable and rules cannot redact fields — keeping UIDs out
+        // of pages entirely would need a projection like productsPublic.
         const pageDoc = querySnapshot.docs[0];
+        const { createdBy, updatedBy, ...publicFields } = pageDoc.data();
         const pageData = {
           id: pageDoc.id,
-          ...pageDoc.data()
+          ...publicFields
         };
 
         console.log('🔍 DynamicPage: Found page:', pageData);

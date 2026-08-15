@@ -74,6 +74,9 @@ async function seed() {
     // products in each shop
     await setDoc(doc(db, 'products/pA'), { shopId: 'shopA', isActive: true, name: 'A prod' });
     await setDoc(doc(db, 'products/pB'), { shopId: 'shopB', isActive: true, name: 'B prod' });
+    // public catalogue projection (P1-11) — server-maintained mirror the
+    // storefront reads; raw products are admin-only.
+    await setDoc(doc(db, 'productsPublic/pA'), { shopId: 'shopA', isActive: true, availability: { b2c: true }, name: 'A prod' });
     // orders in each shop
     await setDoc(doc(db, 'orders/oA'), { shopId: 'shopA', source: 'b2c', customerInfo: { email: 'cust@x.com' }, b2cCustomerId: 'cA' });
     await setDoc(doc(db, 'orders/oB'), { shopId: 'shopB', source: 'b2c', customerInfo: { email: 'other@x.com' } });
@@ -99,7 +102,8 @@ async function run() {
 
   console.log('\n=== STORE → ADMIN direction: legitimate access must WORK (no lockout) ===');
 
-  await check('anon reads products (storefront)', assertSucceeds(getDoc(doc(anonDb(), 'products/pA'))));
+  await check('anon reads productsPublic (storefront catalogue)', assertSucceeds(getDoc(doc(anonDb(), 'productsPublic/pA'))));
+  await check('shopA admin reads OWN raw product', assertSucceeds(getDoc(doc(shopAAdminDb(), 'products/pA'))));
   await check('anon reads shops/{id} (storefront config)', assertSucceeds(getDoc(doc(anonDb(), 'shops/shopA'))));
   await check('anon reads single order by id (confirmation page)', assertSucceeds(getDoc(doc(anonDb(), 'orders/oA'))));
   await check('customer reads OWN b2cCustomer doc', assertSucceeds(getDoc(doc(customerDb('cust'), 'b2cCustomers/cA'))));
@@ -127,6 +131,13 @@ async function run() {
   await check('anon CANNOT read affiliateClicks', assertFails(getDoc(doc(anonDb(), 'affiliateClicks/x'))));
   await check('anon CANNOT list all orders', assertFails(getDocs(collection(anonDb(), 'orders'))));
   await check('anon CANNOT write a product', assertFails(setDoc(doc(anonDb(), 'products/pHack'), { shopId: 'shopA' })));
+  // P1-11: raw products carry b2bPrice/podCostSek/drafts — anonymous reads
+  // now go to the projection only; the mirror is never client-writable.
+  await check('anon CANNOT read raw products (P1-11)', assertFails(getDoc(doc(anonDb(), 'products/pA'))));
+  await check('shopA admin CANNOT read shopB raw product', assertFails(getDoc(doc(shopAAdminDb(), 'products/pB'))));
+  await check('anon CANNOT write productsPublic', assertFails(setDoc(doc(anonDb(), 'productsPublic/pHack'), { shopId: 'shopA' })));
+  await check('shop admin CANNOT write productsPublic (server-only)', assertFails(updateDoc(doc(shopAAdminDb(), 'productsPublic/pA'), { name: 'x' })));
+  await check('platform CANNOT write productsPublic via client SDK', assertFails(updateDoc(doc(platformDb(), 'productsPublic/pA'), { name: 'x' })));
   await check('customer CANNOT self-promote to admin (role field)', assertFails(setDoc(doc(customerDb('cust'), 'users/cust'), { role: 'admin' })));
 
   console.log('\n=== PLATFORM privileges ===');

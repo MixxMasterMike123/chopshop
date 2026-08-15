@@ -181,7 +181,7 @@ const PublicProductPage = () => {
         return;
       }
       
-      const productsRef = collection(db, 'products');
+      const productsRef = collection(db, 'productsPublic');
       const productQuery = query(productsRef, where('shopId', '==', shopId), where('sku', '==', sku), where('isActive', '==', true), where('availability.b2c', '==', true));
       const querySnapshot = await getDocs(productQuery);
 

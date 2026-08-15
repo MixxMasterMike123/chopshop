@@ -38,6 +38,11 @@ export default function B2BCatalog() {
     (async () => {
       setLoading(true);
       try {
+        // INTENTIONALLY the raw collection: b2bPrice is excluded from the
+        // public productsPublic projection. Since the P1-11 rules tightening,
+        // raw products are admin-read-only, so this retired add-on's catalog
+        // only loads for shop admins — a rebuild needs a server-side
+        // projection/callable for B2B customers.
         const snap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
         const list = [];
         snap.forEach((d) => {

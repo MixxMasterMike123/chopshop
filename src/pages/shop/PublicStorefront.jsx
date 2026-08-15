@@ -78,7 +78,9 @@ const PublicStorefront = () => {
     try {
       setLoading(true);
       const productsQuery = query(
-        collection(db, 'products'),
+        // productsPublic = server-projected public catalogue (published-only,
+        // field-allowlisted); raw `products` is no longer world-readable.
+        collection(db, 'productsPublic'),
         where('shopId', '==', shopId),
         where('isActive', '==', true),
         where('availability.b2c', '==', true) // Only show B2C available products
@@ -113,15 +115,16 @@ const PublicStorefront = () => {
     }
   };
 
-  // Featured collections for the homepage "Populära samlingar" strip. Load all of
-  // the shop's collections, then client-filter to published + featured and order
-  // by sortOrder (mirrors how products derive featured/sort — no extra index).
+  // Featured collections for the homepage "Populära samlingar" strip. The
+  // published filter is in the QUERY — rules deny anonymous reads of drafts,
+  // so an unfiltered list would be rejected wholesale. Featured + sortOrder
+  // stay client-side (equality-only queries need no composite index).
   const loadFeaturedCollections = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId)));
+      const snap = await getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId), where('published', '==', true)));
       const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const feat = all
-        .filter((c) => c.published === true && c.featured === true)
+        .filter((c) => c.featured === true)
         .sort((a, b) => {
           const ao = Number.isFinite(a.sortOrder) ? a.sortOrder : Number.POSITIVE_INFINITY;
           const bo = Number.isFinite(b.sortOrder) ? b.sortOrder : Number.POSITIVE_INFINITY;

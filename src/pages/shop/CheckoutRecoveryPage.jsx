@@ -62,7 +62,7 @@ const CheckoutRecoveryPage = () => {
           const productId = it.productId;
           if (!productId) { anyMissing = true; continue; }
           try {
-            const snap = await getDoc(doc(db, 'products', productId));
+            const snap = await getDoc(doc(db, 'productsPublic', productId));
             if (!snap.exists()) { anyMissing = true; continue; }
             const productData = snap.data();
             // Only restore products that still belong to this shop, are active

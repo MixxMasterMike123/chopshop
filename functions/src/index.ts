@@ -229,6 +229,11 @@ export { submitLead } from './leads/submitLead';
 export { sweepAbandonedCheckouts } from './checkout-recovery/sweep';
 export { resolveCheckoutRecovery, unsubscribeCheckout } from './checkout-recovery/callables';
 
+// Public catalogue projection (P1-11): mirrors products/{id} into the
+// field-allowlisted, published-only productsPublic/{id} the storefront reads,
+// so the raw collection (b2bPrice/podCostSek/drafts) can be admin-read-only.
+export { syncProductsPublicOnWrite } from './catalog/syncProductsPublic';
+
 // Native product reviews ("Recensioner" add-on): an order trigger that schedules
 // a review request when a B2C order is fulfilled, a scheduled sweep that emails
 // the request, and the public/admin callables the storefront + admin pages call.
