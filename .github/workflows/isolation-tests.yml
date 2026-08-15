@@ -28,12 +28,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Node 20 matches functions/package.json engines.node and the deployed
-      # Cloud Functions runtime (nodejs20).
-      - name: Set up Node 20
+      # Node 22 matches functions/package.json engines.node and the deployed
+      # Cloud Functions runtime (nodejs22).
+      - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: |
             package-lock.json
