@@ -8,7 +8,7 @@ import {
   authorizePrintOperator,
   authorizeTenantAdmin,
 } from "./live-authorization";
-import { createAuth } from "./create-auth";
+import { createAuth, isAuthConfigured } from "./create-auth";
 import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 export interface SessionIdentity {
@@ -19,6 +19,12 @@ export async function resolveSessionIdentity(
   env: Env,
   request: Request,
 ): Promise<SessionIdentity | null> {
+  // Without a configured auth secret no session can exist, so every
+  // session-guarded surface fails closed as anonymous instead of throwing.
+  if (!isAuthConfigured(env)) {
+    return null;
+  }
+
   const result = await createAuth(env).api.getSession({
     headers: request.headers,
   });

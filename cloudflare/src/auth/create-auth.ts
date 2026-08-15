@@ -2,6 +2,13 @@ import { betterAuth } from "better-auth";
 
 const MINIMUM_SECRET_LENGTH = 32;
 
+export function isAuthConfigured(env: Env): boolean {
+  return (
+    typeof env.BETTER_AUTH_SECRET === "string" &&
+    env.BETTER_AUTH_SECRET.length >= MINIMUM_SECRET_LENGTH
+  );
+}
+
 function trustedOrigins(value: string): string[] {
   const origins = value
     .split(",")
@@ -16,7 +23,7 @@ function trustedOrigins(value: string): string[] {
 }
 
 export function createAuth(env: Env) {
-  if (env.BETTER_AUTH_SECRET.length < MINIMUM_SECRET_LENGTH) {
+  if (!isAuthConfigured(env)) {
     throw new Error("BETTER_AUTH_SECRET must contain at least 32 characters");
   }
 
