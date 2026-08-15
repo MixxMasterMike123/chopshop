@@ -19,6 +19,7 @@ const shopFeatures_1 = require("../config/shopFeatures");
 const connectParams_1 = require("./connectParams");
 const platformConfig_1 = require("./platformConfig");
 const writeCheckoutDoc_1 = require("../checkout-recovery/writeCheckoutDoc");
+const durableRateLimit_1 = require("../protection/rate-limiting/durableRateLimit");
 /**
  * Server-side price computation. NEVER trust client-supplied amounts:
  * prices come from the products collection, the discount from the affiliate
@@ -266,6 +267,15 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
         // Only allow POST requests
         if (request.method !== 'POST') {
             response.status(405).json({ error: 'Method not allowed' });
+            return;
+        }
+        // P1-02: durable per-IP rate limit — each call creates a Stripe
+        // PaymentIntent, so an unthrottled caller is both an abuse and a cost
+        // vector. 40 per 5 min leaves room for several LEGIT buyers sharing one
+        // carrier CGNAT IP (each makes ~1-3 calls now that the client only
+        // recreates the PI when a priced input actually changes).
+        if (!(await (0, durableRateLimit_1.checkRateLimit)('pi', (0, durableRateLimit_1.trustedClientIp)(request), { limit: 40, windowSec: 300 }))) {
+            response.status(429).json({ error: 'Too many requests' });
             return;
         }
         // Initialize Stripe with secret key from environment variable
@@ -554,8 +564,8 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
                 statusCode: stripeError.statusCode,
                 requestParams: {
                     amount: amountInOre,
-                    currency: currency.toLowerCase(),
-                    customerEmail: customerInfo.email
+                    currency: currency.toLowerCase()
+                    // P1-05: no customer email in error logs
                 }
             });
             response.status(400).json({

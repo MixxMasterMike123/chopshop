@@ -282,6 +282,27 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, customerL
   const [elementsKey, setElementsKey] = useState(0);
   const resetPaymentMethods = () => setElementsKey((k) => k + 1);
 
+  // PI recreation fingerprint (2026-08-15 verifier + 07-25 audit fixes).
+  // Checkout passes customerInfo/shippingInfo as FRESH inline literals every
+  // render, so depending on those objects recreated the PaymentIntent on every
+  // parent re-render ("PI-per-keystroke"). This key is a PRIMITIVE built from
+  // exactly the inputs the server prices from — the effect refires only when
+  // one of them actually changes. Crucially it includes the APPLIED DISCOUNT:
+  // without it, a code applied after PI creation left the old (higher) PI
+  // amount live while the UI showed the discounted total (overcharge).
+  const totalsNow = calculateTotals();
+  const paymentInputsKey = JSON.stringify({
+    lines: cart.items.map((i) => [i.productId || i.id, i.variantSku || '', i.quantity]),
+    email: customerInfo?.email || '',
+    country: shippingInfo?.country || '',
+    shopId,
+    method: deliveryInfo?.method || 'home',
+    discount: totalsNow.discountCode || '',
+    gateBlocked,
+    nv: withdrawalGate?.noticeVersion || '',
+    nf: withdrawalGate?.noticeFingerprint || '',
+  });
+
   useEffect(() => {
     // Defer creating the PaymentIntent until the no-withdrawal notice is
     // accepted (when required), so the consent proof is guaranteed to be in the
@@ -422,14 +443,8 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, customerL
     if (cart.items.length > 0 && customerInfo?.email) {
       initializePayment();
     }
-    // Depend on the delivery METHOD (a primitive), not the deliveryInfo object
-    // (a fresh literal each render — would recreate the PI every render). This
-    // recreates the PaymentIntent with the correct shipping if the method changes
-    // while the form stays mounted, preserving total-parity. eslint can't see
-    // through deliveryInfo?.method so the object dep is intentionally omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    // gateBlocked / consent flags are primitives so they don't churn the effect.
-  }, [cart.items, customerInfo, shippingInfo, shopId, deliveryInfo?.method, gateBlocked, withdrawalGate?.noticeVersion, withdrawalGate?.noticeFingerprint]);
+  }, [paymentInputsKey]);
 
   if (isLoading) {
     return (

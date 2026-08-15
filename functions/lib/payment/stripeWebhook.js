@@ -285,7 +285,10 @@ exports.stripeWebhookV2 = (0, https_1.onRequest)({
             catch (err) {
                 firebase_functions_1.logger.error('❌ Failed to parse itemDetails JSON', {
                     paymentIntentId: paymentIntent.id,
-                    itemDetails: itemDetailsJson
+                    // Truncated (P1-05): enough to diagnose a chunking bug, not the
+                    // whole snapshot.
+                    itemDetailsHead: String(itemDetailsJson).slice(0, 200),
+                    itemDetailsLength: String(itemDetailsJson).length
                 });
                 response.status(400).json({ error: 'Invalid itemDetails format' });
                 return;
@@ -458,11 +461,11 @@ exports.stripeWebhookV2 = (0, https_1.onRequest)({
                 }
                 throw createError;
             }
+            // P1-05: no customer PII (email) in logs — ids reconcile fine.
             firebase_functions_1.logger.info('✅ Order created from Stripe webhook', {
                 paymentIntentId: paymentIntent.id,
                 orderId: orderRef.id,
                 orderNumber,
-                customerEmail: metadata.customerEmail,
                 total: metadata.total,
                 hasAffiliate: !!metadata.affiliateCode
             });

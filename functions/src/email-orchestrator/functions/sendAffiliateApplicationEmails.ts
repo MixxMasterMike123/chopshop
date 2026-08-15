@@ -13,6 +13,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { appUrls } from '../../config/app-urls';
 import { EmailOrchestrator } from '../core/EmailOrchestrator';
 import { EMAIL_CONFIG } from '../core/config';
+import { checkRateLimit, trustedClientIp } from '../../protection/rate-limiting/durableRateLimit';
 
 const db = getFirestore('b8s-reseller-db');
 
@@ -33,6 +34,12 @@ export const sendAffiliateApplicationEmails = onCall<AffiliateApplicationEmailsR
     const applicationId = (request.data?.applicationId || '').trim();
     if (!applicationId) {
       throw new HttpsError('invalid-argument', 'Application ID is required');
+    }
+
+    // P1-02: per-IP throttle on top of the per-application single-shot claim —
+    // bounds how fast a bot farm of fresh application docs can pump mail.
+    if (!(await checkRateLimit('affAppMail', trustedClientIp(request.rawRequest as any), { limit: 10, windowSec: 3600 }))) {
+      throw new HttpsError('resource-exhausted', 'För många försök — försök igen om en stund.');
     }
 
     // Load the application — the SERVER-side source of recipient + content.

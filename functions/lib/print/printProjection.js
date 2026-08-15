@@ -58,12 +58,48 @@ function safeImageUrl(u) {
         return null;
     }
 }
+// P1-18/P2-17 (2026-08-15 audit): a doc-stored fallback URL is admin-writable
+// data — honoring it blindly let a hand-crafted doc hand the printer an
+// arbitrary external link. A fallback now counts only when it is a https URL
+// on OUR storage hosts whose object path matches the exact storagePath we
+// meant to sign. Anything else → null (fail closed).
+const SAFE_FALLBACK_HOSTS = new Set(['firebasestorage.googleapis.com', 'storage.googleapis.com']);
+function safeFallbackUrl(url, storagePath) {
+    if (typeof url !== 'string' || !url)
+        return null;
+    try {
+        const u = new URL(url);
+        if (u.protocol !== 'https:' || !SAFE_FALLBACK_HOSTS.has(u.hostname))
+            return null;
+        // BUCKET PINNING (verifier finding 2026-08-15): both hosts serve EVERY
+        // project's buckets, so a path match alone lets a doc point at an
+        // attacker-owned bucket that mirrors our folder layout. Require OUR
+        // default bucket in the URL's bucket segment:
+        //   firebasestorage: /v0/b/<bucket>/o/<ENCODED path> · GCS: /<bucket>/<path>
+        const ourBucket = (0, storage_1.getStorage)().bucket().name;
+        const segs = u.pathname.split('/').filter(Boolean);
+        const urlBucket = u.hostname === 'firebasestorage.googleapis.com'
+            ? (segs[0] === 'v0' && segs[1] === 'b' ? segs[2] : '')
+            : segs[0];
+        if (urlBucket !== ourBucket)
+            return null;
+        return decodeURIComponent(u.pathname).includes(storagePath) ? url : null;
+    }
+    catch {
+        return null;
+    }
+}
 // Mint a short-lived signed read URL for a Storage object. Falls back to the
 // stored download URL if signing isn't available (the Functions service account
-// needs roles/iam.serviceAccountTokenCreator to sign — a project-config item).
-async function signedUrlFor(storagePath, fallbackUrl) {
+// needs roles/iam.serviceAccountTokenCreator to sign — a project-config item);
+// the fallback is CONSTRAINED to our storage hosts + the same object path.
+// `allowedPrefix` (when given) rejects a path outside the expected partition
+// before any signing happens.
+async function signedUrlFor(storagePath, fallbackUrl, allowedPrefix = '') {
     if (!storagePath)
-        return fallbackUrl;
+        return null; // fail closed — never an arbitrary stored URL
+    if (allowedPrefix && !storagePath.startsWith(allowedPrefix))
+        return null;
     try {
         const [url] = await (0, storage_1.getStorage)()
             .bucket()
@@ -72,8 +108,8 @@ async function signedUrlFor(storagePath, fallbackUrl) {
         return url;
     }
     catch (e) {
-        console.warn(`print: signed URL failed for ${storagePath} (need serviceAccountTokenCreator?), falling back:`, e?.message);
-        return fallbackUrl;
+        console.warn(`print: signed URL failed for ${storagePath} (need serviceAccountTokenCreator?), constrained fallback:`, e?.message);
+        return safeFallbackUrl(fallbackUrl, storagePath);
     }
 }
 exports.signedUrlFor = signedUrlFor;
@@ -151,12 +187,20 @@ exports.resolveMapping = resolveMapping;
 // back to its original. Kept as ONE predicate so the production view and the
 // status-transition gate can never drift apart.
 function artworkDeliverable(art, shopId) {
-    const shopPrintPrefix = `pod-artwork/${String(shopId || '')}/print/`;
-    const isPrintFile = typeof art?.printStoragePath === 'string' && art.printStoragePath.startsWith(shopPrintPrefix);
-    if (!isPrintFile && art?.status !== undefined) {
+    const shopPrefix = `pod-artwork/${String(shopId || '')}/`;
+    const isPrintFile = typeof art?.printStoragePath === 'string' && art.printStoragePath.startsWith(`${shopPrefix}print/`);
+    if (isPrintFile)
+        return { deliverable: true };
+    if (art?.status !== undefined) {
         return { deliverable: false, reason: 'Tryckfil saknas — be butiken validera om originalet' };
     }
-    return { deliverable: true };
+    // Legacy pre-gate doc (no status field): the raw original may substitute,
+    // but ONLY when it lives inside THIS shop's partition (P1-18 fail-closed —
+    // a hand-crafted path must not route foreign/cross-tenant bytes).
+    const legacyOk = typeof art?.originalStoragePath === 'string' && art.originalStoragePath.startsWith(shopPrefix);
+    return legacyOk
+        ? { deliverable: true }
+        : { deliverable: false, reason: 'Originalfilen ligger utanför butikens lagring' };
 }
 exports.artworkDeliverable = artworkDeliverable;
 // P1-13: list every POD production line (item × resolved slot) whose artwork
@@ -346,9 +390,11 @@ async function toPrintJob(orderId, order, shopName, mappingsBySku) {
                 lines.push({ ...base, purpose: art.purpose || mapping.profileId || null, artwork: { unresolved: true, reason: delivery.reason } });
                 continue;
             }
+            // allowedPrefix pins the signed/fallback URL inside THIS shop's
+            // partition (P1-18) — mirrors artworkDeliverable's decision.
             const downloadUrl = isPrintFile
-                ? await signedUrlFor(art.printStoragePath, art.printUrl || null)
-                : await signedUrlFor(art.originalStoragePath, art.originalUrl || null);
+                ? await signedUrlFor(art.printStoragePath, art.printUrl || null, shopPrintPrefix)
+                : await signedUrlFor(art.originalStoragePath, art.originalUrl || null, `pod-artwork/${String(order.shopId || '')}/`);
             lines.push({
                 ...base,
                 purpose: art.purpose || mapping.profileId || null,

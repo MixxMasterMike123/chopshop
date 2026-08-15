@@ -332,7 +332,10 @@ export const stripeWebhookV2 = onRequest(
         } catch (err) {
           logger.error('❌ Failed to parse itemDetails JSON', {
             paymentIntentId: paymentIntent.id,
-            itemDetails: itemDetailsJson
+            // Truncated (P1-05): enough to diagnose a chunking bug, not the
+            // whole snapshot.
+            itemDetailsHead: String(itemDetailsJson).slice(0, 200),
+            itemDetailsLength: String(itemDetailsJson).length
           });
           response.status(400).json({ error: 'Invalid itemDetails format' });
           return;
@@ -523,11 +526,11 @@ export const stripeWebhookV2 = onRequest(
           throw createError;
         }
 
+        // P1-05: no customer PII (email) in logs — ids reconcile fine.
         logger.info('✅ Order created from Stripe webhook', {
           paymentIntentId: paymentIntent.id,
           orderId: orderRef.id,
           orderNumber,
-          customerEmail: metadata.customerEmail,
           total: metadata.total,
           hasAffiliate: !!metadata.affiliateCode
         });

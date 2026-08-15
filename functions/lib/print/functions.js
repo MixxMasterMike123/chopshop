@@ -271,7 +271,7 @@ exports.getPrintArtworkDownload = (0, https_1.onCall)(COMMON, async (request) =>
             ? 'Tryckfil saknas — be butiken validera om originalet'
             : 'Originalfilen saknas');
     }
-    const url = await (0, printProjection_1.signedUrlFor)(path, fallback);
+    const url = await (0, printProjection_1.signedUrlFor)(path, fallback, shopPrefix);
     if (!url)
         throw new https_1.HttpsError('internal', 'Kunde inte skapa nedladdningslänk');
     return { url, kind, fileName: a.fileName || '', ext: kind === 'print' ? 'png' : (a.ext || '') };

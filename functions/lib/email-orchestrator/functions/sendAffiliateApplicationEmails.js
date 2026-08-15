@@ -15,6 +15,7 @@ const firestore_1 = require("firebase-admin/firestore");
 const app_urls_1 = require("../../config/app-urls");
 const EmailOrchestrator_1 = require("../core/EmailOrchestrator");
 const config_1 = require("../core/config");
+const durableRateLimit_1 = require("../../protection/rate-limiting/durableRateLimit");
 const db = (0, firestore_1.getFirestore)('b8s-reseller-db');
 exports.sendAffiliateApplicationEmails = (0, https_1.onCall)({
     region: 'us-central1',
@@ -26,6 +27,11 @@ exports.sendAffiliateApplicationEmails = (0, https_1.onCall)({
     const applicationId = (request.data?.applicationId || '').trim();
     if (!applicationId) {
         throw new https_1.HttpsError('invalid-argument', 'Application ID is required');
+    }
+    // P1-02: per-IP throttle on top of the per-application single-shot claim —
+    // bounds how fast a bot farm of fresh application docs can pump mail.
+    if (!(await (0, durableRateLimit_1.checkRateLimit)('affAppMail', (0, durableRateLimit_1.trustedClientIp)(request.rawRequest), { limit: 10, windowSec: 3600 }))) {
+        throw new https_1.HttpsError('resource-exhausted', 'För många försök — försök igen om en stund.');
     }
     // Load the application — the SERVER-side source of recipient + content.
     const appRef = db.collection('affiliateApplications').doc(applicationId);

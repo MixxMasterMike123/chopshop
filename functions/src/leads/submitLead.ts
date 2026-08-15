@@ -18,6 +18,7 @@ import { db } from '../config/database';
 import { appUrls } from '../config/app-urls';
 import { EmailOrchestrator } from '../email-orchestrator/core/EmailOrchestrator';
 import { EMAIL_CONFIG } from '../email-orchestrator/core/config';
+import { checkRateLimit, trustedClientIp } from '../protection/rate-limiting/durableRateLimit';
 
 interface SubmitLeadRequest {
   name?: string;
@@ -46,6 +47,12 @@ export const submitLead = onCall<SubmitLeadRequest>(
     // Honeypot filled → bot. Reject without writing anything.
     if (clip(data.website, 10)) {
       throw new HttpsError('invalid-argument', 'Invalid submission.');
+    }
+
+    // P1-02: durable per-IP throttle (each accepted lead also fires an admin
+    // email — this bounds both the collection spam and the mail volume).
+    if (!(await checkRateLimit('lead', trustedClientIp(request.rawRequest as any), { limit: 5, windowSec: 3600 }))) {
+      throw new HttpsError('resource-exhausted', 'För många försök — försök igen om en stund.');
     }
 
     const name = clip(data.name, 500);

@@ -6,6 +6,7 @@ const firestore_1 = require("firebase-admin/firestore");
 const app_1 = require("firebase-admin/app");
 const tenancy_1 = require("../../config/tenancy");
 const shopFeatures_1 = require("../../config/shopFeatures");
+const durableRateLimit_1 = require("../../protection/rate-limiting/durableRateLimit");
 /**
  * Log affiliate link click (Callable version)
  * Called when a user clicks an affiliate link
@@ -21,6 +22,14 @@ exports.logAffiliateClickV2 = (0, https_1.onCall)({
     const { affiliateCode, campaignCode } = data;
     if (!affiliateCode) {
         throw new Error('The function must be called with an affiliateCode.');
+    }
+    // P1-02: per-IP throttle on click logging (stats/ledger inflation guard).
+    // Over-limit returns the same benign no-track response as the disabled
+    // add-on so the storefront tracker never errors for real visitors. 240/h
+    // absorbs a campaign burst behind one carrier CGNAT IP while still
+    // bounding single-source ledger inflation.
+    if (!(await (0, durableRateLimit_1.checkRateLimit)('affClick', (0, durableRateLimit_1.trustedClientIp)(request.rawRequest), { limit: 240, windowSec: 3600 }))) {
+        return { success: true, message: 'Rate limited.', clickId: '' };
     }
     try {
         // Get affiliate details

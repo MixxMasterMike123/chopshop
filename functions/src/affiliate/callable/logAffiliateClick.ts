@@ -4,6 +4,7 @@ import { getApp } from 'firebase-admin/app';
 import { AffiliateClickData, AffiliateClickResponse } from '../types';
 import { DEFAULT_SHOP_ID } from '../../config/tenancy';
 import { isShopFeatureEnabled } from '../../config/shopFeatures';
+import { checkRateLimit, trustedClientIp } from '../../protection/rate-limiting/durableRateLimit';
 
 /**
  * Log affiliate link click (Callable version)
@@ -24,6 +25,15 @@ export const logAffiliateClickV2 = onCall<AffiliateClickData>(
 
     if (!affiliateCode) {
       throw new Error('The function must be called with an affiliateCode.');
+    }
+
+    // P1-02: per-IP throttle on click logging (stats/ledger inflation guard).
+    // Over-limit returns the same benign no-track response as the disabled
+    // add-on so the storefront tracker never errors for real visitors. 240/h
+    // absorbs a campaign burst behind one carrier CGNAT IP while still
+    // bounding single-source ledger inflation.
+    if (!(await checkRateLimit('affClick', trustedClientIp(request.rawRequest as any), { limit: 240, windowSec: 3600 }))) {
+      return { success: true, message: 'Rate limited.', clickId: '' };
     }
 
     try {

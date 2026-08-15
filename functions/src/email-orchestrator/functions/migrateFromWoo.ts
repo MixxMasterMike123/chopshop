@@ -19,6 +19,7 @@ import { db } from '../../config/database';
 import { requireAdminOfShop } from './authGuard';
 import {
   skuFromName, uniqueSku, deriveVariantsFromGroups, isBlockedHost, makeReuploadImage, writeProgress,
+  safePublicFetch,
   type RawGroup, type CleanGroup, type VariantRow,
 } from './migrationShared';
 
@@ -120,7 +121,8 @@ export const migrateFromWoo = onCall<MigrateWooRequest>(
         const url = `https://${host}/wp-json/wc/store/products?per_page=100&page=${page}`;
         let res: Response;
         try {
-          res = await fetch(url, { headers: { Accept: 'application/json' } });
+          // P1-03: resolved-host SSRF guard + manual-redirect revalidation.
+          res = await safePublicFetch(url, { headers: { Accept: 'application/json' } }, { maxBytes: 50 * 1024 * 1024 });
         } catch {
           throw new HttpsError('unavailable', `Kunde inte nå ${host}.`);
         }

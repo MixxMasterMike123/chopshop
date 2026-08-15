@@ -9,6 +9,7 @@ const crypto_1 = require("crypto");
 const EmailOrchestrator_1 = require("../core/EmailOrchestrator");
 const database_1 = require("../../config/database");
 const authGuard_1 = require("./authGuard");
+const durableRateLimit_1 = require("../../protection/rate-limiting/durableRateLimit");
 exports.sendPasswordResetEmail = (0, https_1.onCall)({
     region: 'us-central1',
     secrets: ['RESEND_API_KEY'],
@@ -17,15 +18,22 @@ exports.sendPasswordResetEmail = (0, https_1.onCall)({
     cors: app_urls_1.appUrls.CORS_ORIGINS
 }, async (request) => {
     try {
-        console.log('📧 sendPasswordResetEmail: Starting unified password reset');
-        console.log('📧 Request data:', {
-            email: request.data.email,
+        // P1-05: don't log the target email (PII) — type/language suffice.
+        console.log('📧 sendPasswordResetEmail: Starting unified password reset', {
             userType: request.data.userType,
             language: request.data.language
         });
         // Validate required data
         if (!request.data.email) {
             throw new Error('Email is required');
+        }
+        // P1-02: durable throttles — per requesting IP (spray) AND per target
+        // email (mail-bombing one victim). Both fail closed on the limit only.
+        const ip = (0, durableRateLimit_1.trustedClientIp)(request.rawRequest);
+        const targetEmail = String(request.data.email).trim().toLowerCase();
+        if (!(await (0, durableRateLimit_1.checkRateLimit)('pwResetIp', ip, { limit: 10, windowSec: 3600 })) ||
+            !(await (0, durableRateLimit_1.checkRateLimit)('pwResetEmail', targetEmail, { limit: 3, windowSec: 3600 }))) {
+            throw new https_1.HttpsError('resource-exhausted', 'För många försök — försök igen om en stund.');
         }
         // SECURITY: the reset code MUST be generated server-side. Accepting a
         // client-supplied code lets an attacker pre-choose the code for any
@@ -81,6 +89,10 @@ exports.sendPasswordResetEmail = (0, https_1.onCall)({
         }
     }
     catch (error) {
+        // Preserve typed callable errors (e.g. resource-exhausted from the rate
+        // limit) — only wrap untyped ones.
+        if (error instanceof https_1.HttpsError)
+            throw error;
         console.error('❌ sendPasswordResetEmail: Fatal error:', error);
         throw new Error(error instanceof Error ? error.message : 'Unknown error in password reset email');
     }

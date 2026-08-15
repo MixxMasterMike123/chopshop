@@ -124,7 +124,8 @@ exports.migrateFromShopify = (0, https_1.onCall)({
         const url = `https://${host}/products.json?limit=250&page=${page}`;
         let res;
         try {
-            res = await fetch(url, { headers: { Accept: 'application/json' } });
+            // P1-03: resolved-host SSRF guard + manual-redirect revalidation.
+            res = await (0, migrationShared_1.safePublicFetch)(url, { headers: { Accept: 'application/json' } }, { maxBytes: 50 * 1024 * 1024 });
         }
         catch {
             throw new https_1.HttpsError('unavailable', `Kunde inte nå ${host}.`);

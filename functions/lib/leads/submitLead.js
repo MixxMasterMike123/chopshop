@@ -43,6 +43,7 @@ const database_1 = require("../config/database");
 const app_urls_1 = require("../config/app-urls");
 const EmailOrchestrator_1 = require("../email-orchestrator/core/EmailOrchestrator");
 const config_1 = require("../email-orchestrator/core/config");
+const durableRateLimit_1 = require("../protection/rate-limiting/durableRateLimit");
 const clip = (v, max) => typeof v === 'string' ? v.trim().slice(0, max) : '';
 exports.submitLead = (0, https_1.onCall)({
     region: 'us-central1',
@@ -56,6 +57,11 @@ exports.submitLead = (0, https_1.onCall)({
     // Honeypot filled → bot. Reject without writing anything.
     if (clip(data.website, 10)) {
         throw new https_1.HttpsError('invalid-argument', 'Invalid submission.');
+    }
+    // P1-02: durable per-IP throttle (each accepted lead also fires an admin
+    // email — this bounds both the collection spam and the mail volume).
+    if (!(await (0, durableRateLimit_1.checkRateLimit)('lead', (0, durableRateLimit_1.trustedClientIp)(request.rawRequest), { limit: 5, windowSec: 3600 }))) {
+        throw new https_1.HttpsError('resource-exhausted', 'För många försök — försök igen om en stund.');
     }
     const name = clip(data.name, 500);
     const company = clip(data.company, 500);

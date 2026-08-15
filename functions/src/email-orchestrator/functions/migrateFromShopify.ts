@@ -27,6 +27,7 @@ import { requireAdminOfShop } from './authGuard';
 // Moved here VERBATIM (do NOT re-inline / diverge the slug/sku/derivation logic).
 import {
   skuFromName, uniqueSku, deriveVariantsFromGroups, isBlockedHost, makeReuploadImage,
+  safePublicFetch,
   type RawGroup, type CleanGroup, type VariantRow,
 } from './migrationShared';
 
@@ -133,7 +134,8 @@ export const migrateFromShopify = onCall<MigrateRequest>(
       const url = `https://${host}/products.json?limit=250&page=${page}`;
       let res: Response;
       try {
-        res = await fetch(url, { headers: { Accept: 'application/json' } });
+        // P1-03: resolved-host SSRF guard + manual-redirect revalidation.
+        res = await safePublicFetch(url, { headers: { Accept: 'application/json' } }, { maxBytes: 50 * 1024 * 1024 });
       } catch {
         throw new HttpsError('unavailable', `Kunde inte nå ${host}.`);
       }

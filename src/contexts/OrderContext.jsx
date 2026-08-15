@@ -483,15 +483,12 @@ export const OrderProvider = ({ children }) => {
         
         // Trigger email notification via V3 Firebase Function
         try {
-          console.log('🔧 DEBUG: Starting V3 order status email process...');
-          console.log('🔧 DEBUG: Full order data structure:', JSON.stringify(orderData, null, 2));
-          console.log('🔧 DEBUG: Order fields:', { 
-            orderId, 
-            userId: orderData.userId,
-            b2cCustomerId: orderData.b2cCustomerId,
-            customerInfo: orderData.customerInfo,
+          // P1-05/P2-25: no full order dumps or customer PII in browser logs —
+          // ids + source are enough to trace the flow.
+          console.log('🔧 Order status email:', {
+            orderId,
             orderNumber: orderData.orderNumber,
-            source: orderData.source 
+            source: orderData.source
           });
           
           // Check for different user ID fields based on order type
@@ -531,13 +528,13 @@ export const OrderProvider = ({ children }) => {
               companyName: orderData.customerInfo.companyName || orderData.customerInfo.name || 'B2B Customer',
               contactPerson: orderData.customerInfo.contactPerson || orderData.customerInfo.name || 'Customer'
             };
-            console.log('🔧 DEBUG: Using embedded B2B customerInfo for email:', userData.email);
+            console.log('🔧 Using embedded B2B customerInfo for recipient');
           } else if (actualUserId) {
             console.log('🔧 DEBUG: Looking up user in "users" collection with ID:', actualUserId);
             const userDoc = await getDoc(doc(db, "users", actualUserId));
             if (userDoc.exists()) {
               userData = userDoc.data();
-              console.log('🔧 DEBUG: Found B2B user data:', { email: userData.email, companyName: userData.companyName });
+              console.log('🔧 Found recipient in "users"');
             } else {
               // Try B2C customers collection
               console.log('🔧 DEBUG: User not found in "users", trying "b2cCustomers" collection');
@@ -549,12 +546,12 @@ export const OrderProvider = ({ children }) => {
                   companyName: b2cData.name || 'B2C Customer',
                   contactPerson: b2cData.name || 'Customer'
                 };
-                console.log('🔧 DEBUG: Found B2C customer data:', { email: userData.email, name: userData.companyName });
+                console.log('🔧 Found recipient in "b2cCustomers"');
               }
             }
           } else if (userEmail) {
             // Guest order - use email from order data
-            console.log('🔧 DEBUG: Using guest order email:', userEmail);
+            console.log('🔧 Using guest order email as recipient');
             userData = {
               email: userEmail,
               companyName: orderData.customerInfo?.name || 'Guest Customer',
@@ -562,7 +559,7 @@ export const OrderProvider = ({ children }) => {
             };
           }
           
-          console.log('🔧 DEBUG: User data loaded:', { email: userData.email, companyName: userData.companyName });
+          console.log('🔧 Recipient resolved');
           
           // Call NEW EmailOrchestrator order status email function
           const functions = getFunctions();
@@ -599,11 +596,11 @@ export const OrderProvider = ({ children }) => {
             orderId: orderId
           };
           
-          console.log('🔧 DEBUG: About to call NEW sendOrderStatusUpdateEmail with data:', JSON.stringify(emailData, null, 2));
-          
+          console.log('🔧 Calling sendOrderStatusUpdateEmail', { orderId, newStatus });
+
           const result = await sendOrderStatusUpdateEmail(emailData);
-          
-          console.log('✅ EmailOrchestrator Status update emails sent successfully:', result.data);
+
+          console.log('✅ Status update emails sent:', { success: result.data?.success === true });
         } catch (emailError) {
           console.error('❌ Error sending EmailOrchestrator status update emails:', emailError);
           // Don't fail the status update if email fails

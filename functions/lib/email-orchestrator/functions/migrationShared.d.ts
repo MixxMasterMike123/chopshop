@@ -1,3 +1,5 @@
+/// <reference types="node" />
+/// <reference types="node" />
 import type { Bucket } from '@google-cloud/storage';
 export declare const slugify: (str: string) => string;
 export declare const skuFromName: (name: string) => string;
@@ -34,6 +36,11 @@ export declare function deriveVariantsFromGroups(groups: RawGroup[], { productSk
     cleanVariants: VariantRow[];
 };
 export declare const isBlockedHost: (host: string) => boolean;
+export declare function assertPublicUrl(raw: string): Promise<URL>;
+export declare function readBodyCapped(res: Response, maxBytes: number): Promise<Buffer>;
+export declare function safePublicFetch(rawUrl: string, init?: RequestInit, opts?: {
+    maxBytes?: number;
+}): Promise<Response>;
 export declare const makeReuploadImage: (bucket: Bucket) => (srcUrl: string, destPath: string) => Promise<string | null>;
 export type MigrationPhase = 'fetching' | 'creating' | 'done' | 'error';
 export declare function writeProgress(migrationId: string, patch: Record<string, unknown>): Promise<void>;

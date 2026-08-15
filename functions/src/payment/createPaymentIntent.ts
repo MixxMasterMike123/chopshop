@@ -14,6 +14,7 @@ import { isShopFeatureEnabled } from '../config/shopFeatures';
 import { buildConnectChargeParams } from './connectParams';
 import { readPlatformConfig } from './platformConfig';
 import { writeAbandonedCheckoutDoc } from '../checkout-recovery/writeCheckoutDoc';
+import { checkRateLimit, trustedClientIp } from '../protection/rate-limiting/durableRateLimit';
 
 /**
  * Server-side price computation. NEVER trust client-supplied amounts:
@@ -367,6 +368,16 @@ export const createPaymentIntentV2 = onRequest(
         return;
       }
 
+      // P1-02: durable per-IP rate limit — each call creates a Stripe
+      // PaymentIntent, so an unthrottled caller is both an abuse and a cost
+      // vector. 40 per 5 min leaves room for several LEGIT buyers sharing one
+      // carrier CGNAT IP (each makes ~1-3 calls now that the client only
+      // recreates the PI when a priced input actually changes).
+      if (!(await checkRateLimit('pi', trustedClientIp(request), { limit: 40, windowSec: 300 }))) {
+        response.status(429).json({ error: 'Too many requests' });
+        return;
+      }
+
       // Initialize Stripe with secret key from environment variable
       const stripeSecretKey = (process.env.STRIPE_SECRET_KEY || '').trim();
       
@@ -700,8 +711,8 @@ export const createPaymentIntentV2 = onRequest(
           statusCode: stripeError.statusCode,
           requestParams: {
             amount: amountInOre,
-            currency: currency.toLowerCase(),
-            customerEmail: customerInfo.email
+            currency: currency.toLowerCase()
+            // P1-05: no customer email in error logs
           }
         });
         

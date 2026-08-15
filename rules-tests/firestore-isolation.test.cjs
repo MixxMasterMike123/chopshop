@@ -508,6 +508,33 @@ async function run() {
   await check('shopA admin deletes own presence (ALLOW — sign-out cleanup)', assertSucceeds(
     deleteDoc(doc(shopAAdminDb(), 'adminPresence/adminA'))));
 
+  // ── P1-04 (2026-08-15): impersonationAudit is APPEND-ONLY — create by the
+  //    actor, endedAt-stamp the only legal mutation, everything else immutable. ──
+  console.log('\n=== P1-04: impersonationAudit append-only ===');
+  await check('platform CREATES own audit record', assertSucceeds(
+    setDoc(doc(platformDb(), 'impersonationAudit/aud1'), {
+      actorUid: 'mikael', shopId: 'shopB', reason: 'support', startedAt: new Date(), endedAt: null, endReason: null,
+    })));
+  await check('platform CANNOT create audit record spoofing another actor', assertFails(
+    setDoc(doc(platformDb(), 'impersonationAudit/audSpoof'), {
+      actorUid: 'someone-else', shopId: 'shopB', reason: 'support', startedAt: new Date(), endedAt: null,
+    })));
+  // THE REAL CLIENT PAYLOAD (writeImpersonationEnd): {endedAt, endReason} —
+  // probing with anything less lets a too-strict rule pass the suite while
+  // silently breaking prod (verifier finding, 2026-08-15).
+  await check('platform ends session with the REAL {endedAt, endReason} payload', assertSucceeds(
+    updateDoc(doc(platformDb(), 'impersonationAudit/aud1'), { endedAt: new Date(), endReason: 'manual' })));
+  await check('platform CANNOT rewrite the reason (append-only)', assertFails(
+    updateDoc(doc(platformDb(), 'impersonationAudit/aud1'), { reason: 'edited after the fact' })));
+  await check('platform CANNOT rewrite actorUid (append-only)', assertFails(
+    updateDoc(doc(platformDb(), 'impersonationAudit/aud1'), { actorUid: 'patsy' })));
+  await check('platform CANNOT stamp endedAt AND touch another field', assertFails(
+    updateDoc(doc(platformDb(), 'impersonationAudit/aud1'), { endedAt: new Date(), shopId: 'shopA' })));
+  await check('audit records are NEVER deletable', assertFails(
+    deleteDoc(doc(platformDb(), 'impersonationAudit/aud1'))));
+  await check('shop admin CANNOT read audit records', assertFails(
+    getDoc(doc(shopAAdminDb(), 'impersonationAudit/aud1'))));
+
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
   await env.cleanup();
   process.exit(failed === 0 ? 0 : 1);

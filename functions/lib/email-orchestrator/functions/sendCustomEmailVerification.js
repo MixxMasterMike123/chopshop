@@ -19,6 +19,7 @@ const auth_1 = require("firebase-admin/auth");
 const EmailOrchestrator_1 = require("../core/EmailOrchestrator");
 const authGuard_1 = require("./authGuard");
 const verificationCode_1 = require("./verificationCode");
+const durableRateLimit_1 = require("../../protection/rate-limiting/durableRateLimit");
 // Initialize Firestore with named database
 const db = (0, firestore_1.getFirestore)('b8s-reseller-db');
 exports.sendCustomEmailVerification = (0, https_1.onCall)({
@@ -32,6 +33,10 @@ exports.sendCustomEmailVerification = (0, https_1.onCall)({
     // verification email — otherwise this is an open mailer.
     if (!request.auth || request.auth.uid !== request.data.firebaseAuthUid) {
         throw new https_1.HttpsError('permission-denied', 'Callers may only request verification for their own account');
+    }
+    // P1-02: per-account send throttle (mail-volume abuse guard).
+    if (!(await (0, durableRateLimit_1.checkRateLimit)('verifyMail', request.auth.uid, { limit: 5, windowSec: 3600 }))) {
+        throw new https_1.HttpsError('resource-exhausted', 'För många verifieringsmail — försök igen om en stund.');
     }
     // The recipient is the AUTH account's email — never a caller-chosen
     // address. A payload email that disagrees with the account is rejected

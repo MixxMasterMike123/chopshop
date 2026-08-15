@@ -1,12 +1,13 @@
 // sendPasswordResetEmail - Unified Password Reset Function
 // Replaces: sendPasswordResetV3, sendPasswordReset
 
-import { onCall } from 'firebase-functions/v2/https';
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { appUrls } from '../../config/app-urls';
 import { randomBytes } from 'crypto';
 import { EmailOrchestrator } from '../core/EmailOrchestrator';
 import { db } from '../../config/database';
 import { resolveShopIdByEmail } from './authGuard';
+import { checkRateLimit, trustedClientIp } from '../../protection/rate-limiting/durableRateLimit';
 
 interface PasswordResetRequest {
   email: string;
@@ -28,9 +29,8 @@ export const sendPasswordResetEmail = onCall<PasswordResetRequest>(
   },
   async (request) => {
     try {
-      console.log('📧 sendPasswordResetEmail: Starting unified password reset');
-      console.log('📧 Request data:', {
-        email: request.data.email,
+      // P1-05: don't log the target email (PII) — type/language suffice.
+      console.log('📧 sendPasswordResetEmail: Starting unified password reset', {
         userType: request.data.userType,
         language: request.data.language
       });
@@ -38,6 +38,15 @@ export const sendPasswordResetEmail = onCall<PasswordResetRequest>(
       // Validate required data
       if (!request.data.email) {
         throw new Error('Email is required');
+      }
+
+      // P1-02: durable throttles — per requesting IP (spray) AND per target
+      // email (mail-bombing one victim). Both fail closed on the limit only.
+      const ip = trustedClientIp(request.rawRequest as any);
+      const targetEmail = String(request.data.email).trim().toLowerCase();
+      if (!(await checkRateLimit('pwResetIp', ip, { limit: 10, windowSec: 3600 })) ||
+          !(await checkRateLimit('pwResetEmail', targetEmail, { limit: 3, windowSec: 3600 }))) {
+        throw new HttpsError('resource-exhausted', 'För många försök — försök igen om en stund.');
       }
 
       // SECURITY: the reset code MUST be generated server-side. Accepting a
@@ -100,6 +109,9 @@ export const sendPasswordResetEmail = onCall<PasswordResetRequest>(
       }
 
     } catch (error) {
+      // Preserve typed callable errors (e.g. resource-exhausted from the rate
+      // limit) — only wrap untyped ones.
+      if (error instanceof HttpsError) throw error;
       console.error('❌ sendPasswordResetEmail: Fatal error:', error);
       throw new Error(error instanceof Error ? error.message : 'Unknown error in password reset email');
     }

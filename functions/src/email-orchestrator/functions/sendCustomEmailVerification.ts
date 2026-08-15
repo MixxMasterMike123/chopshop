@@ -17,6 +17,7 @@ import { getAuth } from 'firebase-admin/auth';
 import { EmailOrchestrator } from '../core/EmailOrchestrator';
 import { resolveShopIdByEmail } from './authGuard';
 import { generateVerificationCode, hashVerificationCode } from './verificationCode';
+import { checkRateLimit } from '../../protection/rate-limiting/durableRateLimit';
 
 // Initialize Firestore with named database
 const db = getFirestore('b8s-reseller-db');
@@ -47,6 +48,11 @@ export const sendCustomEmailVerification = onCall<CustomEmailVerificationRequest
     // verification email — otherwise this is an open mailer.
     if (!request.auth || request.auth.uid !== request.data.firebaseAuthUid) {
       throw new HttpsError('permission-denied', 'Callers may only request verification for their own account');
+    }
+
+    // P1-02: per-account send throttle (mail-volume abuse guard).
+    if (!(await checkRateLimit('verifyMail', request.auth.uid, { limit: 5, windowSec: 3600 }))) {
+      throw new HttpsError('resource-exhausted', 'För många verifieringsmail — försök igen om en stund.');
     }
 
     // The recipient is the AUTH account's email — never a caller-chosen

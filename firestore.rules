@@ -286,8 +286,13 @@ service cloud.firestore {
       allow read: if isPlatform();
       allow create: if isPlatform()
         && request.resource.data.actorUid == request.auth.uid;
+      // APPEND-ONLY (P1-04, 2026-08-15 audit): the only legal mutation is the
+      // operator ending the session — impersonationAudit.js writeImpersonationEnd
+      // writes EXACTLY {endedAt, endReason}. Actor/target/reason/timestamps are
+      // immutable — an audit trail you can rewrite is not an audit trail.
       allow update: if isPlatform()
-        && resource.data.actorUid == request.auth.uid;
+        && resource.data.actorUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['endedAt', 'endReason']);
       allow delete: if false;
     }
 
