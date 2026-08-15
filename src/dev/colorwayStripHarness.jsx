@@ -25,34 +25,46 @@ const TEMPLATE = {
   printAreaMm: { front: { w: 300, h: 400 } },
 };
 
-const makeArtwork = () => {
+// Two motifs: a DARK one (base) that vanishes on dark garments, and a LIGHT
+// alternative — so the contrast warning + swap flow is exercisable for real.
+const makeArtwork = (id, label, circleColor, boxColor, textColor) => {
   const c = document.createElement('canvas');
   c.width = 1200; c.height = 1600;
   const g = c.getContext('2d');
-  g.fillStyle = '#e2574c';
+  g.fillStyle = circleColor;
   g.beginPath(); g.arc(600, 560, 360, 0, Math.PI * 2); g.fill();
-  g.fillStyle = '#2c4b6e';
+  g.fillStyle = boxColor;
   g.fillRect(240, 880, 720, 480);
-  g.fillStyle = '#ffffff';
+  g.fillStyle = textColor;
   g.font = '150px sans-serif'; g.textAlign = 'center';
   g.fillText('MOTIV', 600, 1200);
   return {
-    id: 'art-1', label: 'Motiv 1200×1600',
+    id, label,
     previewUrl: c.toDataURL('image/png'),
     sourceWidthPx: 1200, sourceHeightPx: 1600,
     validation: { tier: 'PASS' },
   };
 };
 
-const Strip = ({ initialReviewed }) => {
-  const art = useMemo(makeArtwork, []);
-  const [activeId, setActiveId] = useState('white');
+const Strip = ({ initialReviewed, initialActive = 'white' }) => {
+  const darkArt = useMemo(() => makeArtwork('art-dark', 'Mörkt motiv', '#1f2430', '#2c4b6e', '#111111'), []);
+  const lightArt = useMemo(() => makeArtwork('art-light', 'Ljust motiv', '#f5d76e', '#eeeeee', '#ffffff'), []);
+  const [activeId, setActiveId] = useState(initialActive);
   const [reviewed, setReviewed] = useState(() => new Set(initialReviewed));
+  const [overrides, setOverrides] = useState({});
   // Seen-on-view, like DesignStudio: selecting marks reviewed.
   const select = (id) => {
     setActiveId(id);
     setReviewed((prev) => new Set(prev).add(id));
   };
+  const setOverride = (cwId, artId) =>
+    setOverrides((prev) => {
+      const next = { ...prev };
+      if (artId) next[cwId] = artId;
+      else delete next[cwId];
+      return next;
+    });
+  const resolveArtwork = (cwId) => (overrides[cwId] === 'art-light' ? lightArt : darkArt);
   return (
     <div className="p-4">
       <ColorwayStrip
@@ -61,13 +73,15 @@ const Strip = ({ initialReviewed }) => {
         activeColorwayId={activeId}
         onSelect={select}
         placement={null}
-        resolveArtwork={() => art}
-        overrides={{}}
-        onOverrideChange={() => {}}
-        artworkOptions={[]}
-        baseArtworkLabel="Standardmotiv"
+        resolveArtwork={resolveArtwork}
+        overrides={overrides}
+        onOverrideChange={setOverride}
+        artworkOptions={[lightArt]}
+        baseArtwork={darkArt}
+        baseArtworkLabel="Mörkt motiv"
         reviewedColorwayIds={reviewed}
         colorwayIds={COLORWAYS.map((c) => c.id)}
+        onApplyOverrideToColorways={(ids, artId) => ids.forEach((id) => setOverride(id, artId))}
         onApproveAll={() => setReviewed(new Set(COLORWAYS.map((c) => c.id)))}
       />
     </div>
@@ -75,7 +89,7 @@ const Strip = ({ initialReviewed }) => {
 };
 
 const Pane = ({ label, dark, children }) => (
-  <div className={`${dark ? 'dark' : ''} flex-1 min-w-[520px]`}>
+  <div className={`${dark ? 'dark' : ''} flex-1 min-w-[300px]`}>
     <div className="bg-admin-surface-2 px-3 py-1 font-mono text-[11px] text-admin-text-faint">{label}</div>
     <div className="bg-admin-bg">{children}</div>
   </div>
@@ -83,9 +97,14 @@ const Pane = ({ label, dark, children }) => (
 
 createRoot(document.getElementById('root')).render(
   <div className="flex flex-wrap">
-    <Pane label="LIGHT — 2 av 5 granskade"><Strip initialReviewed={['white', 'black']} /></Pane>
-    <Pane label="DARK — 2 av 5 granskade" dark><Strip initialReviewed={['white', 'black']} /></Pane>
-    <Pane label="LIGHT — alla granskade"><Strip initialReviewed={['white', 'black', 'navy', 'heather', 'red']} /></Pane>
-    <Pane label="DARK — alla granskade" dark><Strip initialReviewed={['white', 'black', 'navy', 'heather', 'red']} /></Pane>
+    <Pane label="LIGHT — OK (vit tröja, mörkt motiv)"><Strip initialReviewed={['white']} initialActive="white" /></Pane>
+    <Pane label="DARK — VARNING (svart tröja, mörkt motiv)" dark><Strip initialReviewed={['white', 'black']} initialActive="black" /></Pane>
+    <Pane label="LIGHT — VARNING (svart tröja)"><Strip initialReviewed={['white', 'black']} initialActive="black" /></Pane>
+    <Pane label="DARK — alla granskade" dark><Strip initialReviewed={['white', 'black', 'navy', 'heather', 'red']} initialActive="navy" /></Pane>
+    <Pane label="LIGHT — SMAL KOLUMN 360px (varning)">
+      <div style={{ width: 360 }}>
+        <Strip initialReviewed={['white', 'black']} initialActive="black" />
+      </div>
+    </Pane>
   </div>
 );

@@ -12,7 +12,7 @@
 //
 // Pure presentational: state (active colourway, overrides) lives in DesignStudio.
 import React, { useEffect, useState } from 'react';
-import { CheckIcon } from '@heroicons/react/24/outline';
+import { CheckIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import TemplateBackground, { templateViewBox } from './TemplateBackground';
 import { analyzeArtworkContrast, classifyHexTone } from './contrastGuard';
 import {
@@ -72,8 +72,9 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
  *   resolveArtwork(colorwayId) → artwork doc that colourway prints (override-aware)
  *   overrides               — { [colorwayId]: artworkId } for THIS slot
  *   onOverrideChange(colorwayId, artworkId|null)
- *   artworkOptions          — selectable artwork docs (PASS/WARN) for the override select
- *   baseArtworkLabel        — label of the product's standard artwork (select's default row)
+ *   artworkOptions          — selectable artwork docs (PASS/WARN) for the motif swap
+ *   baseArtwork             — the slot's standard artwork doc (for its swap thumbnail)
+ *   baseArtworkLabel        — label of the product's standard artwork
  *   reviewedColorwayIds     — Set|array of colourway ids the seller has SEEN (review gate)
  *   colorwayIds             — ids selected in step 5 (omitted = all template colours)
  *   onApplyOverrideToColorways(ids, artworkId) — optional bulk light/dark action
@@ -82,7 +83,7 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
  */
 const ColorwayStrip = ({
   template, slot, activeColorwayId, onSelect, placement,
-  resolveArtwork, overrides = {}, onOverrideChange, artworkOptions = [], baseArtworkLabel = 'Standardmotiv',
+  resolveArtwork, overrides = {}, onOverrideChange, artworkOptions = [], baseArtwork = null, baseArtworkLabel = 'Standardmotiv',
   reviewedColorwayIds = [], minDpi = null, locked = false, colorwayIds = null,
   onApplyOverrideToColorways = null, onApproveAll = null,
 }) => {
@@ -122,6 +123,23 @@ const ColorwayStrip = ({
 
   if (!template) return null;
 
+  const remaining = colorways.length - reviewedCount;
+  const activeIndex = active ? colorways.findIndex((c) => c.id === active.id) : -1;
+  // Tone-mates of the ACTIVE colourway (for the contextual bulk suggestion).
+  const activeTone = active ? classifyHexTone(active.hex) : 'unknown';
+  const toneMates = active
+    ? colorways.filter((cw) => cw.id !== active.id && classifyHexTone(cw.hex) === activeTone)
+    : [];
+  const toneWord = activeTone === 'dark' ? 'mörka' : 'ljusa';
+  // Swap choices: the standard motif + every selectable alternative. Rendered as
+  // thumbnails (the same affordance as step 3's motif picker) so the fix for a
+  // bad combination is VISIBLE next to the warning instead of hidden in a select.
+  const swapChoices = [
+    { id: '', label: `${baseArtworkLabel} (standard)`, previewUrl: baseArtwork?.previewUrl || null },
+    ...artworkOptions.map((a) => ({ id: a.id, label: a.label || a.fileName, previewUrl: a.previewUrl })),
+  ];
+  const showSwap = Boolean(active && onOverrideChange && artworkOptions.length > 0);
+
   return (
     <div className="mt-4">
       <div className="mb-1 flex items-baseline justify-between gap-3">
@@ -132,9 +150,6 @@ const ColorwayStrip = ({
           {reviewedCount} av {colorways.length} granskade
         </span>
       </div>
-      <p className="mb-2 text-[12px] text-admin-text-muted">
-        Det du ser är det som trycks. Varje färg måste ses innan du kan gå vidare.
-      </p>
       {/* Progress bar — glanceable gate state, mirrors the counter above. */}
       <div className="mb-2 h-1 overflow-hidden rounded-full bg-admin-surface-3" aria-hidden="true">
         <div
@@ -143,10 +158,11 @@ const ColorwayStrip = ({
         />
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      {/* ── Progress rail: one small chip per colour — navigation + status only.
+          Judgment happens on the big review card below, not here. */}
+      <div className="flex gap-1.5 overflow-x-auto pb-1">
         {colorways.map((cw) => {
           const isActive = cw.id === activeColorwayId;
-          const hasOverride = Boolean(overrides[cw.id]);
           const isReviewed = reviewedSet.has(cw.id);
           const contrastWarning = contrastByColorway[cw.id]?.warning === true;
           return (
@@ -155,15 +171,15 @@ const ColorwayStrip = ({
               type="button"
               onClick={() => onSelect(cw.id)}
               aria-pressed={isActive}
-              className={`w-[86px] shrink-0 rounded-[var(--radius-admin)] border p-1.5 text-left transition ${
+              aria-label={`${cw.label}${isReviewed ? ', granskad' : ', ej granskad'}${contrastWarning ? ', låg kontrast' : ''}`}
+              title={cw.label}
+              className={`w-[60px] shrink-0 rounded-[var(--radius-admin-el)] border p-1 transition ${
                 isActive
                   ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
-                  : isReviewed
-                  ? 'border-admin-success-dot/50 hover:bg-admin-surface-2'
                   : 'border-admin-border hover:bg-admin-surface-2'
               }`}
             >
-              <div className="relative overflow-hidden rounded-[6px] bg-admin-surface-2 p-1">
+              <div className="relative overflow-hidden rounded-[4px] bg-admin-surface-2 p-0.5">
                 <MiniMockup
                   template={template}
                   slot={slot}
@@ -173,126 +189,156 @@ const ColorwayStrip = ({
                   locked={locked}
                   minDpi={minDpi}
                 />
-                {/* Review badge ON the mockup — the same check-circle pattern as
-                    step 5 (ColorSelectionPanel), so "checked" reads identically
-                    across the wizard and can't be missed at chip size. */}
-                {isReviewed && (
-                  <span
-                    className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-admin-success-dot text-white"
-                    title="Granskad"
-                    aria-label="Granskad"
-                  >
-                    <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                {isReviewed ? (
+                  <span className="absolute right-0.5 top-0.5 grid h-4 w-4 place-items-center rounded-full bg-admin-success-dot text-white" aria-hidden="true">
+                    <CheckIcon className="h-3 w-3" />
+                  </span>
+                ) : (
+                  <span className="absolute right-0.5 top-0.5 h-2.5 w-2.5 rounded-full border border-white/70 bg-admin-caution-dot" aria-hidden="true" />
+                )}
+                {contrastWarning && (
+                  <span className="absolute bottom-0.5 right-0.5 text-admin-caution-dot" aria-hidden="true">
+                    <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                   </span>
                 )}
               </div>
-              <div className="mt-1 flex items-center gap-1">
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full border border-admin-border"
-                  style={{ backgroundColor: cw.hex }}
-                />
-                <span className="truncate text-[11px] font-medium text-admin-text">{cw.label}</span>
-              </div>
-              {!isReviewed && (
-                <div className="mt-0.5 text-[11px] font-medium text-admin-caution-text">Ej granskad</div>
-              )}
-              {hasOverride && (
-                <div className="mt-0.5 text-[11px] text-admin-info-text">eget motiv</div>
-              )}
-              {contrastWarning && (
-                <div className="mt-0.5 text-[11px] font-medium text-admin-caution-text">låg kontrast</div>
-              )}
+              <span className="mt-0.5 block truncate text-center text-[10px] font-medium text-admin-text">{cw.label}</span>
             </button>
           );
         })}
       </div>
 
-      {/* Guided review: one click per colour, in order. onSelect drives the
-          seen-marking in DesignStudio (the active colourway = seen), so this
-          button IS the review mechanic — no separate approve action to learn.
-          Random access by clicking chips still works. */}
-      <div className="mt-2">
-        {allSeen ? (
-          <p className="flex items-center gap-1.5 text-[13px] font-medium text-admin-success-text">
-            <span className="grid h-5 w-5 place-items-center rounded-full bg-admin-success-dot text-white">
-              <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
-            </span>
-            Alla {colorways.length} färger granskade
-          </p>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                const next = colorways.find((cw) => !reviewedSet.has(cw.id) && cw.id !== activeColorwayId);
-                if (next) onSelect(next.id);
-              }}
-              className="rounded-[var(--radius-admin-el)] bg-admin-primary px-3.5 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover"
-            >
-              Nästa färg att granska ({colorways.length - reviewedCount} kvar)
-            </button>
-            {/* Shortcut for sellers who trust the combination — deliberately the
-                QUIET secondary so the look-at-each-colour path stays the default. */}
-            {onApproveAll && (
-              <button
-                type="button"
-                onClick={onApproveAll}
-                className="rounded-[var(--radius-admin-el)] border border-admin-border px-3.5 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface-2"
-              >
-                Godkänn alla {colorways.length} färger
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      {/* ── Review card: the ACTIVE colour at judgment size. The verdict sits ON
+          the card and the fix (motif swap) sits DIRECTLY UNDER the verdict, so
+          "when do I change artwork?" is answered by structure, not prose. */}
+      {active && (
+        <div className="mt-2 rounded-[var(--radius-admin)] border border-admin-border bg-admin-surface p-3">
+          <div className="flex flex-wrap gap-4">
+            <div className="w-full max-w-[240px] self-start overflow-hidden rounded-[6px] bg-admin-surface-2 p-2">
+              <MiniMockup
+                template={template}
+                slot={slot}
+                colorway={active}
+                artwork={resolveArtwork(active.id)}
+                placement={placement}
+                locked={locked}
+                minDpi={minDpi}
+              />
+            </div>
 
-      {active && activeContrast?.warning && (
-        <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
-          Motivet kan bli svårt att se på {active.label.toLowerCase()} eftersom stora delar har låg kontrast mot plagget.
-          Välj ett alternativt motiv nedan eller kontrollera kombinationen noggrant i mockupen. Varningen blockerar inte publicering.
-        </p>
-      )}
+            <div className="min-w-[240px] flex-1">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="flex items-center gap-2 text-[14px] font-semibold text-admin-text">
+                  <span
+                    className="h-3.5 w-3.5 shrink-0 rounded-full border border-admin-border"
+                    style={{ backgroundColor: active.hex }}
+                    aria-hidden="true"
+                  />
+                  {active.label}
+                </span>
+                <span className="text-[12px] text-admin-text-muted">Färg {activeIndex + 1} av {colorways.length}</span>
+              </div>
 
-      {/* Override select for the ACTIVE colourway — swaps the artwork this
-          colourway prints in this slot (light motif on dark garments, etc). */}
-      {active && onOverrideChange && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <label htmlFor="cw-override" className="text-[12px] text-admin-text-muted">
-            Motiv på {active.label.toLowerCase()}:
-          </label>
-          <select
-            id="cw-override"
-            value={activeOverride}
-            onChange={(e) => onOverrideChange(active.id, e.target.value || null)}
-            className="rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-[12px] text-admin-text focus:outline-none focus:border-admin-info-dot focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
-          >
-            <option value="">{baseArtworkLabel} (standard)</option>
-            {artworkOptions.map((a) => (
-              <option key={a.id} value={a.id}>{a.label || a.fileName}</option>
-            ))}
-          </select>
-          {activeOverride && onApplyOverrideToColorways && (
-            <div className="flex flex-wrap gap-1.5">
-              {bulkIds('dark').length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => onApplyOverrideToColorways(bulkIds('dark'), activeOverride)}
-                  className="rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1 text-[11px] text-admin-text hover:bg-admin-surface-2"
-                >
-                  Använd på alla mörka
-                </button>
+              {/* Verdict — only once the analysis has an answer. */}
+              {activeContrast?.warning === true && (
+                <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2">
+                  <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-admin-caution-dot" aria-hidden="true" />
+                  <p className="text-[12px] leading-relaxed text-admin-caution-text">
+                    <span className="font-semibold">Motivet syns dåligt på {active.label.toLowerCase()}.</span>{' '}
+                    {showSwap ? 'Välj ett motiv som syns bättre nedan, eller godkänn ändå.' : 'Kontrollera kombinationen extra noga i mockupen, eller godkänn ändå.'}
+                  </p>
+                </div>
               )}
-              {bulkIds('light').length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => onApplyOverrideToColorways(bulkIds('light'), activeOverride)}
-                  className="rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1 text-[11px] text-admin-text hover:bg-admin-surface-2"
-                >
-                  Använd på alla ljusa
-                </button>
+              {activeContrast && activeContrast.warning !== true && (
+                <p className="mt-2 flex items-center gap-1.5 text-[12px] text-admin-success-text">
+                  <CheckIcon className="h-4 w-4" aria-hidden="true" />
+                  Kontrasten ser bra ut på den här färgen
+                </p>
+              )}
+
+              {/* Motif swap — thumbnails, the same affordance as step 3's motif
+                  picker. Picking one updates the big preview instantly, so the
+                  cause→effect of a swap is taught by the interface itself. */}
+              {showSwap && (
+                <div className="mt-3">
+                  <span className="block text-[12px] font-medium text-admin-text">Motiv på {active.label.toLowerCase()}:</span>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {swapChoices.map((choice) => {
+                      const isChosen = (activeOverride || '') === choice.id;
+                      return (
+                        <button
+                          key={choice.id || '__base'}
+                          type="button"
+                          onClick={() => onOverrideChange(active.id, choice.id)}
+                          aria-pressed={isChosen}
+                          title={choice.label}
+                          className={`w-16 rounded-[var(--radius-admin-el)] border p-1 transition ${
+                            isChosen
+                              ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
+                              : 'border-admin-border hover:bg-admin-surface-2'
+                          }`}
+                        >
+                          {choice.previewUrl ? (
+                            <img src={choice.previewUrl} alt="" loading="lazy" decoding="async" className="aspect-square w-full rounded-[4px] bg-admin-surface-2 object-contain" />
+                          ) : (
+                            <span className="grid aspect-square w-full place-items-center rounded-[4px] bg-admin-surface-2 text-[10px] text-admin-text-muted">Std</span>
+                          )}
+                          <span className="mt-0.5 block truncate text-center text-[10px] text-admin-text-muted">
+                            {choice.id === '' ? 'Standard' : choice.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Contextual bulk apply: offered only right after an override
+                      pick, phrased as the decision it saves. */}
+                  {activeOverride && onApplyOverrideToColorways && toneMates.length >= 1 && (
+                    <button
+                      type="button"
+                      onClick={() => onApplyOverrideToColorways([active.id, ...toneMates.map((c) => c.id)], activeOverride)}
+                      className="mt-2 rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1.5 text-[12px] text-admin-text hover:bg-admin-surface-2"
+                    >
+                      Använd det här motivet på alla {toneMates.length + 1} {toneWord} färger
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Approve = advance. Viewing marks the colour reviewed (the
+                  DesignStudio seen-on-view rule), so this button IS the
+                  approval mechanic. */}
+              {!allSeen && (
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = colorways.find((cw) => !reviewedSet.has(cw.id) && cw.id !== activeColorwayId);
+                      if (next) onSelect(next.id);
+                    }}
+                    className="min-h-10 rounded-[var(--radius-admin-el)] bg-admin-primary px-4 py-2 text-[13px] font-medium text-white dark:text-admin-bg hover:bg-admin-primary-hover"
+                  >
+                    Ser bra ut — nästa färg ({remaining} kvar)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onApproveAll || undefined}
+                    className={`min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3.5 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface-2 ${onApproveAll ? '' : 'hidden'}`}
+                  >
+                    Godkänn alla {colorways.length}
+                  </button>
+                </div>
+              )}
+              {allSeen && (
+                <p className="mt-4 flex items-center gap-1.5 text-[13px] font-medium text-admin-success-text">
+                  <span className="grid h-5 w-5 place-items-center rounded-full bg-admin-success-dot text-white">
+                    <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                  </span>
+                  Alla {colorways.length} färger granskade
+                </p>
               )}
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
