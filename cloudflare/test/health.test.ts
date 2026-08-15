@@ -33,7 +33,7 @@ describe("API foundation", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     await expect(response.json()).resolves.toEqual({
       database: "ready",
-      migration: "0004_email_delivery_fingerprint.sql",
+      migration: "0005_catalogue.sql",
       status: "ok",
     });
   });

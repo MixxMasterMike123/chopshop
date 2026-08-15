@@ -1,3 +1,7 @@
+import {
+  getPublicProduct,
+  listPublicProducts,
+} from "./catalog/public-catalog";
 import { jsonResponse } from "./lib/http";
 import { handleDisabledAuthEmailQueue } from "./email/disabled-email-queue";
 import { getPublicStorefront } from "./storefront/public-storefront";
@@ -6,7 +10,41 @@ import { resolveRequestTenant } from "./tenancy/resolve-tenant";
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
 const STOREFRONT_PATH = "/v1/storefront";
-const REQUIRED_MIGRATION = "0004_email_delivery_fingerprint.sql";
+const PRODUCTS_PATH = "/v1/products";
+const PRODUCT_PATH_PREFIX = "/v1/products/";
+const REQUIRED_MIGRATION = "0005_catalogue.sql";
+
+function notFoundResponse(message: string): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "not_found",
+        message,
+      },
+    },
+    404,
+  );
+}
+
+function productIdFromPath(pathname: string): string | null {
+  if (!pathname.startsWith(PRODUCT_PATH_PREFIX)) {
+    return null;
+  }
+
+  const segment = pathname.slice(PRODUCT_PATH_PREFIX.length);
+  if (segment.length === 0 || segment.includes("/")) {
+    return null;
+  }
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+
+  return decoded.length > 0 && !decoded.includes("/") ? decoded : null;
+}
 
 async function readinessResponse(env: Env): Promise<Response> {
   try {
@@ -74,26 +112,35 @@ export default {
         }
       }
 
-      return jsonResponse(
-        {
-          error: {
-            code: "not_found",
-            message: "Storefront not found",
-          },
-        },
-        404,
-      );
+      return notFoundResponse("Storefront not found");
     }
 
-    return jsonResponse(
-      {
-        error: {
-          code: "not_found",
-          message: "Route not found",
-        },
-      },
-      404,
-    );
+    if (request.method === "GET" && url.pathname === PRODUCTS_PATH) {
+      const tenant = await resolveRequestTenant(env.DB, request);
+      if (tenant === null) {
+        return notFoundResponse("Products not found");
+      }
+
+      const products = await listPublicProducts(env.DB, tenant);
+      return jsonResponse({ products });
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith(PRODUCT_PATH_PREFIX)) {
+      const productId = productIdFromPath(url.pathname);
+      if (productId !== null) {
+        const tenant = await resolveRequestTenant(env.DB, request);
+        if (tenant !== null) {
+          const product = await getPublicProduct(env.DB, tenant, productId);
+          if (product !== null) {
+            return jsonResponse({ product });
+          }
+        }
+      }
+
+      return notFoundResponse("Product not found");
+    }
+
+    return notFoundResponse("Route not found");
   },
 
   queue(batch: MessageBatch<unknown>): void {

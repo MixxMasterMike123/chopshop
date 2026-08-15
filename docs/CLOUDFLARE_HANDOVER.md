@@ -1,14 +1,14 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 10 locally complete — handover to Fable
-**Owner:** Codex/SOL autonomous migration run
+**Last updated:** 2026-08-16, checkpoint 11 locally complete — Fable orchestrating, Opus building, Fable reviewing
+**Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
 ## Current repository state
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest pushed implementation checkpoint: `a04c32d` — `feat: add tenant-bound storefront read route`
+- Latest implementation checkpoint: checkpoint 11 — catalogue foundation (see below)
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -196,6 +196,16 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Local gate passed: generated bindings current, TypeScript clean, 39/39 Workers/D1 tests green, and deploy dry-run passed at 4.69 KiB / 1.62 KiB gzip.
 - This checkpoint has **not** been deployed. The live staging Worker remains version `7099d7e1-4a18-4f12-baba-5d977c2b7a8f` from checkpoint 9.
 
+## Checkpoint 11 — Catalogue foundation (not deployed, remote migration not applied)
+
+- Built by an Opus subagent, line-by-line reviewed by Fable before commit.
+- Added `0005_catalogue.sql`: `products`, `product_variants`, `product_publications` with tenant-immutability triggers, parent-tenant-consistency triggers (variant/publication tenant must match product tenant, verified against SQLite trigger firing order), `product_id` immutability/re-point guards, `(tenant_id, sku)` uniqueness, non-negative price and 0/1 boolean CHECKs, `published => published_at` CHECK, and operational indexes.
+- Added `src/catalog/public-catalog.ts`: tenant-context-required reads with explicit column allowlists. Public list/detail select only publication name/description/price/currency plus product `sku`; `internal_json` and `b2c_price_minor` are never selected. Detail includes active variants (id, sku, label, price) with the tenant bound on every query side.
+- Added `GET /v1/products` and `GET /v1/products/{productId}`: hostname-only tenancy, strict single-segment path parsing with safe percent-decoding, fail-closed JSON 404s for unknown host, foreign-tenant IDs, drafts, archived, unpublished, malformed paths, and wrong methods.
+- `/ready` now requires `0005_catalogue.sql`.
+- Local gate: types current, TypeScript clean, 61/61 Workers/D1 tests green (21 new adversarial catalogue tests incl. cross-tenant re-homing/re-pointing and leak sentinels), deploy dry-run 8.40 KiB / 2.39 KiB gzip.
+- **Not deployed and remote migration not applied**: this session's tool permissions block `wrangler deploy` and remote D1 commands. The live staging Worker remains version `7099d7e1` (checkpoint 9) and staging D1 remains at migration 0004. Before or at the next deploy: apply `0005_catalogue.sql` remotely first, then deploy (deploy without the migration leaves `/ready` correctly reporting 503 migration_required).
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -219,8 +229,8 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Review commit for checkpoint 10, then deploy it only to `meteorshop-stg-api` if accepted.
-2. Smoke `/health`, `/ready`, unknown-host `/v1/storefront`, and confirm `/api/auth/*` remains 404.
+1. Apply `0005_catalogue.sql` to `meteorshop-stg-db` remotely, then deploy checkpoints 10+11 to `meteorshop-stg-api` (both reviewed and accepted; blocked only on tool permissions — owner can run `npx wrangler d1 migrations apply meteorshop-stg-db --remote` then `npm run deploy:staging` from `cloudflare/`).
+2. Smoke `/health`, `/ready`, unknown-host `/v1/storefront` and `/v1/products`, and confirm `/api/auth/*` remains 404.
 3. Decide whether to mount sign-in only before sign-up; do not enable either until a staging secret and provisioning policy are in place.
 4. Onboard a MeteorShop sending domain only at the explicit DNS/provider canary checkpoint; the unrelated existing domain stays untouched.
 5. Create R2 buckets only when their object ownership contracts and local tests are ready.
