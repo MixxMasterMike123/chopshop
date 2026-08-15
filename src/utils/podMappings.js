@@ -131,7 +131,13 @@ export const listShopProductSkus = async (shopId) => {
       });
     }
 
-    products.push({ id: d.id, sku: p.sku || '', name: p.name || '', image, hasSku: !!p.sku, variants: variantRows });
+    products.push({
+      id: d.id, sku: p.sku || '', name: p.name || '', image, hasSku: !!p.sku, variants: variantRows,
+      // For the Avancerat strand-guard: enough state to unpublish a live POD
+      // product whose LAST covering mapping is deleted (P1 2026-08-15).
+      isPodProduct: p.isPodProduct === true,
+      b2cAvailable: p.availability?.b2c !== false,
+    });
     if (p.sku) { skus.add(p.sku); rows.push({ sku: p.sku, name: p.name, label: null }); }
     // include every sellable variant SKU too (a mapping can target any of them)
     if (Array.isArray(p.variants)) {

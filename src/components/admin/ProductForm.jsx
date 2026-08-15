@@ -69,7 +69,7 @@ import SortableImageGallery from './SortableImageGallery';
 import { withShopId } from '../../config/withShopId';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { listMappings } from '../../utils/podMappings';
-import { priceFloor, FEE_RATE, FEE_FIXED } from '../../wagons/pod-wagon/podPricing';
+import { priceFloor, sellerProfitExVat, FEE_RATE, FEE_FIXED } from '../../wagons/pod-wagon/podPricing';
 import { CardSection, RightRail, Button } from './ui';
 import { skuFromName, uniqueSku } from '../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../utils/variantDerivation';
@@ -358,10 +358,23 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
       .catch(() => { if (alive) setPodMappingSkus(new Set()); });
     return () => { alive = false; };
   }, [podEnabled, shopId]);
-  const savedPodSkus = product
-    ? [product.sku, ...(Array.isArray(product.variantGroups) ? product.variantGroups.map((g) => g?.sku) : [])].filter(Boolean)
-    : [];
-  const podConnected = savedPodSkus.some((sku) => podMappingSkus?.has(sku));
+  // Coverage rule (matches the print pipeline's longest-prefix resolution): the
+  // PARENT sku's mapping is the fallback for every colour, so parent-mapped =
+  // fully covered. Without a parent row, EVERY variant-group sku must be mapped
+  // — one override row alone must never count as "connected" (P1 2026-08-15).
+  const podCoverage = (parentSku, groupSkus, mappingSkus) => {
+    if (!mappingSkus) return false; // not loaded → fail closed
+    if (parentSku && mappingSkus.has(parentSku)) return true;
+    const groups = (groupSkus || []).filter(Boolean);
+    return groups.length > 0 && groups.every((sku) => mappingSkus.has(sku));
+  };
+  const podConnected = product
+    ? podCoverage(
+        product.sku,
+        Array.isArray(product.variantGroups) ? product.variantGroups.map((g) => g?.sku) : [],
+        podMappingSkus
+      )
+    : false;
   // Gate: a POD product without a connection can be SAVED but never LIVE.
   // (Only asserted once mappings have loaded — no false alarm during the fetch.)
   const podGateActive = podEnabled && formData.isPodProduct && podMappingSkus !== null && !podConnected;
@@ -646,13 +659,15 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
     // POD price floor (break-even, podPricing.js): a price below it means the
     // seller LOSES money on every sale — block, name the floor, name the fix.
     if (podFloor != null) {
+      // ANY price below the floor blocks — 0 kr included (a "free" POD product
+      // means the seller pays the platform's base cost on every order).
       const mainPrice = parseFloat(formData.price) || 0;
-      if (mainPrice > 0 && mainPrice < podFloor) {
+      if (mainPrice < podFloor) {
         toast.error(`Priset ${mainPrice} kr ligger under prisgolvet ${podFloor} kr — vid golvet tjänar du 0 kr. Höj priset.`);
         return;
       }
       const lowGroups = (formData.variantGroups || [])
-        .filter((g) => String(g?.price ?? '').trim() !== '' && parseFloat(g.price) > 0 && parseFloat(g.price) < podFloor)
+        .filter((g) => String(g?.price ?? '').trim() !== '' && Number.isFinite(parseFloat(g.price)) && parseFloat(g.price) < podFloor)
         .map((g) => g.label || g.sku || 'variant');
       if (lowGroups.length > 0) {
         toast.error(`Priset för ${lowGroups.join(', ')} ligger under prisgolvet ${podFloor} kr.`);
@@ -767,6 +782,23 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
         productPrice: price,
         skuFromName,
       });
+
+      // POD LIVE-GATE, decided on the SKUs BEING SAVED (P1 fix 2026-08-15: the
+      // render-time check uses the SAVED sku, so editing the SKU could carry a
+      // stale "connected" verdict onto skus the Print Queue will never find).
+      // Mappings are fetched fresh if the initial load hasn't landed.
+      let podConnectedFinal = false;
+      if (podEnabled && formData.isPodProduct === true) {
+        let mappingSkus = podMappingSkus;
+        if (mappingSkus === null) {
+          try {
+            mappingSkus = new Set((await listMappings(shopId)).map((m) => m.sku).filter(Boolean));
+          } catch {
+            mappingSkus = new Set(); // unreadable → fail closed (draft)
+          }
+        }
+        podConnectedFinal = podCoverage(resolvedSku, cleanGroups.map((g) => g?.sku), mappingSkus);
+      }
       const hasVariants = cleanVariants.length > 0;
 
       // Build the persisted doc. Single price → BOTH consumer-price fields.
@@ -801,7 +833,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
           // the save) counts as unconnected — fail CLOSED, the seller can re-save
           // once the connection exists.
           b2c: formData.availability.b2c !== false
-            && !(podEnabled && formData.isPodProduct === true && !podConnected),
+            && !(podEnabled && formData.isPodProduct === true && !podConnectedFinal),
           // Only carry the b2b availability flag for B2B shops, so a non-B2B
           // shop's products never gain a stray key.
           ...(b2bEnabled ? { b2b: formData.availability.b2b !== false } : {}),
@@ -845,7 +877,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
         toast.success('Produkt uppdaterad');
       }
 
-      if (formData.availability.b2c !== false && podEnabled && formData.isPodProduct === true && !podConnected) {
+      if (formData.availability.b2c !== false && podEnabled && formData.isPodProduct === true && !podConnectedFinal) {
         toast('Sparad som utkast — produkten visas i webbshoppen först när tryckkopplingen finns.', { icon: '🔒' });
       }
       onSaved?.();
@@ -1183,9 +1215,25 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                 <label className={labelCls}>Pris (SEK, inkl. moms)</label>
                 <input type="number" name="price" min="0" step="0.01" value={formData.price} onChange={handleInput} className={inputCls} />
                 {podFloor != null && (
-                  <p className={`mt-1 text-[12px] ${parseFloat(formData.price) > 0 && parseFloat(formData.price) < podFloor ? 'text-admin-critical-text' : 'text-admin-text-muted'}`}>
-                    Prisgolv: <span className="font-medium">{podFloor} kr</span> — vid det priset tjänar du 0 kr
-                    (produktion {product.podCostSek} kr + avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr inräknat).
+                  <>
+                    <p className={`mt-1 text-[12px] ${parseFloat(formData.price) < podFloor ? 'text-admin-critical-text' : 'text-admin-text-muted'}`}>
+                      Prisgolv: <span className="font-medium">{podFloor} kr</span> — vid det priset tjänar du 0 kr
+                      (produktion {product.podCostSek} kr + avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr inräknat).
+                    </p>
+                    {(() => {
+                      const pNow = parseFloat(formData.price);
+                      const profitNow = sellerProfitExVat(pNow, product.podCostSek);
+                      return profitNow != null && pNow >= podFloor ? (
+                        <p className="mt-0.5 text-[12px] text-admin-text-muted">
+                          Vid {pNow} kr tjänar du ca <span className="font-medium text-admin-text">{Math.round(profitNow)} kr</span> per försäljning (exkl. moms).
+                        </p>
+                      ) : null;
+                    })()}
+                  </>
+                )}
+                {podEnabled && formData.isPodProduct && podFloor == null && (
+                  <p className="mt-1 text-[12px] text-admin-text-muted">
+                    Prisgolv och vinstkalkyl aktiveras när produkten publiceras (om) via Designstudion — det är där produkttypens produktionskostnad blir känd.
                   </p>
                 )}
               </div>

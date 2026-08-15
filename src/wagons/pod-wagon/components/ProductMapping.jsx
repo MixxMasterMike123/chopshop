@@ -8,6 +8,8 @@ import toast from 'react-hot-toast';
 import { TrashIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { CardSection, Button, Field, Input, Select } from '../../../components/admin/ui';
 import StatusPill from '../../../components/admin/ui/StatusPill';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../../../firebase/config';
 import { setMapping, deleteMapping } from '../../../utils/podMappings';
 import { getProfileById } from '../../../config/podProfiles';
 import { POD_SLOTS, slotOf, slotLabel } from '../../../config/podSlots';
@@ -86,6 +88,34 @@ const ProductMapping = ({
     if (!window.confirm(`Ta bort kopplingen för SKU "${m.sku}" (${slotLabel(slotOf(m))})?`)) return;
     try {
       await deleteMapping(m.id);
+
+      // STRAND-GUARD (P1 2026-08-15): if this was the sku's LAST covering row,
+      // any live POD product it fed is now unprintable — unpublish it rather
+      // than let orders keep arriving for a file the printer will never get.
+      // Coverage mirrors ProductForm/the print pipeline: parent-sku mapping
+      // covers everything; otherwise every variant-group sku must be mapped.
+      const remaining = new Set(
+        mappings.filter((row) => row.id !== m.id && row.sku).map((row) => row.sku)
+      );
+      const covered = (prod) => {
+        if (prod.sku && remaining.has(prod.sku)) return true;
+        const groups = (prod.variants || []).map((v) => v?.sku).filter(Boolean);
+        return groups.length > 0 && groups.every((sku) => remaining.has(sku));
+      };
+      const stranded = products.filter((prod) =>
+        prod.isPodProduct === true
+        && prod.b2cAvailable !== false
+        && (prod.sku === m.sku || (prod.variants || []).some((v) => v?.sku === m.sku))
+        && !covered(prod)
+      );
+      for (const prod of stranded) {
+        await updateDoc(doc(db, 'products', prod.id), {
+          'availability.b2c': false,
+          updatedAt: serverTimestamp(),
+        });
+        toast(`"${prod.name || prod.sku}" avpublicerades — tryckkopplingen togs bort.`, { icon: '🔒' });
+      }
+
       toast.success('Koppling borttagen');
       refresh();
     } catch (e) {

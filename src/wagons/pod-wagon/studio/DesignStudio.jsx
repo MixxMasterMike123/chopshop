@@ -54,6 +54,7 @@ import { withShopId } from '../../../config/withShopId';
 import { skuFromName, uniqueSku } from '../../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../../utils/variantDerivation';
 import { setMapping } from '../../../utils/podMappings';
+import { priceFloor } from '../podPricing';
 import { STORE } from '../../../config/store';
 
 // Validation is ADVISORY (podValidation's contract: "WARN/FAIL never blocks — it
@@ -552,6 +553,24 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     setPublishing(true);
     let docCreated = false;
     try {
+      // PRISGOLV — authoritative re-check in the handler (the UI enforces it
+      // too, but the handler is the gate that actually creates a sellable
+      // product; podPricing.js is the single formula source).
+      {
+        const floorP = Number.isFinite(selectedTemplate?.costSek) ? priceFloor(selectedTemplate.costSek) : null;
+        if (floorP != null) {
+          if (!(parseFloat(price) >= floorP)) {
+            throw new Error(`Priset måste vara minst prisgolvet ${floorP} kr — under det tjänar säljaren 0 kr.`);
+          }
+          const lowCw = Object.values(perColorwayPrices || {})
+            .filter((v) => String(v).trim() !== '')
+            .map((v) => parseFloat(v))
+            .filter((n) => Number.isFinite(n) && n < floorP);
+          if (lowCw.length > 0) {
+            throw new Error(`Ett färgpris ligger under prisgolvet ${floorP} kr.`);
+          }
+        }
+      }
       // 1. Resolve a per-shop-UNIQUE sku (same logic as ProductForm).
       const requestedSku = skuFromName(cleanName);
       const skuSnap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
@@ -620,58 +639,12 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       });
       const hasVariants = cleanVariants.length > 0;
 
-      // 5. Build the product doc EXACTLY like ProductForm (studio-relevant field
-      // set). Single price → BOTH b2cPrice + basePrice. Empty weight/dimensions/
-      // shipping shapes copied verbatim from ProductForm's emptyForm.
-      // Prices are stored INKL. moms (see STORE.vatRate — VAT is display-only in
-      // the Publish step's profit columns, not applied to the stored number).
-      const data = {
-        name: cleanName,
-        sku: resolvedSku,
-        category: '',
-        tags: [],
-        hasVariants,
-        variantGroups: cleanGroups,
-        options: [],
-        variants: cleanVariants,
-        b2cPrice: productPrice,
-        basePrice: productPrice,          // keep in sync for the `b2cPrice || basePrice` fallback
-        isActive: true,
-        featured: false,
-        imageUrl: heroUrl,
-        b2cImageUrl: heroUrl,
-        b2cImageGallery: galleryUrls,
-        availability: { b2c: true },
-        descriptions: { b2c: '', b2cMoreInfo: '' },
-        // LEGAL FIREWALL: studio-authored products are NEVER personalized. The
-        // 14-day withdrawal right stays; isPersonalized is order-flow-derived only.
-        isPersonalized: false,
-        // POD marker + economics: lets the product form gate "live" on a print
-        // connection and compute the break-even price floor (podPricing.js)
-        // without loading the template. costSek is the platform's base revenue.
-        isPodProduct: true,
-        ...(Number.isFinite(selectedTemplate?.costSek) ? { podCostSek: selectedTemplate.costSek } : {}),
-        sizeGuide: '',
-        weight: { value: 0, unit: 'g' },
-        dimensions: {
-          length: { value: 0, unit: 'mm' },
-          width: { value: 0, unit: 'mm' },
-          height: { value: 0, unit: 'mm' },
-        },
-        shipping: {
-          sweden: { cost: 0, service: 'Standard' },
-          nordic: { cost: 0, service: 'Nordic' },
-          eu: { cost: 0, service: 'EU' },
-          worldwide: { cost: 0, service: 'International' },
-        },
-        delivery: { shipping: true, pickup: true },
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-      };
-      await addDoc(collection(db, 'products'), withShopId(data, shopId));
-      docCreated = true;
-
-      // 6. POD mappings. PARENT row per DESIGNED slot: keyed on the product sku,
+      // 5. POD mappings — written BEFORE the product doc goes live (P1 fix
+      // 2026-08-15: the old order created a LIVE product first and connected it
+      // after; a failed mapping write left a live-but-unprintable product. This
+      // order can at worst leave orphan mapping rows for a product that was
+      // never created — harmless, visible in Avancerat, overwritten on retry).
+      // PARENT row per DESIGNED slot: keyed on the product sku,
       // its placement is the cm readout of the slot's EFFECTIVE placement (stored
       // placement, else the compositor default). The print pipeline resolves
       // longest-prefix within a slot, so per-colourway group-sku rows override the
@@ -726,6 +699,59 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         }
       }
       await Promise.all(mappingWrites);
+
+      // 6. Build the product doc EXACTLY like ProductForm (studio-relevant field
+      // set). Single price → BOTH b2cPrice + basePrice. Empty weight/dimensions/
+      // shipping shapes copied verbatim from ProductForm's emptyForm.
+      // Prices are stored INKL. moms (see STORE.vatRate — VAT is display-only in
+      // the Publish step's profit columns, not applied to the stored number).
+      const data = {
+        name: cleanName,
+        sku: resolvedSku,
+        category: '',
+        tags: [],
+        hasVariants,
+        variantGroups: cleanGroups,
+        options: [],
+        variants: cleanVariants,
+        b2cPrice: productPrice,
+        basePrice: productPrice,          // keep in sync for the `b2cPrice || basePrice` fallback
+        isActive: true,
+        featured: false,
+        imageUrl: heroUrl,
+        b2cImageUrl: heroUrl,
+        b2cImageGallery: galleryUrls,
+        availability: { b2c: true },
+        descriptions: { b2c: '', b2cMoreInfo: '' },
+        // LEGAL FIREWALL: studio-authored products are NEVER personalized. The
+        // 14-day withdrawal right stays; isPersonalized is order-flow-derived only.
+        isPersonalized: false,
+        // POD marker + economics: lets the product form gate "live" on a print
+        // connection and compute the break-even price floor (podPricing.js)
+        // without loading the template. costSek is the platform's base revenue.
+        isPodProduct: true,
+        ...(Number.isFinite(selectedTemplate?.costSek) ? { podCostSek: selectedTemplate.costSek } : {}),
+        sizeGuide: '',
+        weight: { value: 0, unit: 'g' },
+        dimensions: {
+          length: { value: 0, unit: 'mm' },
+          width: { value: 0, unit: 'mm' },
+          height: { value: 0, unit: 'mm' },
+        },
+        shipping: {
+          sweden: { cost: 0, service: 'Standard' },
+          nordic: { cost: 0, service: 'Nordic' },
+          eu: { cost: 0, service: 'EU' },
+          worldwide: { cost: 0, service: 'International' },
+        },
+        delivery: { shipping: true, pickup: true },
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      };
+      await addDoc(collection(db, 'products'), withShopId(data, shopId));
+      docCreated = true;
+
+
 
       setPublishResult({ name: cleanName, sku: resolvedSku });
       onChanged?.();
@@ -810,6 +836,22 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       if (missingOverrideLabels.size > 0) {
         throw new Error(`Motivet för ${[...missingOverrideLabels].join(', ')} kan inte kopplas eftersom färgnamnet saknas på produkten. Uppdatera produktens färger eller skapa en ny produkt.`);
       }
+      // PRISGOLV: becoming a POD product stamps this template's cost — the
+      // product's EXISTING prices must clear the floor that cost implies, or the
+      // seller would lose money on every sale from the moment this connects.
+      const floorU = Number.isFinite(selectedTemplate?.costSek) ? priceFloor(selectedTemplate.costSek) : null;
+      if (floorU != null) {
+        const prodPrice = prod.b2cPrice || prod.basePrice || 0;
+        if (!(prodPrice >= floorU)) {
+          throw new Error(`Produktens pris ${prodPrice} kr ligger under prisgolvet ${floorU} kr för den här produkttypen. Höj priset under Produkter och försök igen.`);
+        }
+        const lowGroups = (Array.isArray(prod.variantGroups) ? prod.variantGroups : [])
+          .filter((g) => Number.isFinite(parseFloat(g?.price)) && parseFloat(g.price) > 0 && parseFloat(g.price) < floorU)
+          .map((g) => g.label || g.sku);
+        if (lowGroups.length > 0) {
+          throw new Error(`Priset för ${lowGroups.join(', ')} ligger under prisgolvet ${floorU} kr. Justera under Produkter först.`);
+        }
+      }
 
       const publicPath = `products/${shopId}/${productId}`;
       const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
@@ -880,14 +922,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // KNOWN WINDOW: getDoc → uploads → updateDoc is a seconds-long
       // read-modify-write; a concurrent ProductForm save in that window loses
       // its group edits to this snapshot. Accepted for v1 (single-admin shops).
-      // Same POD stamps as the create path — an existing product that gets a
-      // studio design IS a POD product from now on.
-      updates.isPodProduct = true;
-      if (Number.isFinite(selectedTemplate?.costSek)) updates.podCostSek = selectedTemplate.costSek;
-      await updateDoc(prodRef, updates);
-      docTouched = true;
-
-      // Automatic print connection — identical mapping rows to the create flow, keyed on
+      // Automatic print connection — written BEFORE the product doc is touched
+      // (P1 fix 2026-08-15: mapping-write failure must abort with the product
+      // unchanged, never leave updated images/stamps on a broken connection).
+      // Identical mapping rows to the create flow, keyed on
       // the product's OWN sku; override rows target group skus whose label
       // EXACTLY matches the overridden colourway's label (decision 2026-08-09:
       // exact matches only, nothing fuzzy).
@@ -929,6 +967,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         }
       }
       await Promise.all(writes);
+
+      // Same POD stamps as the create path — an existing product that gets a
+      // studio design IS a POD product from now on.
+      updates.isPodProduct = true;
+      if (Number.isFinite(selectedTemplate?.costSek)) updates.podCostSek = selectedTemplate.costSek;
+      await updateDoc(prodRef, updates);
+      docTouched = true;
+
+
 
       setPublishResult({
         name: prod.name || '(namnlös produkt)',
