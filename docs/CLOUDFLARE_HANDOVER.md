@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 3 ready to commit
+**Last updated:** 2026-08-16, checkpoint 4 ready to commit
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `0de5e79` — `chore: scaffold Cloudflare migration foundation`
+- Last pushed commit: `c512754` — `feat: establish Cloudflare staging foundation`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -105,6 +105,19 @@ Checkpoint 2 was committed and pushed as `0de5e79`.
 
 An initially added fake `preview_database_id` made the dry run report a local-only binding. It was removed before deployment; the reviewed bundle and live Worker bind the real staging D1 database.
 
+## Checkpoint 4 — Identity and authorization foundation
+
+- Pinned Better Auth `1.6.29`, the current stable release verified from npm on 2026-08-16; dependency audit reports zero known vulnerabilities.
+- Selected Better Auth's native D1 adapter and generated its core schema from the pinned application configuration.
+- Added `0002_auth_identity.sql` with the generated `user`, `session`, `account`, `verification`, and database-backed `rateLimit` tables.
+- Kept authorization out of cookie claims: `identity_access`, `tenant_memberships`, and `print_memberships` are live D1 authority records.
+- Preserved one account-kind boundary (`ordinary`, `tenant_admin`, `platform_admin`, or `print_operator`) and explicit multi-tenant print assignments.
+- Added email/password configuration with session revocation on password reset, database-backed rate limiting, no session cookie cache, and explicit trusted origins.
+- Did not mount `/api/auth/*`, create a remote auth secret, seed users, or deploy identity routes. This keeps staging sign-up closed until tenant provisioning, verification/reset email, and live guards are complete.
+- Local gate passed: generated types current, TypeScript clean, 13/13 Workers/D1 tests green, and Better Auth reports no pending schema tables or columns after migrations.
+- Remote migration `0002_auth_identity.sql` applied to `meteorshop-stg-db`: 20 commands completed successfully.
+- Remote readback from the WEUR primary confirmed all eight identity/authorization tables, both tenant-immutability triggers, both recorded migrations, and exactly zero user rows.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -128,10 +141,10 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Commit and push checkpoint 3 after the final local verification pass.
-2. Verify and lock the current Better Auth version and its official Cloudflare D1 schema/migration workflow.
-3. Add identity/session schema only through the supported auth tooling; do not invent password or session tables.
-4. Implement the tenant resolver/repository boundary and prove two-tenant API isolation before porting a business route.
+1. Commit and push checkpoint 4.
+2. Implement the tenant resolver/repository boundary and prove two-tenant API isolation before porting a business route.
+3. Add live authorization guards and session revocation behavior before mounting auth endpoints.
+4. Add verification/reset delivery through the outbox before enabling sign-up or password recovery.
 5. Create R2 buckets and Queues only when their contracts and local tests are ready.
 6. Keep Firebase as the sole production side-effect owner throughout these staging waves.
 

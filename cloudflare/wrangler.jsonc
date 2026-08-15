@@ -9,6 +9,8 @@
   "preview_urls": true,
   "vars": {
     "APP_ENV": "staging",
+    "AUTH_BASE_URL": "https://meteorshop-stg-api.micke-ohlen.workers.dev",
+    "AUTH_TRUSTED_ORIGINS": "https://meteorshop-stg-api.micke-ohlen.workers.dev",
     "SERVICE_NAME": "meteorshop-stg-api"
   },
   "d1_databases": [

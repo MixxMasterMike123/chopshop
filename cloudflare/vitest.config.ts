@@ -18,6 +18,8 @@ export default defineConfig({
         },
         miniflare: {
           bindings: {
+            BETTER_AUTH_SECRET:
+              "test-only-better-auth-secret-at-least-32-characters",
             TEST_MIGRATIONS: migrations,
           },
         },

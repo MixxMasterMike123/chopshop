@@ -68,23 +68,20 @@ Indexes: `tenants(status)`, normalized support email if used for routing. Do not
 
 Every host-to-tenant resolution must use a verified, active row. A request body must not override it.
 
-### `users`, `auth_accounts`, `sessions`, `verification_tokens`, `password_reset_tokens`
+### Better Auth identity and live authorization
 
-The current `users/{uid}` documents contain platform/admin/shop/print identity and are read by authorization code. Customer auth and the replacement auth adapter are not yet selected.
+Better Auth `1.6.29` with its native D1 adapter is the selected identity/session implementation. Its generated core tables remain library-owned: `user`, `account`, `session`, `verification`, and `rateLimit`. Application authorization is deliberately separate and live-read; session cookies or cached claims are never the sole authority for privileged access.
 
 Recommended planning shape:
 
 | Table | Required columns and constraints |
 |---|---|
-| `users` | `user_id TEXT PRIMARY KEY`, `email_norm TEXT UNIQUE`, `display_name`, `status`, `platform_admin INTEGER`, `created_at`, `updated_at`, `deleted_at` |
-| `auth_accounts` | `account_id TEXT PRIMARY KEY`, `user_id`, `provider`, `provider_subject`, `UNIQUE(provider, provider_subject)`; no password/token material in `users` |
-| `sessions` | `session_id TEXT PRIMARY KEY`, `user_id`, `surface`, `token_hash UNIQUE`, `expires_at`, `revoked_at`, `created_at`, `last_seen_at` |
-| `verification_tokens` | `token_id TEXT PRIMARY KEY`, `user_id`, `purpose`, `token_hash UNIQUE`, `expires_at`, `used_at`, `created_at`; store only a hash |
-| `password_reset_tokens` | Same token rules; single-use, expiring, hashed, never logged |
-| `tenant_memberships` | `membership_id`, `tenant_id`, `user_id`, constrained `role`, `status`, `created_at`, `updated_at`, `UNIQUE(tenant_id,user_id,role)` |
-| `print_memberships` | `membership_id`, `tenant_id`, `user_id`, `printer_scope`, `status`, timestamps; printer access is explicit, not inferred from email |
+| Better Auth core | Generated `user`, `account`, `session`, `verification`, and `rateLimit` schema; migration parity is tested against the pinned library |
+| `identity_access` | One row per identity with exactly one `account_type`: `ordinary`, `tenant_admin`, `platform_admin`, or `print_operator`; live `status` is authoritative |
+| `tenant_memberships` | `membership_id`, immutable `tenant_id`, `user_id`, constrained `role`, `status`, timestamps, `UNIQUE(tenant_id,user_id,role)` |
+| `print_memberships` | `membership_id`, immutable `tenant_id`, `user_id`, `status`, timestamps, `UNIQUE(tenant_id,user_id)`; multi-shop assignment is explicit |
 
-Role values are a **decision**. The current code uses platform/admin/shop/print concepts and Firebase custom claims. Do not import a role string as authority without mapping it to an allowlisted role and tenant membership.
+Firebase role strings must be mapped to the allowlisted account kind and membership rows. Privileged handlers must join the current session to live authorization records and the target tenant; hostnames and frontend route guards are never authorization.
 
 ### Security and operator tables
 
@@ -330,7 +327,7 @@ Migration import should produce a report for: missing tenant, cross-tenant forei
 
 ## Ambiguities to resolve before migration SQL
 
-- **Authentication provider and customer identity:** the current repository is Firebase Auth-centric; the Cloudflare plan names an application-owned adapter but does not select its final provider or password/passkey model.
+- **Customer identity transition:** Better Auth + D1 is selected. The remaining decision is the cutover compatibility window for existing Firebase verification/reset links and UID-linked records; fresh staging contains no imported customers.
 - **Money semantics:** B2C/Stripe minor units and B2B decimal SEK currently coexist. Confirm currency policy, VAT-inclusive/exclusive display, rounding, and historic conversion.
 - **Order transition vocabulary:** UI/status strings are spread across rules and functions. Freeze the canonical transition table before implementing constraints and print filters.
 - **Production snapshot timing:** the code currently marks B2B orders `productionSnapshotRequired` before payment and builds snapshots on the paid lifecycle. Confirm whether B2C checkout snapshot promotion and B2B paid snapshot creation share one versioned format.

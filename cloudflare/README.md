@@ -4,6 +4,8 @@ This package contains the Cloudflare replacement runtime. It is isolated from th
 
 The checked-in Wrangler configuration targets the personal Cloudflare account as **staging/non-production only**. It must not contain secrets or production resource identifiers.
 
+The Better Auth/D1 schema is installed, but auth HTTP routes are intentionally not mounted yet. Do not expose sign-up, sign-in, verification, or reset endpoints until tenant provisioning, live authorization guards, outbox email delivery, and a staging-only `BETTER_AUTH_SECRET` are in place.
+
 ## Local validation
 
 ```sh
