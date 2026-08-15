@@ -233,6 +233,14 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Redeployed as version `8b01035c` (startup 46 ms, expected bindings only). Live smoke suite green: `/health` 200; `/ready` 200 reporting `0005_catalogue.sql`; unknown-host `/v1/storefront`, `/v1/products`, `/v1/products/{id}` all fail-closed JSON 404; `/api/auth/*` 404; anonymous `POST /v1/admin/products`, `PATCH /v1/admin/products/{id}`, `POST /v1/platform/tenants`, `POST /v1/platform/tenants/{id}/admins` all fail-closed JSON 404 (no more 1101).
 - The live staging Worker is now version `8b01035c` from `ec36930`; staging D1 is at migration 0005.
 
+## Checkpoint 14 — Sign-in-only auth HTTP surface (mounted, dark until secret exists)
+
+- Decision executed: sign-in mounted, sign-up NOT mounted — accounts arrive via invitation/provisioning flows; public registration stays closed.
+- `src/auth/auth-routes.ts`: the `/api/auth/*` namespace fails closed 404 in full when `BETTER_AUTH_SECRET` is unconfigured; when configured, an exact-match allowlist admits only `POST /api/auth/sign-in/email`, `POST /api/auth/sign-out`, `GET /api/auth/get-session` to the Better Auth handler. Everything else (sign-up, reset, verification, social) is 404.
+- Better Auth's own `trustedOrigins` CSRF enforcement was **verified by probe, not assumed**: hostile-origin sign-in returns 403 `INVALID_ORIGIN` with no cookie; the test pins that exact status. Probe also exposed that no-Origin sign-ins share a rate bucket (429), which would have made loose "not 200" assertions pass vacuously — negative tests assert exact statuses instead.
+- Builder mutation-verified the suite (sign-up added to allowlist, prefix matching, unconfigured guard removed — each broke the right tests).
+- Local gate: 181/181 tests green. Deployed to staging: live `/api/auth/sign-in/email` still fail-closed 404 because the staging secret intentionally does not exist yet. **To open sign-in: owner runs `npx wrangler secret put BETTER_AUTH_SECRET` (32+ chars) in `cloudflare/` — note `wrangler secret` is not in the current permission allowlist.**
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.

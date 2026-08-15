@@ -31,6 +31,7 @@ import {
   authorizePlatformRequest,
   authorizeTenantAdminRequest,
 } from "./auth/request-authorization";
+import { handleAuthRoute } from "./auth/auth-routes";
 import { handleDisabledAuthEmailQueue } from "./email/disabled-email-queue";
 import { getPublicStorefront } from "./storefront/public-storefront";
 import { isSameOriginRequest } from "./lib/same-origin";
@@ -492,6 +493,11 @@ export default {
       url.pathname.startsWith(PLATFORM_TENANT_PATH_PREFIX)
     ) {
       return handlePlatformTenantRoute(env, request, url);
+    }
+
+    const authResponse = await handleAuthRoute(env, request, url);
+    if (authResponse !== null) {
+      return authResponse;
     }
 
     return notFoundResponse("Route not found");
