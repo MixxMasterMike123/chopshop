@@ -204,7 +204,7 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Added `GET /v1/products` and `GET /v1/products/{productId}`: hostname-only tenancy, strict single-segment path parsing with safe percent-decoding, fail-closed JSON 404s for unknown host, foreign-tenant IDs, drafts, archived, unpublished, malformed paths, and wrong methods.
 - `/ready` now requires `0005_catalogue.sql`.
 - Local gate: types current, TypeScript clean, 61/61 Workers/D1 tests green (21 new adversarial catalogue tests incl. cross-tenant re-homing/re-pointing and leak sentinels), deploy dry-run 8.40 KiB / 2.39 KiB gzip.
-- **Not deployed and remote migration not applied**: this session's tool permissions block `wrangler deploy` and remote D1 commands. The live staging Worker remains version `7099d7e1` (checkpoint 9) and staging D1 remains at migration 0004. Before or at the next deploy: apply `0005_catalogue.sql` remotely first, then deploy (deploy without the migration leaves `/ready` correctly reporting 503 migration_required).
+- Deployed 2026-08-16 (see checkpoint 13.1 below) after the owner added Bash permission rules for `wrangler deploy` and `wrangler d1 migrations apply meteorshop-stg-db` to `.claude/settings.local.json`.
 
 ## Checkpoint 12 — Tenant-admin catalogue write path (not deployed)
 
@@ -224,6 +224,14 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Tenant provisioning creates tenant + first storefront domain + audit row in one `db.batch`. Domains are created `verified` because **the platform operator is the verification authority at this stage** — a DNS proof-of-control checkpoint must downgrade the default to `pending` before self-serve domains.
 - Admin grant enforces the one-account-kind boundary: existing `identity_access` of a different kind, or any non-active identity/membership → 409 (no silent re-enable); no existing row → plain INSERT (PK makes a racing grant fail loudly); duplicate active grant is idempotent. Suspension relies on live guards (resolver requires active tenant) and does not touch sessions.
 - Local gate: types current, TypeScript clean, 157/157 tests green (55 new, incl. provision→storefront-resolves→suspend-404→activate-restores E2E and a granted admin exercising the checkpoint 12 write path), deploy dry-run 1740 KiB / 302 KiB gzip.
+
+## Checkpoint 13.1 — Staging deployment of checkpoints 10–13 + fail-closed auth fix
+
+- Remote migration `0005_catalogue.sql` applied to `meteorshop-stg-db` (17 commands). WEUR readback confirmed the 3 catalogue tables, 3 indexes, and all 9 triggers.
+- First deploy (version `369b60ad`) exposed a defect the local gate could not catch: `POST /v1/admin/products` and `POST /v1/platform/tenants` returned Cloudflare error 1101 (worker exception) because `createAuth` read `env.BETTER_AUTH_SECRET.length` and the secret binding does not exist in staging yet, while vitest always injects a test secret.
+- Fix `ec36930`: `Env.BETTER_AUTH_SECRET` is now typed `string | undefined`; new `isAuthConfigured(env)` gate; `resolveSessionIdentity` returns null (anonymous, fail-closed) when the secret is missing or shorter than 32 chars; `createAuth` stays strict and still throws so a future mounted auth surface cannot run misconfigured. Six regression tests cover missing/short secret at the identity, guard, and route levels (163/163 total).
+- Redeployed as version `8b01035c` (startup 46 ms, expected bindings only). Live smoke suite green: `/health` 200; `/ready` 200 reporting `0005_catalogue.sql`; unknown-host `/v1/storefront`, `/v1/products`, `/v1/products/{id}` all fail-closed JSON 404; `/api/auth/*` 404; anonymous `POST /v1/admin/products`, `PATCH /v1/admin/products/{id}`, `POST /v1/platform/tenants`, `POST /v1/platform/tenants/{id}/admins` all fail-closed JSON 404 (no more 1101).
+- The live staging Worker is now version `8b01035c` from `ec36930`; staging D1 is at migration 0005.
 
 ## Verification and research completed
 
