@@ -395,8 +395,30 @@ service cloud.firestore {
           get(/databases/$(database)/documents/b2bCustomers/$(resource.data.b2bCustomerId)).data.firebaseAuthUid == request.auth.uid);
       // Orders are created ONLY server-side by the Stripe webhook (Admin SDK).
       allow create: if false;
-      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
-      allow delete: if isAdminOfShop(resource.data.shopId);
+      // P1-09 (2026-08-15 audit): orders are ACCOUNTING records. A same-shop
+      // admin's client update may touch ONLY the status-workflow fields the
+      // admin UI actually writes (OrderContext.updateOrderStatus/cancel +
+      // tracking) — never totals, payment.*, customer PII, items or refund
+      // markers. Status may not be set to (partially_)refunded from a client:
+      // those are minted exclusively by the refundOrder callable (a client
+      // 'refunded' write would fire the commission-reversal trigger without
+      // any money moving). Platform keeps broad edit (shopId still frozen).
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged() &&
+        (isPlatform() || (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'updatedAt', 'statusHistory', 'trackingNumber', 'cancelledBy', 'cancelledAt']) &&
+          // A fully refunded order is TERMINAL for shop admins — flipping it
+          // back to a workflow status would resurface it in the print queue
+          // (money already returned). partially_refunded still moves forward.
+          resource.data.status != 'refunded' &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']) ||
+            request.resource.data.status in
+              ['pending', 'confirmed', 'processing', 'ready_for_pickup', 'printed',
+               'shipped', 'delivered', 'completed', 'cancelled', 'invoiced', 'paid'])
+        ));
+      // Deletion of accounting records is PLATFORM-only (P1-09) — a shop admin
+      // must not be able to erase an order out of the books.
+      allow delete: if isPlatform();
     }
 
     // orderStatuses — DEAD/GLOBAL config (no shopId; only seed scripts touch it,

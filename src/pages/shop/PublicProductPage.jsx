@@ -643,10 +643,6 @@ const PublicProductPage = () => {
               >
                 {buttonState.text}
               </button>
-              
-              <button className="w-full border border-ink/15 bg-white py-3 px-6 rounded-full text-base font-medium hover:border-ink/40 transition-colors">
-                {t('favorite_button', 'Favorit ♡')}
-              </button>
             </div>
 
             {/* Additional product info — Klarna + product-aware delivery line */}
@@ -812,10 +808,6 @@ const PublicProductPage = () => {
                     }`}
                   >
                     {buttonState.text}
-                  </button>
-                  
-                  <button className="w-full border border-ink/15 bg-white py-4 px-8 rounded-full text-base font-medium hover:border-ink/40 transition-colors">
-                    {t('favorite_button', 'Favorit ♡')}
                   </button>
                 </div>
 

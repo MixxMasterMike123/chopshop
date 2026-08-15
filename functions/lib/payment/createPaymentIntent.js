@@ -7,7 +7,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createPaymentIntentV2 = exports.validateCartLine = exports.shopCheckoutBlockReason = void 0;
+exports.createPaymentIntentV2 = exports.validateCartLine = exports.resolvePickupLocation = exports.shopCheckoutBlockReason = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firebase_functions_1 = require("firebase-functions");
 const stripe_1 = __importDefault(require("stripe"));
@@ -51,6 +51,23 @@ function shopCheckoutBlockReason(shop) {
     return null;
 }
 exports.shopCheckoutBlockReason = shopCheckoutBlockReason;
+// P1-06 (2026-08-15 audit): pickup zeroes shipping, so the SERVER must verify
+// the shop actually offers pickup and that the chosen location is one of the
+// shop's configured points — name/address are then taken from the shop config,
+// never from the client payload. Returns null when the location can't resolve.
+function resolvePickupLocation(shop, pickupLocationId) {
+    const locations = Array.isArray(shop?.storeIdentity?.pickupLocations)
+        ? shop.storeIdentity.pickupLocations
+        : [];
+    const locId = String(pickupLocationId || '');
+    if (!locId)
+        return null;
+    const loc = locations.find((l) => l && l.id === locId);
+    if (!loc)
+        return null;
+    return { id: String(loc.id), name: String(loc.name || ''), address: String(loc.address || '') };
+}
+exports.resolvePickupLocation = resolvePickupLocation;
 // Validate ONE cart line against the SERVER product doc and derive the
 // authoritative line snapshot. The client contributes only (productId,
 // variantSku, quantity) — tenant, availability, price, SKU, name, label and
@@ -322,6 +339,20 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
             response.status(403).json({ error: 'Shop is not accepting orders' });
             return;
         }
+        // P1-06: a 'pickup' charge (zero shipping) requires a pickup location
+        // that actually exists in THIS shop's configuration. The resolved
+        // name/address (server truth) is what gets persisted — a crafted request
+        // can no longer zero shipping on a shop without pickup, or stamp a
+        // fabricated pickup address onto the order.
+        let resolvedPickup = null;
+        if (deliveryMethod === 'pickup') {
+            resolvedPickup = resolvePickupLocation(shopSnap.data(), deliveryInfo?.pickupLocationId);
+            if (!resolvedPickup) {
+                firebase_functions_1.logger.warn('⛔ Checkout blocked — invalid pickup location', { shopId: resolvedShopId });
+                response.status(400).json({ error: 'Invalid pickup location' });
+                return;
+            }
+        }
         // Tenant display name for Stripe-visible strings (description, card-
         // statement suffix). Buyers know the SHOP, never the platform brand.
         const tenantName = String(shopSnap.data()?.storeIdentity?.shopName || resolvedShopId);
@@ -478,13 +509,16 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
             shippingPostalCode: shippingInfo.postalCode || '',
             shippingCountry: shippingInfo.country || 'SE',
             shippingCost: (shippingInfo.cost || 0).toString(),
-            // Delivery method (Click & Collect) — carried to the order by the webhook.
+            // Delivery method (Click & Collect) — carried to the order by the
+            // webhook. Location fields are the SERVER-resolved shop config
+            // (P1-06), never the client's copies; only the chosen date string
+            // passes through.
             deliveryMethod,
-            ...(deliveryMethod === 'pickup' && {
-                pickupLocationId: deliveryInfo?.pickupLocationId || '',
-                pickupLocationName: deliveryInfo?.pickupLocationName || '',
-                pickupLocationAddress: deliveryInfo?.pickupLocationAddress || '',
-                pickupLocationDate: deliveryInfo?.pickupLocationDate || '',
+            ...(deliveryMethod === 'pickup' && resolvedPickup && {
+                pickupLocationId: resolvedPickup.id,
+                pickupLocationName: resolvedPickup.name,
+                pickupLocationAddress: resolvedPickup.address,
+                pickupLocationDate: String(deliveryInfo?.pickupLocationDate || '').slice(0, 40),
             }),
             // Order Totals (server-computed breakdown — single source of truth)
             subtotal: totals.subtotal.toString(),

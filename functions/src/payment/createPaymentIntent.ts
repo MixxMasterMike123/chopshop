@@ -44,6 +44,24 @@ export function shopCheckoutBlockReason(shop: any): string | null {
   return null;
 }
 
+// P1-06 (2026-08-15 audit): pickup zeroes shipping, so the SERVER must verify
+// the shop actually offers pickup and that the chosen location is one of the
+// shop's configured points — name/address are then taken from the shop config,
+// never from the client payload. Returns null when the location can't resolve.
+export function resolvePickupLocation(
+  shop: any,
+  pickupLocationId: unknown
+): { id: string; name: string; address: string } | null {
+  const locations = Array.isArray(shop?.storeIdentity?.pickupLocations)
+    ? shop.storeIdentity.pickupLocations
+    : [];
+  const locId = String(pickupLocationId || '');
+  if (!locId) return null;
+  const loc = locations.find((l: any) => l && l.id === locId);
+  if (!loc) return null;
+  return { id: String(loc.id), name: String(loc.name || ''), address: String(loc.address || '') };
+}
+
 export interface ServerCartLine {
   productId: string;
   variantSku: string | null;
@@ -442,6 +460,21 @@ export const createPaymentIntentV2 = onRequest(
         return;
       }
 
+      // P1-06: a 'pickup' charge (zero shipping) requires a pickup location
+      // that actually exists in THIS shop's configuration. The resolved
+      // name/address (server truth) is what gets persisted — a crafted request
+      // can no longer zero shipping on a shop without pickup, or stamp a
+      // fabricated pickup address onto the order.
+      let resolvedPickup: { id: string; name: string; address: string } | null = null;
+      if (deliveryMethod === 'pickup') {
+        resolvedPickup = resolvePickupLocation(shopSnap.data(), deliveryInfo?.pickupLocationId);
+        if (!resolvedPickup) {
+          logger.warn('⛔ Checkout blocked — invalid pickup location', { shopId: resolvedShopId });
+          response.status(400).json({ error: 'Invalid pickup location' });
+          return;
+        }
+      }
+
       // Tenant display name for Stripe-visible strings (description, card-
       // statement suffix). Buyers know the SHOP, never the platform brand.
       const tenantName = String(shopSnap.data()?.storeIdentity?.shopName || resolvedShopId);
@@ -615,13 +648,16 @@ export const createPaymentIntentV2 = onRequest(
             shippingCountry: shippingInfo.country || 'SE',
             shippingCost: (shippingInfo.cost || 0).toString(),
 
-            // Delivery method (Click & Collect) — carried to the order by the webhook.
+            // Delivery method (Click & Collect) — carried to the order by the
+            // webhook. Location fields are the SERVER-resolved shop config
+            // (P1-06), never the client's copies; only the chosen date string
+            // passes through.
             deliveryMethod,
-            ...(deliveryMethod === 'pickup' && {
-              pickupLocationId: deliveryInfo?.pickupLocationId || '',
-              pickupLocationName: deliveryInfo?.pickupLocationName || '',
-              pickupLocationAddress: deliveryInfo?.pickupLocationAddress || '',
-              pickupLocationDate: deliveryInfo?.pickupLocationDate || '',
+            ...(deliveryMethod === 'pickup' && resolvedPickup && {
+              pickupLocationId: resolvedPickup.id,
+              pickupLocationName: resolvedPickup.name,
+              pickupLocationAddress: resolvedPickup.address,
+              pickupLocationDate: String(deliveryInfo?.pickupLocationDate || '').slice(0, 40),
             }),
             
             // Order Totals (server-computed breakdown — single source of truth)

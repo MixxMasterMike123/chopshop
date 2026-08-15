@@ -475,6 +475,9 @@ async function run() {
       await setDoc(doc(raw, `${coll}/rehome_${coll}`), { shopId: 'shopA', ...data });
     }
   });
+  // Orders are field-allowlisted for shop admins (P1-09), so their benign
+  // probe must use an allowlisted key; every other collection stays free-form.
+  const BENIGN_PROBE = { orders: { status: 'processing', updatedAt: new Date() } };
   for (const [coll] of REHOME) {
     const path = `${coll}/rehome_${coll}`;
     await check(`${coll}: shopA admin CANNOT re-home own doc to shopB`, assertFails(
@@ -482,8 +485,42 @@ async function run() {
     await check(`${coll}: platform CANNOT re-home via client SDK (server-only op)`, assertFails(
       updateDoc(doc(platformDb(), path), { shopId: 'shopB' })));
     await check(`${coll}: benign same-shop update still ALLOWED`, assertSucceeds(
-      updateDoc(doc(shopAAdminDb(), path), { rehomeProbe: 1 })));
+      updateDoc(doc(shopAAdminDb(), path), BENIGN_PROBE[coll] || { rehomeProbe: 1 })));
   }
+
+  // ── P1-09: orders are ACCOUNTING records — field-allowlist + status guard ──
+  console.log('\n=== P1-09: orders field-allowlist for shop admins ===');
+  await check('shop admin updates STATUS WORKFLOW fields (ALLOW — the real admin flow)', assertSucceeds(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'),
+      { status: 'shipped', updatedAt: new Date(), trackingNumber: 'ABC123', statusHistory: [] })));
+  await check('shop admin CANNOT rewrite the order TOTAL', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { total: 0.01 })));
+  await check('shop admin CANNOT touch payment.* (refund markers)', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { 'payment.refundedTotalSek': 99999 })));
+  await check('shop admin CANNOT rewrite customer PII on the order', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { 'customerInfo.email': 'evil@x.com' })));
+  await check('shop admin CANNOT self-mark status refunded (commission-reversal without money)', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { status: 'refunded' })));
+  await check('shop admin CANNOT mark partially_refunded from the client either', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'), { status: 'partially_refunded' })));
+  await check('shop admin cancel flow (status+cancelledBy/At) still ALLOWED', assertSucceeds(
+    updateDoc(doc(shopAAdminDb(), 'orders/rehome_orders'),
+      { status: 'cancelled', updatedAt: new Date(), cancelledBy: 'adminA', cancelledAt: new Date() })));
+  await check('shop admin CANNOT delete an order (accounting record)', assertFails(
+    deleteDoc(doc(shopAAdminDb(), 'orders/rehome_orders'))));
+  // Terminal-refunded guard: a fully refunded order can't be flipped back into
+  // the workflow by a shop admin (it would re-enter the print queue).
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'orders/refundedOrder'), {
+      shopId: 'shopA', status: 'refunded', total: 100, source: 'b2c',
+    });
+  });
+  await check('shop admin CANNOT resurrect a REFUNDED order back to processing', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'orders/refundedOrder'), { status: 'processing', updatedAt: new Date() })));
+  await check('platform edits a non-workflow field (broad edit retained)', assertSucceeds(
+    updateDoc(doc(platformDb(), 'orders/rehome_orders'), { adminNote: 'platform annotation' })));
+  await check('platform deletes an order (cleanup stays possible)', assertSucceeds(
+    deleteDoc(doc(platformDb(), 'orders/rehome_orders'))));
   // Partial-update compat: an update that WRITES shopId with the identical
   // value is not a re-home (affectedKeys excludes unchanged keys) — the common
   // "save whole form" admin pattern must keep working.

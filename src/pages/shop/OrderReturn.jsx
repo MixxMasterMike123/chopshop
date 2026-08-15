@@ -51,6 +51,7 @@ const OrderReturnInner = () => {
           clearCart();
           localStorage.removeItem('b8s_checkout_customer');
           localStorage.removeItem('b8s_checkout_shipping');
+          sessionStorage.removeItem(`b8s_return_poll_${paymentIntent.id}`);
           setStatus('success');
 
           setTimeout(() => {
@@ -60,12 +61,26 @@ const OrderReturnInner = () => {
         } else if (paymentIntent.status === 'processing') {
           console.log('⏳ Payment still processing...');
           setStatus('processing');
-          
-          // Check again after a delay
-          setTimeout(() => {
-            window.location.reload();
-          }, 3000);
-          
+
+          // P2-11: BOUNDED polling — max 10 rechecks (~30 s), then a terminal
+          // "still processing" state instead of reloading forever. Attempt
+          // count survives the reload via sessionStorage (keyed per PI).
+          const attemptKey = `b8s_return_poll_${paymentIntent.id}`;
+          const attempts = Number(sessionStorage.getItem(attemptKey) || 0);
+          if (attempts < 10) {
+            sessionStorage.setItem(attemptKey, String(attempts + 1));
+            setTimeout(() => {
+              window.location.reload();
+            }, 3000);
+          } else {
+            sessionStorage.removeItem(attemptKey);
+            setStatus('error');
+            setErrorMessage(t(
+              'order_return_processing_timeout',
+              'Betalningen behandlas fortfarande. Du får ett orderbekräftelsemail när den går igenom — kontakta oss om inget mail kommit inom en timme.'
+            ));
+          }
+
         } else if (paymentIntent.status === 'canceled') {
           console.log('❌ Payment was canceled');
           setStatus('error');

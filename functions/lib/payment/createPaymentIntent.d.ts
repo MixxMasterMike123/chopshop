@@ -3,6 +3,11 @@
  * Handles server-side payment intent creation for B2C checkout
  */
 export declare function shopCheckoutBlockReason(shop: any): string | null;
+export declare function resolvePickupLocation(shop: any, pickupLocationId: unknown): {
+    id: string;
+    name: string;
+    address: string;
+} | null;
 export interface ServerCartLine {
     productId: string;
     variantSku: string | null;

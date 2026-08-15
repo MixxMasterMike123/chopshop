@@ -24,7 +24,7 @@
 const admin = require('../functions/node_modules/firebase-admin');
 if (!admin.apps.length) admin.initializeApp({ projectId: 'demo-rules-test' });
 
-const { validateCartLine, shopCheckoutBlockReason } =
+const { validateCartLine, shopCheckoutBlockReason, resolvePickupLocation } =
   require('../functions/lib/payment/createPaymentIntent.js');
 
 let pass = 0, fail = 0;
@@ -117,6 +117,20 @@ ok(shopCheckoutBlockReason({ status: 'disabled' }) === 'shop-disabled', 'kill-sw
 ok(shopCheckoutBlockReason({ status: 'active', published: false }) === 'shop-not-published', 'published===false (GO-LIVE gate) → blocked');
 ok(shopCheckoutBlockReason({ status: 'active' }) === null, 'active shop without published field → live (existing shops unaffected)');
 ok(shopCheckoutBlockReason({ status: 'active', published: true }) === null, 'published shop → live');
+
+console.log('\n=== resolvePickupLocation — pickup gate (P1-06) ===');
+{
+  const shop = { storeIdentity: { pickupLocations: [
+    { id: 'loc-1', name: 'Butiken Söder', address: 'Gatan 1' },
+    { id: 'loc-2', name: 'Lagret', address: 'Vägen 2' },
+  ] } };
+  const r = resolvePickupLocation(shop, 'loc-2');
+  ok(r && r.name === 'Lagret' && r.address === 'Vägen 2', 'valid id → SERVER config name/address (never client copies)');
+  ok(resolvePickupLocation(shop, 'loc-999') === null, 'unknown location id → null (charge rejected)');
+  ok(resolvePickupLocation(shop, '') === null, 'missing id → null');
+  ok(resolvePickupLocation({}, 'loc-1') === null, 'shop WITHOUT pickup config → null (no free-shipping tamper)');
+  ok(resolvePickupLocation({ storeIdentity: { pickupLocations: [] } }, 'loc-1') === null, 'empty pickup list → null');
+}
 
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

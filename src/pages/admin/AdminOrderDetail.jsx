@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useOrder } from '../../contexts/OrderContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { format } from 'date-fns';
 import { sv } from 'date-fns/locale';
 import toast from 'react-hot-toast';
@@ -42,6 +43,7 @@ const AdminOrderDetail = () => {
   const { orderId } = useParams();
   const navigate = useNavigate();
   const { getOrderById, updateOrderStatus, deleteOrder } = useOrder();
+  const { isPlatform } = useAuth();
   const [order, setOrder] = useState(null);
   const [userData, setUserData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -560,10 +562,14 @@ const AdminOrderDetail = () => {
         )}
       </Button>
       <LabelPrintInstructions />
-      <Button variant="destructive" onClick={handleDeleteOrder} disabled={deleteLoading}>
-        <TrashIcon className="h-4 w-4" />
-        {deleteLoading ? 'Tar bort…' : 'Ta bort'}
-      </Button>
+      {/* Order deletion is PLATFORM-only (P1-09: accounting records) — hide
+          the button for shop admins instead of letting them hit a rules deny. */}
+      {isPlatform && (
+        <Button variant="destructive" onClick={handleDeleteOrder} disabled={deleteLoading}>
+          <TrashIcon className="h-4 w-4" />
+          {deleteLoading ? 'Tar bort…' : 'Ta bort'}
+        </Button>
+      )}
     </>
   );
 

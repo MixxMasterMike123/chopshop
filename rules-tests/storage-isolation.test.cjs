@@ -60,12 +60,14 @@ async function run() {
   });
 
   console.log('\n=== LEGIT WRITES (allow) ===');
+  // contentType matters now (P2-04 image/* gate) — real uploaders send typed
+  // Blobs/Files; the probes must too.
   await check('shopA admin writes OWN partitioned product image', assertSucceeds(
-    uploadBytes(ref(shopAAdmin(), 'products/shopA/p2/img.jpg'), BYTES)));
+    uploadBytes(ref(shopAAdmin(), 'products/shopA/p2/img.jpg'), BYTES, { contentType: 'image/jpeg' })));
   await check('shopA admin writes OWN partitioned branding', assertSucceeds(
     uploadBytes(ref(shopAAdmin(), 'branding/shopA/hero.jpg'), BYTES)));
   await check('platform admin writes ANY shop partitioned product (shopB)', assertSucceeds(
-    uploadBytes(ref(platform(), 'products/shopB/p9/img.jpg'), BYTES)));
+    uploadBytes(ref(platform(), 'products/shopB/p9/img.jpg'), BYTES, { contentType: 'image/jpeg' })));
   await check('shopA admin writes OWN partitioned affiliate invoice', assertSucceeds(
     uploadBytes(ref(shopAAdmin(), 'affiliates/shopA/aff1/invoices/inv.pdf'), BYTES)));
   await check('shopA admin writes OWN partitioned page attachment', assertSucceeds(
@@ -124,6 +126,27 @@ async function run() {
   });
   await check('shopB admin CANNOT delete shopA LIBRARY original (cross-shop)', assertFails(
     deleteObject(ref(shopBAdmin(), 'pod-artwork/shopA/originals/art2.tiff'))));
+
+  // ── P2-03/P2-04 (2026-08-15): upload caps + same-shop marketing reads ──
+  console.log('\n=== P2-03/04: upload caps + marketing read scope ===');
+  const BIG = new Uint8Array(6 * 1024 * 1024); // 6MB > profile's 5MB cap
+  await check('oversized profile image (6MB > 5MB cap) DENIED', assertFails(
+    uploadBytes(ref(customer('c1'), 'users/c1/profile.jpg'), BIG, { contentType: 'image/jpeg' })));
+  await check('non-image product upload (text/plain) DENIED', assertFails(
+    uploadBytes(ref(shopAAdmin(), 'products/shopA/p9/evil.txt'), BYTES, { contentType: 'text/plain' })));
+  await check('normal product image still ALLOWED', assertSucceeds(
+    uploadBytes(ref(shopAAdmin(), 'products/shopA/p9/ok.jpg'), BYTES, { contentType: 'image/jpeg' })));
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await uploadBytes(ref(ctx.storage(), 'marketing-materials/shopA/generic/flyer.pdf'), BYTES);
+  });
+  const shopAUser = () => env.authenticatedContext('affA', { shopId: 'shopA' }).storage();
+  const shopBUser = () => env.authenticatedContext('affB', { shopId: 'shopB' }).storage();
+  await check('same-shop user reads generic marketing file (ALLOW)', assertSucceeds(
+    getBytes(ref(shopAUser(), 'marketing-materials/shopA/generic/flyer.pdf'))));
+  await check('OTHER-shop user CANNOT read shopA generic marketing file (P2-03)', assertFails(
+    getBytes(ref(shopBUser(), 'marketing-materials/shopA/generic/flyer.pdf'))));
+  await check('claimless authenticated user CANNOT read generic marketing file', assertFails(
+    getBytes(ref(customer('c1'), 'marketing-materials/shopA/generic/flyer.pdf'))));
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
   await env.cleanup();

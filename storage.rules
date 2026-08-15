@@ -46,10 +46,14 @@ service firebase.storage {
     // transition; ALL writes go through the partitioned blocks (every uploader
     // now writes partitioned). After migration (Phase B step 5) delete them.
 
-    // User profile images
+    // User profile images. P2-04: size/type-capped (create/update split from
+    // delete — request.resource is null on delete).
     match /users/{userId}/profile.jpg {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth != null && request.auth.uid == userId;
     }
 
     // Order attachments.
@@ -65,10 +69,12 @@ service firebase.storage {
         isAdmin() ||
         resource.metadata.userId == request.auth.uid
       );
-      allow write: if request.auth != null && (
+      // P2-04: capped create/update; delete separate (request.resource null).
+      allow create, update: if request.auth != null && (
         isAdmin() ||
         request.resource.metadata.userId == request.auth.uid
-      );
+      ) && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if request.auth != null && isAdmin();
     }
 
     // Product images — PARTITIONED by shopId. New uploads land at
@@ -76,7 +82,11 @@ service firebase.storage {
     // shop's own admin (or platform).
     match /products/{shopId}/{allPaths=**} {
       allow read: if true;
-      allow write: if isAdminOfShop(shopId);
+      // P2-04: images only, capped. Delete stays for library cleanup.
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if isAdminOfShop(shopId);
     }
 
     // LEGACY FLAT PATH (READ-ONLY) — remove after migration (Phase B step 5).
@@ -92,7 +102,12 @@ service firebase.storage {
     // them; write gated to the shop's own admin (or platform).
     match /branding/{shopId}/{allPaths=**} {
       allow read: if true;
-      allow write: if isAdminOfShop(shopId);
+      // P2-04: size cap only — NO contentType restriction here, because the
+      // per-shop favicon flow uploads the RAW file (.ico may arrive as
+      // octet-stream) and a type match would break it.
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if isAdminOfShop(shopId);
     }
 
     // LEGACY FLAT PATH (READ-ONLY) — remove after migration (Phase B step 5).
@@ -107,7 +122,11 @@ service firebase.storage {
     // Greenfield path — no legacy flat block.
     match /collections/{shopId}/{allPaths=**} {
       allow read: if true;
-      allow write: if isAdminOfShop(shopId);
+      // P2-04: images only, capped.
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if isAdminOfShop(shopId);
     }
 
     // POD print artwork (original + web preview) — PARTITIONED by shopId.
@@ -132,7 +151,9 @@ service firebase.storage {
       allow delete: if isAdminOfShop(shopId)
         && !resource.name.matches('pod-artwork/[^/]+/print/.*');
       allow create, update: if isAdminOfShop(shopId)
-        && !request.resource.name.matches('pod-artwork/[^/]+/print/.*');
+        && !request.resource.name.matches('pod-artwork/[^/]+/print/.*')
+        // P2-04: cap uploads — print originals can be big TIFFs, but not ∞.
+        && request.resource.size < 150 * 1024 * 1024;
     }
 
     // Content Studio ("Innehållsstudio" add-on) — PARTITIONED by shopId. Holds
@@ -190,10 +211,17 @@ service firebase.storage {
     }
 
     // Marketing materials — generic (PARTITIONED by shopId).
-    // Any authenticated user of the shop can read; write gated to shop admin.
+    // P2-03 (2026-08-15 audit): read is SAME-SHOP users only (shopId claim) or
+    // the shop's admin/platform — was any authenticated user of ANY shop
+    // (cross-tenant asset reads). Claims are synced by syncUserClaimsOnWrite,
+    // so affiliates/users with a users-doc carry shopId.
+    // P2-04: capped writes; delete split out.
     match /marketing-materials/{shopId}/generic/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if isAdminOfShop(shopId);
+      allow read: if request.auth != null &&
+        (isAdminOfShop(shopId) || request.auth.token.shopId == shopId);
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 50 * 1024 * 1024;
+      allow delete: if isAdminOfShop(shopId);
     }
 
     // Customer-specific marketing materials (PARTITIONED by shopId).
@@ -203,7 +231,9 @@ service firebase.storage {
         isAdminOfShop(shopId) ||
         request.auth.uid == customerId
       );
-      allow write: if isAdminOfShop(shopId);
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 50 * 1024 * 1024;
+      allow delete: if isAdminOfShop(shopId);
     }
 
     // CRM documents for customers (PARTITIONED by shopId).
@@ -212,7 +242,9 @@ service firebase.storage {
         isAdminOfShop(shopId) ||
         request.auth.uid == customerId
       );
-      allow write: if isAdminOfShop(shopId);
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 50 * 1024 * 1024;
+      allow delete: if isAdminOfShop(shopId);
     }
 
     // LEGACY FLAT PATHS (READ-ONLY) — remove after migration (Phase B step 5).
@@ -241,7 +273,9 @@ service firebase.storage {
         isAdminOfShop(shopId) ||
         request.auth.uid == affiliateId
       );
-      allow write: if isAdminOfShop(shopId);
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if isAdminOfShop(shopId);
     }
 
     // LEGACY FLAT PATH (READ-ONLY) — remove after migration (Phase B step 5).
@@ -254,7 +288,9 @@ service firebase.storage {
 
     // Admin-only customer documents (PARTITIONED by shopId).
     match /admin-documents/{shopId}/customers/{customerId}/{fileName} {
-      allow read, write: if isAdminOfShop(shopId);
+      allow read, delete: if isAdminOfShop(shopId);
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 25 * 1024 * 1024;
     }
 
     // LEGACY FLAT PATH (READ-ONLY) — remove after migration (Phase B step 5).
@@ -268,7 +304,11 @@ service firebase.storage {
     // Public read for published page attachments; write gated to shop admin.
     match /pages/{shopId}/{pageId}/attachments/{fileName} {
       allow read: if true;
-      allow write: if isAdminOfShop(shopId);
+      // P2-04: capped (PDFs/docs allowed — no type restriction, they're CMS
+      // attachments); delete split out.
+      allow create, update: if isAdminOfShop(shopId)
+        && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if isAdminOfShop(shopId);
     }
 
     // LEGACY FLAT PATH (READ-ONLY) — remove after migration (Phase B step 5).
