@@ -38,7 +38,9 @@ TOTAL=0
 for p in "${PREFIXES[@]}"; do
   PATH_GS="${BUCKET}/${p}/${SHOP}/"
   # -r so nested objects count; silence the "no matches" stderr for empty prefixes.
-  N=$(gsutil ls -r "${PATH_GS}" 2>/dev/null | grep -v '/$' | grep -c . || true)
+  # -r output includes "<prefix>/:" directory-header lines and trailing-slash
+  # placeholder entries — neither is an object, so filter both from the count.
+  N=$(gsutil ls -r "${PATH_GS}" 2>/dev/null | grep -v '/$' | grep -v ':$' | grep -c . || true)
   if [ "${N}" -gt 0 ]; then
     echo "   ${p}/${SHOP}/: ${N} objects"
     TOTAL=$((TOTAL + N))

@@ -279,11 +279,34 @@ const AppLayout = ({ children }) => {
     setLastPickedShopId(null);
   };
 
-  // No shop resolved (platform operator, nothing picked yet) → make them choose.
-  // Rendered INSTEAD of the admin chrome: with no tenant there is nothing
-  // meaningful in the nav, and every shop-scoped query would read the sentinel.
+  // No shop resolved → make them choose. Rendered INSTEAD of the admin chrome:
+  // with no tenant there is nothing meaningful in the nav, and every shop-scoped
+  // query would read the sentinel.
   if (needsShopPick) {
-    return <ShopPicker />;
+    // Only a PLATFORM operator gets the picker (its shops LIST query is
+    // platform-only in the rules). A non-platform admin can only land here with
+    // broken data — the rules invariant says every shop admin's users doc
+    // carries a shopId — so fail LOUD rather than let them pick a tenant they
+    // don't administer (the silent-wrong-shop class this change exists to kill).
+    if (!isPlatform) {
+      return (
+        <div className="grid min-h-screen place-items-center bg-admin-bg px-4">
+          <div className="max-w-md rounded-[var(--radius-admin)] bg-admin-surface p-6 text-center ring-1 ring-admin-border">
+            <h1 className="text-[16px] font-semibold text-admin-text">Ditt konto saknar en butik</h1>
+            <p className="mt-2 text-[13px] text-admin-text-muted">
+              Kontot är administratör men är inte kopplat till någon butik. Kontakta plattformsansvarig.
+            </p>
+            <button
+              onClick={handleLogout}
+              className="mt-4 text-[13px] text-admin-text-muted underline underline-offset-2 hover:text-admin-text"
+            >
+              Logga ut
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return <ShopPicker onLogout={handleLogout} />;
   }
 
   return (

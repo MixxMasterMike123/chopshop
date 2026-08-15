@@ -18,7 +18,7 @@ import { db } from '../../firebase/config';
 import { setDeepLinkShopId, setLastPickedShopId } from '../../config/activeShop';
 import { BuildingStorefrontIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 
-const ShopPicker = () => {
+const ShopPicker = ({ onLogout }) => {
   const [shops, setShops] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -112,6 +112,17 @@ const ShopPicker = () => {
         <p className="mt-4 text-center text-[12px] text-admin-text-faint">
           Valet sparas i den här webbläsaren. Du kan byta butik när som helst från butiksväljaren uppe till höger.
         </p>
+
+        {onLogout && (
+          <p className="mt-2 text-center">
+            <button
+              onClick={onLogout}
+              className="text-[12px] text-admin-text-muted underline underline-offset-2 hover:text-admin-text"
+            >
+              Logga ut
+            </button>
+          </p>
+        )}
       </div>
     </div>
   );
