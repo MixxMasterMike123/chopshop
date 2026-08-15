@@ -3,6 +3,7 @@ export type AuthEmailLocale = "en" | "sv";
 
 export interface AuthEmailJob {
   actionUrl: string;
+  createdAt: number;
   deliveryId: string;
   expiresAt: number;
   kind: AuthEmailKind;
@@ -20,6 +21,7 @@ export interface AuthEmailMessage {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DELIVERY_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_JOB_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
 function normalizedEmail(value: string): string {
   const email = value.trim().toLowerCase();
@@ -56,12 +58,20 @@ function validatedActionUrl(
 }
 
 export function createAuthEmailJob(
-  input: Omit<AuthEmailJob, "deliveryId" | "recipient" | "version"> & {
+  input: Omit<
+    AuthEmailJob,
+    "createdAt" | "deliveryId" | "recipient" | "version"
+  > & {
     recipient: string;
   },
   expectedBaseUrl: string,
 ): AuthEmailJob {
-  if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= Date.now()) {
+  const createdAt = Date.now();
+  if (
+    !Number.isSafeInteger(input.expiresAt) ||
+    input.expiresAt <= createdAt ||
+    input.expiresAt > createdAt + MAX_JOB_LIFETIME_MS
+  ) {
     throw new Error("Auth email expiry must be in the future");
   }
 
@@ -71,6 +81,7 @@ export function createAuthEmailJob(
       input.kind,
       expectedBaseUrl,
     ),
+    createdAt,
     deliveryId: crypto.randomUUID(),
     expiresAt: input.expiresAt,
     kind: input.kind,
@@ -95,8 +106,12 @@ export function parseAuthEmailJob(
     !DELIVERY_ID_PATTERN.test(job.deliveryId ?? "") ||
     (job.kind !== "email_verification" && job.kind !== "password_reset") ||
     (job.locale !== "sv" && job.locale !== "en") ||
+    !Number.isSafeInteger(job.createdAt) ||
     !Number.isSafeInteger(job.expiresAt) ||
-    (job.expiresAt as number) <= Date.now() ||
+    (job.createdAt as number) > Date.now() + 5 * 60 * 1000 ||
+    (job.expiresAt as number) <= (job.createdAt as number) ||
+    (job.expiresAt as number) - (job.createdAt as number) >
+      MAX_JOB_LIFETIME_MS ||
     (job.tenantId !== undefined &&
       (typeof job.tenantId !== "string" || job.tenantId.length === 0))
   ) {
@@ -109,6 +124,7 @@ export function parseAuthEmailJob(
       job.kind,
       expectedBaseUrl,
     ),
+    createdAt: job.createdAt as number,
     deliveryId: job.deliveryId as string,
     expiresAt: job.expiresAt as number,
     kind: job.kind,
@@ -131,6 +147,7 @@ export async function hashEmailRecipient(recipient: string): Promise<string> {
 
 export function redactedAuthEmailJobMetadata(job: AuthEmailJob) {
   return {
+    createdAt: job.createdAt,
     deliveryId: job.deliveryId,
     expiresAt: job.expiresAt,
     kind: job.kind,

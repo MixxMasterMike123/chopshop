@@ -112,8 +112,8 @@ describe("email delivery ledger", () => {
     await env.DB.prepare(
       `INSERT INTO email_deliveries (
         delivery_id, tenant_id, kind, recipient_hash, next_attempt_at,
-        expires_at, created_at, updated_at
-      ) VALUES (?, ?, 'email_verification', ?, ?, ?, ?, ?)`,
+        expires_at, created_at, updated_at, job_fingerprint
+      ) VALUES (?, ?, 'email_verification', ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         "delivery-email-a",
@@ -123,6 +123,7 @@ describe("email delivery ledger", () => {
         NOW + 60_000,
         NOW,
         NOW,
+        "b".repeat(64),
       )
       .run();
 

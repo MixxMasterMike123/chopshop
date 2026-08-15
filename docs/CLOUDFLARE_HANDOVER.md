@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 7 ready to commit
+**Last updated:** 2026-08-16, checkpoint 8 ready to commit
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `a0c28ce` — `fix: hash auth verification identifiers`
+- Last pushed commit: `762a074` — `feat: define secure auth email contract`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -155,6 +155,17 @@ Better Auth defaults verification identifiers to plain storage. Password reset i
 - Remote migration applied successfully to staging D1: seven commands. WEUR readback confirmed the table, three indexes, immutability trigger, exact non-sensitive columns, and zero delivery rows.
 - Local gate passed: generated types current, TypeScript clean, 29/29 Workers/D1 tests green.
 
+## Checkpoint 8 — Email delivery claim and lease state machine
+
+- Added a SHA-256 fingerprint over the complete Queue job. Reusing a delivery ID with changed recipient, URL, tenant, purpose, locale, or expiry fails closed.
+- Added atomic D1 insert/claim behavior with one lease winner under eight concurrent claim attempts.
+- Added 60-second reclaimable leases, attempt accounting, due-time enforcement, lease-owned completion, bounded retry, redacted error codes, and explicit expired/failed terminals.
+- Hardened the crash edge: a worker that crashes on its final allowed attempt becomes terminal when the lease expires rather than remaining stuck in `processing`.
+- Added `createdAt` to the versioned Queue contract so a capability can be recorded as expired without violating ledger history constraints; maximum lifetime is 24 hours.
+- Added migration `0004_email_delivery_fingerprint.sql`; remote WEUR readback confirmed the fingerprint column and required-fingerprint trigger, all four migrations, and zero delivery rows.
+- Local gate passed: generated types current, TypeScript clean, 35/35 Workers/D1 tests green.
+- Known provider boundary: a crash after Cloudflare accepts a send but before D1 records success can still duplicate a later send unless the provider gains a supported idempotency key. The lease removes concurrent duplicates but cannot atomically join an external mail send to D1.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -178,11 +189,11 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Commit and push checkpoint 7.
-2. Implement and concurrency-test the D1 delivery claim/lease state machine before creating the email Queue.
+1. Commit and push checkpoint 8.
+2. Create the staging auth-email Queue + DLQ and bind only the producer/consumer contract; do not add an Email Sending binding yet.
 3. Decide whether to mount sign-in only before sign-up; do not enable either until a staging secret and provisioning policy are in place.
 4. Port the first read-only tenant route only after its repository query is tenant-bound and adversarially tested.
-5. Create R2 buckets and Queues only when their contracts and local tests are ready.
+5. Create R2 buckets only when their object ownership contracts and local tests are ready.
 6. Keep Firebase as the sole production side-effect owner throughout these staging waves.
 
 ## Known blockers and approvals

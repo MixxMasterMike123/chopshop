@@ -242,7 +242,7 @@ The current `printNotifications/{orderId}` document maps to an outbox event with
 
 ### Email delivery
 
-The implemented auth-email ledger stores `delivery_id PK`, immutable nullable `tenant_id`, constrained `kind`, `recipient_hash`, status/attempt/lease/backoff fields, optional provider message ID, expiry, redacted error code, and timestamps. It intentionally has no raw recipient, action URL, token, or generic payload column. The short-lived Queue message carries the verification/reset capability; consumers must never log it and must reject the message after its expiry.
+The implemented auth-email ledger stores `delivery_id PK`, immutable nullable `tenant_id`, constrained `kind`, `recipient_hash`, a full-job fingerprint, status/attempt/lease/backoff fields, optional provider message ID, expiry, redacted error code, and timestamps. It intentionally has no raw recipient, action URL, token, or generic payload column. The short-lived Queue message carries the verification/reset capability; consumers must never log it and must reject the message after its expiry. Claim is compare-and-set: one lease wins, changed payloads reusing an ID are rejected, expired leases are reclaimable, and exhausted crashed leases become terminal rather than stranded.
 
 Order/print/customer email will add resource/event references and template versions when those domains are ported. Their recipients and templates must be derived server-side from the tenant-owned resource, not copied from an arbitrary request address. Duplicate concurrent sends claim the same delivery row; terminal failures remain visible for operator handling.
 
