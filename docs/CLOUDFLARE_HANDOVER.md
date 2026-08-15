@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 4 ready to commit
+**Last updated:** 2026-08-16, checkpoint 5 ready to commit
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `c512754` — `feat: establish Cloudflare staging foundation`
+- Last pushed commit: `e9045ba` — `feat: add Cloudflare identity foundation`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -118,6 +118,17 @@ An initially added fake `preview_database_id` made the dry run report a local-on
 - Remote migration `0002_auth_identity.sql` applied to `meteorshop-stg-db`: 20 commands completed successfully.
 - Remote readback from the WEUR primary confirmed all eight identity/authorization tables, both tenant-immutability triggers, both recorded migrations, and exactly zero user rows.
 
+## Checkpoint 5 — Tenant resolution and live authorization
+
+- Added hostname-only tenant resolution from the request URL. Client `shopId`, `X-Shop-Id`, and forwarded-host values are not authority.
+- Resolver returns only a verified domain joined to an active tenant and otherwise fails closed.
+- Added live D1 guards for platform admins, tenant admins, and print operators.
+- Tenant-admin access requires an active account-kind record, active same-tenant admin membership, and active tenant.
+- Print access requires an active print-operator record plus an explicit active assignment for the requested tenant; multi-shop assignments remain supported.
+- Platform access requires a current active platform-admin record and is not inferred from tenant membership.
+- Local gate passed: generated types current, TypeScript clean, 19/19 Workers/D1 tests green, including hostile tenant headers, unknown/pending/suspended domains, tenant-A-to-B attempts, live revocation, and print assignment scope.
+- No new route was exposed and no staging deployment or remote data mutation was needed for this checkpoint.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -141,10 +152,10 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Commit and push checkpoint 4.
-2. Implement the tenant resolver/repository boundary and prove two-tenant API isolation before porting a business route.
-3. Add live authorization guards and session revocation behavior before mounting auth endpoints.
-4. Add verification/reset delivery through the outbox before enabling sign-up or password recovery.
+1. Commit and push checkpoint 5.
+2. Add session-to-live-principal resolution and revocation behavior before mounting auth endpoints.
+3. Add verification/reset delivery through the outbox before enabling sign-up or password recovery.
+4. Port the first read-only tenant route only after its repository query is tenant-bound and adversarially tested.
 5. Create R2 buckets and Queues only when their contracts and local tests are ready.
 6. Keep Firebase as the sole production side-effect owner throughout these staging waves.
 
