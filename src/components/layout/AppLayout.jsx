@@ -8,6 +8,9 @@ import { useTranslation } from '../../contexts/TranslationContext';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { useShopId } from '../../contexts/ShopContext';
+import { isUnresolvedShopId } from '../../config/tenancy';
+import { setDeepLinkShopId, setLastPickedShopId } from '../../config/activeShop';
+import ShopPicker from '../admin/ShopPicker';
 import { WAGON_FEATURE_KEY } from '../../config/addons';
 import ImpersonationBanner from '../auth/ImpersonationBanner';
 import { getImpersonation } from '../../config/impersonation';
@@ -41,10 +44,14 @@ const AppLayout = ({ children }) => {
   const { t } = useTranslation();
   const store = useStoreSettings();
   const { features, isEnabled: isAddonEnabled } = useShopFeatures();
-  // The shop this admin session is managing (impersonation > own shop > default).
-  // Surfaced in the top bar so "which shop am I editing?" is always explicit —
-  // every admin shares the /admin URL, so the name alone wasn't enough.
+  // The shop this admin session is managing (impersonation > deep-link > own
+  // shop > last picked). Surfaced in the top bar so "which shop am I editing?"
+  // is always explicit — every admin shares the /admin URL, so the name alone
+  // wasn't enough. When it resolves to the UNRESOLVED sentinel (a platform
+  // operator who hasn't picked yet) we render the picker instead of a dashboard
+  // — there is no default shop to fall into any more (2026-08-15).
   const shopId = useShopId();
+  const needsShopPick = isUnresolvedShopId(shopId);
   const navigate = useNavigate();
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -265,6 +272,20 @@ const AppLayout = ({ children }) => {
   const navIconClass = (active) =>
     `h-[18px] w-[18px] shrink-0 ${active ? 'text-admin-text' : 'text-admin-text-muted group-hover:text-admin-text'}`;
 
+  const handleShopSwitch = () => {
+    // A ?shopId= deep link has higher precedence than the remembered picker
+    // choice. Clear both sources so switching always returns to the picker.
+    setDeepLinkShopId(null);
+    setLastPickedShopId(null);
+  };
+
+  // No shop resolved (platform operator, nothing picked yet) → make them choose.
+  // Rendered INSTEAD of the admin chrome: with no tenant there is nothing
+  // meaningful in the nav, and every shop-scoped query would read the sentinel.
+  if (needsShopPick) {
+    return <ShopPicker />;
+  }
+
   return (
     <div className="min-h-screen bg-admin-bg text-admin-text [font-size:13px] [line-height:20px]">
       {/* ── Dark top command bar (Shopify chrome). Fixed, full-width, 56px. ── */}
@@ -307,18 +328,39 @@ const AppLayout = ({ children }) => {
           )}
           <DarkModeToggle />
           <LanguageSwitcher />
-          <div
-            className="ml-1 flex items-center gap-2 rounded-[var(--radius-admin-el)] py-1 pl-2 pr-1"
-            title={`${shopName} (${shopId})`}
-          >
-            <span className="hidden max-w-[180px] flex-col items-end leading-tight lg:flex">
-              <span className="max-w-[180px] truncate text-[13px] font-medium text-white/90">{shopName}</span>
-              <span className="max-w-[180px] truncate font-mono text-[10px] text-white/55">{shopId}</span>
-            </span>
-            <span className="grid h-6 w-6 place-items-center rounded-[6px] bg-[var(--color-admin-success-dot)] text-[11px] font-semibold text-white">
-              {shopInitials}
-            </span>
-          </div>
+          {/* Store identity. For a PLATFORM operator it doubles as the shop
+              switcher — clearing the remembered pick drops them back to the
+              picker (impersonation keeps its own banner + exit, so it is left
+              alone here). For a normal shop admin it stays a plain label: they
+              have exactly one shop and nothing to switch to. */}
+          {isPlatform && !getImpersonation() ? (
+            <button
+              onClick={handleShopSwitch}
+              className="ml-1 flex items-center gap-2 rounded-[var(--radius-admin-el)] py-1 pl-2 pr-1 hover:bg-white/10"
+              title={`${shopName} (${shopId}) — byt butik`}
+            >
+              <span className="hidden max-w-[180px] flex-col items-end leading-tight lg:flex">
+                <span className="max-w-[180px] truncate text-[13px] font-medium text-white/90">{shopName}</span>
+                <span className="max-w-[180px] truncate font-mono text-[10px] text-white/55">Byt butik</span>
+              </span>
+              <span className="grid h-6 w-6 place-items-center rounded-[6px] bg-[var(--color-admin-success-dot)] text-[11px] font-semibold text-white">
+                {shopInitials}
+              </span>
+            </button>
+          ) : (
+            <div
+              className="ml-1 flex items-center gap-2 rounded-[var(--radius-admin-el)] py-1 pl-2 pr-1"
+              title={`${shopName} (${shopId})`}
+            >
+              <span className="hidden max-w-[180px] flex-col items-end leading-tight lg:flex">
+                <span className="max-w-[180px] truncate text-[13px] font-medium text-white/90">{shopName}</span>
+                <span className="max-w-[180px] truncate font-mono text-[10px] text-white/55">{shopId}</span>
+              </span>
+              <span className="grid h-6 w-6 place-items-center rounded-[6px] bg-[var(--color-admin-success-dot)] text-[11px] font-semibold text-white">
+                {shopInitials}
+              </span>
+            </div>
+          )}
           <button
             onClick={handleLogout}
             title={t('nav.logout', 'Logga ut')}
@@ -563,4 +605,4 @@ const AppLayout = ({ children }) => {
   );
 };
 
-export default AppLayout; 
+export default AppLayout;

@@ -4,6 +4,7 @@
  * Integrates with existing TranslationContext
  */
 
+import { isShopHost } from '../utils/isShopHost';
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from './TranslationContext';
@@ -386,9 +387,7 @@ export const LanguageCurrencyProvider = ({ children }) => {
 
   // Timeout fallback for when no redirect happens (ONLY for unsupported countries)
   useEffect(() => {
-    if (typeof window !== 'undefined' && 
-        window.location.hostname === 'shop.b8shield.com' && 
-        !isInitialized) {
+    if (isShopHost() && !isInitialized) {
       
       // Check if we have country from either params or path
       const countryFromParams = urlCountryCode;
@@ -468,7 +467,7 @@ export const LanguageCurrencyProvider = ({ children }) => {
     isCountrySupported: urlCountryCode ? isCountrySupported(urlCountryCode) : true,
     
     // Computed properties
-    isShopDomain: typeof window !== 'undefined' && window.location.hostname === 'shop.b8shield.com',
+    isShopDomain: isShopHost(),
     isPrimaryMarket: market === 'primary',
     isSecondaryMarket: market === 'secondary'
   };

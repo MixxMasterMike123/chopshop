@@ -18,8 +18,10 @@ class WagonRegistry {
    */
   shouldDiscoverWagons() {
     // Check if we're on B2C shop domain
-    const isB2CShop = typeof window !== 'undefined' && 
-                     window.location.hostname === 'shop.b8shield.com';
+    const sub = typeof window !== 'undefined'
+      ? (window.location.hostname || '').split('.')[0]
+      : '';
+    const isB2CShop = sub === 'shop' || sub.startsWith('shop-');
     
     // Check URL path for admin routes
     const isAdminRoute = typeof window !== 'undefined' && 
@@ -29,7 +31,7 @@ class WagonRegistry {
     const needsWagons = !isB2CShop || isAdminRoute;
     
     if (!needsWagons) {
-      console.log('⚡ B8Shield Train: Skipping wagon discovery for B2C mode (performance optimization)');
+      console.log('⚡ Skipping wagon discovery for B2C mode (performance optimization)');
       return false;
     }
     

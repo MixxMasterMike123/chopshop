@@ -2,9 +2,16 @@
 // Helper functions for campaign management, banners, and affiliate targeting
 
 import { CampaignWagonManifest } from '../CampaignWagonManifest.js';
+import { APP_URLS } from '../../../config/urls';
+import { resolveShopId } from '../../../config/tenancy';
 
-// **CRITICAL NOTE: All URLs must use /:currentLang/ structure for affiliate referrals**
-// Example: shop.b8shield.com/:currentLang/?ref=AFFILIATE_CODE&campaign=CAMPAIGN_CODE
+// Shop path prefix for the CURRENT storefront context (mirrors the private
+// helper in utils/productUrls.js).
+const currentShopPrefix = () =>
+  typeof window !== 'undefined' ? `/${resolveShopId(window.location.pathname)}` : '';
+
+// **CRITICAL NOTE: affiliate URLs use the /{shopId}/ path-prefix grammar**
+// Example: shop-meteorpr.web.app/{shopId}/?ref=AFFILIATE_CODE&campaign=CAMPAIGN_CODE
 
 // Social Media Platform Banner Specifications
 export const BANNER_PLATFORMS = CampaignWagonManifest.config.banners.platforms;
@@ -88,26 +95,20 @@ export const CAMPAIGN_STATUS = {
 };
 
 /**
- * Generate campaign-specific affiliate URL with language awareness
- * CRITICAL: Must use /:currentLang/ structure for proper routing
- * 
+ * Generate campaign-specific affiliate URL.
+ *
+ * Uses the configured storefront host + the /{shopId} path-prefix grammar, the
+ * same as generateAffiliateLink in utils/productUrls.js. (Until 2026-08-15 this
+ * hardcoded the dead `shop.b8shield.com` host AND the retired /se|/gb|/us
+ * country-prefix grammar, so every URL it produced was doubly broken.)
+ *
  * @param {string} affiliateCode - Affiliate's unique code
  * @param {string} campaignCode - Campaign's unique code
- * @param {string} preferredLang - Affiliate's preferred language (sv-SE, en-GB, en-US)
  * @returns {string} Complete campaign URL
  */
-export const generateCampaignURL = (affiliateCode, campaignCode, preferredLang = 'sv-SE') => {
-  // Map language codes to URL segments
-  const langSegments = {
-    'sv-SE': 'se',
-    'en-GB': 'gb', 
-    'en-US': 'us'
-  };
-  
-  const segment = langSegments[preferredLang] || 'se';
-  const baseURL = 'https://shop.b8shield.com';
-  
-  return `${baseURL}/${segment}/?ref=${affiliateCode}&campaign=${campaignCode}`;
+export const generateCampaignURL = (affiliateCode, campaignCode) => {
+  const shopPrefix = currentShopPrefix();
+  return `${APP_URLS.B2C_SHOP}${shopPrefix}/?ref=${affiliateCode}&campaign=${campaignCode}`;
 };
 
 /**

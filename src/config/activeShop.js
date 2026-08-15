@@ -12,7 +12,7 @@
 //
 // Precedence in ShopProvider (admin surface): impersonation session (P4.3, an
 // operator viewing a tenant) > THIS (the logged-in shop admin's own shop) >
-// path resolution (default). Platform operators have shopId null/'b8shield' and
+// path resolution. Platform operators have shopId null (no home shop) and
 // their reads bypass scoping via the rules, so leaving them on the path-default
 // is fine.
 //
@@ -96,4 +96,54 @@ export function setDeepLinkShopId(shopId) {
 export function subscribeDeepLinkShopId(fn) {
   deepLinkListeners.add(fn);
   return () => deepLinkListeners.delete(fn);
+}
+
+// ── Operator's last-picked shop (platform users only) ────────────────────────
+// A platform operator's /admin/* has no shop in the URL and no own shopId (they
+// publish activeShopId = null), so without this every admin visit would land on
+// the shop picker. The picker writes the chosen shopId here and the admin
+// surface reuses it on the next visit — the convenience the old default-shop
+// default provided, but EXPLICIT: the operator chose this shop, and the top-bar
+// chip names it.
+//
+// localStorage (not sessionStorage) so the choice survives a browser restart,
+// and it is per-origin so it stays on the admin host. UI-only, like everything
+// else in this module: the Firestore/Storage rules remain the hard gate, and a
+// stale id just yields empty reads until the operator picks again.
+//
+// Precedence in ShopProvider (admin surface): impersonation > deep-link
+// (?shopId=) > the shop admin's OWN shopId > THIS > unresolved (→ picker).
+const LAST_SHOP_KEY = '__admin_last_shopId';
+const lastShopListeners = new Set();
+
+/** The operator's last explicitly-picked shopId, or null. */
+export function getLastPickedShopId() {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(LAST_SHOP_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remember (or clear, with null) the operator's picked shopId; notifies subscribers. */
+export function setLastPickedShopId(shopId) {
+  if (typeof window === 'undefined') return;
+  const next = shopId || null;
+  if (next === getLastPickedShopId()) return;
+  try {
+    if (next) window.localStorage.setItem(LAST_SHOP_KEY, next);
+    else window.localStorage.removeItem(LAST_SHOP_KEY);
+  } catch {
+    /* localStorage unavailable (private mode edge) → picker just asks each time */
+  }
+  lastShopListeners.forEach((fn) => {
+    try { fn(next); } catch { /* ignore subscriber errors */ }
+  });
+}
+
+/** Subscribe to last-picked-shop changes; returns an unsubscribe fn. */
+export function subscribeLastPickedShopId(fn) {
+  lastShopListeners.add(fn);
+  return () => lastShopListeners.delete(fn);
 }

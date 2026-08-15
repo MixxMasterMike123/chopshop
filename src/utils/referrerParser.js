@@ -18,10 +18,12 @@ export const parseReferrer = (referrerUrl) => {
     const hostname = url.hostname.toLowerCase();
     
     // Filter out internal/development domains - show as Direct
+    // Internal/dev origins count as Direct, not as a referring site. Matches
+    // the platform's own hosting domains (meteorpr surfaces + the Firebase
+    // project domain) — the dead b8shield brand domains were removed 2026-08-15.
     if (hostname.includes('localhost') || 
         hostname.includes('127.0.0.1') || 
-        hostname.includes('shop.b8shield.com') ||
-        hostname.includes('partner.b8shield.com') ||
+        hostname.includes('meteorpr') ||
         hostname.includes('b8shield-reseller-app')) {
       return { name: 'Direct', category: 'direct' };
     }

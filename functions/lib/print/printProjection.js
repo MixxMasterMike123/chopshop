@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.toPrintJob = exports.toQueueRow = exports.toPrintNotificationLines = exports.orderHasPodLine = exports.resolveMapping = exports.resolveSlots = exports.loadShopMappings = exports.slotLabel = exports.slotOf = exports.DEFAULT_SLOT = void 0;
+exports.toPrintJob = exports.toQueueRow = exports.toPrintNotificationLines = exports.orderHasPodLine = exports.resolveMapping = exports.resolveSlots = exports.loadShopMappings = exports.signedUrlFor = exports.mappingSlotLabel = exports.slotLabel = exports.slotOf = exports.DEFAULT_SLOT = void 0;
 // printProjection.ts — builds the FIELD-MINIMISED production view of a POD order
 // for the print shop. This is the data-minimisation boundary: the printer (an
 // external sub-processor) gets ship-to + production fields ONLY — never customer
@@ -29,6 +29,18 @@ function slotLabel(slot) {
     return SLOT_LABELS[slot] || SLOT_LABELS[exports.DEFAULT_SLOT];
 }
 exports.slotLabel = slotLabel;
+// Display label for a mapping's slot. The studio writes a garment-correct
+// label on the mapping ("Framsida" on a keps — the shared vocabulary above is
+// apparel-worded and says "Bröst"; Kent bug 2026-08-11). Older rows lack the
+// field → shared label. Client-authored text that renders in the OPERATOR
+// portal/email, so sanitize: strip control chars, cap length.
+function mappingSlotLabel(mapping, slot) {
+    const raw = typeof mapping?.slotLabel === 'string' ? mapping.slotLabel : '';
+    // eslint-disable-next-line no-control-regex
+    const clean = raw.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 40);
+    return clean || slotLabel(slot);
+}
+exports.mappingSlotLabel = mappingSlotLabel;
 // Sanitize a client-influenced image URL before it may render in the PRINT
 // OPERATOR's portal: https only (kills javascript:/data: stored XSS) and
 // platform storage hosts only (kills off-platform tracking beacons). Product
@@ -64,6 +76,7 @@ async function signedUrlFor(storagePath, fallbackUrl) {
         return fallbackUrl;
     }
 }
+exports.signedUrlFor = signedUrlFor;
 // Load a shop's POD mappings, grouped by mapping SKU (one read per shop, cached by
 // caller). MULTI-PLACEMENT: a SKU can now carry SEVERAL mappings (one per slot:
 // front/back/sleeve), so each map value is an ARRAY of mappings for that SKU — the
@@ -159,7 +172,7 @@ function toPrintNotificationLines(order, mappingsBySku) {
                 productName: typeof it.name === 'string' ? it.name : (it.name?.['sv-SE'] || it.sku),
                 sku: it.sku,
                 quantity: it.quantity || 0,
-                placement: detail ? `${slotLabel(slot)} — ${detail}` : slotLabel(slot),
+                placement: detail ? `${mappingSlotLabel(mapping, slot)} — ${detail}` : mappingSlotLabel(mapping, slot),
             });
         }
     }
@@ -246,14 +259,14 @@ async function toPrintJob(orderId, order, shopName, mappingsBySku) {
             const mapping = slots.get(slot);
             const detail = String(mapping.placement || '').trim();
             // "Bröst — Centrerat på bröstet" (slot label + optional free-text detail).
-            const placement = detail ? `${slotLabel(slot)} — ${detail}` : slotLabel(slot);
+            const placement = detail ? `${mappingSlotLabel(mapping, slot)} — ${detail}` : mappingSlotLabel(mapping, slot);
             const base = {
                 productName: typeof it.name === 'string' ? it.name : (it.name?.['sv-SE'] || it.sku),
                 sku: it.sku,
                 variantLabel: it.label || null,
                 quantity: it.quantity || 0,
                 placementSlot: slot,
-                slotLabel: slotLabel(slot),
+                slotLabel: mappingSlotLabel(mapping, slot),
                 placement,
                 profileId: mapping.profileId || null,
                 // The bought colourway's product mockup (front view) — the printer's

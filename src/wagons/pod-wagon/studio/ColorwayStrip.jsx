@@ -11,8 +11,9 @@
 // the podMappings colorway-override model the print pipeline already resolves.
 //
 // Pure presentational: state (active colourway, overrides) lives in DesignStudio.
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import TemplateBackground, { templateViewBox } from './TemplateBackground';
+import { analyzeArtworkContrast, classifyHexTone } from './contrastGuard';
 import {
   isComposable, clampPlacement, defaultPlacement, containPlacement,
   placementToViewBoxRect, rectToPercent,
@@ -73,20 +74,50 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
  *   artworkOptions          — selectable artwork docs (PASS/WARN) for the override select
  *   baseArtworkLabel        — label of the product's standard artwork (select's default row)
  *   reviewedColorwayIds     — Set|array of colourway ids the seller has SEEN (review gate)
+ *   colorwayIds             — ids selected in step 5 (omitted = all template colours)
+ *   onApplyOverrideToColorways(ids, artworkId) — optional bulk light/dark action
  */
 const ColorwayStrip = ({
   template, slot, activeColorwayId, onSelect, placement,
   resolveArtwork, overrides = {}, onOverrideChange, artworkOptions = [], baseArtworkLabel = 'Standardmotiv',
-  reviewedColorwayIds = [], minDpi = null, locked = false,
+  reviewedColorwayIds = [], minDpi = null, locked = false, colorwayIds = null,
+  onApplyOverrideToColorways = null,
 }) => {
-  if (!template) return null;
-  const colorways = template.colorways || [];
+  const selectedSet = colorwayIds ? new Set(colorwayIds) : null;
+  const colorways = (template?.colorways || []).filter((cw) => !selectedSet || selectedSet.has(cw.id));
   const active = colorways.find((c) => c.id === activeColorwayId) || null;
   const activeOverride = active ? overrides[active.id] || '' : '';
   // Accept a Set or an array — reviewed = the seller has seen this composite.
   const reviewedSet = reviewedColorwayIds instanceof Set ? reviewedColorwayIds : new Set(reviewedColorwayIds);
   const reviewedCount = colorways.filter((c) => reviewedSet.has(c.id)).length;
   const allSeen = reviewedCount === colorways.length;
+  const [contrastByColorway, setContrastByColorway] = useState({});
+  const contrastInputs = colorways.map((cw) => ({
+    id: cw.id,
+    hex: cw.hex,
+    artwork: resolveArtwork(cw.id),
+  }));
+  const contrastKey = JSON.stringify(contrastInputs.map(({ id, hex, artwork }) => [id, hex, artwork?.id, artwork?.previewUrl]));
+
+  useEffect(() => {
+    let current = true;
+    setContrastByColorway({});
+    Promise.all(contrastInputs.map(async ({ id, hex, artwork }) => [
+      id,
+      await analyzeArtworkContrast(artwork?.previewUrl, hex),
+    ])).then((entries) => {
+      if (current) setContrastByColorway(Object.fromEntries(entries));
+    });
+    return () => { current = false; };
+    // contrastKey captures the primitive inputs without depending on the
+    // resolver function identity, which changes whenever the parent renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contrastKey]);
+
+  const activeContrast = active ? contrastByColorway[active.id] : null;
+  const bulkIds = (tone) => colorways.filter((cw) => classifyHexTone(cw.hex) === tone).map((cw) => cw.id);
+
+  if (!template) return null;
 
   return (
     <div className="mt-4">
@@ -106,6 +137,7 @@ const ColorwayStrip = ({
           const isActive = cw.id === activeColorwayId;
           const hasOverride = Boolean(overrides[cw.id]);
           const isReviewed = reviewedSet.has(cw.id);
+          const contrastWarning = contrastByColorway[cw.id]?.warning === true;
           return (
             <button
               key={cw.id}
@@ -143,10 +175,20 @@ const ColorwayStrip = ({
               {hasOverride && (
                 <div className="mt-0.5 text-[11px] text-admin-info-text">eget motiv</div>
               )}
+              {contrastWarning && (
+                <div className="mt-0.5 text-[11px] font-medium text-admin-caution-text">låg kontrast</div>
+              )}
             </button>
           );
         })}
       </div>
+
+      {active && activeContrast?.warning && (
+        <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
+          Motivet kan bli svårt att se på {active.label.toLowerCase()} eftersom stora delar har låg kontrast mot plagget.
+          Välj ett alternativt motiv nedan eller kontrollera kombinationen noggrant i mockupen. Varningen blockerar inte publicering.
+        </p>
+      )}
 
       {/* Override select for the ACTIVE colourway — swaps the artwork this
           colourway prints in this slot (light motif on dark garments, etc). */}
@@ -166,6 +208,28 @@ const ColorwayStrip = ({
               <option key={a.id} value={a.id}>{a.label || a.fileName}</option>
             ))}
           </select>
+          {activeOverride && onApplyOverrideToColorways && (
+            <div className="flex flex-wrap gap-1.5">
+              {bulkIds('dark').length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => onApplyOverrideToColorways(bulkIds('dark'), activeOverride)}
+                  className="rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1 text-[11px] text-admin-text hover:bg-admin-surface-2"
+                >
+                  Använd på alla mörka
+                </button>
+              )}
+              {bulkIds('light').length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => onApplyOverrideToColorways(bulkIds('light'), activeOverride)}
+                  className="rounded-[var(--radius-admin-el)] border border-admin-border px-2 py-1 text-[11px] text-admin-text hover:bg-admin-surface-2"
+                >
+                  Använd på alla ljusa
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

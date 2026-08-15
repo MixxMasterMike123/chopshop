@@ -70,8 +70,10 @@ async function requireAdminOfShop(targetShopId, authUid) {
 // EXACT re-implementation of resolveShopIdByEmail(email) from authGuard.ts —
 // the shopId-inference used by the anonymous storefront flows (password reset,
 // email verification) to stamp/scope passwordResets + emailVerifications. Checks
-// users -> b2cCustomers -> affiliates by email; first shopId wins; else DEFAULT.
-const DEFAULT_SHOP_ID = 'b8shield';
+// users -> b2cCustomers -> affiliates by email; first shopId wins; else the
+// UNRESOLVED sentinel (there is no default shop — keep in sync with
+// functions/src/config/tenancy.ts).
+const DEFAULT_SHOP_ID = '__unresolved__';
 async function resolveShopIdByEmail(email) {
   if (!email) return DEFAULT_SHOP_ID;
   for (const name of ['users', 'b2cCustomers', 'affiliates']) {

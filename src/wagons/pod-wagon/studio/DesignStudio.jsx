@@ -1,12 +1,9 @@
 // DesignStudio.jsx — the Design Studio tab (POD add-on, Mode A / shop-owner studio).
 //
-// LAYOUT (v2 restructure 2026-08-08, from /impeccable critique): four NUMBERED
-// task phases in one column — 1·Plagg (compact template strip) · 2·Tryck &
-// placering (CompositorCanvas + trycklista SIDE BY SIDE; every print row owns
-// its motif via an INLINE picker — no separate artwork rail) · 3·Färger &
-// mockuper (colourway review strip w/ live gate counter, read-only 3D, mockup
-// generation) · 4·Publicera. The studio stays MOUNTED across PodAdminPage tab
-// switches (state survives a trip to the Original tab).
+// LAYOUT: eight numbered task pages in one column — 1·Plagg · 2·Tryckytor ·
+// 3·Motiv · 4·Placering · 5·Färger · 6·Motiv per färg · 7·Mockuper ·
+// 8·Publicera. The studio stays MOUNTED across PodAdminPage tab switches
+// (state survives a trip to the Original tab).
 //
 // PLACEMENT STATE lives here, ONE PER SLOT (placements[slot] = {xMm,yMm,wMm}), so
 // switching front↔back preserves each side's placement. Placements reset when the
@@ -41,6 +38,7 @@ import { renderMockup } from './mockupRender';
 import { uploadMockup } from './mockupUpload';
 import TemplateBackground, { viewForSlot } from './TemplateBackground';
 import CompositorCanvas from './CompositorCanvas';
+import ColorSelectionPanel from './ColorSelectionPanel';
 import ColorwayStrip from './ColorwayStrip';
 import MockupPanel from './MockupPanel';
 import PublishPanel from './PublishPanel';
@@ -84,12 +82,16 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const [prints, setPrints] = useState([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [colorwayId, setColorwayId] = useState(null);
+  // Colours offered by this design. A template starts with every colour on;
+  // step 5 only opts colours out. This state is shared by artwork review,
+  // mockup generation and publishing so the steps cannot drift apart.
+  const [selectedColorwayIds, setSelectedColorwayIds] = useState(() => new Set());
   // The ACTIVE print row's slot (drives canvas/strip). Reconciled against
   // `prints` — when the list is empty it idles on 'front' with no artwork.
   const [slot, setSlot] = useState('front');
-  // WIZARD (Kent's chain, 2026-08-10): one decision at a time, as pages —
-  // 1 Plagg · 2 Tryckytor · 3 Motiv (one surface at a time) · 4 Placering
-  // (one surface at a time) · 5 Färger & mockuper · 6 Publicera. Steps are
+  // WIZARD: one decision at a time, as pages — 1 Plagg · 2 Tryckytor ·
+  // 3 Motiv · 4 Placering · 5 Färger · 6 Motiv per färg · 7 Mockuper ·
+  // 8 Publicera. Steps are
   // VIEWS over the same design state, so going back never loses work.
   const [step, setStep] = useState(1);
   const [motifCursor, setMotifCursor] = useState(0); // step 3: index into prints
@@ -109,7 +111,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // PER-COLOURWAY REVIEW GATE (slice 5): ids the seller has SEEN composited in the
   // strip for the CURRENT design. Only the active colourway counts as seen; the set
   // resets to just the active colourway whenever the composite changes (placement /
-  // override / mockup / artwork / template) so a stale review can't unlock publish.
+  // override / artwork / template) so a stale review can't unlock publish.
   const [reviewedColorways, setReviewedColorways] = useState(() => new Set());
   const [generating, setGenerating] = useState(false);
   const [mockupError, setMockupError] = useState(null);
@@ -176,6 +178,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     if (!selectedTemplate) return;
     const cwIds = (selectedTemplate.colorways || []).map((c) => c.id);
     if (!cwIds.includes(colorwayId)) setColorwayId(cwIds[0] || null);
+    setSelectedColorwayIds(new Set(cwIds));
     const slots = templateSlots(selectedTemplate);
     // Keep print rows whose slot exists on the new garment (the seller's motif
     // picks survive a garment switch); their placements reset below — they were
@@ -319,6 +322,32 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     resetReviews(); // the composite changed — every colourway must be re-seen
   };
 
+  const setOverrideForColorways = (forSlot, cwIds, artworkId) => {
+    const ids = new Set(cwIds);
+    setOverrides((prev) => {
+      const slotMap = { ...(prev[forSlot] || {}) };
+      ids.forEach((cwId) => {
+        if (artworkId) slotMap[cwId] = artworkId;
+        else delete slotMap[cwId];
+      });
+      return { ...prev, [forSlot]: slotMap };
+    });
+    setMockups([]);
+    setHeroKey(null);
+    resetReviews();
+  };
+
+  const toggleSelectedColorway = (cwId) => {
+    const next = new Set(selectedColorwayIds);
+    if (next.has(cwId)) next.delete(cwId);
+    else next.add(cwId);
+    setSelectedColorwayIds(next);
+    setMockups([]);
+    setHeroKey(null);
+    setMockupError(null);
+    if (!next.has(colorwayId)) setColorwayId(next.values().next().value || null);
+  };
+
   // Override choices for the ACTIVE slot: selectable (non-FAIL) artwork that can
   // actually be COMPOSED (raster with known dims — a PASS-tier PDF can't
   // preview/mockup), excluding the slot's own base motif.
@@ -379,7 +408,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     let uploadFailures = 0;
     let renderSkips = 0;
     try {
-      for (const cw of selectedTemplate.colorways || []) {
+      for (const cw of (selectedTemplate.colorways || []).filter((item) => selectedColorwayIds.has(item.id))) {
         for (const s of designedSlots(selectedTemplate)) {
           const art = resolveArtwork(s, cw.id);
           if (!art || !isComposable(art)) continue;
@@ -427,7 +456,6 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       await Promise.all(uploadPromises);
       replaceObjectUrls(urls);
       setMockups(next);
-      resetReviews(); // regenerated composites — the seller must re-scan the strip
       setHeroKey((prev) => (prev && next.some((m) => m.key === prev) ? prev : next[0]?.key || null));
       if (next.length === 0) {
         setMockupError(renderSkips > 0
@@ -892,18 +920,25 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const s1done = Boolean(selectedTemplateId);
   const s2done = prints.length > 0;
   const s3done = s2done && prints.every((p) => p.artworkId);
-  const s5done = mockups.length > 0;
+  const selectedColorways = (selectedTemplate?.colorways || [])
+    .filter((cw) => selectedColorwayIds.has(cw.id));
+  const s5done = selectedColorways.length > 0;
+  const s6done = s5done && selectedColorways.every((cw) => reviewedColorways.has(cw.id));
+  const mockupColorwayIds = new Set(mockups.map((m) => m.colorwayId));
+  const s7done = s6done && selectedColorways.every((cw) => mockupColorwayIds.has(cw.id));
   const STEP_META = [
     { n: 1, label: 'Plagg', done: s1done },
     { n: 2, label: 'Tryckytor', done: s2done },
     { n: 3, label: 'Motiv', done: s3done },
     { n: 4, label: 'Placering', done: s3done }, // auto-placement = always valid
-    { n: 5, label: 'Färger & mockuper', done: s5done },
-    { n: 6, label: 'Publicera', done: Boolean(publishResult) },
+    { n: 5, label: 'Färger', done: s5done },
+    { n: 6, label: 'Motiv per färg', done: s6done },
+    { n: 7, label: 'Mockuper', done: s7done },
+    { n: 8, label: 'Publicera', done: Boolean(publishResult) },
   ];
   const canEnterStep = (n) => STEP_META.slice(0, n - 1).every((m) => m.done);
   const goStep = (n) => {
-    if (n < 1 || n > 6 || !canEnterStep(n)) return;
+    if (n < 1 || n > 8 || !canEnterStep(n)) return;
     // Entering a one-surface-at-a-time page: land the cursor somewhere useful
     // (first motif-less surface for Motiv; clamped last position for
     // Placering) and point the canvas/strip at that row's slot.
@@ -973,7 +1008,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     while (n > 1 && !canEnterStep(n)) n -= 1;
     setStep(n);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, s1done, s2done, s3done, s5done]);
+  }, [step, s1done, s2done, s3done, s5done, s6done, s7done]);
 
   const designForProduct = designForProductId
     ? products.find((p) => p.id === designForProductId) || null
@@ -988,7 +1023,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           <span className="font-semibold">
             Du designar för: {designForProduct?.name || 'vald produkt'}.
           </span>{' '}
-          Bilderna och trycket kopplas till produkten i steg 4 · Publicera
+          Bilderna och trycket kopplas till produkten i steg 8 · Publicera
           (förvalt som mål — du kan ändra det där).
         </div>
       )}
@@ -1339,18 +1374,30 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           />
         )}
         <StepNav
-          nextLabel={pi < prints.length - 1 ? 'Klar — nästa tryck' : 'Nästa: Färger & mockuper'}
+          nextLabel={pi < prints.length - 1 ? 'Klar — nästa tryck' : 'Nästa: Färger'}
           nextEnabled={s3done}
           onNext={() => (pi < prints.length - 1 ? goPlace(pi + 1) : goStep(5))}
         />
       </CardSection>
       )}
 
-      {/* ── 5 · FÄRGER & MOCKUPER — the review gate lives here; overrides
-          ("byt motiv per färg") stay on this page, out of the main flow. The
-          3D beta sits BELOW the strip so it never buries the gate. */}
+      {/* ── 5 · FÄRGER — choose the sellable colour range before artwork
+          variants and mockups. Every template colour starts selected. */}
       {step === 5 && (
-      <CardSection title="5 · Färger & mockuper" bodyClassName="p-4">
+      <CardSection title="5 · Färger" bodyClassName="p-4">
+        <ColorSelectionPanel
+          template={selectedTemplate}
+          selectedColorwayIds={selectedColorwayIds}
+          onToggle={toggleSelectedColorway}
+        />
+        <StepNav nextLabel="Nästa: Motiv per färg" nextEnabled={s5done} onNext={() => goStep(6)} hint="Välj minst en färg" />
+      </CardSection>
+      )}
+
+      {/* ── 6 · MOTIV PER FÄRG — review selected combinations, set explicit
+          per-colour overrides and surface advisory contrast warnings. */}
+      {step === 6 && (
+      <CardSection title="6 · Motiv per färg" bodyClassName="p-4">
         {designedSlots(selectedTemplate).length > 1 && (
           <div className="mb-3 flex flex-wrap items-center gap-1.5">
             <span className="text-[12px] text-admin-text-muted">Förhandsvisa yta:</span>
@@ -1386,9 +1433,19 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             artworkOptions={overrideOptions}
             baseArtworkLabel={printArtwork(slot)?.label || printArtwork(slot)?.fileName || 'Standardmotiv'}
             reviewedColorwayIds={reviewedColorways}
+            colorwayIds={[...selectedColorwayIds]}
+            onApplyOverrideToColorways={printArtwork(slot)
+              ? (cwIds, artId) => setOverrideForColorways(slot, cwIds, artId)
+              : null}
           />
         )}
+        <StepNav nextLabel="Nästa: Mockuper" nextEnabled={s6done} onNext={() => goStep(7)} hint="Granska varje vald färg" />
+      </CardSection>
+      )}
 
+      {/* ── 7 · MOCKUPER — only selected colourways are generated. */}
+      {step === 7 && (
+      <CardSection title="7 · Mockuper" bodyClassName="p-4">
         {/* 3D-vy (beta): follows the live print placement; pixi lazy-loads.
             APPAREL ONLY — the 3D model library depicts garments (tees), so a
             keps/mössa/tygkasse motif would render onto a t-shirt photo, which
@@ -1413,15 +1470,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           onGenerate={generateMockups}
           generating={generating}
           error={mockupError}
-          canGenerate={Boolean(selectedTemplate) && designedSlots(selectedTemplate).some((s) => isComposable(printArtwork(s))) && !publishing}
+          canGenerate={s6done && Boolean(selectedTemplate) && designedSlots(selectedTemplate).some((s) => isComposable(printArtwork(s))) && !publishing}
         />
-        <StepNav nextLabel="Nästa: Publicera" nextEnabled={s5done} onNext={() => goStep(6)} hint="Generera mockuper först" />
+        <StepNav nextLabel="Nästa: Publicera" nextEnabled={s7done} onNext={() => goStep(8)} hint="Generera en mockup för varje vald färg" />
       </CardSection>
       )}
 
-      {/* ── 6 · PUBLICERA ─────────────────────────────────────────────────── */}
-      {step === 6 && (
-      <CardSection title="6 · Publicera" bodyClassName="p-4">
+      {/* ── 8 · PUBLICERA ─────────────────────────────────────────────────── */}
+      {step === 8 && (
+      <CardSection title="8 · Publicera" bodyClassName="p-4">
         <PublishPanel
           mockups={mockups}
           template={selectedTemplate}
@@ -1439,6 +1496,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           result={publishResult}
           error={publishError}
           reviewedColorwayIds={reviewedColorways}
+          selectedColorwayIds={[...selectedColorwayIds]}
           onPublish={publish}
           products={products}
           onUpdateExisting={updateProduct}

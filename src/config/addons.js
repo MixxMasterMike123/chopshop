@@ -40,7 +40,7 @@ export const ADDON_CATALOG = [
 ];
 
 // Default-ON: a feature is enabled unless EXPLICITLY set to false. This keeps the
-// existing shop (b8shield, which predates the `features` field) and any shop
+// existing shops (which predate the `features` field) and any shop
 // missing a flag fully working — nothing disappears until an operator turns it
 // off from the platform. New shops get explicit defaults from ProvisionShopModal.
 export const isFeatureEnabled = (features, key) => features?.[key] !== false;

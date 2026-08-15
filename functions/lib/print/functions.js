@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createPrintShopUser = exports.getPrintQueueExport = exports.getPrintJob = exports.getPrintQueue = void 0;
+exports.getPrintArtworkDownload = exports.getPrintArtworkLibrary = exports.createPrintShopUser = exports.getPrintQueueExport = exports.getPrintJob = exports.getPrintQueue = void 0;
 // functions.ts — the print-shop CALLABLES (callable projection model).
 //
 // The print_shop role has NO direct DB/Storage access. These callables enforce
@@ -197,5 +197,71 @@ exports.createPrintShopUser = (0, https_1.onCall)(COMMON, async (request) => {
     // NO custom claim is set — the print_shop role uses none (callables read the live
     // doc; signed URLs replace any Storage claim). This is intentional, not an omission.
     return { success: true, uid, email, printShopShops: shops, wasExisting, tempPassword };
+});
+// ---- getPrintArtworkLibrary: the printer's ARTWORK library (2026-08-11) ----
+// The printer needs to re-download and printability-check uploaded originals
+// OUTSIDE the order flow (Mikael request). Same projection discipline as the
+// queue: field-minimized rows for the caller's ASSIGNED shops only — file
+// facts + validation verdict + stored preview thumb. No uploader identity, no
+// signed URLs here (download URLs are minted per file by
+// getPrintArtworkDownload so links stay short-lived).
+exports.getPrintArtworkLibrary = (0, https_1.onCall)(COMMON, async (request) => {
+    const ctx = await (0, printGuard_1.getPrintShopContext)(request.auth?.uid);
+    const names = await shopNames(ctx.printShopShops);
+    const rows = [];
+    for (const shopId of ctx.printShopShops) {
+        const snap = await database_1.db.collection('podArtwork').where('shopId', '==', shopId).get();
+        snap.docs.forEach((d) => {
+            const a = d.data();
+            const shopPrintPrefix = `pod-artwork/${shopId}/print/`;
+            const hasPrintFile = typeof a.printStoragePath === 'string' && a.printStoragePath.startsWith(shopPrintPrefix);
+            rows.push({
+                id: d.id,
+                shopId,
+                shopName: names[shopId] || shopId,
+                fileName: a.fileName || '',
+                label: a.label || '',
+                ext: a.ext || '',
+                tier: a.validation?.tier || null,
+                status: a.status || null,
+                hasPrintFile,
+                widthPx: a.sourceWidthPx || null,
+                heightPx: a.sourceHeightPx || null,
+                previewUrl: typeof a.previewUrl === 'string' ? a.previewUrl : null,
+                createdAt: a.createdAt?.toDate ? a.createdAt.toDate().toISOString() : null,
+            });
+        });
+    }
+    // Newest first across shops.
+    rows.sort((x, y) => String(y.createdAt || '').localeCompare(String(x.createdAt || '')));
+    return { artworks: rows };
+});
+// ---- getPrintArtworkDownload: mint ONE short-lived signed URL ----
+// kind 'print' (the gate-verified PNG) or 'original' (the raw upload). Path
+// guards mirror toPrintJob: only server-owned paths inside the artwork's OWN
+// shop folder are honoured — a hand-crafted doc can't route foreign bytes.
+exports.getPrintArtworkDownload = (0, https_1.onCall)(COMMON, async (request) => {
+    const ctx = await (0, printGuard_1.getPrintShopContext)(request.auth?.uid);
+    const artworkId = String(request.data?.artworkId || '');
+    const kind = request.data?.kind === 'original' ? 'original' : 'print';
+    if (!artworkId)
+        throw new https_1.HttpsError('invalid-argument', 'artworkId krävs');
+    const snap = await database_1.db.collection('podArtwork').doc(artworkId).get();
+    if (!snap.exists)
+        throw new https_1.HttpsError('not-found', 'Originalet finns inte längre');
+    const a = snap.data();
+    (0, printGuard_1.assertShopAllowed)(ctx, String(a.shopId || ''));
+    const shopPrefix = `pod-artwork/${a.shopId}/`;
+    const path = kind === 'print' ? a.printStoragePath : a.originalStoragePath;
+    const fallback = kind === 'print' ? (a.printUrl || null) : (a.originalUrl || null);
+    if (typeof path !== 'string' || !path.startsWith(shopPrefix)) {
+        throw new https_1.HttpsError('not-found', kind === 'print'
+            ? 'Tryckfil saknas — be butiken validera om originalet'
+            : 'Originalfilen saknas');
+    }
+    const url = await (0, printProjection_1.signedUrlFor)(path, fallback);
+    if (!url)
+        throw new https_1.HttpsError('internal', 'Kunde inte skapa nedladdningslänk');
+    return { url, kind, fileName: a.fileName || '', ext: kind === 'print' ? 'png' : (a.ext || '') };
 });
 //# sourceMappingURL=functions.js.map

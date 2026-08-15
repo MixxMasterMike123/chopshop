@@ -2,6 +2,8 @@ export type PlacementSlot = 'front' | 'back' | 'pocket' | 'left_sleeve' | 'right
 export declare const DEFAULT_SLOT: PlacementSlot;
 export declare function slotOf(mapping: any): PlacementSlot;
 export declare function slotLabel(slot: PlacementSlot): string;
+export declare function mappingSlotLabel(mapping: any, slot: PlacementSlot): string;
+export declare function signedUrlFor(storagePath: string, fallbackUrl: string | null): Promise<string | null>;
 export declare function loadShopMappings(shopId: string): Promise<Map<string, any[]>>;
 export declare function resolveSlots(sku: string, mappingsBySku: Map<string, any[]>): Map<PlacementSlot, any>;
 export declare function resolveMapping(sku: string, mappingsBySku: Map<string, any[]>): any | null;

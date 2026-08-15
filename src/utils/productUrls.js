@@ -88,7 +88,7 @@ export const uniqueSku = (base, takenSkus, selfSku = '') => {
  * NEW DYNAMIC SLUG GENERATOR
  * Generates a unique, SEO-friendly slug for a specific product variant.
  * Format: [name-size]_[sku]
- * Example: b8shield-vasskydd-6_B8S-6-GL
+ * Example: minbutik-vasskydd-6_ABC-6-GL
  */
 export const getVariantProductSlug = (product) => {
   if (!product || !product.sku) {
@@ -128,9 +128,9 @@ export const getProductUrl = (product) => {
 // getCountryAwareUrl('cart') -> /{shopId}/cart ; getCountryAwareUrl('') -> /{shopId}
 //
 // SHOPLESS GUARD: on a shopless path (bare root, credential routes like /login,
-// /register, /affiliate-login), there is no real shop — resolveShopId() would
-// fall back to DEFAULT_SHOP_ID and this used to manufacture a /b8shield store
-// link out of thin air (the credential-page → b8shield leak). In that case
+// /register, /affiliate-login), there is no real shop — resolveShopId() returns
+// the UNRESOLVED sentinel, and this used to manufacture a /b8shield store link
+// out of thin air (the credential-page → default-shop leak). In that case
 // return the platform Landing Page ('/') instead. On a real /{shopId}/... route
 // this is unchanged: the prefix is the genuine tenant.
 export const getCountryAwareUrl = (path) => {

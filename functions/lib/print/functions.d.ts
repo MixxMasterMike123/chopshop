@@ -76,4 +76,13 @@ interface CreatePrintShopUserRequest {
     printShopShops: string[];
 }
 export declare const createPrintShopUser: import("firebase-functions/v2/https").CallableFunction<CreatePrintShopUserRequest, any, unknown>;
+export declare const getPrintArtworkLibrary: import("firebase-functions/v2/https").CallableFunction<any, Promise<{
+    artworks: any[];
+}>, unknown>;
+export declare const getPrintArtworkDownload: import("firebase-functions/v2/https").CallableFunction<any, Promise<{
+    url: string;
+    kind: string;
+    fileName: any;
+    ext: any;
+}>, unknown>;
 export {};

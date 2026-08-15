@@ -2,10 +2,11 @@
  * Geo + Language + Currency Detection System for B2C Shop
  * Handles intelligent detection based on geo-targeting, user preferences, and overrides
  * 
- * ONLY ACTIVE FOR: shop.b8shield.com
- * (B2B portal partner.b8shield.com always uses sv-SE + SEK)
+ * ONLY ACTIVE FOR: the storefront host (shop.* / shop-*)
+ * (the admin/portal host always uses sv-SE + SEK)
  */
 
+import { isShopHost } from './isShopHost';
 import { detectCurrency, getCurrencySymbol, getCurrencyName } from './currencyDetection.js';
 
 // Primary markets with full language + currency support
@@ -145,8 +146,7 @@ export const detectLanguageAndCurrency = (options = {}) => {
     } = options;
     
     // Check if we're on the B2C shop domain
-    const isShopDomain = typeof window !== 'undefined' && 
-                        window.location.hostname === 'shop.b8shield.com';
+    const isShopDomain = isShopHost();
     
     console.log('🔍 Detection Debug:', {
       isShopDomain,

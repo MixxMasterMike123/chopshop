@@ -289,7 +289,7 @@ export const exportOrdersToCSV = (orders, options = {}) => {
 
     // Generate filename with timestamp
     const timestamp = new Date().toISOString().split('T')[0];
-    const filename = options.filename || `b8shield-orders-${timestamp}.csv`;
+    const filename = options.filename || `orders-${timestamp}.csv`;
 
     // Create and trigger download
     const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' }); // BOM for Excel compatibility

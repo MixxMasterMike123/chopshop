@@ -2,7 +2,7 @@
 // Each shop × each add-on is a toggle writing shops/{id}.features.<key>. This is
 // the ONLY place add-ons are enabled/disabled (platform-only control); the shop
 // admin can no longer toggle them. Read app-wide via useShopFeatures().
-// Default-ON: a missing flag shows as ON (the existing b8shield shop has no
+// Default-ON: a missing flag shows as ON (shops predating the `features` field have no
 // features field and keeps every add-on until an operator turns one off).
 // Mirrors PlatformShops' toggleStatus kill-switch write shape exactly.
 // (docs/ADDONS_PLATFORM_CONTROL_PLAN.md)

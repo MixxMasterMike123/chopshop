@@ -37,7 +37,7 @@ export const appUrls = {
       this.B2C_SHOP,
       this.B2B_PORTAL,
       this.B2B_LEGACY,
-      `https://shop-b8shield.web.app`,
+      // (shop-b8shield.web.app removed 2026-08-15 — the legacy shop is deleted.)
       // meteorpr surfaces (the live hosting targets) — admin, storefront, and the
       // platform operator console. The platform host is required so the operator
       // console's callables (e.g. createShopUser) aren't CORS-rejected.

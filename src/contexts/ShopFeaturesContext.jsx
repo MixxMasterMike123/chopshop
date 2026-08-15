@@ -1,7 +1,7 @@
 // ShopFeaturesContext — provides the active shop's add-on entitlement map
 // (shops/{shopId}.features) to the whole app, loaded once per shopId. The single
 // gate everyone calls is isEnabled(key); it is DEFAULT-ON (a feature is enabled
-// unless explicitly set to false), so the existing b8shield shop and any shop
+// unless explicitly set to false), so shops predating the field and any shop
 // missing the field keep all add-ons until an operator disables one from the
 // platform console. See docs/ADDONS_PLATFORM_CONTROL_PLAN.md + config/addons.js.
 import React, { createContext, useContext, useState, useEffect } from 'react';

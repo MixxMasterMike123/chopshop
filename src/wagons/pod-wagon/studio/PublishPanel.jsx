@@ -50,6 +50,8 @@ const roundUpTo9 = (value) => {
  *   reviewedColorwayIds — Set|array of colourway ids the seller has SEEN in the strip.
  *                     LAST publish gate: every selected colourway must be reviewed
  *                     ("inga tryck-överraskningar").
+ *   selectedColorwayIds — colours chosen in Studio step 5. Null keeps the
+ *                     standalone harness backwards-compatible by using all mockups.
  *   onPublish(form) — form = { name, price, selectedColorwayIds, sizesByColorway,
  *                     perColorwayPrices }
  *   products       — [{ id, sku, name, image, hasSku, variants }] existing shop
@@ -73,6 +75,7 @@ const PublishPanel = ({
   result = null,
   error = null,
   reviewedColorwayIds = [],
+  selectedColorwayIds: requestedColorwayIds = null,
   onPublish,
   products = [],
   onUpdateExisting,
@@ -82,14 +85,17 @@ const PublishPanel = ({
   // Colourways that actually have ≥1 generated mockup (the only publishable set).
   const availableColorways = useMemo(() => {
     const withMockup = new Set(mockups.map((m) => m.colorwayId));
+    const requested = Array.isArray(requestedColorwayIds) ? new Set(requestedColorwayIds) : null;
     const labelById = new Map(mockups.map((m) => [m.colorwayId, m.colorwayLabel]));
     // Preserve template colourway order; fall back to mockup order/labels.
     const ordered = (template?.colorways || [])
-      .filter((c) => withMockup.has(c.id))
+      .filter((c) => withMockup.has(c.id) && (!requested || requested.has(c.id)))
       .map((c) => ({ id: c.id, label: c.label }));
     if (ordered.length) return ordered;
-    return [...withMockup].map((id) => ({ id, label: labelById.get(id) || id }));
-  }, [mockups, template]);
+    return [...withMockup]
+      .filter((id) => !requested || requested.has(id))
+      .map((id) => ({ id, label: labelById.get(id) || id }));
+  }, [mockups, template, requestedColorwayIds]);
 
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
@@ -102,12 +108,6 @@ const PublishPanel = ({
   const [margin, setMargin] = useState('40');
   const [sizes, setSizes] = useState(DEFAULT_SIZES);
   const [newSize, setNewSize] = useState('');
-  // Selected colourways: default all. Keyed by colourway id → bool.
-  const [selected, setSelected] = useState(() => {
-    const m = {};
-    availableColorways.forEach((c) => { m[c.id] = true; });
-    return m;
-  });
   // Per-(colourway,size) opt-out: default all-on. { [cwId]: { [size]: bool } }.
   const [sizeOptOut, setSizeOptOut] = useState({});
   // Per-colourway explicit price override (empty = inherit product price).
@@ -115,21 +115,11 @@ const PublishPanel = ({
 
   const cost = Number.isFinite(template?.costSek) ? template.costSek : null;
 
-  // Keep selection map in sync when the available set changes (regenerated mockups).
-  const syncedSelected = useMemo(() => {
-    const m = {};
-    availableColorways.forEach((c) => { m[c.id] = c.id in selected ? selected[c.id] : true; });
-    return m;
-  }, [availableColorways, selected]);
-
-  const selectedColorways = availableColorways.filter((c) => syncedSelected[c.id]);
+  const selectedColorways = availableColorways;
   const selectedColorwayIds = selectedColorways.map((c) => c.id);
 
   // The effective sizes for a colourway (global sizes minus its opt-outs).
   const sizesFor = (cwId) => sizes.filter((s) => sizeOptOut[cwId]?.[s] !== true);
-
-  const toggleColorway = (id) =>
-    setSelected((prev) => ({ ...prev, [id]: !(id in prev ? prev[id] : true) }));
 
   const toggleSizeCell = (cwId, size) =>
     setSizeOptOut((prev) => ({
@@ -327,20 +317,17 @@ const PublishPanel = ({
           </div>
           )}
 
-          {/* 3. Colourway multi-select */}
+          {/* 3. Colourway receipt — selection is owned by Studio step 5. */}
           <div>
-            <label className={labelCls}>Färger som publiceras</label>
-            <div className="flex flex-wrap gap-x-4 gap-y-2">
-              {availableColorways.map((c) => (
-                <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] text-admin-text">
-                  <input
-                    type="checkbox"
-                    checked={!!syncedSelected[c.id]}
-                    onChange={() => toggleColorway(c.id)}
-                    className={checkboxCls}
-                  />
+            <span className={labelCls}>Färger som publiceras</span>
+            <div className="flex flex-wrap gap-1.5">
+              {selectedColorways.map((c) => (
+                <span
+                  key={c.id}
+                  className="rounded-full bg-admin-surface-2 px-2.5 py-1 text-[12px] text-admin-text"
+                >
                   {c.label}
-                </label>
+                </span>
               ))}
             </div>
             {!hasColorways && (
@@ -353,6 +340,9 @@ const PublishPanel = ({
           {target === 'new' && (
           <div>
             <label className={labelCls}>Storlekar</label>
+            <p className="mb-2 text-[12px] text-admin-text-muted">
+              Alla storlekar är tillgängliga från början. Avmarkera en kombination som inte ska erbjudas.
+            </p>
             <div className="flex flex-wrap items-center gap-2">
               {sizes.map((s) => (
                 <span
@@ -401,7 +391,7 @@ const PublishPanel = ({
                           <td key={s} className="px-2 py-1 text-center">
                             <input
                               type="checkbox"
-                              aria-label={`${c.label} storlek ${s}`}
+                              aria-label={`${c.label}, storlek ${s}, tillgänglig`}
                               checked={sizeOptOut[c.id]?.[s] !== true}
                               onChange={() => toggleSizeCell(c.id, s)}
                               className={checkboxCls}
@@ -416,7 +406,7 @@ const PublishPanel = ({
             )}
             {anySizeless && (
               <p className="mt-1.5 text-[12px] text-admin-text-muted">
-                En färg utan valda storlekar publiceras utan storleksval (en enda variant).
+                En färg utan tillgängliga storlekar publiceras utan storleksval (en enda variant), inte som slutsåld.
               </p>
             )}
           </div>

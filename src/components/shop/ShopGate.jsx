@@ -3,7 +3,7 @@ import { useParams, useLocation, Navigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
-import { DEFAULT_SHOP_ID, COUNTRY_PREFIXES } from '../../config/tenancy';
+import { COUNTRY_PREFIXES } from '../../config/tenancy';
 import LandingPage from '../../pages/LandingPage';
 
 /**
@@ -12,9 +12,9 @@ import LandingPage from '../../pages/LandingPage';
  * router doesn't need fragile precedence between legacy redirects, shopIds and
  * CMS slugs:
  *
- *  1. Legacy country code as the shop segment (/se/..., old links) → strip it
- *     and redirect to the default shop's equivalent path.
- *  2. Unknown shopId (no shops/{id} doc) → redirect to the default shop.
+ *  1. Legacy country code as the shop segment (/se/..., old links) → the
+ *     platform Landing Page (there is no default shop to redirect into).
+ *  2. Unknown shopId (no shops/{id} doc) → the platform Landing Page.
  *  3. Disabled shop (status === 'disabled') → render the kill-switch
  *     "unavailable" state instead of the storefront.
  *  4. Valid shop → render children (the storefront page). ShopContext already
@@ -42,13 +42,12 @@ const ShopGate = ({ children }) => {
         const snap = await getDoc(doc(db, 'shops', shopId));
         if (cancelled) return;
         if (!snap.exists()) {
-          // The default shop is ALWAYS valid — never redirect it to itself
-          // (would infinite-loop if the seed doc were ever missing). Render it.
-          if (shopId === DEFAULT_SHOP_ID) {
-            setState({ status: 'ok', shop: null });
-          } else {
-            setState({ status: 'unknown', shop: null });
-          }
+          // No shops/{id} doc → unknown shop, always. (Until 2026-08-15 the
+          // default shop was special-cased as "always valid" so a missing seed
+          // doc couldn't infinite-loop; there is no default shop any more, and
+          // 'unknown' renders the Landing Page rather than redirecting, so
+          // there is no loop to guard against.)
+          setState({ status: 'unknown', shop: null });
         } else {
           setState({ status: 'ok', shop: { id: snap.id, ...snap.data() } });
         }
@@ -64,7 +63,7 @@ const ShopGate = ({ children }) => {
 
   // 1. Legacy country code (/se/...) → the platform Landing Page. Storefronts
   //    live ONLY at an explicit /{shopId}; a legacy country prefix is NOT a shop,
-  //    so it must not resolve to the default (b8shield) storefront. (Strict rule,
+  //    so it must not resolve to any storefront. (Strict rule,
   //    decided 2026-06-25: any non-/{shopId} path shows the LP, not a store.)
   if (isLegacyCountry) {
     return <LandingPage />;
@@ -78,9 +77,8 @@ const ShopGate = ({ children }) => {
     );
   }
 
-  // 2. Unknown shop (no shops/{id} doc) → the platform Landing Page, NOT the
-  //    default (b8shield) storefront. A typo'd/nonexistent shop must never leak
-  //    into b8shield's store.
+  // 2. Unknown shop (no shops/{id} doc) → the platform Landing Page. A typo'd
+  //    or nonexistent shop must never leak into some other tenant's store.
   if (state.status === 'unknown') {
     return <LandingPage />;
   }

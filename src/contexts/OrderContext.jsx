@@ -926,88 +926,10 @@ export const OrderProvider = ({ children }) => {
     }
   }, [isAdmin]);
   
-  // Create default B8 Shield products (used when products collection is empty)
-  const createDefaultProducts = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      if (!currentUser || !isAdmin) {
-        throw new Error('Unauthorized');
-      }
-      
-      // Product data from aterforsaljare-portal.tsx
-      const products = [
-        {
-          id: 'b8shield-base',
-          name: 'B8 Shield',
-          description: 'B8 Shield protection for smartphones',
-          basePrice: 71.2, // 89 SEK including VAT (89 / 1.25)
-          manufacturingCost: 10,
-          defaultMargin: 35,
-          variants: [
-            // Colors
-            {
-              type: 'color',
-              options: [
-                { id: 'transparent', name: 'Transparent' },
-                { id: 'rod', name: 'Röd' },
-                { id: 'florerande', name: 'Florerande' },
-                { id: 'glitter', name: 'Glitter' }
-              ]
-            },
-            // Sizes
-            {
-              type: 'size',
-              options: [
-                { id: 'storlek2', name: 'Storlek 2' },
-                { id: 'storlek4', name: 'Storlek 4' },
-                { id: 'storlek6', name: 'Storlek 6' }
-              ]
-            }
-          ],
-          isActive: true,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        }
-      ];
-
-      // Add settings to Firestore
-      const settingsData = {
-        id: 'product-settings',
-        FORSALJNINGSPRIS_INKL_MOMS: 89,
-        TILLVERKNINGSKOSTNAD: 10,
-        DEFAULT_MARGINAL: 35,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      };
-      
-      // Add products to named database only
-      for (const product of products) {
-        try {
-          await addDoc(collection(db, "products"), withShopId(product, shopId));
-        } catch (error) {
-          console.error("Error adding product to named DB:", error);
-        }
-      }
-      
-      // Add settings to named database only
-      try {
-        await addDoc(collection(db, "settings"), settingsData);
-      } catch (error) {
-        console.error("Error adding settings to named DB:", error);
-      }
-      
-      toast.success('Default products created');
-      return true;
-    } catch (error) {
-      setError(error.message);
-      toast.error('Failed to create products: ' + error.message);
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  }, [currentUser, isAdmin, shopId]);
+  // (createDefaultProducts removed 2026-08-15 — it seeded the legacy B8 Shield
+  //  fishing-product catalog and was never called from any UI. With the
+  //  b8shield shop deleted it had no valid target; running it would have
+  //  injected another brand's demo products into whichever shop was active.)
 
   const value = useMemo(() => ({
     loading,
@@ -1022,12 +944,11 @@ export const OrderProvider = ({ children }) => {
     deleteOrder,
     cancelOrder,
     updateProductSettings,
-    createDefaultProducts,
     isDemoMode
   }), [
     loading, error, getOrderById, getUserOrders, getRecentOrders, 
     getAllOrders, updateOrderStatus, getOrderStats, deleteOrder, cancelOrder, 
-    updateProductSettings, createDefaultProducts
+    updateProductSettings
   ]);
 
   return (

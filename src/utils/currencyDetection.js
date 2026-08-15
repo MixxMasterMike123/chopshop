@@ -3,9 +3,11 @@
  * Detects user's preferred currency based on CloudFlare geo-targeting, 
  * language preferences, and fallback logic
  * 
- * ONLY ACTIVE FOR: shop.b8shield.com
- * (B2B portal partner.b8shield.com always uses SEK)
+ * ONLY ACTIVE FOR: the storefront host (shop.* / shop-*)
+ * (the admin/portal host always uses SEK)
  */
+
+import { isShopHost } from './isShopHost';
 
 // Country to currency mapping
 const COUNTRY_TO_CURRENCY = {
@@ -104,8 +106,7 @@ export const getCloudFlareCountry = () => {
 export const detectCurrency = (userLanguage = null, manualOverride = null) => {
   try {
     // Check if we're on the B2C shop domain
-    const isShopDomain = typeof window !== 'undefined' && 
-                        window.location.hostname === 'shop.b8shield.com';
+    const isShopDomain = isShopHost();
     
     // If not on shop domain, always return SEK (B2B portal)
     if (!isShopDomain) {
