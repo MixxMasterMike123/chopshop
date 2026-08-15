@@ -22,7 +22,9 @@ exports.confirmPasswordReset = (0, https_1.onCall)({
         throw new https_1.HttpsError('invalid-argument', 'Password must be at least 6 characters');
     }
     try {
-        console.log(`🔍 Processing password reset confirmation for code: ${resetCode}`);
+        // P1-05: never log the reset code — a log reader must not be able to
+        // redeem an account takeover.
+        console.log('🔍 Processing password reset confirmation');
         // Find and validate the reset code
         const resetQuery = await database_1.db.collection('passwordResets')
             .where('resetCode', '==', resetCode)

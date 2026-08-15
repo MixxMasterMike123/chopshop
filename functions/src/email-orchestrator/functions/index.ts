@@ -13,7 +13,9 @@ export { createShopUser } from './createShopUser';
 export { createPlatformSuperAdmin, deletePlatformUser } from './platformUsers';
 export { migrateFromShopify } from './migrateFromShopify';
 export { migrateFromWoo } from './migrateFromWoo';
-export { sendEmailVerification } from './sendEmailVerification';
+// sendEmailVerification DELETED (P0-02/P1-01, 2026-08-15 audit): it was an
+// unauthenticated open relay (caller-supplied recipient + code) with zero
+// client callers — verification mail goes through sendCustomEmailVerification.
 export { sendCustomEmailVerification } from './sendCustomEmailVerification';
 export { verifyEmailCode } from './verifyEmailCode';
 export { confirmPasswordReset } from './confirmPasswordReset';

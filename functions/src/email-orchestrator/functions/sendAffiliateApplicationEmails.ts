@@ -1,29 +1,22 @@
 // sendAffiliateApplicationEmails.ts - Send both affiliate and admin emails when application is submitted
-// Replaces missing affiliate application notification system
+//
+// P1-01 HARDENING (2026-08-15 audit): this endpoint used to accept a full
+// caller-supplied applicantInfo payload (recipient + content) — an anonymous
+// relay through the platform's sender identity. It now accepts ONLY an
+// applicationId: recipient, content and tenant are loaded server-side from the
+// affiliateApplications doc the storefront just created (that create is itself
+// rules-gated). A per-doc sent-stamp makes the send single-shot, so the
+// endpoint cannot be replayed to spam the applicant.
 
-import { onCall } from 'firebase-functions/v2/https';
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { appUrls } from '../../config/app-urls';
 import { EmailOrchestrator } from '../core/EmailOrchestrator';
 import { EMAIL_CONFIG } from '../core/config';
 
+const db = getFirestore('b8s-reseller-db');
+
 interface AffiliateApplicationEmailsRequest {
-  applicantInfo: {
-    name: string;
-    email: string;
-    phone?: string;
-    address?: string;
-    city?: string;
-    country?: string;
-    promotionMethod?: string;
-    message?: string;
-    socials?: {
-      website?: string;
-      instagram?: string;
-      youtube?: string;
-      facebook?: string;
-      tiktok?: string;
-    };
-  };
   applicationId: string;
   language?: string;
 }
@@ -37,87 +30,105 @@ export const sendAffiliateApplicationEmails = onCall<AffiliateApplicationEmailsR
     cors: appUrls.CORS_ORIGINS
   },
   async (request) => {
-    try {
-      console.log('📧 sendAffiliateApplicationEmails: Starting dual email send');
-      console.log('📧 Request data:', {
-        applicantName: request.data.applicantInfo.name,
-        applicantEmail: request.data.applicantInfo.email,
-        applicationId: request.data.applicationId,
-        language: request.data.language
-      });
-
-      // Validate required data
-      if (!request.data.applicantInfo || !request.data.applicationId) {
-        throw new Error('Applicant info and application ID are required');
-      }
-
-      if (!request.data.applicantInfo.name || !request.data.applicantInfo.email) {
-        throw new Error('Applicant name and email are required');
-      }
-
-      // Initialize EmailOrchestrator
-      const orchestrator = new EmailOrchestrator();
-
-      // 1. Send confirmation email to affiliate applicant
-      console.log('📧 Sending confirmation email to applicant...');
-      const applicantResult = await orchestrator.sendEmail({
-        emailType: 'AFFILIATE_APPLICATION_RECEIVED',
-        customerInfo: {
-          email: request.data.applicantInfo.email,
-          name: request.data.applicantInfo.name
-        },
-        language: request.data.language || 'sv-SE',
-        additionalData: {
-          applicantInfo: request.data.applicantInfo,
-          applicationId: request.data.applicationId
-        },
-        adminEmail: false
-      });
-
-      if (!applicantResult.success) {
-        console.error('❌ Failed to send applicant confirmation email:', applicantResult.error);
-        throw new Error(`Failed to send confirmation email: ${applicantResult.error}`);
-      }
-
-      // 2. Send notification email to admin
-      console.log('📧 Sending notification email to admin...');
-      const adminResult = await orchestrator.sendEmail({
-        emailType: 'AFFILIATE_APPLICATION_NOTIFICATION_ADMIN',
-        customerInfo: {
-          email: EMAIL_CONFIG.ADMIN_RECIPIENTS.join(', '), // Admin email(s)
-          name: `${EMAIL_CONFIG.SMTP.FROM_NAME} Admin`
-        },
-        language: 'sv-SE', // Admin emails always in Swedish
-        additionalData: {
-          applicantInfo: request.data.applicantInfo,
-          applicationId: request.data.applicationId,
-          adminPortalUrl: appUrls.B2B_PORTAL
-        },
-        adminEmail: true
-      });
-
-      if (!adminResult.success) {
-        console.error('❌ Failed to send admin notification email:', adminResult.error);
-        // Don't fail the entire operation if admin email fails
-        console.log('⚠️ Continuing despite admin email failure');
-      }
-
-      console.log('✅ sendAffiliateApplicationEmails: Success');
-      return {
-        success: true,
-        applicantEmailSent: applicantResult.success,
-        adminEmailSent: adminResult.success,
-        applicantMessageId: applicantResult.messageId,
-        adminMessageId: adminResult.messageId,
-        details: {
-          applicant: applicantResult.details,
-          admin: adminResult.details
-        }
-      };
-
-    } catch (error) {
-      console.error('❌ sendAffiliateApplicationEmails: Fatal error:', error);
-      throw new Error(error instanceof Error ? error.message : 'Unknown error in affiliate application emails');
+    const applicationId = (request.data?.applicationId || '').trim();
+    if (!applicationId) {
+      throw new HttpsError('invalid-argument', 'Application ID is required');
     }
+
+    // Load the application — the SERVER-side source of recipient + content.
+    const appRef = db.collection('affiliateApplications').doc(applicationId);
+    const appSnap = await appRef.get();
+    if (!appSnap.exists) {
+      throw new HttpsError('not-found', 'Application not found');
+    }
+    const application = appSnap.data() as any;
+
+    if (!application.email || !application.name) {
+      throw new HttpsError('failed-precondition', 'Application is missing name or email');
+    }
+    if (application.status !== 'pending') {
+      throw new HttpsError('failed-precondition', 'Application is not pending');
+    }
+
+    // Single-shot: claim the send in a TRANSACTION so a replayed/concurrent
+    // call cannot spam the applicant — exactly one caller wins the stamp.
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(appRef);
+      if ((snap.data() as any)?.confirmationEmailsSentAt) {
+        throw new HttpsError('already-exists', 'Confirmation emails were already sent for this application');
+      }
+      tx.update(appRef, { confirmationEmailsSentAt: FieldValue.serverTimestamp() });
+    });
+
+    const applicantInfo = {
+      name: application.name,
+      email: application.email,
+      phone: application.phone || '',
+      address: application.address || '',
+      city: application.city || '',
+      country: application.country || '',
+      promotionMethod: application.promotionMethod || '',
+      message: application.message || '',
+      socials: application.socials || {}
+    };
+    const language = request.data?.language || application.preferredLang || 'sv-SE';
+
+    const orchestrator = new EmailOrchestrator();
+
+    // 1. Confirmation email to the applicant (recipient from the DOC).
+    const applicantResult = await orchestrator.sendEmail({
+      emailType: 'AFFILIATE_APPLICATION_RECEIVED',
+      customerInfo: {
+        email: application.email,
+        name: application.name
+      },
+      language,
+      additionalData: {
+        applicantInfo,
+        applicationId
+      },
+      shopId: application.shopId,
+      adminEmail: false
+    });
+
+    if (!applicantResult.success) {
+      console.error('❌ Failed to send applicant confirmation email:', applicantResult.error);
+      // Release the single-shot claim so a retry can succeed — otherwise a
+      // transient send failure permanently loses the confirmation email.
+      try {
+        await appRef.update({ confirmationEmailsSentAt: FieldValue.delete() });
+      } catch (releaseError) {
+        console.error('❌ Could not release the email-send claim:', releaseError);
+      }
+      throw new HttpsError('internal', 'Failed to send confirmation email');
+    }
+
+    // 2. Notification email to admin
+    const adminResult = await orchestrator.sendEmail({
+      emailType: 'AFFILIATE_APPLICATION_NOTIFICATION_ADMIN',
+      customerInfo: {
+        email: EMAIL_CONFIG.ADMIN_RECIPIENTS.join(', '), // Admin email(s)
+        name: `${EMAIL_CONFIG.SMTP.FROM_NAME} Admin`
+      },
+      language: 'sv-SE', // Admin emails always in Swedish
+      additionalData: {
+        applicantInfo,
+        applicationId,
+        adminPortalUrl: appUrls.B2B_PORTAL
+      },
+      shopId: application.shopId,
+      adminEmail: true
+    });
+
+    if (!adminResult.success) {
+      console.error('❌ Failed to send admin notification email:', adminResult.error);
+      // Don't fail the entire operation if admin email fails
+    }
+
+    return {
+      success: true,
+      applicantEmailSent: applicantResult.success,
+      adminEmailSent: adminResult.success
+    };
   }
 );

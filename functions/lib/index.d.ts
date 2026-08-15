@@ -1,4 +1,4 @@
-export { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail, sendOrderNotificationAdmin, sendPasswordResetEmail, sendLoginCredentialsEmail, sendAffiliateWelcomeEmail, approveAffiliate, createShopUser, createPlatformSuperAdmin, deletePlatformUser, migrateFromShopify, migrateFromWoo, sendEmailVerification, sendCustomEmailVerification, verifyEmailCode, sendAffiliateApplicationEmails } from './email-orchestrator/functions';
+export { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail, sendOrderNotificationAdmin, sendPasswordResetEmail, sendLoginCredentialsEmail, sendAffiliateWelcomeEmail, approveAffiliate, createShopUser, createPlatformSuperAdmin, deletePlatformUser, migrateFromShopify, migrateFromWoo, sendCustomEmailVerification, verifyEmailCode, sendAffiliateApplicationEmails } from './email-orchestrator/functions';
 import { confirmPasswordReset } from './email-orchestrator/functions';
 import { logAffiliateClickV2 } from './affiliate/callable/logAffiliateClick';
 import { validateDiscountCode } from './affiliate/callable/validateDiscountCode';

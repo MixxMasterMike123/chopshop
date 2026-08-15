@@ -75,18 +75,9 @@ const AffiliateRegistration = () => {
         const functions = getFunctions();
         const sendAffiliateApplicationEmails = httpsCallable(functions, 'sendAffiliateApplicationEmails');
         
+        // P1-01: the server loads recipient + content from the application doc
+        // itself — only the id and language cross the wire.
         const emailResult = await sendAffiliateApplicationEmails({
-          applicantInfo: {
-            name: formData.name,
-            email: formData.email,
-            phone: formData.phone,
-            address: formData.address,
-            city: formData.city,
-            country: formData.country,
-            promotionMethod: formData.promotionMethod,
-            message: formData.message,
-            socials: formData.socials
-          },
           applicationId: applicationDoc.id,
           language: formData.preferredLang || currentLanguage || 'sv-SE'
         });

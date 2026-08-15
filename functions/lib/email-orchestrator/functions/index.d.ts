@@ -9,7 +9,6 @@ export { createShopUser } from './createShopUser';
 export { createPlatformSuperAdmin, deletePlatformUser } from './platformUsers';
 export { migrateFromShopify } from './migrateFromShopify';
 export { migrateFromWoo } from './migrateFromWoo';
-export { sendEmailVerification } from './sendEmailVerification';
 export { sendCustomEmailVerification } from './sendCustomEmailVerification';
 export { verifyEmailCode } from './verifyEmailCode';
 export { confirmPasswordReset } from './confirmPasswordReset';

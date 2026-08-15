@@ -75,6 +75,18 @@ service cloud.firestore {
         (isAdmin() && userDoc().shopId == shopId);
     }
 
+    // P0-01 RE-HOMING GUARD (2026-08-15 audit): a tenant-scoped doc's shopId is
+    // IMMUTABLE on client updates. Update rules authorize against the OLD
+    // resource.data.shopId, so without this a Shop A admin could update an
+    // A-owned doc and set shopId to Shop B — re-homing it into another tenant.
+    // affectedKeys() lists only changed/added/removed keys, so a partial update
+    // that never touches shopId (or writes the identical value) passes. Applies
+    // to PLATFORM too: legitimate re-homing, if ever needed, is a server-only
+    // (Admin SDK) operation — never a direct client write.
+    function tenantUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['shopId']);
+    }
+
     // ============================================================
     // Users (B2B portal + admin accounts) — NOT shop-scoped, but TENANT-FILTERED
     // (tenant-isolation hardening): a user reads their own doc; platform reads
@@ -161,13 +173,15 @@ service cloud.firestore {
     match /products/{productId} {
       allow read: if true;
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     match /productGroups/{groupId} {
       allow read: if true;
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // Collections — curated product groups (manual pick or smart tag-rule) that
@@ -177,7 +191,8 @@ service cloud.firestore {
     match /collections/{collectionId} {
       allow read: if true;
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // CMS pages (legal pages, content pages). Note: drafts are technically
@@ -185,7 +200,8 @@ service cloud.firestore {
     match /pages/{pageId} {
       allow read: if true;
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // UI translations, one collection per locale — GLOBAL config (no shopId),
@@ -374,7 +390,8 @@ service cloud.firestore {
           get(/databases/$(database)/documents/b2bCustomers/$(resource.data.b2bCustomerId)).data.firebaseAuthUid == request.auth.uid);
       // Orders are created ONLY server-side by the Stripe webhook (Admin SDK).
       allow create: if false;
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // orderStatuses — DEAD/GLOBAL config (no shopId; only seed scripts touch it,
@@ -397,10 +414,12 @@ service cloud.firestore {
       );
       // Created at checkout by the (just-authenticated) customer themselves.
       allow create: if isAuthenticated() && request.resource.data.firebaseAuthUid == request.auth.uid;
+      // tenantUnchanged(): neither the owner nor an admin may re-home a
+      // customer to another shop (P0-01).
       allow update: if isAuthenticated() && (
         resource.data.firebaseAuthUid == request.auth.uid ||
         isAdminOfShop(resource.data.shopId)
-      );
+      ) && tenantUnchanged();
       allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
@@ -426,13 +445,15 @@ service cloud.firestore {
       // re-home themselves (shopId immutable), or rewrite their identity link
       // (firebaseAuthUid immutable — closes the self-orphan/hand-off gap that
       // b2cCustomers still has); a same-shop admin may change those.
+      // tenantUnchanged(): the admin branch must not re-home the customer to
+      // another shop either (P0-01; the owner branch already froze shopId).
       allow update: if isAuthenticated() && (
         (resource.data.firebaseAuthUid == request.auth.uid &&
           request.resource.data.firebaseAuthUid == resource.data.firebaseAuthUid &&
           request.resource.data.active == resource.data.active &&
           request.resource.data.shopId == resource.data.shopId) ||
         isAdminOfShop(resource.data.shopId)
-      );
+      ) && tenantUnchanged();
       allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
@@ -451,28 +472,32 @@ service cloud.firestore {
       // create stamps shopId (guard the incoming one); update/delete guard the
       // stored shopId (no incoming data on delete).
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // Clicks are written ONLY server-side via logAffiliateClickV2 (Admin SDK)
     match /affiliateClicks/{clickId} {
       allow read: if isAdminOfShop(resource.data.shopId);
       allow create: if false;
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // Public application form (anonymous applicants); admins of the shop manage.
     match /affiliateApplications/{applicationId} {
       allow create: if request.resource.data.email is string &&
         request.resource.data.email.size() < 200;
-      allow read, update, delete: if isAdminOfShop(resource.data.shopId);
+      allow read, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
     }
 
     match /affiliatePayouts/{payoutId} {
       allow read: if isAdminOfShop(resource.data.shopId) ||
         (isAuthenticated() && resource.data.affiliateId == request.auth.uid);
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // Campaign discount codes ("Rabattkoder" add-on; shop-scoped). Only shop
@@ -483,7 +508,8 @@ service cloud.firestore {
     match /discountCodes/{codeId} {
       allow read: if isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // Content Studio drafts ("Innehållsstudio" add-on; shop-scoped). The admin
@@ -494,7 +520,8 @@ service cloud.firestore {
     match /socialPosts/{postId} {
       allow read: if isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // ============================================================
@@ -512,7 +539,8 @@ service cloud.firestore {
         isAdminOfShop(resource.data.shopId) ||
         (isActiveUser() && resource.data.shopId == userDoc().shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // ============================================================
@@ -521,7 +549,8 @@ service cloud.firestore {
     match /campaigns/{campaignId} {
       allow read: if isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // ============================================================
@@ -538,7 +567,8 @@ service cloud.firestore {
     match /podArtwork/{artworkId} {
       allow read: if isPlatform() || isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // podMappings — the SKU → artwork mapping (shopId+sku → artworkId + placement).
@@ -549,7 +579,8 @@ service cloud.firestore {
     match /podMappings/{mappingId} {
       allow read: if isPlatform() || isAdminOfShop(resource.data.shopId);
       allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update, delete: if isAdminOfShop(resource.data.shopId);
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
     // ============================================================
@@ -572,7 +603,13 @@ service cloud.firestore {
     match /adminPresence/{presenceId} {
       allow read: if isPlatform() ||
         (isAdmin() && resource.data.shopId == userDoc().shopId);
-      allow write: if isAdmin() && presenceId == request.auth.uid;
+      // create/update must stamp the writer's OWN shopId (P0-01 family: a shop
+      // admin must not plant presence docs under another tenant's shopId —
+      // shop-scoped reads would show them a foreign "online admin"). Platform
+      // presence docs carry shopId == null (userDoc().shopId is null → equal).
+      allow create, update: if isAdmin() && presenceId == request.auth.uid &&
+        request.resource.data.shopId == userDoc().shopId;
+      allow delete: if isAdmin() && presenceId == request.auth.uid;
     }
 
     // adminUIDs — parallel admin registry, now SHOP-STAMPED (addAdminUID writes
@@ -591,8 +628,15 @@ service cloud.firestore {
     match /adminUIDs/{adminUID} {
       allow read: if isPlatform() ||
         (isAdmin() && resource.data.shopId == userDoc().shopId);
-      allow create, update: if isPlatform() ||
+      allow create: if isPlatform() ||
         (isAdmin() && request.resource.data.shopId == userDoc().shopId);
+      // update additionally guards the EXISTING doc's shopId (P0-01 family):
+      // without it, a shop-A admin could take over a shop-B admin's registry
+      // doc by writing it with shopId = A (incoming-only check passes).
+      allow update: if isPlatform() ||
+        (isAdmin() &&
+          resource.data.shopId == userDoc().shopId &&
+          request.resource.data.shopId == userDoc().shopId);
       allow delete: if isPlatform() ||
         (isAdmin() && resource.data.shopId == userDoc().shopId);
     }

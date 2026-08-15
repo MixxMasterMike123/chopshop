@@ -31,7 +31,9 @@ export const confirmPasswordReset = onCall<PasswordResetConfirmRequest>(
     }
 
     try {
-      console.log(`🔍 Processing password reset confirmation for code: ${resetCode}`);
+      // P1-05: never log the reset code — a log reader must not be able to
+      // redeem an account takeover.
+      console.log('🔍 Processing password reset confirmation');
 
       // Find and validate the reset code
       const resetQuery = await db.collection('passwordResets')

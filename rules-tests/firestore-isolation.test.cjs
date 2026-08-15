@@ -440,6 +440,74 @@ async function run() {
   await check('plain customer CANNOT create a collection', assertFails(
     setDoc(doc(customerDb('custA'), 'collections/custColl'), { shopId: 'shopA', handle: 'c', title: 'c', type: 'manual', productIds: [] })));
 
+  // ── P0-01 RE-HOMING (2026-08-15 audit): shopId is IMMUTABLE on client
+  //    updates. The pre-fix rules authorized updates against the OLD
+  //    resource.data.shopId only, so a shopA admin could take an A-owned doc
+  //    and set shopId:'shopB' — re-homing it into another tenant. Every
+  //    tenant-scoped collection family gets the same three probes:
+  //      1. own-doc re-home to shopB → DENY (the vulnerability)
+  //      2. platform re-home via client SDK → DENY (re-homing is server-only)
+  //      3. benign same-shop update → ALLOW (no lockout regression)
+  //    Plus: writing the IDENTICAL shopId passes (partial-update compat). ──
+  console.log('\n=== P0-01 re-homing: shopId immutable on update ===');
+  const REHOME = [
+    ['products',              { name: 'P', isActive: true, b2cPrice: 100 }],
+    ['productGroups',         { name: 'G' }],
+    ['collections',           { handle: 'rh', title: 'C', type: 'manual', productIds: [] }],
+    ['pages',                 { title: 'Pg' }],
+    ['orders',                { status: 'pending', total: 1, source: 'b2c' }],
+    ['affiliates',            { email: 'rhaff@x.com', status: 'active', affiliateCode: 'RH1' }],
+    ['affiliateClicks',       { code: 'RH1' }],
+    ['affiliatePayouts',      { amount: 1, affiliateId: 'rhaff' }],
+    ['discountCodes',         { code: 'RHC', active: true }],
+    ['campaigns',             { name: 'K' }],
+    ['socialPosts',           { caption: 's' }],
+    ['marketingMaterials',    { title: 'm' }],
+    ['podArtwork',            { label: 'a', originalUrl: 'gs://a' }],
+    ['podMappings',           { sku: 'RH-SKU', artworkId: 'a1' }],
+    ['affiliateApplications', { email: 'rhapp@x.com', name: 'N', status: 'pending' }],
+    ['b2cCustomers',          { firebaseAuthUid: 'rhOwnerC', email: 'rhc@x.com' }],
+    ['b2bCustomers',          { firebaseAuthUid: 'rhOwnerB', email: 'rhb@x.com', active: false }],
+  ];
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const raw = ctx.firestore();
+    for (const [coll, data] of REHOME) {
+      await setDoc(doc(raw, `${coll}/rehome_${coll}`), { shopId: 'shopA', ...data });
+    }
+  });
+  for (const [coll] of REHOME) {
+    const path = `${coll}/rehome_${coll}`;
+    await check(`${coll}: shopA admin CANNOT re-home own doc to shopB`, assertFails(
+      updateDoc(doc(shopAAdminDb(), path), { shopId: 'shopB' })));
+    await check(`${coll}: platform CANNOT re-home via client SDK (server-only op)`, assertFails(
+      updateDoc(doc(platformDb(), path), { shopId: 'shopB' })));
+    await check(`${coll}: benign same-shop update still ALLOWED`, assertSucceeds(
+      updateDoc(doc(shopAAdminDb(), path), { rehomeProbe: 1 })));
+  }
+  // Partial-update compat: an update that WRITES shopId with the identical
+  // value is not a re-home (affectedKeys excludes unchanged keys) — the common
+  // "save whole form" admin pattern must keep working.
+  await check('products: update writing IDENTICAL shopId still ALLOWED (form-save compat)', assertSucceeds(
+    updateDoc(doc(shopAAdminDb(), 'products/rehome_products'), { shopId: 'shopA', name: 'P2' })));
+  // Owner-side re-home probes (customers must not move themselves either).
+  await check('b2cCustomers: the OWNER cannot re-home their own profile', assertFails(
+    updateDoc(doc(customerDb('rhOwnerC'), 'b2cCustomers/rehome_b2cCustomers'), { shopId: 'shopB' })));
+
+  // ── P0-01 family: adminUIDs takeover + adminPresence forged stamp ──
+  console.log('\n=== P0-01 family: adminUIDs update guard + adminPresence stamp ===');
+  await check('shopA admin CANNOT take over a shopB adminUIDs doc (rewrite shopId to A)', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'adminUIDs/adminB'), { shopId: 'shopA' })));
+  await check('shopA admin CANNOT move own adminUIDs doc to shopB', assertFails(
+    updateDoc(doc(shopAAdminDb(), 'adminUIDs/adminA'), { shopId: 'shopB' })));
+  await check('shopA admin updates own adminUIDs doc same-shop (ALLOW, no lockout)', assertSucceeds(
+    updateDoc(doc(shopAAdminDb(), 'adminUIDs/adminA'), { level: 'admin' })));
+  await check('shopA admin CANNOT stamp own presence with shopB (forged tenant)', assertFails(
+    setDoc(doc(shopAAdminDb(), 'adminPresence/adminA'), { uid: 'adminA', shopId: 'shopB', status: 'online' })));
+  await check('shopA admin heartbeats own presence with own shopId (ALLOW)', assertSucceeds(
+    setDoc(doc(shopAAdminDb(), 'adminPresence/adminA'), { uid: 'adminA', shopId: 'shopA', status: 'online' })));
+  await check('shopA admin deletes own presence (ALLOW — sign-out cleanup)', assertSucceeds(
+    deleteDoc(doc(shopAAdminDb(), 'adminPresence/adminA'))));
+
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
   await env.cleanup();
   process.exit(failed === 0 ? 0 : 1);

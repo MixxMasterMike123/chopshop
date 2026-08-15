@@ -52,6 +52,8 @@ echo "==> [1/3] withdrawal-gate (pure unit test, ESM)"
 node rules-tests/withdrawal-gate.test.mjs
 echo "==> [1/3] dac7-aggregation (pure unit test)"
 node rules-tests/dac7-aggregation.test.cjs
+echo "==> [1/3] checkout-invariants (pure unit test — P0-03 tenant/SKU/live-shop)"
+node rules-tests/checkout-invariants.test.cjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"

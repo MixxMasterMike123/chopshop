@@ -19,7 +19,6 @@ export {
   deletePlatformUser,
   migrateFromShopify,
   migrateFromWoo,
-  sendEmailVerification,
   sendCustomEmailVerification,
   verifyEmailCode,
   sendAffiliateApplicationEmails

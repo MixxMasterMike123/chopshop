@@ -2,7 +2,7 @@
 // EmailOrchestrator Functions Index
 // Unified email functions replacing ALL V1/V2/V3 email functions
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendAffiliateApplicationEmails = exports.confirmPasswordReset = exports.verifyEmailCode = exports.sendCustomEmailVerification = exports.sendEmailVerification = exports.migrateFromWoo = exports.migrateFromShopify = exports.deletePlatformUser = exports.createPlatformSuperAdmin = exports.createShopUser = exports.approveAffiliate = exports.sendAffiliateWelcomeEmail = exports.sendLoginCredentialsEmail = exports.sendPasswordResetEmail = exports.sendOrderNotificationAdmin = exports.sendOrderStatusUpdateEmail = exports.sendOrderConfirmationEmail = void 0;
+exports.sendAffiliateApplicationEmails = exports.confirmPasswordReset = exports.verifyEmailCode = exports.sendCustomEmailVerification = exports.migrateFromWoo = exports.migrateFromShopify = exports.deletePlatformUser = exports.createPlatformSuperAdmin = exports.createShopUser = exports.approveAffiliate = exports.sendAffiliateWelcomeEmail = exports.sendLoginCredentialsEmail = exports.sendPasswordResetEmail = exports.sendOrderNotificationAdmin = exports.sendOrderStatusUpdateEmail = exports.sendOrderConfirmationEmail = void 0;
 // Import all unified email functions
 var sendOrderConfirmationEmail_1 = require("./sendOrderConfirmationEmail");
 Object.defineProperty(exports, "sendOrderConfirmationEmail", { enumerable: true, get: function () { return sendOrderConfirmationEmail_1.sendOrderConfirmationEmail; } });
@@ -27,8 +27,9 @@ var migrateFromShopify_1 = require("./migrateFromShopify");
 Object.defineProperty(exports, "migrateFromShopify", { enumerable: true, get: function () { return migrateFromShopify_1.migrateFromShopify; } });
 var migrateFromWoo_1 = require("./migrateFromWoo");
 Object.defineProperty(exports, "migrateFromWoo", { enumerable: true, get: function () { return migrateFromWoo_1.migrateFromWoo; } });
-var sendEmailVerification_1 = require("./sendEmailVerification");
-Object.defineProperty(exports, "sendEmailVerification", { enumerable: true, get: function () { return sendEmailVerification_1.sendEmailVerification; } });
+// sendEmailVerification DELETED (P0-02/P1-01, 2026-08-15 audit): it was an
+// unauthenticated open relay (caller-supplied recipient + code) with zero
+// client callers — verification mail goes through sendCustomEmailVerification.
 var sendCustomEmailVerification_1 = require("./sendCustomEmailVerification");
 Object.defineProperty(exports, "sendCustomEmailVerification", { enumerable: true, get: function () { return sendCustomEmailVerification_1.sendCustomEmailVerification; } });
 var verifyEmailCode_1 = require("./verifyEmailCode");

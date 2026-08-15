@@ -7,7 +7,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createPaymentIntentV2 = void 0;
+exports.createPaymentIntentV2 = exports.validateCartLine = exports.shopCheckoutBlockReason = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firebase_functions_1 = require("firebase-functions");
 const stripe_1 = __importDefault(require("stripe"));
@@ -33,54 +33,112 @@ function getShippingRegion(country) {
     const euCountries = ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES'];
     return euCountries.includes(country) ? 'eu' : 'worldwide';
 }
+// ────────────────────────────────────────────────────────────────────────────
+// P0-03 CHECKOUT INVARIANTS (2026-08-15 audit) — pure, unit-tested helpers
+// (rules-tests/checkout-invariants.test.cjs runs them against functions/lib).
+// ────────────────────────────────────────────────────────────────────────────
+// A shop that must not be charged against: platform kill-switch (status
+// 'disabled') or the GO-LIVE gate (published === false — absent means live,
+// matching the storefront's live-gate semantics: existing shops stay live).
+function shopCheckoutBlockReason(shop) {
+    if (!shop)
+        return 'unknown-shop';
+    if (shop.status === 'disabled')
+        return 'shop-disabled';
+    if (shop.published === false)
+        return 'shop-not-published';
+    return null;
+}
+exports.shopCheckoutBlockReason = shopCheckoutBlockReason;
+// Validate ONE cart line against the SERVER product doc and derive the
+// authoritative line snapshot. The client contributes only (productId,
+// variantSku, quantity) — tenant, availability, price, SKU, name, label and
+// image all come from the product/variant doc, so a crafted cart can no longer
+// cross shop, pricing or print-routing (order SKU → podMappings) boundaries.
+function validateCartLine(product, item, shopId, deliveryMethod) {
+    const productId = item.productId || item.id; // tolerate either key
+    const quantity = Math.floor(Number(item.quantity));
+    if (!productId || !Number.isFinite(quantity) || quantity < 1 || quantity > 1000) {
+        throw new Error(`Invalid cart item: ${productId}`);
+    }
+    if (!product) {
+        throw new Error(`Unknown product: ${productId}`);
+    }
+    // TENANT (P0-03): the product must belong to the shop being charged —
+    // a foreign product id must never price a line or stamp a foreign SKU.
+    if (product.shopId !== shopId) {
+        throw new Error(`Product not in shop: ${productId}`);
+    }
+    if (product.isActive === false) {
+        throw new Error(`Product not available: ${productId}`);
+    }
+    // B2C availability (P0-03): a B2B-only product is not purchasable through
+    // the public checkout. Default-ON (absent field = available), mirroring the
+    // createB2BOrder b2b-availability check.
+    if (product.availability?.b2c === false) {
+        throw new Error(`Product not available for B2C: ${productId}`);
+    }
+    // Per-product delivery modes (Delivery & Pickup v2). Default-ON: a product
+    // without the `delivery` field permits both methods. Reject a charge whose
+    // delivery method is disabled for this product — anti-tamper backstop for the
+    // client-side restriction (a tampered client could otherwise send 'pickup'
+    // for a shipping-only product to zero shipping, or 'home' for a pickup-only
+    // one). The legitimate client never sends a disabled method.
+    if (deliveryMethod === 'pickup' && product.delivery?.pickup === false) {
+        throw new Error(`Product not available for pickup: ${productId}`);
+    }
+    if (deliveryMethod === 'home' && product.delivery?.shipping === false) {
+        throw new Error(`Product not available for home delivery: ${productId}`);
+    }
+    // Resolve price: a chosen variant's price (matched by sku) wins, else the
+    // product price. A variantSku that doesn't match any variant is rejected.
+    let price = product.b2cPrice || product.basePrice || 0;
+    const variantSku = item.variantSku || null;
+    let variant = null;
+    if (variantSku) {
+        variant = Array.isArray(product.variants)
+            ? product.variants.find((v) => v && v.sku === variantSku)
+            : null;
+        if (!variant) {
+            throw new Error(`Unknown variant ${variantSku} for product ${productId}`);
+        }
+        price = (variant.price ?? null) !== null ? variant.price : price;
+    }
+    if (!price || price <= 0) {
+        throw new Error(`Product has no valid price: ${productId}`);
+    }
+    // SERVER-derived display/fulfilment snapshot (never the client's copy).
+    // Name flattening + image priority mirror the client (CartContext), so the
+    // order shows what the buyer saw — but sourced from the live product doc.
+    const name = typeof product.name === 'string'
+        ? product.name
+        : (product.name?.['sv-SE'] || product.name?.['en-US'] || product.name?.['en-GB'] || 'Product');
+    return {
+        productId,
+        variantSku,
+        quantity,
+        price,
+        sku: variant?.sku || product.sku || '',
+        name,
+        label: variant?.label || '',
+        image: variant?.image || product.b2cImageUrl || product.b2cImageGallery?.[0] || product.imageUrl || '',
+        isPersonalized: product.isPersonalized === true,
+    };
+}
+exports.validateCartLine = validateCartLine;
 async function computeOrderTotalsSek(cartItems, shippingCountry, discountCode, shopId, deliveryMethod) {
     // Product model v2: line items reference the PARENT product by productId plus
     // an optional variantSku. We load the parent doc and resolve the variant's
     // price from the embedded variants array — never trusting the client price.
     const loaded = await Promise.all(cartItems.map(async (item) => {
-        const productId = item.productId || item.id; // tolerate either key
-        const quantity = Math.floor(Number(item.quantity));
-        if (!productId || !Number.isFinite(quantity) || quantity < 1 || quantity > 1000) {
-            throw new Error(`Invalid cart item: ${productId}`);
-        }
-        const snap = await database_1.db.collection('products').doc(productId).get();
-        if (!snap.exists) {
-            throw new Error(`Unknown product: ${productId}`);
-        }
-        const product = snap.data();
-        if (product.isActive === false) {
-            throw new Error(`Product not available: ${productId}`);
-        }
-        // Per-product delivery modes (Delivery & Pickup v2). Default-ON: a product
-        // without the `delivery` field permits both methods. Reject a charge whose
-        // delivery method is disabled for this product — anti-tamper backstop for the
-        // client-side restriction (a tampered client could otherwise send 'pickup'
-        // for a shipping-only product to zero shipping, or 'home' for a pickup-only
-        // one). The legitimate client never sends a disabled method.
-        if (deliveryMethod === 'pickup' && product.delivery?.pickup === false) {
-            throw new Error(`Product not available for pickup: ${productId}`);
-        }
-        if (deliveryMethod === 'home' && product.delivery?.shipping === false) {
-            throw new Error(`Product not available for home delivery: ${productId}`);
-        }
-        // Resolve price: a chosen variant's price (matched by sku) wins, else the
-        // product price. A variantSku that doesn't match any variant is rejected.
-        let price = product.b2cPrice || product.basePrice || 0;
-        const variantSku = item.variantSku || null;
-        if (variantSku) {
-            const variant = Array.isArray(product.variants)
-                ? product.variants.find((v) => v && v.sku === variantSku)
-                : null;
-            if (!variant) {
-                throw new Error(`Unknown variant ${variantSku} for product ${productId}`);
-            }
-            price = (variant.price ?? null) !== null ? variant.price : price;
-        }
-        if (!price || price <= 0) {
-            throw new Error(`Product has no valid price: ${productId}`);
-        }
-        const lineKey = `${productId}::${variantSku || ''}`;
-        return { lineKey, productId, variantSku, quantity, price, product };
+        const rawId = item.productId || item.id;
+        const snap = rawId ? await database_1.db.collection('products').doc(String(rawId)).get() : null;
+        const product = snap && snap.exists ? snap.data() : null;
+        // All P0-03 invariants (tenant, availability, delivery, variant, price)
+        // live in the pure helper above — unit-tested against functions/lib.
+        const line = validateCartLine(product, item, shopId, deliveryMethod);
+        const lineKey = `${line.productId}::${line.variantSku || ''}`;
+        return { lineKey, ...line, product };
     }));
     const serverPrices = {};
     for (const { lineKey, price } of loaded) {
@@ -183,8 +241,11 @@ async function computeOrderTotalsSek(cartItems, shippingCountry, discountCode, s
     // Right-of-withdrawal (POD): derive from the LIVE product docs (never trust a
     // client flag) whether any line item is personalized → the no-withdrawal
     // consent gate was required at checkout.
-    const hasPersonalizedItem = loaded.some(({ product }) => product?.isPersonalized === true);
-    return { subtotal, discountAmount, discountPercentage, discountSource, discountCodeId, shipping, vat, total, serverPrices, hasPersonalizedItem };
+    const hasPersonalizedItem = loaded.some((line) => line.isPersonalized);
+    // The authoritative line snapshot (P0-03) — what the webhook persists onto
+    // the order. Strip the raw product doc; only the derived fields leave here.
+    const serverLines = loaded.map(({ lineKey: _k, product: _p, ...line }) => line);
+    return { subtotal, discountAmount, discountPercentage, discountSource, discountCodeId, shipping, vat, total, serverPrices, hasPersonalizedItem, serverLines };
 }
 exports.createPaymentIntentV2 = (0, https_1.onRequest)({
     region: 'us-central1',
@@ -241,6 +302,14 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
         const shopSnap = await database_1.db.collection('shops').doc(resolvedShopId).get();
         if (!shopSnap.exists) {
             response.status(400).json({ error: 'Unknown shop' });
+            return;
+        }
+        // P0-03: never charge against a killed or not-yet-published shop — the
+        // storefront gate is client-side only; this is the server backstop.
+        const shopBlockReason = shopCheckoutBlockReason(shopSnap.data());
+        if (shopBlockReason) {
+            firebase_functions_1.logger.warn('⛔ Checkout blocked — shop not live', { shopId: resolvedShopId, shopBlockReason });
+            response.status(403).json({ error: 'Shop is not accepting orders' });
             return;
         }
         // Tenant display name for Stripe-visible strings (description, card-
@@ -352,21 +421,20 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
         // itemDetails, itemDetails1, itemDetails2… (webhook reassembles).
         // If even the image-less variant exceeds the chunk budget, we fail
         // loudly rather than let Stripe truncate mid-JSON.
-        const buildItemDetailsJson = (withImages) => JSON.stringify(cartItems.map(item => {
-            const productId = item.productId || item.id;
-            const variantSku = item.variantSku || '';
-            const lineKey = `${productId}::${variantSku}`;
-            return {
-                productId,
-                variantSku,
-                sku: item.sku,
-                name: typeof item.name === 'string' ? item.name : item.name?.['sv-SE'] || item.name?.['en-US'] || 'Product',
-                label: item.label || '',
-                price: totals.serverPrices[lineKey] ?? item.price,
-                quantity: item.quantity,
-                image: withImages ? (item.image || '') : ''
-            };
-        }));
+        // P0-03: the snapshot is built ONLY from the server-derived lines
+        // (validateCartLine) — client sku/name/label/image never reach the order.
+        // Print later resolves order.items[].sku → podMappings, so a client-
+        // controlled SKU here was a wrong-artwork fulfilment path.
+        const buildItemDetailsJson = (withImages) => JSON.stringify(totals.serverLines.map(line => ({
+            productId: line.productId,
+            variantSku: line.variantSku || '',
+            sku: line.sku,
+            name: line.name,
+            label: line.label,
+            price: line.price,
+            quantity: line.quantity,
+            image: withImages ? line.image : ''
+        })));
         const META_VALUE_MAX = 500;
         const META_TOTAL_KEYS = 50; // Stripe's hard cap on metadata key count
         const chunkItemDetails = (json, maxChunks) => {
@@ -433,9 +501,9 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
             // Cart Items (detailed for recovery)
             itemCount: cartItems.length.toString(),
             totalItems: cartItems.reduce((sum, item) => sum + item.quantity, 0).toString(),
-            // Legacy compatibility (keep existing fields)
-            itemIds: cartItems.map(item => String(item.productId || item.id || '').substring(0, 8)).join(','),
-            cartSummary: cartItems.map(item => `${item.quantity}x${item.sku}`).join(','),
+            // Legacy compatibility (keep existing fields) — server-derived (P0-03)
+            itemIds: totals.serverLines.map(line => line.productId.substring(0, 8)).join(','),
+            cartSummary: totals.serverLines.map(line => `${line.quantity}x${line.sku}`).join(','),
             // B2C customer account linkage (set when the buyer has/creates an account)
             ...(request.body.b2cCustomerId && {
                 b2cCustomerId: request.body.b2cCustomerId,
