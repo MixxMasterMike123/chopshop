@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 8 ready to commit
+**Last updated:** 2026-08-16, checkpoint 9 ready to commit
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `762a074` — `feat: define secure auth email contract`
+- Last pushed commit: `9f8e631` — `feat: add email delivery leases`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -166,6 +166,26 @@ Better Auth defaults verification identifiers to plain storage. Password reset i
 - Local gate passed: generated types current, TypeScript clean, 35/35 Workers/D1 tests green.
 - Known provider boundary: a crash after Cloudflare accepts a send but before D1 records success can still duplicate a later send unless the provider gains a supported idempotency key. The lease removes concurrent duplicates but cannot atomically join an external mail send to D1.
 
+## Checkpoint 9 — Staging auth-email Queue
+
+Planned staging resources for this checkpoint:
+
+- Primary Queue: `meteorshop-stg-email-auth`
+- Dead-letter Queue: `meteorshop-stg-email-auth-dlq`
+- Retention: 86,400 seconds (the free-tier maximum and the contract's maximum capability lifetime)
+- Producer binding: `AUTH_EMAIL_QUEUE`
+
+No public producer route, Email Sending binding, domain/DNS change, or real message send is part of this checkpoint.
+
+- Created primary Queue ID `6f77ddb4e3bb4fe08ce5638ab468eaea` and DLQ ID `06386088cd4443d9b6f22990e5b55f69` in the verified personal staging account.
+- Configured `meteorshop-stg-api` as the sole producer and consumer for the primary Queue; the DLQ has no consumer and remains operator-visible.
+- Added a fail-closed Queue handler that retries accidental messages after five minutes without inspecting or logging their body.
+- Configured batches of 10, five-second batch timeout, two-way concurrency, eight Queue retries, and the named DLQ.
+- Deployed staging Worker version `7099d7e1-4a18-4f12-baba-5d977c2b7a8f`; startup remains 4 ms and bundle is 2.50 KiB / 1.06 KiB gzip.
+- Corrected `/ready` to require the latest schema migration (`0004_email_delivery_fingerprint.sql`), not only migration 0001. Live `/health` and `/ready` return 200; `/api/auth/sign-in/email` remains a fail-closed JSON 404.
+- Local gate passed: generated Queue binding current, TypeScript clean, 36/36 tests green, and deployment dry-run shows only the expected staging Queue/D1/non-secret vars.
+- No messages were enqueued, and no Email Sending binding, auth secret, or auth route exists.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -189,10 +209,10 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Commit and push checkpoint 8.
-2. Create the staging auth-email Queue + DLQ and bind only the producer/consumer contract; do not add an Email Sending binding yet.
+1. Commit and push checkpoint 9.
+2. Port the first read-only tenant route only after its repository query is tenant-bound and adversarially tested.
 3. Decide whether to mount sign-in only before sign-up; do not enable either until a staging secret and provisioning policy are in place.
-4. Port the first read-only tenant route only after its repository query is tenant-bound and adversarially tested.
+4. Onboard a MeteorShop sending domain only at the explicit DNS/provider canary checkpoint; the unrelated existing domain stays untouched.
 5. Create R2 buckets only when their object ownership contracts and local tests are ready.
 6. Keep Firebase as the sole production side-effect owner throughout these staging waves.
 

@@ -1,8 +1,9 @@
 import { jsonResponse } from "./lib/http";
+import { handleDisabledAuthEmailQueue } from "./email/disabled-email-queue";
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
-const REQUIRED_MIGRATION = "0001_platform_foundation.sql";
+const REQUIRED_MIGRATION = "0004_email_delivery_fingerprint.sql";
 
 async function readinessResponse(env: Env): Promise<Response> {
   try {
@@ -70,5 +71,9 @@ export default {
       },
       404,
     );
+  },
+
+  queue(batch: MessageBatch<unknown>): void {
+    handleDisabledAuthEmailQueue(batch);
   },
 } satisfies ExportedHandler<Env>;

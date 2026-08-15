@@ -6,6 +6,8 @@ The checked-in Wrangler configuration targets the personal Cloudflare account as
 
 The Better Auth/D1 schema is installed, but auth HTTP routes are intentionally not mounted yet. Do not expose sign-up, sign-in, verification, or reset endpoints until tenant provisioning, live authorization guards, outbox email delivery, and a staging-only `BETTER_AUTH_SECRET` are in place.
 
+The staging auth-email Queue is bound, but its consumer is deliberately disabled and retries every message without reading its body. Do not add a producer route or enqueue a real capability until a reviewed email provider binding and consumer replace that fail-closed handler.
+
 ## Local validation
 
 ```sh
