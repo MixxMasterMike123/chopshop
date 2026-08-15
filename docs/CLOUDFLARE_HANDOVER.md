@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 6 ready to commit
+**Last updated:** 2026-08-16, checkpoint 6.1 ready to commit
 **Owner:** Codex/SOL autonomous migration run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Last pushed commit: `4398c8f` — `feat: enforce Cloudflare tenant boundaries`
+- Last pushed commit: `9569762` — `feat: bind sessions to live authorization`
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
@@ -139,6 +139,10 @@ An initially added fake `preview_database_id` made the dry run report a local-on
 - Tests create real Better Auth email/password sessions against D1, then prove live access revocation, hostname-bound tenant authorization, session deletion, and anonymous denial.
 - Local gate passed: generated types current, TypeScript clean, 23/23 Workers/D1 tests green.
 - Auth HTTP routes remain unmounted and the remote staging Worker still has no `BETTER_AUTH_SECRET`; no public sign-up/sign-in surface was introduced.
+
+### Checkpoint 6.1 — Verification identifier hardening
+
+Better Auth defaults verification identifiers to plain storage. Password reset is still disabled/unmounted, but the configuration now explicitly selects hashed identifiers before any reset flow is wired. A configuration test prevents this from silently regressing; the full 23/23 test gate remains green.
 
 ## Verification and research completed
 

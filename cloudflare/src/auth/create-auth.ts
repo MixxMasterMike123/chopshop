@@ -42,5 +42,8 @@ export function createAuth(env: Env) {
       updateAge: 60 * 60 * 24,
     },
     trustedOrigins: trustedOrigins(env.AUTH_TRUSTED_ORIGINS),
+    verification: {
+      storeIdentifier: "hashed",
+    },
   });
 }
