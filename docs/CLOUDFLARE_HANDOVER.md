@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 11 locally complete — Fable orchestrating, Opus building, Fable reviewing
+**Last updated:** 2026-08-16, checkpoint 20 deployed — Fable orchestrating, Opus building, Fable reviewing
 **Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,11 +8,11 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest implementation checkpoint: checkpoint 11 — catalogue foundation (see below)
+- Latest implementation checkpoint: checkpoint 20 — staging R2 buckets created and `PRIVATE_BUCKET` bound (see below)
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
-- Staging D1 database `meteorshop-stg-db` and Worker `meteorshop-stg-api` have been created in the personal Cloudflare account and smoke-tested.
-- No production resources, DNS records, custom routes, secrets, queues, R2 buckets, Containers, Stripe endpoints, or email integrations have been created.
+- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0008), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
+- No **production** resources, DNS records, custom routes, Containers, Stripe endpoints, or email integrations have been created.
 - The user's personal Cloudflare account is designated for staging/non-production.
 - A separate Cloudflare production account is required before cutover, but does not need to exist yet.
 
@@ -287,6 +287,15 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Limits: checkout 10/min per IP (before body parsing) + 30/hour per email (after); over → 429 with `Retry-After`, message names no specific limit. Bootstrap: 5 per 10 min per IP, checked before the token compare, and over-limit returns the standard indistinguishable 404 (tested byte-identical, including with a CORRECT token — the limiter cannot be used as a token oracle).
 - Migration 0008 applied to staging; `/ready` requires it. Gate 384/384 green; deployed and smoke-tested (429 verified live).
 
+## Checkpoint 20 — Staging R2 buckets + PRIVATE_BUCKET binding (deployed)
+
+- Created R2 buckets `meteorshop-stg-public`, `meteorshop-stg-private`, `meteorshop-stg-temp` in the verified personal staging account (location hint WEUR, matching D1; existence confirmed by `r2 bucket list` readback).
+- Bound only `PRIVATE_BUCKET` → `meteorshop-stg-private` in `wrangler.jsonc`; the public/temp buckets stay unbound until code references them. Generated types now carry `PRIVATE_BUCKET: R2Bucket`, merging cleanly with the hand-written fail-closed `R2Bucket | undefined` contract in `src/env.d.ts` (comment updated: environments without buckets still fail closed).
+- No code change was needed — exactly as checkpoint 16 designed, the upload/delivery path lit up on binding alone.
+- Local gate 384/384 green; dry-run showed only the expected bindings plus the new R2 bucket. Deployed as version `899ceb15-5c0b-45f4-8582-d37610edf7d9`.
+- Live smoke green: `/health` 200; `/ready` 200 at `0008_rate_limits.sql`; anonymous reserve/upload/delivery/delete on `/v1/admin/objects*` all fail-closed 404; sign-up 404; unknown-host storefront 404; anonymous checkout 404.
+- Authenticated end-to-end upload smoke is still blocked on owner bootstrap: no platform admin exists in staging yet (`BOOTSTRAP_TOKEN` procedure in checkpoint 17), so no tenant/tenant-admin can be provisioned to exercise the live upload path.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -310,12 +319,11 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. Apply `0005_catalogue.sql` to `meteorshop-stg-db` remotely, then deploy checkpoints 10+11 to `meteorshop-stg-api` (both reviewed and accepted; blocked only on tool permissions — owner can run `npx wrangler d1 migrations apply meteorshop-stg-db --remote` then `npm run deploy:staging` from `cloudflare/`).
-2. Smoke `/health`, `/ready`, unknown-host `/v1/storefront` and `/v1/products`, and confirm `/api/auth/*` remains 404.
-3. Decide whether to mount sign-in only before sign-up; do not enable either until a staging secret and provisioning policy are in place.
+1. **Owner:** run the checkpoint 17 bootstrap on staging (`openssl rand -base64 48 | npx wrangler secret put BOOTSTRAP_TOKEN` from `cloudflare/`, then one `POST /v1/platform/bootstrap`) to mint the first platform admin — this unblocks live provisioning of a staging tenant + tenant admin and the authenticated upload/checkout smoke.
+2. Continue Wave-4 checkout: shipping/VAT/discount engines on the checkout totals contract, then the payment-provider seam (`payment_intent_id` column is the Stripe seam). Stripe secrets remain owner actions.
+3. Turnstile (or equivalent) on the anonymous checkout surface before any real traffic.
 4. Onboard a MeteorShop sending domain only at the explicit DNS/provider canary checkpoint; the unrelated existing domain stays untouched.
-5. Create R2 buckets only when their object ownership contracts and local tests are ready.
-6. Keep Firebase as the sole production side-effect owner throughout these staging waves.
+5. Keep Firebase as the sole production side-effect owner throughout these staging waves.
 
 ## Known blockers and approvals
 

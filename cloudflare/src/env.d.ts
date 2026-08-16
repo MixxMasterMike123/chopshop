@@ -8,7 +8,8 @@ interface Env {
   // "the bootstrap route does not exist".
   BOOTSTRAP_TOKEN: string | undefined;
 
-  // Private object bucket. Absent from wrangler.jsonc until the buckets are
-  // provisioned, so every delivery path must fail closed when it is undefined.
+  // Private object bucket. Bound in staging, but any environment without its
+  // buckets provisioned lacks the binding, so every delivery path must still
+  // fail closed when it is undefined.
   PRIVATE_BUCKET: R2Bucket | undefined;
 }

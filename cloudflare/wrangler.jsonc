@@ -13,6 +13,12 @@
     "AUTH_TRUSTED_ORIGINS": "https://meteorshop-stg-api.micke-ohlen.workers.dev",
     "SERVICE_NAME": "meteorshop-stg-api"
   },
+  "r2_buckets": [
+    {
+      "binding": "PRIVATE_BUCKET",
+      "bucket_name": "meteorshop-stg-private"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
