@@ -130,9 +130,22 @@ const warnOnAspectMismatch = (templates) => {
 export const getTemplateById = (templates, id) =>
   (Array.isArray(templates) ? templates : []).find((t) => t && t.id === id) || null;
 
-/** The slots a template actually defines a print area for (e.g. ['front','back']). */
+// Canonical slot order for every slot enumeration (step-2 tryckytor cards,
+// trycklista, preview tabs, mockup/publish loops): chest → back → pocket →
+// sleeves. Needed because printAreas arrives as a FIRESTORE MAP, and Firestore
+// gives map keys back in no guaranteed order — raw Object.keys shuffled the
+// step-2 cards on every reload. Slots not listed here sort last, in map order.
+const SLOT_ORDER = ['front', 'back', 'pocket', 'left_sleeve', 'right_sleeve'];
+const slotRank = (slot) => {
+  const i = SLOT_ORDER.indexOf(slot);
+  return i === -1 ? SLOT_ORDER.length : i;
+};
+
+/** The slots a template actually defines a print area for, in canonical order
+ *  (e.g. ['front','back','pocket',…]). */
 export const templateSlots = (template) =>
-  template && template.printAreas ? Object.keys(template.printAreas) : [];
+  (template && template.printAreas ? Object.keys(template.printAreas) : [])
+    .sort((a, b) => slotRank(a) - slotRank(b));
 
 /** Drop the cache (e.g. after a platform edit) so the next load re-reads Firestore. */
 export const clearPodMockupTemplatesCache = () => {
