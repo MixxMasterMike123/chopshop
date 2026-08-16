@@ -27,6 +27,10 @@ import {
   listPublicProducts,
 } from "./catalog/public-catalog";
 import {
+  createCheckout,
+  parseCreateCheckoutInput,
+} from "./commerce/checkout";
+import {
   deleteAdminObject,
   deliverAdminObject,
   getAdminObjectMetadata,
@@ -55,6 +59,7 @@ const READINESS_PATH = "/ready";
 const STOREFRONT_PATH = "/v1/storefront";
 const PRODUCTS_PATH = "/v1/products";
 const PRODUCT_PATH_PREFIX = "/v1/products/";
+const CHECKOUT_PATH = "/v1/checkout";
 const ADMIN_PRODUCTS_PATH = "/v1/admin/products";
 const ADMIN_PRODUCT_PATH_PREFIX = "/v1/admin/products/";
 const ADMIN_OBJECTS_PATH = "/v1/admin/objects";
@@ -62,7 +67,7 @@ const ADMIN_OBJECT_PATH_PREFIX = "/v1/admin/objects/";
 const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
 const PLATFORM_BOOTSTRAP_PATH = "/v1/platform/bootstrap";
-const REQUIRED_MIGRATION = "0006_object_store.sql";
+const REQUIRED_MIGRATION = "0007_checkout.sql";
 
 type AdminProductAction = "publish" | "unpublish";
 
@@ -525,6 +530,82 @@ async function handleAdminObjectRoute(
     : adminNotFoundResponse();
 }
 
+function unprocessableResponse(): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "unprocessable",
+        message: "Request could not be processed",
+      },
+    },
+    422,
+  );
+}
+
+/**
+ * Anonymous storefront checkout. The tenant comes from the verified hostname
+ * and nothing else — an x-shop-id header or a forwarded-host claim is never
+ * consulted — so a caller can only ever price against the storefront it is
+ * actually talking to.
+ *
+ * There is no session and no same-origin check, and both omissions are
+ * deliberate: this surface accepts unauthenticated buyers by design, and CSRF
+ * protection is meaningless for a request that carries no ambient credential.
+ * A forged cross-site POST here can create a checkout, which is exactly what an
+ * honest buyer's browser does too, and it grants the attacker nothing: the
+ * response is the only place the checkout id appears.
+ *
+ * The 422 is deliberately opaque about which line failed. Naming the offending
+ * item would turn this route into a catalogue oracle that reveals which product
+ * and variant ids exist, are active, and belong to this tenant.
+ *
+ * TODO(rate-limit checkpoint): this is an unauthenticated write that inserts
+ * rows and runs one query per item. It needs a per-tenant and per-IP limiter
+ * before it faces real traffic.
+ */
+async function handleCheckoutRoute(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return notFoundResponse("Route not found");
+  }
+
+  const tenant = await resolveRequestTenant(env.DB, request);
+  if (tenant === null) {
+    return notFoundResponse("Checkout not found");
+  }
+
+  const input = parseCreateCheckoutInput(await readJsonBody(request));
+  if (input === null) {
+    return invalidRequestResponse();
+  }
+
+  const result = await createCheckout(env.DB, tenant, input, Date.now());
+  if (result.status === "ok") {
+    // A replay answers 200 rather than 201: the checkout already existed, and
+    // the status code is the only honest way to say so without changing body.
+    return jsonResponse(
+      { checkout: result.checkout },
+      result.replayed ? 200 : 201,
+    );
+  }
+
+  if (result.status === "invalid_items") {
+    return unprocessableResponse();
+  }
+
+  return jsonResponse(
+    {
+      error: {
+        code: "conflict",
+        message: "Idempotency key was already used for a different request",
+      },
+    },
+    409,
+  );
+}
+
 function platformResultResponse(
   result: DomainResult | MembershipResult | TenantResult,
   successStatus: number,
@@ -705,6 +786,10 @@ export default {
       }
 
       return notFoundResponse("Product not found");
+    }
+
+    if (url.pathname === CHECKOUT_PATH) {
+      return handleCheckoutRoute(env, request);
     }
 
     if (

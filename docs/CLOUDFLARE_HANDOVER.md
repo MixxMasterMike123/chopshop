@@ -269,6 +269,16 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Gate 280/280 green; control-byte scan clean. Full loop proven in tests: bootstrap → sign-in through the worker → `POST /v1/platform/tenants` 201.
 - Bootstrap procedure for the owner: `openssl rand -base64 48 | npx wrangler secret put BOOTSTRAP_TOKEN` (from `cloudflare/`), then one `POST /v1/platform/bootstrap` with header `x-bootstrap-token` and body `{email, password}`. Afterward the token secret can be deleted (`npx wrangler secret delete BOOTSTRAP_TOKEN`) — the route is dead either way once an admin exists.
 
+## Checkpoint 18 — Server-authoritative checkout creation (deployed; no payment provider yet)
+
+- First Wave-4/P2 slice: `POST /v1/checkout` (public, hostname tenancy) + `0007_checkout.sql` (`checkouts`, `checkout_items`).
+- **The server is the only source of money**: requests carry only productId/variantId/quantity; sku/name/price/currency come from the tenant's published catalogue (same predicates as the public storefront query — nothing hidden is purchasable). Bodies containing price/sku/name keys are rejected outright by the strict allowlist. Variants must belong to the tenant AND the named product.
+- Totals contract enforced in schema: `total = subtotal + shipping + vat - discount` CHECK, `line_total = quantity × unit_price` CHECK; shipping/vat/discount are 0 until their engines land. Item snapshots frozen by trigger; 9 triggers incl. product/variant tenant-match guards the FKs alone can't provide.
+- **Idempotency**: caller key hashed as SHA-256(`tenant:key`), UNIQUE per tenant; insert-first, on collision compare freshly-resolved server lines (incl. name) against stored — match → replay (200, same checkout), mismatch (incl. price/name changed since) → 409, so a stale price is never silently honoured. Error-matching narrowed to the idempotency index by name.
+- Builder ran an adversarial self-review that found and fixed 3 issues (missing product/variant tenant-match triggers, name missing from replay fingerprint, over-broad UNIQUE matching); Fable reviewed line-by-line after.
+- Known accepted gaps for later checkpoints (documented in code): no rate limiting on this anonymous write (amplification ~50 D1 reads/request — must land before real traffic), line-resolution timing reveals resolve depth, no Turnstile, no shipping/VAT/discount, no PaymentIntent (nullable unique `payment_intent_id` column is the Stripe seam).
+- Migration 0007 applied to staging D1; `/ready` requires it. Gate 356/356 green (76 new tests); deployed and smoke-tested live.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
