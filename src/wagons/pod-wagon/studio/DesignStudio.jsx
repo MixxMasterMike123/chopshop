@@ -56,6 +56,7 @@ import { deriveVariantsFromGroups } from '../../../utils/variantDerivation';
 import { setMapping } from '../../../utils/podMappings';
 import { priceFloor } from '../podPricing';
 import { STORE } from '../../../config/store';
+import { orderedVariantMockupUrls } from './mockupVariantImages';
 
 // Validation is ADVISORY (podValidation's contract: "WARN/FAIL never blocks — it
 // guides the seller; the printer decides"). The studio therefore selects ANY
@@ -504,7 +505,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   //   validate → resolve per-shop-unique sku → upload hero + every mockup blob to
   //   the PUBLIC product path (the pod-artwork drafts are admin-read-only) → build
   //   resolved variant groups (selected colourways, per-colourway FRONT mockup as
-  //   the group image, chosen sizes, explicit per-row price or '') →
+  //   primary + BACK as secondary, chosen sizes, explicit per-row price or '') →
   //   deriveVariantsFromGroups → build the product doc EXACTLY like ProductForm →
   //   addDoc → setMapping parent rows (one per designed slot) → setMapping override
   //   rows (one per slot×overridden-colourway) → success.
@@ -597,21 +598,13 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       const heroUrl = await uploadBlobToPublicPath(hero.objectUrl, hero.type, publicPath, 'b2c_main');
 
       // Upload the published mockups (in mockups-array order → gallery order).
-      // Track the FRONT mockup url per colourway for its variant group image.
       // Parallel uploads — Promise.all preserves input order, so galleryUrls[i]
       // still corresponds to pubMockups[i] (the index-join below depends on it).
       const galleryUrls = await Promise.all(pubMockups.map((m) =>
         uploadBlobToPublicPath(m.objectUrl, m.type, publicPath, `mockup_${m.colorwayId}_${m.slot}`)
       ));
-      const frontUrlByColorway = {};
-      pubMockups.forEach((m, i) => {
-        if (m.slot === 'front') frontUrlByColorway[m.colorwayId] = galleryUrls[i];
-      });
-
-      // 3. Build resolved variant groups — one per SELECTED colourway. Its image is
-      // that colourway's FRONT mockup (fallback: any mockup for it, then hero).
-      const anyUrlByColorway = {};
-      pubMockups.forEach((m, i) => { if (!(m.colorwayId in anyUrlByColorway)) anyUrlByColorway[m.colorwayId] = galleryUrls[i]; });
+      // 3. Build resolved variant groups — one per SELECTED colourway. Front is
+      // primary and the matching back is secondary when both were designed.
       const colorwayLabel = (id) =>
         (selectedTemplate?.colorways || []).find((c) => c.id === id)?.label || id;
       // publishedIds order defines resolvedGroups order — and the derivation
@@ -620,13 +613,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       const publishedIds = (selectedColorwayIds || []).filter((id) => selectedSet.has(id));
       const resolvedGroups = publishedIds
         .map((id) => {
-          const img = frontUrlByColorway[id] || anyUrlByColorway[id] || heroUrl;
+          const images = orderedVariantMockupUrls({
+            colorwayId: id, mockups: pubMockups, urls: galleryUrls, fallbackUrl: heroUrl,
+          });
           const explicit = (perColorwayPrices?.[id] ?? '').toString().trim();
           return {
             label: colorwayLabel(id),
             sku: '',                                   // auto-derive from product sku + label
             price: explicit === '' ? '' : explicit,    // '' inherits the product price
-            images: img ? [img] : [],
+            images,
             sizes: sizesByColorway?.[id] || [],
           };
         });
@@ -880,10 +875,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
       // Variant-group images on EXACT label matches (case-insensitive):
       // fill empty groups always, replace populated ones only on opt-in.
-      const frontUrlByLabel = {};
-      pubMockups.forEach((m, i) => {
-        if (m.slot === 'front') frontUrlByLabel[norm(m.colorwayLabel)] = galleryUrls[i];
-      });
+      const variantUrlsByLabel = {};
+      for (const id of selectedSet) {
+        const label = cwLabelOf(id);
+        if (!label) continue;
+        variantUrlsByLabel[norm(label)] = orderedVariantMockupUrls({
+          colorwayId: id, mockups: pubMockups, urls: galleryUrls, fallbackUrl: heroUrl,
+        });
+      }
       // NOTE both `image` AND `images` must be written: the storefront card
       // reads g.image / v.image, the product page reads variant.images — the
       // persisted shape carries both (variantDerivation CleanGroup/VariantRow).
@@ -893,27 +892,27 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         const updatedUrlByLabel = {};
         let changed = false;
         const groups = prod.variantGroups.map((g) => {
-          const url = frontUrlByLabel[norm(g?.label)];
-          if (!url) return g;
+          const urls = variantUrlsByLabel[norm(g?.label)];
+          if (!urls?.length) return g;
           const has = Array.isArray(g.images) ? g.images.length > 0 : Boolean(g.image);
           if (has && !replaceImages) return g;
           changed = true;
-          updatedUrlByLabel[norm(g.label)] = url;
+          updatedUrlByLabel[norm(g.label)] = urls;
           const rest = Array.isArray(g.images)
-            ? g.images.slice(1).filter((u) => pathOf(u) !== pathOf(url))
+            ? g.images.slice(1).filter((u) => !urls.some((url) => pathOf(u) === pathOf(url)))
             : [];
-          return { ...g, image: url, images: [url, ...rest] };
+          return { ...g, image: urls[0], images: [...urls, ...rest] };
         });
         if (changed) {
           updates.variantGroups = groups;
           if (Array.isArray(prod.variants) && prod.variants.length) {
             updates.variants = prod.variants.map((v) => {
-              const url = updatedUrlByLabel[norm(v?.group)];
-              if (!url) return v;
+              const urls = updatedUrlByLabel[norm(v?.group)];
+              if (!urls?.length) return v;
               const rest = Array.isArray(v.images)
-                ? v.images.slice(1).filter((u) => pathOf(u) !== pathOf(url))
+                ? v.images.slice(1).filter((u) => !urls.some((url) => pathOf(u) === pathOf(url)))
                 : [];
-              return { ...v, image: url, images: [url, ...rest] };
+              return { ...v, image: urls[0], images: [...urls, ...rest] };
             });
           }
         }
