@@ -42,6 +42,11 @@ import {
 // "advanced" blend modes implemented via backdrop-reading filters — without this
 // they don't composite (multiply rendered the artwork as a black slab).
 import 'pixi.js/advanced-blend-modes';
+// Pixi's default shader/uniform codegen goes through new Function — the admin
+// CSP (report-only today) flags that eval on every compositor boot, and would
+// break the studio outright the day script-src starts enforcing. This
+// side-effect import switches Pixi to its no-eval code paths.
+import 'pixi.js/unsafe-eval';
 
 // Blend modes we allow from config ('overlay' is often the most fabric-real:
 // shadows darken the ink, highlights lift it).
@@ -169,7 +174,16 @@ const loadDisplacementTexture = async (img, blurPx, contrast = 1, printArea = nu
  *   extractPNG() → Promise<Blob> — the product image at output resolution
  *   destroy()                    — full teardown (GPU + textures)
  */
-export const createDisplacementCompositor = async ({ view, printAreaMm, assets, tuning = {}, output }) => {
+export const createDisplacementCompositor = async ({
+  view, printAreaMm, assets, tuning = {}, output,
+  // Called ONCE if the browser revokes the WebGL context (GPU memory pressure —
+  // observed in Firefox during full mockup generation). After loss every
+  // compositor op is a silent no-op; the owner must swap to a fallback surface
+  // (previews) or rebuild on a fresh context (mockup session), NOT keep
+  // rendering — Pixi throws "this.resources is null" from a dead context, and
+  // an uncaught throw in a React effect white-screens the whole admin.
+  onContextLost = null,
+} = {}) => {
   if (!view?.w || !view?.h || !view?.printArea) throw new Error('3D-mockup: ogiltig vy-konfiguration.');
   if (!printAreaMm?.w || !printAreaMm?.h) throw new Error('3D-mockup: printAreaMm saknas.');
   if (!assets?.photoUrl || !assets?.displacementUrl) throw new Error('3D-mockup: foto eller displacement-karta saknas i konfigurationen.');
@@ -290,10 +304,20 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     surfaceUrl: assets.displacementUrl,
   };
   let destroyed = false;
+  let contextLost = false;
   let contrastToken = 0; // guards against out-of-order async rebuilds
   let surfaceToken = 0;
   let photoToken = 0;
   let artworkToken = 0;
+
+  // The browser fires webglcontextlost the moment it revokes the context —
+  // flag it immediately (renderer state may lag) and tell the owner once.
+  const handleContextLost = () => {
+    if (contextLost || destroyed) return;
+    contextLost = true;
+    try { onContextLost?.(); } catch { /* owner callback must never crash us */ }
+  };
+  app.canvas.addEventListener('webglcontextlost', handleContextLost);
   // antialias:'on' forces the filter's INTERMEDIATE render target to be
   // multisampled. Without it (Pixi's default is 'off' even when the Application
   // has antialias:true — the app flag only AAs final-stage geometry, not a
@@ -359,10 +383,17 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     artSprite.rotation = ((p.rotationDeg || 0) * Math.PI) / 180;
   };
 
-  const render = () => { if (!destroyed) app.render(); };
-  const contextIsLost = () => Boolean(
+  const contextIsLost = () => contextLost || Boolean(
     app.renderer?.context?.isLost || app.renderer?.gl?.isContextLost?.()
   );
+  // Rendering on a dead context is what crashed the whole admin to a white
+  // screen (Pixi: "this.resources is null") — every render funnels through
+  // this guard, and belt-and-braces catches the race where the context dies
+  // between the check and the draw (loss originates in the driver, not JS).
+  const render = () => {
+    if (destroyed || contextIsLost()) return;
+    try { app.render(); } catch { handleContextLost(); }
+  };
 
   // Read back what the compositor ACTUALLY drew, from the presented canvas.
   //
@@ -452,12 +483,13 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   // resolves after a newer one must NOT overwrite the newer texture. Bails if the
   // compositor was destroyed mid-rebuild.
   //
-  // TEXTURE LIFECYCLE: never explicitly destroy a Texture or TextureSource here.
-  // Pixi may reuse Texture objects and cache GPU BindGroups across compositors;
-  // destroying a source during one mockup's teardown can therefore leave the
-  // still-live step-4 preview with a null bind-group resource. Renderer teardown
-  // releases this compositor's GPU resources. We only drop our JS references and
-  // let Pixi/the browser collect the texture objects once nobody uses them.
+  // MAP-TEXTURE LIFECYCLE: never explicitly destroy a DISPLACEMENT-MAP texture
+  // here — they're cached and re-handed-out by surfaceTextures (front/back
+  // swaps), so a destroy would kill a texture a later setSurface re-installs
+  // (and historically left a still-live preview with a null bind-group
+  // resource). Swapped-out maps PARK until renderer teardown releases them.
+  // Photo/artwork textures are different: single-owner, never cached — those
+  // are freed at swap time in setPhoto/setArtwork (GPU-pressure fix).
   const parkedTextures = [];
   const surfaceKeyFor = (url, area, contrast = state.displacementContrast) =>
     `${url}:${area.x}:${area.y}:${area.w}:${area.h}:${dispBlur}:${contrast}`;
@@ -510,7 +542,13 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       photo.texture = tex;
       photo.width = view.w;
       photo.height = view.h;
-      if (oldTex && oldTex !== Texture.EMPTY && oldTex !== tex) parkedTextures.push(oldTex);
+      // Photo textures are PRIVATE to this compositor (every loadTexture
+      // decodes its own <img> → its own TextureSource; no cross-compositor
+      // bind-group sharing, unlike the map textures in surfaceTextures) — so
+      // the swapped-out one is freed NOW. Parking them held ~17MB GPU per
+      // colourway swap; a full 8-colour × front/back generation run
+      // accumulated hundreds of MB and cost Firefox the WebGL context.
+      if (oldTex && oldTex !== Texture.EMPTY && oldTex !== tex) oldTex.destroy(true);
       render();
     },
 
@@ -541,7 +579,8 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       if (destroyed || myToken !== artworkToken) return;
       const oldTex = artSprite.texture;
       artSprite.texture = tex;
-      if (oldTex && oldTex !== Texture.EMPTY && oldTex !== tex) parkedTextures.push(oldTex);
+      // Private texture, same reasoning as setPhoto — free on swap.
+      if (oldTex && oldTex !== Texture.EMPTY && oldTex !== tex) oldTex.destroy(true);
       applyPlacement();
       render();
     },
@@ -598,6 +637,7 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       artworkToken += 1;
       parkedTextures.length = 0;
       surfaceTextures.clear();
+      app.canvas.removeEventListener('webglcontextlost', handleContextLost);
       // removeView:true — the compositor owns its canvas; if a caller appended
       // it to the DOM, destroy detaches it there too.
       app.destroy(true, { children: true });

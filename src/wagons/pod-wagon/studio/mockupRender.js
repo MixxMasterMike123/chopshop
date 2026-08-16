@@ -116,61 +116,75 @@ export const renderMockup = async ({
     const bgSrc = await backgroundImageSource(template, colorway, {
       widthPx: W, heightPx: H, slot,
     });
+    const mapW = displacement.w || template.photo.w;
+    const mapH = displacement.h || template.photo.h;
+    const sx = mapW / viewBox.w;
+    const sy = mapH / viewBox.h;
+    const printArea = {
+      x: areaRect.x * sx,
+      y: areaRect.y * sy,
+      w: areaRect.w * sx,
+      h: areaRect.h * sy,
+    };
     let compositor = session?._get(sessionKey) || null;
-    try {
-      const mapW = displacement.w || template.photo.w;
-      const mapH = displacement.h || template.photo.h;
-      const sx = mapW / viewBox.w;
-      const sy = mapH / viewBox.h;
-      const printArea = {
-        x: areaRect.x * sx,
-        y: areaRect.y * sy,
-        w: areaRect.w * sx,
-        h: areaRect.h * sy,
-      };
-      if (compositor) {
-        // Reused renderer: swap the view's map/geometry and this colourway's
-        // photo. The compositor caches processed map textures per (url, area),
-        // so front/back alternation costs no re-processing.
-        await compositor.setSurface({
-          printArea, printAreaMm: template.printAreaMm?.[slot], displacementUrl,
-        });
-        await compositor.setPhoto(bgSrc);
-      } else {
-        const { createDisplacementCompositor } = await import('./pixi/displacementCompositor');
-        compositor = await createDisplacementCompositor({
-          view: { w: mapW, h: mapH, printArea },
-          printAreaMm: template.printAreaMm?.[slot],
-          assets: { photoUrl: bgSrc, displacementUrl },
-          tuning: {
-            displacementScale: displacement.scale ?? 30,
-            displacementBlur: displacement.blur ?? 6,
-            displacementContrast: displacement.contrast ?? 1,
-            blend: displacement.blend || 'normal',
-            alpha: displacement.alpha ?? 1,
-          },
-          output: { w: W, h: H },
-        });
-        session?._set(sessionKey, compositor);
+    // A reused session compositor may sit on a REVOKED WebGL context (the
+    // browser reclaims contexts under GPU pressure — Firefox does this mid-
+    // generation). That failure earns ONE retry on a freshly created context;
+    // a failure on a fresh compositor means WebGL itself is unhealthy, so it
+    // falls through to the flat renderer without burning another context.
+    const attempts = compositor ? 2 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        if (compositor) {
+          // Reused renderer: swap the view's map/geometry and this colourway's
+          // photo. The compositor caches processed map textures per (url, area),
+          // so front/back alternation costs no re-processing.
+          await compositor.setSurface({
+            printArea, printAreaMm: template.printAreaMm?.[slot], displacementUrl,
+          });
+          await compositor.setPhoto(bgSrc);
+        } else {
+          const { createDisplacementCompositor } = await import('./pixi/displacementCompositor');
+          compositor = await createDisplacementCompositor({
+            view: { w: mapW, h: mapH, printArea },
+            printAreaMm: template.printAreaMm?.[slot],
+            assets: { photoUrl: bgSrc, displacementUrl },
+            tuning: {
+              displacementScale: displacement.scale ?? 30,
+              displacementBlur: displacement.blur ?? 6,
+              displacementContrast: displacement.contrast ?? 1,
+              blend: displacement.blend || 'normal',
+              alpha: displacement.alpha ?? 1,
+            },
+            output: { w: W, h: H },
+          });
+          session?._set(sessionKey, compositor);
+        }
+        await compositor.setArtwork(artwork.previewUrl);
+        compositor.setPlacement(p);
+        if (!compositor.hasVisibleArtwork()) {
+          throw new Error('WebGL-renderingen utelämnade motivet.');
+        }
+        // Pixi extraction is deliberately PNG: browser WebP encoders can leave a
+        // WebGL readback promise unresolved (observed in headless Chrome). Return
+        // the actual type so upload paths and download extensions stay truthful.
+        const blob = await compositor.extractPNG();
+        if (!session) compositor.destroy();
+        return { blob, type: blob.type, width: W, height: H };
+      } catch (error) {
+        // WebGL can be evicted or unavailable on memory-constrained admin tabs.
+        // A product image is still more useful than a frozen workflow, so this
+        // one output continues through the deterministic flat 2D renderer below.
+        console.warn(
+          attempt + 1 < attempts
+            ? 'Displacement mockup failed; retrying on a fresh WebGL context.'
+            : 'Displacement mockup failed; using the flat renderer.',
+          error
+        );
+        session?._drop(sessionKey);
+        try { compositor?.destroy(); } catch { /* renderer may already be invalid */ }
+        compositor = null;
       }
-      await compositor.setArtwork(artwork.previewUrl);
-      compositor.setPlacement(p);
-      if (!compositor.hasVisibleArtwork()) {
-        throw new Error('WebGL-renderingen utelämnade motivet.');
-      }
-      // Pixi extraction is deliberately PNG: browser WebP encoders can leave a
-      // WebGL readback promise unresolved (observed in headless Chrome). Return
-      // the actual type so upload paths and download extensions stay truthful.
-      const blob = await compositor.extractPNG();
-      if (!session) compositor.destroy();
-      return { blob, type: blob.type, width: W, height: H };
-    } catch (error) {
-      // WebGL can be evicted or unavailable on memory-constrained admin tabs.
-      // A product image is still more useful than a frozen workflow, so this
-      // one output continues through the deterministic flat 2D renderer below.
-      console.warn('Displacement mockup failed; using the flat renderer.', error);
-      session?._drop(sessionKey);
-      try { compositor?.destroy(); } catch { /* renderer may already be invalid */ }
     }
   }
 

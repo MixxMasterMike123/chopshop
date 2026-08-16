@@ -43,7 +43,13 @@ const DisplacementPreview = forwardRef(({
 
     (async () => {
       try {
-        const comp = await createDisplacementCompositor(cfg);
+        const comp = await createDisplacementCompositor({
+          ...cfg,
+          // GPU memory pressure can revoke the context mid-session (seen in
+          // Firefox during mockup generation). The compositor goes inert; show
+          // the Swedish error panel instead of rendering a dead canvas.
+          onContextLost: () => setError('3D-vyn tappade grafikminnet — ladda om sidan för att visa den igen.'),
+        });
         if (!alive) { comp.destroy(); return; }
         compRef.current = comp;
         // The canvas renders at output resolution; CSS scales it responsively.
@@ -62,7 +68,7 @@ const DisplacementPreview = forwardRef(({
       alive = false;
       setReady(false);
       if (compRef.current) {
-        compRef.current.destroy();
+        try { compRef.current.destroy(); } catch { /* context may already be lost */ }
         compRef.current = null;
       }
     };
@@ -79,14 +85,17 @@ const DisplacementPreview = forwardRef(({
     });
   }, [ready, artworkUrl]);
 
+  // try/catch: a throw from a dead WebGL context inside a React effect is
+  // UNCAUGHT — it unmounts the whole admin to a white screen (Firefox context
+  // loss, 2026-08-17). The compositor no-ops after loss, this is the backstop.
   useEffect(() => {
     if (!ready || !compRef.current || !placement) return;
-    compRef.current.setPlacement(placement);
+    try { compRef.current.setPlacement(placement); } catch { /* dead context */ }
   }, [ready, placement]);
 
   useEffect(() => {
     if (!ready || !compRef.current || !tuning) return;
-    compRef.current.setTuning(tuning);
+    try { compRef.current.setTuning(tuning); } catch { /* dead context */ }
   }, [ready, tuning]);
 
   useImperativeHandle(ref, () => ({

@@ -68,6 +68,9 @@ const DisplacedTemplatePreview = ({
           },
           printAreaMm: initialSurface.printAreaMm,
           assets: { photoUrl: initialPhotoUrl, displacementUrl: initialSurface.displacementUrl },
+          // Context revoked under GPU pressure → drop straight to the flat DOM
+          // preview via the parent's error path (the compositor is inert now).
+          onContextLost: () => onError(new Error('WebGL-kontexten gick förlorad.')),
           tuning: {
             displacementScale: displacement.scale ?? 30,
             displacementBlur: displacement.blur ?? 6,
