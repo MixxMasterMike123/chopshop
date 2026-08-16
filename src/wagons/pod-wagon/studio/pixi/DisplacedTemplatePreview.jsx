@@ -1,5 +1,5 @@
 // Live photo-displacement layer for the ordinary step-4 placement canvas.
-// This module is lazy-loaded by CompositorCanvas so Pixi stays out of the main
+// The Pixi engine itself is dynamically imported so it stays out of the main
 // studio bundle until a template actually has registered fabric maps.
 import React, { useEffect, useRef } from 'react';
 import { backgroundUrl, templateViewBox, viewForSlot } from '../TemplateBackground';
@@ -10,12 +10,16 @@ const DisplacedTemplatePreview = ({
   const canvasRef = useRef(null);
   const compositorRef = useRef(null);
   const placementRef = useRef(placement);
+  const photoUrlRef = useRef(null);
+  const artworkUrlRef = useRef(artworkUrl);
   placementRef.current = placement;
 
   const viewBox = templateViewBox(template);
   const displacement = template?.photo?.displacement;
   const mapUrl = displacement?.urls?.[viewForSlot(slot)] || null;
   const photoUrl = backgroundUrl(template, colorway, slot);
+  photoUrlRef.current = photoUrl;
+  artworkUrlRef.current = artworkUrl;
   const area = template?.printAreas?.[slot];
   const areaMm = template?.printAreaMm?.[slot];
 
@@ -23,7 +27,7 @@ const DisplacedTemplatePreview = ({
     let cancelled = false;
     let compositor = null;
     const canvas = canvasRef.current;
-    if (!canvas || !viewBox || !mapUrl || !photoUrl || !area || !areaMm || !artworkUrl) return undefined;
+    if (!canvas || !viewBox || !mapUrl || !photoUrlRef.current || !area || !areaMm || !artworkUrlRef.current) return undefined;
 
     const mapW = displacement.w || viewBox.w;
     const mapH = displacement.h || viewBox.h;
@@ -32,6 +36,7 @@ const DisplacedTemplatePreview = ({
 
     (async () => {
       try {
+        const initialPhotoUrl = photoUrlRef.current;
         const { createDisplacementCompositor } = await import('./displacementCompositor');
         compositor = await createDisplacementCompositor({
           view: {
@@ -45,7 +50,7 @@ const DisplacedTemplatePreview = ({
             },
           },
           printAreaMm: areaMm,
-          assets: { photoUrl, displacementUrl: mapUrl },
+          assets: { photoUrl: initialPhotoUrl, displacementUrl: mapUrl },
           tuning: {
             displacementScale: displacement.scale ?? 30,
             displacementBlur: displacement.blur ?? 6,
@@ -57,12 +62,14 @@ const DisplacedTemplatePreview = ({
           // canvas only renders at the template/display resolution for snappy drag.
           output: { w: viewBox.w, h: viewBox.h, canvas },
         });
-        await compositor.setArtwork(artworkUrl);
-        compositor.setPlacement(placementRef.current);
-        if (cancelled) {
-          compositor.destroy();
-          return;
+        if (cancelled) { compositor.destroy(); return; }
+        await compositor.setArtwork(artworkUrlRef.current);
+        if (cancelled) { compositor.destroy(); return; }
+        if (photoUrlRef.current !== initialPhotoUrl) {
+          await compositor.setPhoto(photoUrlRef.current);
         }
+        if (cancelled) { compositor.destroy(); return; }
+        compositor.setPlacement(placementRef.current);
         compositorRef.current = compositor;
       } catch {
         compositor?.destroy();
@@ -75,12 +82,26 @@ const DisplacedTemplatePreview = ({
       compositor?.destroy();
     };
   }, [
-    template?.id, colorway?.id, slot, artworkUrl, photoUrl, mapUrl,
+    template?.id, slot, mapUrl,
     viewBox?.w, viewBox?.h, area?.x, area?.y, area?.w, area?.h,
     areaMm?.w, areaMm?.h, displacement?.w, displacement?.h,
     displacement?.scale, displacement?.blur, displacement?.contrast,
     displacement?.blend, displacement?.alpha,
   ]);
+
+  // Colour changes replace one photo texture inside the existing renderer. The
+  // full-resolution displacement map and WebGL context are deliberately reused.
+  useEffect(() => {
+    const compositor = compositorRef.current;
+    if (!compositor || !photoUrl) return;
+    compositor.setPhoto(photoUrl).catch(() => {});
+  }, [photoUrl]);
+
+  useEffect(() => {
+    const compositor = compositorRef.current;
+    if (!compositor || !artworkUrl) return;
+    compositor.setArtwork(artworkUrl).catch(() => {});
+  }, [artworkUrl]);
 
   useEffect(() => {
     if (placement) compositorRef.current?.setPlacement(placement);

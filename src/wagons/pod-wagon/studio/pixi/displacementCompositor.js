@@ -161,6 +161,7 @@ const loadDisplacementTexture = async (img, blurPx, contrast = 1, printArea = nu
  *
  * compositor:
  *   canvas                       — the live <canvas> (append it to the DOM)
+ *   setPhoto(url) → Promise      — replace only the garment photo (map/GPU stay live)
  *   setArtwork(url) → Promise    — load/replace the artwork texture
  *   setPlacement({xMm,yMm,wMm,rotationDeg}) — reposition (artwork aspect from its texture)
  *   setTuning({displacementScale?, displacementContrast?, blend?, alpha?}) — live tuning knobs
@@ -267,6 +268,8 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   };
   let destroyed = false;
   let contrastToken = 0; // guards against out-of-order async rebuilds
+  let photoToken = 0;
+  let artworkToken = 0;
   // antialias:'on' forces the filter's INTERMEDIATE render target to be
   // multisampled. Without it (Pixi's default is 'off' even when the Application
   // has antialias:true — the app flag only AAs final-stage geometry, not a
@@ -329,7 +332,7 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     artSprite.rotation = ((p.rotationDeg || 0) * Math.PI) / 180;
   };
 
-  const render = () => app.render();
+  const render = () => { if (!destroyed) app.render(); };
 
   // Rebuild the displacement texture with the current contrast (re-runs the
   // canvas pass on the original map image) and hot-swap it into the sprite. The
@@ -368,20 +371,38 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   return {
     canvas: app.canvas,
 
-    async setArtwork(url) {
+    async setPhoto(url) {
+      const myToken = ++photoToken;
       const tex = await loadTexture(url);
+      if (destroyed || myToken !== photoToken) { tex.destroy(true); return; }
+      const oldTex = photo.texture;
+      photo.texture = tex;
+      photo.width = view.w;
+      photo.height = view.h;
+      if (oldTex && oldTex !== Texture.EMPTY && oldTex !== tex) parkedTextures.push(oldTex);
+      render();
+    },
+
+    async setArtwork(url) {
+      const myToken = ++artworkToken;
+      const tex = await loadTexture(url);
+      if (destroyed || myToken !== artworkToken) { tex.destroy(true); return; }
+      const oldTex = artSprite.texture;
       artSprite.texture = tex;
+      if (oldTex && oldTex !== Texture.EMPTY && oldTex !== tex) parkedTextures.push(oldTex);
       applyPlacement();
       render();
     },
 
     setPlacement(placement) {
+      if (destroyed) return;
       state.placement = placement;
       applyPlacement();
       render();
     },
 
     setTuning({ displacementScale, displacementContrast, blend, alpha } = {}) {
+      if (destroyed) return;
       if (displacementScale !== undefined) state.displacementScale = displacementScale;
       if (blend !== undefined && ALLOWED_BLENDS.has(blend)) state.blend = blend;
       if (alpha !== undefined) state.alpha = alpha;
@@ -395,6 +416,7 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     },
 
     async extractPNG() {
+      if (destroyed) throw new Error('Mockup-kompositorn är stängd.');
       render();
       const canvas = app.renderer.extract.canvas(app.stage);
       return new Promise((resolve, reject) => {
@@ -406,7 +428,10 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     },
 
     destroy() {
+      if (destroyed) return;
       destroyed = true; // any in-flight contrast rebuild will no-op on resolve
+      photoToken += 1;
+      artworkToken += 1;
       // Free the parked (swapped-out) displacement textures. The LIVE one is
       // owned by dispSprite and freed by app.destroy(texture:true) below.
       for (const t of parkedTextures) { try { t.destroy(true); } catch { /* already gone */ } }

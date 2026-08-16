@@ -811,6 +811,46 @@ const MockupDmVerifyBench = () => {
   );
 };
 
+const MockupDmColorStressBench = () => {
+  const art = useMemo(
+    () => makeArtwork('dm-color-stress', 'Färgbyte-test', 1200, 1600, '#e2574c', '#2c4b6e', '#ffffff'),
+    []
+  );
+  const [index, setIndex] = useState(0);
+  const [swaps, setSwaps] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setIndex((value) => (value + 1) % WIZARD_TEE_COLORWAYS.length);
+      setSwaps((value) => {
+        const next = value + 1;
+        if (next >= 80) {
+          window.clearInterval(timer);
+          window.__mockupDmColorStressReady = true;
+        }
+        return next;
+      });
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="mx-auto max-w-[620px] p-6">
+      <h1 className="mb-1 text-[16px] font-semibold text-admin-text">Color swap stress test</h1>
+      <p className="mb-4 text-[12px] text-admin-text-muted">
+        {swaps}/80 byten · {WIZARD_TEE_COLORWAYS[index].label}
+      </p>
+      <CompositorCanvas
+        template={WIZARD_TEE}
+        colorway={WIZARD_TEE_COLORWAYS[index]}
+        slot="front"
+        artwork={art}
+        profile={{ min_dpi: 72, target_dpi: 150 }}
+      />
+    </div>
+  );
+};
+
 const WizardBench = () => {
   const arts = useMemo(() => [
     makeArtwork('art-dark', 'Mörkt motiv 1200×1600', 1200, 1600, '#e2574c', '#2c4b6e', '#ffffff'),
@@ -838,6 +878,9 @@ const HarnessRoot = () => {
   }
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('verify') === 'mockup-dm') {
     return <MockupDmVerifyBench />;
+  }
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('verify') === 'mockup-dm-colors') {
+    return <MockupDmColorStressBench />;
   }
   // ?wizard=1 → the FULL DesignStudio (wizard build 2026-08-10). Seed the module
   // caches BEFORE the studio's mount effect calls the loaders (idempotent).
