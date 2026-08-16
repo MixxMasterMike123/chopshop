@@ -851,6 +851,46 @@ const MockupDmColorStressBench = () => {
   );
 };
 
+const MockupDmSurfaceStressBench = () => {
+  const art = useMemo(
+    () => makeArtwork('dm-surface-stress', 'Sidbyte-test', 1200, 1600, '#e2574c', '#2c4b6e', '#ffffff'),
+    []
+  );
+  const [swaps, setSwaps] = useState(0);
+  const slot = swaps % 2 === 0 ? 'front' : 'back';
+  const colorway = WIZARD_TEE_COLORWAYS[swaps % WIZARD_TEE_COLORWAYS.length];
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setSwaps((value) => {
+        const next = value + 1;
+        if (next >= 61) {
+          window.clearInterval(timer);
+          window.__mockupDmSurfaceStressReady = true;
+        }
+        return next;
+      });
+    }, 150);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="mx-auto max-w-[620px] p-6">
+      <h1 className="mb-1 text-[16px] font-semibold text-admin-text">Front/back stress test</h1>
+      <p className="mb-4 text-[12px] text-admin-text-muted">
+        {swaps}/61 byten · {slot} · {colorway.label}
+      </p>
+      <CompositorCanvas
+        template={WIZARD_TEE}
+        colorway={colorway}
+        slot={slot}
+        artwork={art}
+        profile={{ min_dpi: 72, target_dpi: 150 }}
+      />
+    </div>
+  );
+};
+
 const WizardBench = () => {
   const arts = useMemo(() => [
     makeArtwork('art-dark', 'Mörkt motiv 1200×1600', 1200, 1600, '#e2574c', '#2c4b6e', '#ffffff'),
@@ -881,6 +921,9 @@ const HarnessRoot = () => {
   }
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('verify') === 'mockup-dm-colors') {
     return <MockupDmColorStressBench />;
+  }
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('verify') === 'mockup-dm-surfaces') {
+    return <MockupDmSurfaceStressBench />;
   }
   // ?wizard=1 → the FULL DesignStudio (wizard build 2026-08-10). Seed the module
   // caches BEFORE the studio's mount effect calls the loaders (idempotent).

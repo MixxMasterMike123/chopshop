@@ -12,6 +12,7 @@ const DisplacedTemplatePreview = ({
   const placementRef = useRef(placement);
   const photoUrlRef = useRef(null);
   const artworkUrlRef = useRef(artworkUrl);
+  const surfaceRef = useRef(null);
   placementRef.current = placement;
 
   const viewBox = templateViewBox(template);
@@ -22,35 +23,42 @@ const DisplacedTemplatePreview = ({
   artworkUrlRef.current = artworkUrl;
   const area = template?.printAreas?.[slot];
   const areaMm = template?.printAreaMm?.[slot];
+  const mapW = displacement?.w || viewBox?.w;
+  const mapH = displacement?.h || viewBox?.h;
+  const sx = viewBox?.w ? mapW / viewBox.w : 1;
+  const sy = viewBox?.h ? mapH / viewBox.h : 1;
+  const surface = area && areaMm && mapUrl ? {
+    key: `${mapUrl}:${area.x}:${area.y}:${area.w}:${area.h}:${areaMm.w}:${areaMm.h}`,
+    displacementUrl: mapUrl,
+    printArea: {
+      x: area.x * sx,
+      y: area.y * sy,
+      w: area.w * sx,
+      h: area.h * sy,
+    },
+    printAreaMm: areaMm,
+  } : null;
+  surfaceRef.current = surface;
 
   useEffect(() => {
     let cancelled = false;
     let compositor = null;
     const canvas = canvasRef.current;
-    if (!canvas || !viewBox || !mapUrl || !photoUrlRef.current || !area || !areaMm || !artworkUrlRef.current) return undefined;
-
-    const mapW = displacement.w || viewBox.w;
-    const mapH = displacement.h || viewBox.h;
-    const sx = mapW / viewBox.w;
-    const sy = mapH / viewBox.h;
+    if (!canvas || !viewBox || !surfaceRef.current || !photoUrlRef.current || !artworkUrlRef.current) return undefined;
 
     (async () => {
       try {
         const initialPhotoUrl = photoUrlRef.current;
+        const initialSurface = surfaceRef.current;
         const { createDisplacementCompositor } = await import('./displacementCompositor');
         compositor = await createDisplacementCompositor({
           view: {
             w: mapW,
             h: mapH,
-            printArea: {
-              x: area.x * sx,
-              y: area.y * sy,
-              w: area.w * sx,
-              h: area.h * sy,
-            },
+            printArea: initialSurface.printArea,
           },
-          printAreaMm: areaMm,
-          assets: { photoUrl: initialPhotoUrl, displacementUrl: mapUrl },
+          printAreaMm: initialSurface.printAreaMm,
+          assets: { photoUrl: initialPhotoUrl, displacementUrl: initialSurface.displacementUrl },
           tuning: {
             displacementScale: displacement.scale ?? 30,
             displacementBlur: displacement.blur ?? 6,
@@ -69,6 +77,10 @@ const DisplacedTemplatePreview = ({
           await compositor.setPhoto(photoUrlRef.current);
         }
         if (cancelled) { compositor.destroy(); return; }
+        if (surfaceRef.current?.key !== initialSurface.key) {
+          await compositor.setSurface(surfaceRef.current);
+        }
+        if (cancelled) { compositor.destroy(); return; }
         compositor.setPlacement(placementRef.current);
         compositorRef.current = compositor;
       } catch {
@@ -82,12 +94,18 @@ const DisplacedTemplatePreview = ({
       compositor?.destroy();
     };
   }, [
-    template?.id, slot, mapUrl,
-    viewBox?.w, viewBox?.h, area?.x, area?.y, area?.w, area?.h,
-    areaMm?.w, areaMm?.h, displacement?.w, displacement?.h,
+    template?.id, viewBox?.w, viewBox?.h, displacement?.w, displacement?.h,
     displacement?.scale, displacement?.blur, displacement?.contrast,
     displacement?.blend, displacement?.alpha,
   ]);
+
+  // Front/back changes hot-swap the registered map and physical print geometry
+  // inside the same WebGL renderer; no context teardown/recreation on navigation.
+  useEffect(() => {
+    const compositor = compositorRef.current;
+    if (!compositor || !surface) return;
+    compositor.setSurface(surface).catch(() => {});
+  }, [surface?.key]);
 
   // Colour changes replace one photo texture inside the existing renderer. The
   // full-resolution displacement map and WebGL context are deliberately reused.

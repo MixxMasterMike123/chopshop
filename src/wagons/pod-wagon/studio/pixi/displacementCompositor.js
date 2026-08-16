@@ -205,11 +205,12 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   // The map's ORIGINAL HTMLImageElement is kept in closure so displacementContrast
   // can be re-applied LIVE (rebuild the canvas pass) without re-fetching.
   const dispBlur = tuning.displacementBlur ?? 6;
-  const [photoTex, dispImg, maskTex] = await Promise.all([
+  const [photoTex, initialDispImg, maskTex] = await Promise.all([
     loadTexture(assets.photoUrl),
     loadImage(assets.displacementUrl),
     assets.maskUrl ? loadTexture(assets.maskUrl) : Promise.resolve(null),
   ]);
+  let dispImg = initialDispImg;
   const dispTex = await loadDisplacementTexture(dispImg, dispBlur, tuning.displacementContrast ?? 1, view.printArea);
 
   // 1) Base: the blank-garment photograph, filling the view.
@@ -265,9 +266,12 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     blend: ALLOWED_BLENDS.has(tuning.blend) ? tuning.blend : 'multiply',
     alpha: tuning.alpha ?? 0.8,
     placement: null,
+    surfaceKey: null,
+    surfaceUrl: assets.displacementUrl,
   };
   let destroyed = false;
   let contrastToken = 0; // guards against out-of-order async rebuilds
+  let surfaceToken = 0;
   let photoToken = 0;
   let artworkToken = 0;
   // antialias:'on' forces the filter's INTERMEDIATE render target to be
@@ -286,8 +290,8 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   });
   artLayer.filters = [dispFilter];
 
-  const pxPerMmX = view.printArea.w / printAreaMm.w;
-  const pxPerMmY = view.printArea.h / printAreaMm.h;
+  let pxPerMmX = view.printArea.w / printAreaMm.w;
+  let pxPerMmY = view.printArea.h / printAreaMm.h;
 
   const applyTuning = () => {
     dispFilter.scale.set(state.displacementScale);
@@ -354,6 +358,31 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   // negligible, and correctness beats it. The dead ones from stale/aborted
   // rebuilds (never rendered, never bound) ARE safe to free immediately.
   const parkedTextures = [];
+  const surfaceKeyFor = (url, area, contrast = state.displacementContrast) =>
+    `${url}:${area.x}:${area.y}:${area.w}:${area.h}:${dispBlur}:${contrast}`;
+  state.surfaceKey = surfaceKeyFor(assets.displacementUrl, view.printArea);
+  const surfaceTextures = new Map([
+    [state.surfaceKey, { texture: dispTex, image: dispImg }],
+  ]);
+  const surfaceLoads = new Map();
+
+  const loadSurfaceTexture = (url, area) => {
+    const key = surfaceKeyFor(url, area);
+    if (surfaceTextures.has(key)) return Promise.resolve({ key, ...surfaceTextures.get(key) });
+    if (surfaceLoads.has(key)) return surfaceLoads.get(key);
+    const pending = (async () => {
+      const image = await loadImage(url);
+      const texture = await loadDisplacementTexture(
+        image, dispBlur, state.displacementContrast, area
+      );
+      if (destroyed) { texture.destroy(true); return null; }
+      const loaded = { texture, image };
+      surfaceTextures.set(key, loaded);
+      return { key, ...loaded };
+    })().finally(() => surfaceLoads.delete(key));
+    surfaceLoads.set(key, pending);
+    return pending;
+  };
   const rebuildDisplacement = async () => {
     const myToken = ++contrastToken;
     const nextTex = await loadDisplacementTexture(dispImg, dispBlur, state.displacementContrast, view.printArea);
@@ -362,6 +391,8 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     const oldTex = dispSprite.texture;
     dispSprite.texture = nextTex;
     if (oldTex && oldTex !== nextTex) parkedTextures.push(oldTex); // free at teardown
+    state.surfaceKey = surfaceKeyFor(state.surfaceUrl, view.printArea);
+    surfaceTextures.set(state.surfaceKey, { texture: nextTex, image: dispImg });
     render();
   };
 
@@ -380,6 +411,29 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       photo.width = view.w;
       photo.height = view.h;
       if (oldTex && oldTex !== Texture.EMPTY && oldTex !== tex) parkedTextures.push(oldTex);
+      render();
+    },
+
+    async setSurface({ printArea, printAreaMm: nextAreaMm, displacementUrl }) {
+      if (!printArea?.w || !printArea?.h || !nextAreaMm?.w || !nextAreaMm?.h || !displacementUrl) return;
+      const myToken = ++surfaceToken;
+      const loaded = await loadSurfaceTexture(displacementUrl, printArea);
+      if (!loaded || destroyed || myToken !== surfaceToken) return;
+
+      dispSprite.texture = loaded.texture;
+      dispImg = loaded.image;
+      state.surfaceKey = loaded.key;
+      state.surfaceUrl = displacementUrl;
+      view.printArea = { ...printArea };
+      pxPerMmX = printArea.w / nextAreaMm.w;
+      pxPerMmY = printArea.h / nextAreaMm.h;
+
+      // Registered tee surfaces use the generated rectangular mask. Rebuild it
+      // in place so front/back can share one renderer and one React canvas.
+      if (!maskTex && mask instanceof Graphics) {
+        mask.clear().rect(printArea.x, printArea.y, printArea.w, printArea.h).fill(0xffffff);
+      }
+      applyPlacement();
       render();
     },
 
@@ -430,12 +484,18 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     destroy() {
       if (destroyed) return;
       destroyed = true; // any in-flight contrast rebuild will no-op on resolve
+      surfaceToken += 1;
       photoToken += 1;
       artworkToken += 1;
       // Free the parked (swapped-out) displacement textures. The LIVE one is
       // owned by dispSprite and freed by app.destroy(texture:true) below.
-      for (const t of parkedTextures) { try { t.destroy(true); } catch { /* already gone */ } }
+      const liveDispTexture = dispSprite.texture;
+      const retiredTextures = new Set(parkedTextures);
+      for (const item of surfaceTextures.values()) retiredTextures.add(item.texture);
+      retiredTextures.delete(liveDispTexture);
+      for (const t of retiredTextures) { try { t.destroy(true); } catch { /* already gone */ } }
       parkedTextures.length = 0;
+      surfaceTextures.clear();
       // Live step-4 previews pass a React-owned canvas. Destroy the renderer and
       // GPU resources there, but leave the DOM node for React to reconcile.
       app.destroy(ownsCanvas, { children: true, texture: true });
