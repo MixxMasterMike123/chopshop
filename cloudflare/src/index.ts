@@ -46,7 +46,7 @@ const ADMIN_PRODUCTS_PATH = "/v1/admin/products";
 const ADMIN_PRODUCT_PATH_PREFIX = "/v1/admin/products/";
 const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
-const REQUIRED_MIGRATION = "0005_catalogue.sql";
+const REQUIRED_MIGRATION = "0006_object_store.sql";
 
 type AdminProductAction = "publish" | "unpublish";
 

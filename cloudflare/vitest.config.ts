@@ -22,6 +22,9 @@ export default defineConfig({
               "test-only-better-auth-secret-at-least-32-characters",
             TEST_MIGRATIONS: migrations,
           },
+          // Test-only: the deploy config has no R2 binding yet, so the object
+          // store must be exercised against a local bucket.
+          r2Buckets: ["PRIVATE_BUCKET"],
         },
       };
     }),

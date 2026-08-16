@@ -241,6 +241,16 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Builder mutation-verified the suite (sign-up added to allowlist, prefix matching, unconfigured guard removed — each broke the right tests).
 - Local gate: 181/181 tests green. Deployed to staging: live `/api/auth/sign-in/email` still fail-closed 404 because the staging secret intentionally does not exist yet. **To open sign-in: owner runs `npx wrangler secret put BETTER_AUTH_SECRET` (32+ chars) in `cloudflare/` — note `wrangler secret` is not in the current permission allowlist.**
 
+## Checkpoint 15 — R2 object ownership contracts (deployed; buckets NOT yet created)
+
+- `0006_object_store.sql`: `stored_objects` — the canonical D1 ownership record for every future R2 object. R2 keys are never authorization; delivery resolves the row first. Applied to staging D1 (8 commands).
+- Key containment CHECK uses byte-exact `substr()` comparison, NOT `LIKE` — the builder proved computed-pattern LIKE is unsound as a containment invariant (`_` wildcard: tenant `a_b` would accept `shops/axb/…`; ASCII case-insensitivity: tenant `abc` would accept `shops/ABC/…`).
+- Freeze semantics: `immutable = 1` rows can be metadata-touched but never re-pointed, re-hashed, tombstoned, or unfrozen (two triggers). Status machine `pending → active → deleted(soft)`; pending objects are not deliverable.
+- `src/storage/object-store.ts`: reserve (versioned keys `shops/{tenant}/{kind}/{id}/v1/{safeName}`, kind→bucket 1:1 map), activate (validated size/sha256), freeze, authorized-get (D1 row is sole authority), soft-delete, and `deliverPrivateObject` which fails closed when the row isn't private/active or the `PRIVATE_BUCKET` binding is absent. Binding exists ONLY in vitest/miniflare; `wrangler.jsonc` untouched, deploy dry-run confirms no R2 binding.
+- Fable review finding: the content-type validator contained literal invisible control bytes (`\x00`,`\x1f`,`\x7f`) inside a regex class — functionally near-correct but unreviewable (it rendered as `[ -]`). Replaced with a visible RFC 7230 `type/subtype` token pattern + regression tests (hyphenated types accepted; parameters, spaces, CR/LF smuggling rejected). Control-byte scan of `src/` and `test/` is otherwise clean.
+- `/ready` now requires `0006_object_store.sql`. Local gate 204/204 green.
+- Next R2 step for the owner/agent: create `meteorshop-stg-public`, `meteorshop-stg-private`, `meteorshop-stg-temp` buckets, add the bindings to `wrangler.jsonc`, and build upload-grant/finalize + delivery routes on top of these contracts.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
