@@ -736,8 +736,8 @@ const WIZARD_TEE = {
       scale: 40,
       blur: 6,
       contrast: 1,
-      blend: 'multiply',
-      alpha: 0.83,
+      blend: 'normal',
+      alpha: 0.8,
     },
   },
   colorways: WIZARD_TEE_COLORWAYS,
@@ -787,7 +787,7 @@ const MockupDmVerifyBench = () => {
   return (
     <div className="mx-auto max-w-[1400px] p-6">
       <h1 className="mb-1 text-[16px] font-semibold text-admin-text">Mockup displacement verify</h1>
-      <p className="mb-4 text-[12px] text-admin-text-muted">Befintliga fram-/bakmått · scale 40 · blur 6 · multiply · 83%</p>
+      <p className="mb-4 text-[12px] text-admin-text-muted">Befintliga fram-/bakmått · scale 40 · blur 6 · normal · 80%</p>
       {error && <p className="text-admin-critical-text">{error}</p>}
       <div className="grid grid-cols-3 gap-5">
         <figure>
