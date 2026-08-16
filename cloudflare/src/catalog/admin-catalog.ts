@@ -1,13 +1,28 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
+import type {
+  ShippingRates,
+  ShippingRatesWire,
+} from "../commerce/shipping";
+import {
+  MAX_WEIGHT_GRAMS,
+  normalizeShippingRates,
+  toShippingRatesWire,
+} from "../commerce/shipping";
 
 export interface AdminProduct {
+  allowPickup: boolean;
+  allowShipping: boolean;
   currency: string;
   description: string | null;
   name: string;
   priceMinor: number;
   productId: string;
+  // The admin-facing `{region: {cost}}` form, identical to what a write sends
+  // and to what the column stores, so a product round-trips unchanged.
+  shippingRates: ShippingRatesWire | null;
   sku: string;
   status: ProductStatus;
+  weightGrams: number;
 }
 
 export type ProductStatus = "draft" | "active" | "archived";
@@ -17,44 +32,64 @@ export type AdminCatalogResult =
   | { status: "conflict" | "invalid" | "not_found" };
 
 export interface CreateProductInput {
+  allowPickup?: boolean;
+  allowShipping?: boolean;
   currency: string;
   description: string | null;
   name: string;
   priceMinor: number;
+  shippingRates?: ShippingRates | null;
   sku: string;
+  weightGrams?: number;
 }
 
 export interface UpdateProductInput {
+  allowPickup?: boolean;
+  allowShipping?: boolean;
   description?: string | null;
   name?: string;
   priceMinor?: number;
+  shippingRates?: ShippingRates | null;
   sku?: string;
   status?: ProductStatus;
+  weightGrams?: number;
 }
 
 interface ProductRow {
+  allow_pickup: number;
+  allow_shipping: number;
   currency: string;
   description: string | null;
   name: string;
   b2c_price_minor: number;
   product_id: string;
+  shipping_json: string | null;
   sku: string;
   status: ProductStatus;
+  weight_grams: number;
 }
 
 const CREATE_KEYS = [
+  "allowPickup",
+  "allowShipping",
   "currency",
   "description",
   "name",
   "priceMinor",
+  "shippingRates",
   "sku",
+  "weightGrams",
 ] as const;
 const UPDATE_KEYS = [
+  "allowPickup",
+  "allowShipping",
   "description",
   "name",
   "priceMinor",
+  "shippingRates",
   "sku",
   "status",
+  "weightGrams",
 ] as const;
 const PRODUCT_STATUSES: ProductStatus[] = ["draft", "active", "archived"];
 const SKU_MAX_LENGTH = 64;
@@ -62,8 +97,17 @@ const NAME_MAX_LENGTH = 200;
 const DESCRIPTION_MAX_LENGTH = 2_000;
 const PRICE_MINOR_MAX = 100_000_000;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
+// Defaults for a freshly created product, matching the schema's column
+// defaults. Shipping is permitted and pickup is not: a merchant who has not
+// configured collection cannot honour a collected order, and defaulting the
+// other way would let a buyer zero the carriage on a product nobody agreed to
+// hand over in person.
+const DEFAULT_WEIGHT_GRAMS = 0;
+const DEFAULT_ALLOW_SHIPPING = true;
+const DEFAULT_ALLOW_PICKUP = false;
 const PRODUCT_SELECT = `SELECT
-     product_id, sku, name, description, b2c_price_minor, currency, status
+     product_id, sku, name, description, b2c_price_minor, currency, status,
+     weight_grams, allow_shipping, allow_pickup, shipping_json
    FROM products
    WHERE tenant_id = ?
      AND product_id = ?
@@ -122,6 +166,46 @@ function parseCurrency(value: unknown): string | null {
     : null;
 }
 
+function parseWeightGrams(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_WEIGHT_GRAMS
+    ? value
+    : null;
+}
+
+/**
+ * Strictly boolean. A truthy 1 or "true" is refused rather than coerced: these
+ * two flags decide whether a basket may skip carriage, so a caller that sends
+ * the wrong type should be told it sent the wrong type, not quietly granted the
+ * meaning the coercion happened to produce.
+ */
+function parseBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+/**
+ * The per-region carriage table. Shape validation is delegated to the same
+ * gate the checkout engine reads with, so a table that can be written here is
+ * exactly a table that prices correctly there — unknown region keys, non-integer
+ * costs, and out-of-range costs are all rejected, and the whole object is
+ * refused rather than partially accepted.
+ *
+ * `null` is a meaningful value: it clears the table back to the fallback
+ * tariff. `undefined` (absent key) means "leave unchanged" and is distinguished
+ * from it by the caller.
+ */
+function parseShippingRatesInput(
+  value: unknown,
+): ShippingRates | null | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  return normalizeShippingRates(value) ?? undefined;
+}
+
 function parseStatus(value: unknown): ProductStatus | null {
   return typeof value === "string" &&
     (PRODUCT_STATUSES as string[]).includes(value)
@@ -155,7 +239,47 @@ export function parseCreateProductInput(
     return null;
   }
 
-  return { currency, description, name, priceMinor, sku };
+  const input: CreateProductInput = {
+    currency,
+    description,
+    name,
+    priceMinor,
+    sku,
+  };
+
+  if (body.weightGrams !== undefined) {
+    const weightGrams = parseWeightGrams(body.weightGrams);
+    if (weightGrams === null) {
+      return null;
+    }
+    input.weightGrams = weightGrams;
+  }
+
+  if (body.allowShipping !== undefined) {
+    const allowShipping = parseBoolean(body.allowShipping);
+    if (allowShipping === null) {
+      return null;
+    }
+    input.allowShipping = allowShipping;
+  }
+
+  if (body.allowPickup !== undefined) {
+    const allowPickup = parseBoolean(body.allowPickup);
+    if (allowPickup === null) {
+      return null;
+    }
+    input.allowPickup = allowPickup;
+  }
+
+  if (body.shippingRates !== undefined) {
+    const shippingRates = parseShippingRatesInput(body.shippingRates);
+    if (shippingRates === undefined) {
+      return null;
+    }
+    input.shippingRates = shippingRates;
+  }
+
+  return input;
 }
 
 export function parseUpdateProductInput(
@@ -207,19 +331,99 @@ export function parseUpdateProductInput(
     input.status = status;
   }
 
+  if (body.weightGrams !== undefined) {
+    const weightGrams = parseWeightGrams(body.weightGrams);
+    if (weightGrams === null) {
+      return null;
+    }
+    input.weightGrams = weightGrams;
+  }
+
+  if (body.allowShipping !== undefined) {
+    const allowShipping = parseBoolean(body.allowShipping);
+    if (allowShipping === null) {
+      return null;
+    }
+    input.allowShipping = allowShipping;
+  }
+
+  if (body.allowPickup !== undefined) {
+    const allowPickup = parseBoolean(body.allowPickup);
+    if (allowPickup === null) {
+      return null;
+    }
+    input.allowPickup = allowPickup;
+  }
+
+  if (body.shippingRates !== undefined) {
+    const shippingRates = parseShippingRatesInput(body.shippingRates);
+    if (shippingRates === undefined) {
+      return null;
+    }
+    input.shippingRates = shippingRates;
+  }
+
   return Object.keys(input).length === 0 ? null : input;
 }
 
 function toAdminProduct(row: ProductRow): AdminProduct {
   return {
+    allowPickup: row.allow_pickup === 1,
+    allowShipping: row.allow_shipping === 1,
     currency: row.currency,
     description: row.description,
     name: row.name,
     priceMinor: row.b2c_price_minor,
     productId: row.product_id,
+    // Re-validated on the way out with the same gate that guards the way in. A
+    // row that somehow holds a malformed blob reports no table rather than
+    // handing an admin a shape the checkout engine will refuse to price from.
+    shippingRates: toWire(storedShippingRates(row)),
     sku: row.sku,
     status: row.status,
+    weightGrams: row.weight_grams,
   };
+}
+
+function safeParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+/** The stored carriage table in internal form, or null when there is none. */
+function storedShippingRates(row: ProductRow): ShippingRates | null {
+  return emptyToNull(
+    normalizeShippingRates(
+      row.shipping_json === null ? null : safeParseJson(row.shipping_json),
+    ),
+  );
+}
+
+/** Internal → admin-facing, preserving 'no table' as null rather than {}. */
+function toWire(rates: ShippingRates | null): ShippingRatesWire | null {
+  return rates === null ? null : toShippingRatesWire(rates);
+}
+
+/**
+ * The stored form of a carriage table: the same `{region: {cost}}` shape the
+ * admin sends and reads back, so the column holds exactly what the parser
+ * accepts and `parseShippingRates` can validate it on the way out with the same
+ * gate that guarded the way in.
+ *
+ * `null` and an empty table are stored identically as SQL NULL: an object with
+ * no regions configures nothing, and keeping two encodings of "no table" would
+ * mean two code paths that must stay in agreement forever.
+ */
+function serializeShippingRates(rates: ShippingRates | null): string | null {
+  const stored = emptyToNull(rates);
+  return stored === null ? null : JSON.stringify(toShippingRatesWire(stored));
+}
+
+function emptyToNull(rates: ShippingRates | null): ShippingRates | null {
+  return rates === null || Object.keys(rates).length === 0 ? null : rates;
 }
 
 function isUniqueConstraintFailure(error: unknown): boolean {
@@ -269,6 +473,10 @@ export async function createAdminProduct(
   now: number,
 ): Promise<AdminCatalogResult> {
   const productId = crypto.randomUUID();
+  const weightGrams = input.weightGrams ?? DEFAULT_WEIGHT_GRAMS;
+  const allowShipping = input.allowShipping ?? DEFAULT_ALLOW_SHIPPING;
+  const allowPickup = input.allowPickup ?? DEFAULT_ALLOW_PICKUP;
+  const shippingRates = input.shippingRates ?? null;
 
   try {
     await db.batch([
@@ -276,8 +484,9 @@ export async function createAdminProduct(
         .prepare(
           `INSERT INTO products (
             product_id, tenant_id, status, sku, name, description,
-            b2c_price_minor, currency, is_pod, created_at, updated_at
-          ) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, 0, ?, ?)`,
+            b2c_price_minor, currency, is_pod, weight_grams,
+            allow_shipping, allow_pickup, shipping_json, created_at, updated_at
+          ) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           productId,
@@ -287,6 +496,10 @@ export async function createAdminProduct(
           input.description,
           input.priceMinor,
           input.currency,
+          weightGrams,
+          allowShipping ? 1 : 0,
+          allowPickup ? 1 : 0,
+          serializeShippingRates(shippingRates),
           now,
           now,
         ),
@@ -301,13 +514,17 @@ export async function createAdminProduct(
 
   return {
     product: {
+      allowPickup,
+      allowShipping,
       currency: input.currency,
       description: input.description,
       name: input.name,
       priceMinor: input.priceMinor,
       productId,
+      shippingRates: toWire(emptyToNull(shippingRates)),
       sku: input.sku,
       status: "draft",
+      weightGrams,
     },
     status: "ok",
   };
@@ -325,16 +542,33 @@ export async function updateAdminProduct(
     return { status: "not_found" };
   }
 
+  const current = toAdminProduct(existing);
+  // The carriage table is carried in internal form through this function and
+  // converted once, below, so the value that is serialized to the column and
+  // the value that is returned come from the same source.
+  // `undefined` leaves the table alone; an explicit `null` clears it. An empty
+  // object is stored as no table at all, so it is reported that way too — the
+  // response must describe the row that was actually written.
+  const nextRates = emptyToNull(
+    input.shippingRates === undefined
+      ? storedShippingRates(existing)
+      : input.shippingRates,
+  );
+
   const next: AdminProduct = {
-    currency: existing.currency,
+    allowPickup: input.allowPickup ?? current.allowPickup,
+    allowShipping: input.allowShipping ?? current.allowShipping,
+    currency: current.currency,
     description: input.description === undefined
-      ? existing.description
+      ? current.description
       : input.description,
-    name: input.name ?? existing.name,
-    priceMinor: input.priceMinor ?? existing.b2c_price_minor,
+    name: input.name ?? current.name,
+    priceMinor: input.priceMinor ?? current.priceMinor,
     productId,
-    sku: input.sku ?? existing.sku,
-    status: input.status ?? existing.status,
+    shippingRates: toWire(nextRates),
+    sku: input.sku ?? current.sku,
+    status: input.status ?? current.status,
+    weightGrams: input.weightGrams ?? current.weightGrams,
   };
 
   const publication = await db
@@ -353,7 +587,8 @@ export async function updateAdminProduct(
       .prepare(
         `UPDATE products
          SET sku = ?, name = ?, description = ?, b2c_price_minor = ?,
-             status = ?, updated_at = ?
+             status = ?, weight_grams = ?, allow_shipping = ?,
+             allow_pickup = ?, shipping_json = ?, updated_at = ?
          WHERE tenant_id = ?
            AND product_id = ?`,
       )
@@ -363,6 +598,10 @@ export async function updateAdminProduct(
         next.description,
         next.priceMinor,
         next.status,
+        next.weightGrams,
+        next.allowShipping ? 1 : 0,
+        next.allowPickup ? 1 : 0,
+        serializeShippingRates(nextRates),
         now,
         principal.tenantId,
         productId,

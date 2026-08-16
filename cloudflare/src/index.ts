@@ -68,7 +68,7 @@ const ADMIN_OBJECT_PATH_PREFIX = "/v1/admin/objects/";
 const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
 const PLATFORM_BOOTSTRAP_PATH = "/v1/platform/bootstrap";
-const REQUIRED_MIGRATION = "0008_rate_limits.sql";
+const REQUIRED_MIGRATION = "0009_checkout_totals_v2.sql";
 
 const MINUTE_MS = 60 * 1_000;
 

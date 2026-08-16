@@ -17,13 +17,17 @@ interface SignedUpUser {
 
 interface AdminProductBody {
   product: {
+    allowPickup: boolean;
+    allowShipping: boolean;
     currency: string;
     description: string | null;
     name: string;
     priceMinor: number;
     productId: string;
+    shippingRates: Record<string, { cost: number }> | null;
     sku: string;
     status: string;
+    weightGrams: number;
   };
 }
 
@@ -231,13 +235,20 @@ describe("tenant-admin catalogue lifecycle", () => {
 
     expect(created.status).toBe(201);
     expect(createdBody.product).toEqual({
+      // Delivery defaults: shippable, not collectable, weightless, no carriage
+      // table. A merchant who has configured no pickup point cannot honour a
+      // collected order, so pickup must be opted into rather than out of.
+      allowPickup: false,
+      allowShipping: true,
       currency: "SEK",
       description: "Soft cotton",
       name: "Lifecycle Tee",
       priceMinor: 19_900,
       productId: expect.any(String),
+      shippingRates: null,
       sku: "SKU-LIFECYCLE",
       status: "draft",
+      weightGrams: 0,
     });
 
     const productId = createdBody.product.productId;
@@ -793,5 +804,355 @@ describe("tenant-admin catalogue audit trail", () => {
     expect(row?.metadata_json).toBe(JSON.stringify({ fields: ["name", "priceMinor"] }));
     expect(row?.metadata_json).not.toContain("Secret New Name");
     expect(row?.metadata_json).not.toContain("7700");
+  });
+});
+
+/**
+ * The delivery/shipping fields the checkout engine prices from. These are
+ * canonical PRODUCT columns, deliberately not projected into
+ * product_publications: a buyer has no business learning a parcel's weight, and
+ * a projection copy would be one more thing that can drift from what the
+ * merchant configured.
+ */
+describe("tenant-admin delivery and shipping fields", () => {
+  let skuCounter = 0;
+
+  function nextSku(): string {
+    skuCounter += 1;
+    return `SKU-SHIP-${skuCounter.toString().padStart(3, "0")}`;
+  }
+
+  async function createWith(
+    extra: Record<string, unknown>,
+  ): Promise<Response> {
+    return createProduct(HOST_A, adminA.cookie, {
+      currency: "SEK",
+      description: null,
+      name: "Shipping fixture",
+      priceMinor: 10_000,
+      sku: nextSku(),
+      ...extra,
+    });
+  }
+
+  async function productRow(productId: string): Promise<{
+    allow_pickup: number;
+    allow_shipping: number;
+    shipping_json: string | null;
+    weight_grams: number;
+  } | null> {
+    return env.DB.prepare(
+      `SELECT weight_grams, allow_shipping, allow_pickup, shipping_json
+       FROM products WHERE product_id = ?`,
+    )
+      .bind(productId)
+      .first();
+  }
+
+  it("stores every delivery field a create supplies", async () => {
+    const created = await createWith({
+      allowPickup: true,
+      allowShipping: false,
+      shippingRates: { sweden: { cost: 2_500 }, worldwide: { cost: 9_900 } },
+      weightGrams: 450,
+    });
+    const { product } = await created.json<AdminProductBody>();
+
+    expect(created.status).toBe(201);
+    expect(product).toMatchObject({
+      allowPickup: true,
+      allowShipping: false,
+      shippingRates: { sweden: { cost: 2_500 }, worldwide: { cost: 9_900 } },
+      weightGrams: 450,
+    });
+
+    await expect(productRow(product.productId)).resolves.toEqual({
+      allow_pickup: 1,
+      allow_shipping: 0,
+      shipping_json: JSON.stringify({
+        sweden: { cost: 2_500 },
+        worldwide: { cost: 9_900 },
+      }),
+      weight_grams: 450,
+    });
+  });
+
+  it("leaves untouched delivery fields alone on a partial patch", async () => {
+    const created = await createWith({
+      allowPickup: true,
+      shippingRates: { sweden: { cost: 2_500 } },
+      weightGrams: 450,
+    });
+    const { product } = await created.json<AdminProductBody>();
+
+    const patched = await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products/${product.productId}`, "PATCH", {
+        body: { weightGrams: 900 },
+        cookie: adminA.cookie,
+      }),
+    );
+    const patchedBody = await patched.json<AdminProductBody>();
+
+    expect(patched.status).toBe(200);
+    expect(patchedBody.product).toMatchObject({
+      // Only the named field moved. A patch that reset the others to their
+      // defaults would silently withdraw a merchant's pickup offering.
+      allowPickup: true,
+      allowShipping: true,
+      shippingRates: { sweden: { cost: 2_500 } },
+      weightGrams: 900,
+    });
+  });
+
+  it("clears the carriage table on an explicit null", async () => {
+    const created = await createWith({
+      shippingRates: { sweden: { cost: 2_500 } },
+    });
+    const { product } = await created.json<AdminProductBody>();
+
+    const patched = await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products/${product.productId}`, "PATCH", {
+        body: { shippingRates: null },
+        cookie: adminA.cookie,
+      }),
+    );
+    const patchedBody = await patched.json<AdminProductBody>();
+
+    expect(patched.status).toBe(200);
+    expect(patchedBody.product.shippingRates).toBeNull();
+    await expect(productRow(product.productId)).resolves.toMatchObject({
+      shipping_json: null,
+    });
+  });
+
+  it("stores an empty carriage table as no table at all", async () => {
+    // Two encodings of "nothing configured" would be two code paths that must
+    // stay in agreement forever. There is one.
+    const created = await createWith({ shippingRates: {} });
+    const { product } = await created.json<AdminProductBody>();
+
+    expect(created.status).toBe(201);
+    expect(product.shippingRates).toBeNull();
+    await expect(productRow(product.productId)).resolves.toMatchObject({
+      shipping_json: null,
+    });
+  });
+
+  it.each([
+    ["a fractional weight", { weightGrams: 1.5 }],
+    ["a negative weight", { weightGrams: -1 }],
+    ["a weight above one tonne", { weightGrams: 1_000_001 }],
+    ["a weight as a string", { weightGrams: "450" }],
+    ["a weight as null", { weightGrams: null }],
+    ["a truthy number for a flag", { allowPickup: 1 }],
+    ["a string for a flag", { allowShipping: "true" }],
+    ["a null flag", { allowPickup: null }],
+    ["an unknown region key", { shippingRates: { mars: { cost: 100 } } }],
+    ["a region key in the wrong case", { shippingRates: { Sweden: { cost: 100 } } }],
+    ["a bare number instead of a cost object", { shippingRates: { sweden: 100 } }],
+    ["a cost object with an extra key", { shippingRates: { sweden: { cost: 100, currency: "SEK" } } }],
+    ["a cost object with no cost", { shippingRates: { sweden: {} } }],
+    ["a fractional cost", { shippingRates: { sweden: { cost: 1.5 } } }],
+    ["a negative cost", { shippingRates: { sweden: { cost: -1 } } }],
+    ["a cost above the ceiling", { shippingRates: { sweden: { cost: 10_000_001 } } }],
+    ["a cost as a string", { shippingRates: { sweden: { cost: "100" } } }],
+    ["a carriage table as an array", { shippingRates: [{ cost: 100 }] }],
+    ["a carriage table as a string", { shippingRates: "sweden:100" }],
+    ["one bad region among good ones", { shippingRates: { sweden: { cost: 100 }, mars: { cost: 100 } } }],
+  ])("rejects a create carrying %s", async (_label, extra) => {
+    const response = await createWith(extra);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "invalid_request", message: "Request is not valid" },
+    });
+  });
+
+  it.each([
+    ["a fractional weight", { weightGrams: 1.5 }],
+    ["a weight above one tonne", { weightGrams: 1_000_001 }],
+    ["a truthy number for a flag", { allowPickup: 1 }],
+    ["an unknown region key", { shippingRates: { mars: { cost: 100 } } }],
+    ["a negative cost", { shippingRates: { sweden: { cost: -1 } } }],
+    ["an unknown field", { shippingCost: 100 }],
+  ])("rejects a patch carrying %s", async (_label, body) => {
+    const created = await createWith({});
+    const { product } = await created.json<AdminProductBody>();
+
+    const patched = await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products/${product.productId}`, "PATCH", {
+        body,
+        cookie: adminA.cookie,
+      }),
+    );
+
+    expect(patched.status).toBe(400);
+  });
+
+  it("records changed field names in the audit row and never their values", async () => {
+    const created = await createWith({});
+    const { product } = await created.json<AdminProductBody>();
+
+    await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products/${product.productId}`, "PATCH", {
+        body: {
+          allowPickup: true,
+          shippingRates: { sweden: { cost: 4_242 } },
+          weightGrams: 777,
+        },
+        cookie: adminA.cookie,
+      }),
+    );
+
+    const event = await env.DB.prepare(
+      `SELECT metadata_json FROM audit_events
+       WHERE resource_id = ? AND action = 'product.update'`,
+    )
+      .bind(product.productId)
+      .first<{ metadata_json: string }>();
+
+    expect(event?.metadata_json).toBe(
+      JSON.stringify({ fields: ["allowPickup", "shippingRates", "weightGrams"] }),
+    );
+    // The numbers themselves are merchant configuration, not audit content.
+    expect(event?.metadata_json).not.toContain("4242");
+    expect(event?.metadata_json).not.toContain("777");
+  });
+
+  it("keeps the delivery fields out of the public projection", async () => {
+    const created = await createWith({
+      allowPickup: true,
+      shippingRates: { sweden: { cost: 2_500 } },
+      weightGrams: 450,
+    });
+    const { product } = await created.json<AdminProductBody>();
+
+    await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products/${product.productId}`, "PATCH", {
+        body: { status: "active" },
+        cookie: adminA.cookie,
+      }),
+    );
+    await exports.default.fetch(
+      adminRequest(
+        `${HOST_A}/v1/admin/products/${product.productId}/publish`,
+        "POST",
+        { cookie: adminA.cookie },
+      ),
+    );
+
+    const detail = await exports.default.fetch(
+      `${HOST_A}/v1/products/${product.productId}`,
+    );
+    const serialized = JSON.stringify(await detail.json());
+
+    expect(detail.status).toBe(200);
+    for (const leaked of [
+      "weightGrams",
+      "weight_grams",
+      "allowPickup",
+      "allowShipping",
+      "shippingRates",
+      "shipping_json",
+      "450",
+      "2500",
+    ]) {
+      expect(serialized).not.toContain(leaked);
+    }
+  });
+
+  it("round-trips a carriage table through write, read and rewrite", async () => {
+    // The write shape, the stored shape and the read shape must be one shape.
+    // If they diverge, a client that reads its own product and sends it back
+    // unchanged gets a 400 for a table it never edited.
+    const rates = { nordic: { cost: 4_400 }, sweden: { cost: 3_300 } };
+
+    const created = await createWith({ shippingRates: rates });
+    const { product } = await created.json<AdminProductBody>();
+    expect(product.shippingRates).toEqual(rates);
+
+    const rewritten = await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products/${product.productId}`, "PATCH", {
+        body: { shippingRates: product.shippingRates },
+        cookie: adminA.cookie,
+      }),
+    );
+    const rewrittenBody = await rewritten.json<AdminProductBody>();
+
+    expect(rewritten.status).toBe(200);
+    expect(rewrittenBody.product.shippingRates).toEqual(rates);
+
+    const stored = await productRow(product.productId);
+    expect(JSON.parse(stored?.shipping_json ?? "null")).toEqual(rates);
+  });
+
+  it("prices a checkout from a table written through the admin surface", async () => {
+    // The end-to-end claim the two shapes exist to support: what an admin
+    // configures is what a buyer is charged. Anything less than this test would
+    // let the write path and the pricing path agree on a shape only by luck.
+    const created = await createWith({
+      shippingRates: { sweden: { cost: 3_300 } },
+      weightGrams: 50,
+    });
+    const { product } = await created.json<AdminProductBody>();
+
+    await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products/${product.productId}`, "PATCH", {
+        body: { status: "active" },
+        cookie: adminA.cookie,
+      }),
+    );
+    await exports.default.fetch(
+      adminRequest(
+        `${HOST_A}/v1/admin/products/${product.productId}/publish`,
+        "POST",
+        { cookie: adminA.cookie },
+      ),
+    );
+
+    const checkout = await exports.default.fetch(
+      new Request(`${HOST_A}/v1/checkout`, {
+        body: JSON.stringify({
+          deliveryMethod: "shipping",
+          email: "admin-configured@example.test",
+          idempotencyKey: "admin-configured-rate",
+          items: [{ productId: product.productId, quantity: 1 }],
+          shippingCountry: "SE",
+        }),
+        headers: {
+          "cf-connecting-ip": "203.0.113.77",
+          "content-type": "application/json",
+        },
+        method: "POST",
+      }),
+    );
+    const body = await checkout.json<{
+      checkout: { shippingMinor: number; totalMinor: number; vatMinor: number };
+    }>();
+
+    expect(checkout.status).toBe(201);
+    // 50 g of product plus the 20 g packaging allowance is 70 g: two tiers of
+    // the configured 3 300, not of the 2 900 fallback — proof the admin-written
+    // table is what priced the basket.
+    expect(body.checkout.shippingMinor).toBe(6_600);
+    expect(body.checkout.totalMinor).toBe(16_600);
+    expect(body.checkout.vatMinor).toBe(3_320);
+  });
+
+  it("refuses another tenant's admin the same delivery edit", async () => {
+    const created = await createWith({});
+    const { product } = await created.json<AdminProductBody>();
+
+    const foreign = await exports.default.fetch(
+      adminRequest(`${HOST_B}/v1/admin/products/${product.productId}`, "PATCH", {
+        body: { allowPickup: true },
+        cookie: adminB.cookie,
+      }),
+    );
+
+    expect(foreign.status).toBe(404);
+    await expect(productRow(product.productId)).resolves.toMatchObject({
+      allow_pickup: 0,
+    });
   });
 });
