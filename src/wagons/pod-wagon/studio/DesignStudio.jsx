@@ -1088,6 +1088,50 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     if (nextIdx >= 0) goMotif(nextIdx);
   };
 
+  // Segmented surface switcher (steps 3/4/6). The old free-floating text pills
+  // were easy to miss on dual-surface garments ("Bröst/Rygg cta pretty obscure",
+  // Mikael 2026-08-17) — this is a proper segmented control: equal-width
+  // segments in a recessed track, the active one carried by a raised thumb
+  // that SLIDES between surfaces (continuity: same garment, different side).
+  // items: [{ key, label, done? }] — done renders the ✓ completion mark.
+  const SurfaceSwitcher = ({ items, activeIndex, onSelect, ariaLabel }) => {
+    if (items.length < 2) return null;
+    return (
+      <div
+        role="group"
+        aria-label={ariaLabel}
+        className="relative mb-3 grid w-full max-w-[520px] rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface-2 p-1"
+        style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
+      >
+        <span
+          aria-hidden="true"
+          className="pod-thumb absolute inset-y-1 left-1 rounded-[calc(var(--radius-admin-el)-4px)] bg-admin-surface shadow-[var(--shadow-admin)]"
+          style={{
+            width: `calc((100% - 8px) / ${items.length})`,
+            transform: `translateX(${activeIndex * 100}%)`,
+          }}
+        />
+        {items.map((it, i) => {
+          const active = i === activeIndex;
+          return (
+            <button
+              key={it.key}
+              type="button"
+              onClick={() => onSelect(i)}
+              aria-pressed={active}
+              className={`relative z-10 min-h-10 truncate px-3 text-center text-[13px] transition-colors duration-150 ${
+                active ? 'font-medium text-admin-text' : 'text-admin-text-muted hover:text-admin-text'
+              }`}
+            >
+              {it.done && <span className="pod-pop mr-1 inline-block text-admin-success-text">✓</span>}
+              {it.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   // Shared step-footer nav (Tillbaka · primary Klar/Nästa).
   const StepNav = ({ nextLabel, nextEnabled, onNext, hint = null }) => (
     <div className="mt-5 border-t border-admin-border-soft pt-4">
@@ -1214,7 +1258,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {/* ── 1 · PLAGG — page 1 of the wizard (Kents kedja 2026-08-10): the
           one-time garment choice, compact cards (critique P2). */}
       {step === 1 && (
-      <CardSection title="1 · Plagg" bodyClassName="p-4">
+      <CardSection title="1 · Plagg" className="pod-step-enter" bodyClassName="p-4">
         {templatesLoading ? (
           <p className="text-[13px] text-admin-text-muted">Laddar mallar…</p>
         ) : templatesError ? (
@@ -1276,7 +1320,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {/* ── 2 · TRYCKYTOR — big toggle cards, one per physical surface. The
           bröst+ficka collision (beslut 1) is explained ON the blocked card. */}
       {step === 2 && (
-      <CardSection title="2 · Tryckytor" bodyClassName="p-4">
+      <CardSection title="2 · Tryckytor" className="pod-step-enter" bodyClassName="p-4">
         <p className="text-[13px] text-admin-text-muted">
           Välj var på produkten det ska tryckas. Varje yta blir ett eget tryck med eget motiv.
         </p>
@@ -1306,7 +1350,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
               >
                 <span className="flex items-center justify-between gap-2">
                   <span className="text-[13px] font-medium text-admin-text">{labelForSlot(s)}</span>
-                  {selected && <span className="shrink-0 text-[11px] font-medium text-admin-info-text">✓ Valt</span>}
+                  {selected && <span className="pod-pop shrink-0 text-[11px] font-medium text-admin-info-text">✓ Valt</span>}
                 </span>
                 <span className={`mt-0.5 block text-[11px] ${blocked ? 'text-admin-caution-text' : 'text-admin-text-muted'}`}>
                   {blocked
@@ -1329,30 +1373,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           grid for the cursor's surface, chips to jump between surfaces (✓ =
           has motif), and a pick auto-advances to the next motif-less surface. */}
       {step === 3 && prints[mi] && (
-      <CardSection title="3 · Motiv" bodyClassName="p-4">
-        {prints.length > 1 && (
-          <div className="mb-3 flex flex-wrap items-center gap-1.5">
-            {prints.map((p, i) => {
-              const hasMotif = Boolean(p.artworkId);
-              const activeChip = i === mi;
-              return (
-                <button
-                  key={p.slot}
-                  type="button"
-                  onClick={() => goMotif(i)}
-                  aria-pressed={activeChip}
-                  className={`rounded-full border px-3 py-1.5 text-[12px] ${
-                    activeChip
-                      ? 'border-admin-info-dot bg-admin-info-bg font-medium text-admin-info-text'
-                      : 'border-admin-border text-admin-text-muted hover:bg-admin-surface-2'
-                  }`}
-                >
-                  {hasMotif ? '✓ ' : ''}{labelForSlot(p.slot)}
-                </button>
-              );
-            })}
-          </div>
-        )}
+      <CardSection title="3 · Motiv" className="pod-step-enter" bodyClassName="p-4">
+        <SurfaceSwitcher
+          ariaLabel="Byt tryckyta"
+          items={prints.map((p) => ({
+            key: p.slot, label: labelForSlot(p.slot), done: Boolean(p.artworkId),
+          }))}
+          activeIndex={mi}
+          onSelect={goMotif}
+        />
         <p className="text-[13px] font-semibold text-admin-text">
           Motiv för {labelForSlot(prints[mi].slot)}{prints.length > 1 ? ` — ${mi + 1} av ${prints.length}` : ''}
         </p>
@@ -1429,35 +1458,21 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           composites ALL designed prints on the flat (d004250). Pocket rows get
           the discrete position picker ONLY (beslut 2 — no free placement). */}
       {step === 4 && prints[pi] && (
-      <CardSection title="4 · Placering" bodyClassName="p-4">
+      <CardSection title="4 · Placering" className="pod-step-enter" bodyClassName="p-4">
         <p className="mb-3 text-[13px] text-admin-text-muted">
           Standardplaceringen är klar att använda. Dra eller ändra storlek bara om du vill justera resultatet.
         </p>
-        {prints.length > 1 && (
-          <div className="mb-3 flex flex-wrap items-center gap-1.5">
-            {prints.map((p, i) => {
-              const activeChip = i === pi;
-              const chipLabel = p.slot === 'pocket'
-                ? `${labelForSlot(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
-                : labelForSlot(p.slot);
-              return (
-                <button
-                  key={p.slot}
-                  type="button"
-                  onClick={() => goPlace(i)}
-                  aria-pressed={activeChip}
-                  className={`rounded-full border px-3 py-1.5 text-[12px] ${
-                    activeChip
-                      ? 'border-admin-info-dot bg-admin-info-bg font-medium text-admin-info-text'
-                      : 'border-admin-border text-admin-text-muted hover:bg-admin-surface-2'
-                  }`}
-                >
-                  {chipLabel}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        <SurfaceSwitcher
+          ariaLabel="Byt tryckyta"
+          items={prints.map((p) => ({
+            key: p.slot,
+            label: p.slot === 'pocket'
+              ? `${labelForSlot(p.slot)} · ${pocketPositionLabel(pocketPosition)}`
+              : labelForSlot(p.slot),
+          }))}
+          activeIndex={pi}
+          onSelect={goPlace}
+        />
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <p className="text-[13px] font-semibold text-admin-text">
             Placering för {labelForSlot(prints[pi].slot)}{prints.length > 1 ? ` — ${pi + 1} av ${prints.length}` : ''}
@@ -1560,7 +1575,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {/* ── 5 · FÄRGER — choose the sellable colour range before artwork
           variants and mockups. Every template colour starts selected. */}
       {step === 5 && (
-      <CardSection title="5 · Färger" bodyClassName="p-4">
+      <CardSection title="5 · Färger" className="pod-step-enter" bodyClassName="p-4">
         <ColorSelectionPanel
           template={selectedTemplate}
           selectedColorwayIds={selectedColorwayIds}
@@ -1573,30 +1588,16 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {/* ── 6 · MOTIV PER FÄRG — review selected combinations, set explicit
           per-colour overrides and surface advisory contrast warnings. */}
       {step === 6 && (
-      <CardSection title="6 · Godkänn" bodyClassName="p-4">
+      <CardSection title="6 · Godkänn" className="pod-step-enter" bodyClassName="p-4">
         <p className="mb-3 text-[13px] text-admin-text-muted">
           Granska varje färg innan mockuperna skapas. Byt motiv för en viss färg om kontrasten inte fungerar.
         </p>
-        {designedSlots(selectedTemplate).length > 1 && (
-          <div className="mb-3 flex flex-wrap items-center gap-1.5">
-            <span className="text-[12px] text-admin-text-muted">Förhandsvisa yta:</span>
-            {designedSlots(selectedTemplate).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setSlot(s)}
-                aria-pressed={s === slot}
-                className={`rounded-[var(--radius-admin-el)] px-2.5 py-1.5 text-[12px] ${
-                  s === slot
-                    ? 'bg-admin-surface-3 font-medium text-admin-text'
-                    : 'text-admin-text-muted hover:bg-admin-surface-2'
-                }`}
-              >
-                {labelForSlot(s)}
-              </button>
-            ))}
-          </div>
-        )}
+        <SurfaceSwitcher
+          ariaLabel="Förhandsvisa yta"
+          items={designedSlots(selectedTemplate).map((s) => ({ key: s, label: labelForSlot(s) }))}
+          activeIndex={Math.max(0, designedSlots(selectedTemplate).indexOf(slot))}
+          onSelect={(i) => setSlot(designedSlots(selectedTemplate)[i])}
+        />
         {selectedTemplate && (
           <ColorwayStrip
             template={effTemplate}
@@ -1626,7 +1627,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
       {/* ── 7 · MOCKUPER — only selected colourways are generated. */}
       {step === 7 && (
-      <CardSection title="7 · Mockuper" bodyClassName="p-4">
+      <CardSection title="7 · Mockuper" className="pod-step-enter" bodyClassName="p-4">
         {/* Generated mockups are the main task and the studio's first concrete
             output, so keep this action before the optional 3D preview. */}
         <MockupPanel
@@ -1662,7 +1663,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
       {/* ── 8 · PUBLICERA ─────────────────────────────────────────────────── */}
       {step === 8 && (
-      <CardSection title="8 · Publicera" bodyClassName="p-4">
+      <CardSection title="8 · Publicera" className="pod-step-enter" bodyClassName="p-4">
         <PublishPanel
           mockups={mockups}
           template={selectedTemplate}

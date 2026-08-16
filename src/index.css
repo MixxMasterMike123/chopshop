@@ -789,3 +789,19 @@
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28),
     0 0 0 7px color-mix(in srgb, var(--color-admin-info-dot) 14%, transparent);
 }
+/* ── Design Studio wizard motion (Operate-mode: fast, explanatory, calm) ─────
+   One authored enter per wizard page, a sliding thumb on the surface switcher,
+   and ✓-pops on completion marks. All gated on prefers-reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .pod-step-enter { animation: pod-step-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .pod-pop { animation: pod-pop 160ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .pod-thumb { transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+}
+@keyframes pod-step-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes pod-pop {
+  from { opacity: 0; transform: scale(0.6); }
+  to { opacity: 1; transform: none; }
+}
