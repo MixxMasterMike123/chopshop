@@ -17,13 +17,17 @@ interface SignedUpUser {
   userId: string;
 }
 
+// One password for every fixture identity: sign-up and the sign-in that
+// follows it must agree, so the value lives in one place.
+const FIXTURE_PASSWORD = "test-password-long-enough";
+
 async function signUp(email: string): Promise<SignedUpUser> {
   const response = await createAuth(env).handler(
     new Request(`${AUTH_ORIGIN}/api/auth/sign-up/email`, {
       body: JSON.stringify({
         email,
         name: email,
-        password: "test-password-long-enough",
+        password: FIXTURE_PASSWORD,
       }),
       headers: {
         "content-type": "application/json",
@@ -33,12 +37,29 @@ async function signUp(email: string): Promise<SignedUpUser> {
     }),
   );
   const body = await response.json<{ user: { id: string } }>();
-  const setCookie = response.headers.get("set-cookie");
 
   expect(response.status).toBe(200);
+
+  // autoSignIn is deliberately off (see create-auth.ts), so signing up creates
+  // an identity and no session. A fixture that needs a session therefore signs
+  // in for it, exactly as a real provisioned user does.
+  await env.DB.prepare('DELETE FROM "rateLimit"').run();
+  const signedIn = await createAuth(env).handler(
+    new Request(`${AUTH_ORIGIN}/api/auth/sign-in/email`, {
+      body: JSON.stringify({ email, password: FIXTURE_PASSWORD }),
+      headers: {
+        "content-type": "application/json",
+        origin: AUTH_ORIGIN,
+      },
+      method: "POST",
+    }),
+  );
+  const setCookie = signedIn.headers.get("set-cookie");
+
+  expect(signedIn.status).toBe(200);
   expect(setCookie).not.toBeNull();
   if (setCookie === null) {
-    throw new Error("Better Auth sign-up did not return a session cookie");
+    throw new Error("Better Auth sign-in did not return a session cookie");
   }
 
   const cookie = setCookie.split(";", 1)[0];

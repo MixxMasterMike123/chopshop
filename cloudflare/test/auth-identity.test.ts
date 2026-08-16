@@ -36,6 +36,81 @@ describe("Better Auth and live authorization foundation", () => {
     expect(auth.options.verification?.storeIdentifier).toBe("hashed");
   });
 
+  /**
+   * Pinned the same way hashed verification identifiers are, and for the same
+   * reason: it is a security-relevant default that Better Auth ships the other
+   * way round, so nothing but a test stops it silently reverting.
+   *
+   * autoSignIn defaults to TRUE. Sign-up is not mounted as an HTTP surface, so
+   * the only callers of the server-side signUpEmail are the one-time platform
+   * bootstrap and platform user provisioning — neither of which hands the
+   * resulting token to anybody. With the default left in place, each provisioned
+   * identity silently gained a live orphan session row (probed: 1 row per
+   * created user, and a non-null token nobody received). Both surfaces document
+   * that they create no session, and this is what keeps that true.
+   */
+  it("does not auto-create a session when a user is provisioned", async () => {
+    const auth = createAuth(env);
+
+    expect(auth.options.emailAndPassword?.autoSignIn).toBe(false);
+
+    const before = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM "session"',
+    ).first<{ total: number }>();
+
+    await env.DB.prepare('DELETE FROM "rateLimit"').run();
+    const signedUp = await auth.api.signUpEmail({
+      body: {
+        email: "no-auto-session@identity.test",
+        name: "no-auto-session",
+        password: "identity-probe-password-long",
+      },
+    });
+
+    // No token handed back and no row written: the identity exists, the
+    // credential does not.
+    expect(signedUp.token).toBeNull();
+    await expect(
+      env.DB.prepare('SELECT COUNT(*) AS total FROM "session" WHERE "userId" = ?')
+        .bind(signedUp.user.id)
+        .first<{ total: number }>(),
+    ).resolves.toEqual({ total: 0 });
+    await expect(
+      env.DB.prepare('SELECT COUNT(*) AS total FROM "session"').first<{
+        total: number;
+      }>(),
+    ).resolves.toEqual(before);
+
+    // And the setting governs SIGN-UP only — signing in must still mint a
+    // session, or the whole auth surface would be dead. Verified here rather
+    // than taken from the documentation.
+    await env.DB.prepare('DELETE FROM "rateLimit"').run();
+    const signedIn = await auth.handler(
+      new Request(
+        "https://meteorshop-stg-api.micke-ohlen.workers.dev/api/auth/sign-in/email",
+        {
+          body: JSON.stringify({
+            email: "no-auto-session@identity.test",
+            password: "identity-probe-password-long",
+          }),
+          headers: {
+            "content-type": "application/json",
+            origin: "https://meteorshop-stg-api.micke-ohlen.workers.dev",
+          },
+          method: "POST",
+        },
+      ),
+    );
+
+    expect(signedIn.status).toBe(200);
+    expect(signedIn.headers.get("set-cookie")).not.toBeNull();
+    await expect(
+      env.DB.prepare('SELECT COUNT(*) AS total FROM "session" WHERE "userId" = ?')
+        .bind(signedUp.user.id)
+        .first<{ total: number }>(),
+    ).resolves.toEqual({ total: 1 });
+  });
+
   it("installs auth and authorization tables", async () => {
     const result = await env.DB.prepare(
       `SELECT name FROM sqlite_master

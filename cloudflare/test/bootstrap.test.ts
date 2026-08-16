@@ -365,6 +365,19 @@ describe("platform bootstrap happy path", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(JSON.stringify(body)).not.toContain(PASSWORD);
 
+    // And no session EXISTS, not merely none returned. Better Auth's autoSignIn
+    // default would have created one here — a live credential row for an admin
+    // who has never signed in, whose token nobody received. create-auth.ts
+    // disables it; this is the assertion that keeps bootstrap's "no session"
+    // posture literally true rather than only true of the response.
+    await expect(
+      env.DB.prepare(
+        'SELECT COUNT(*) AS total FROM "session" WHERE "userId" = ?',
+      )
+        .bind(body.user.userId)
+        .first<{ total: number }>(),
+    ).resolves.toEqual({ total: 0 });
+
     await expect(accessRow(body.user.userId)).resolves.toEqual({
       account_type: "platform_admin",
       status: "active",

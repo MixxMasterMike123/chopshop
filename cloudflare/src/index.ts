@@ -51,6 +51,10 @@ import {
   isBootstrapAllowed,
   parseBootstrapInput,
 } from "./platform/bootstrap";
+import {
+  createPlatformUser,
+  parseCreateUserInput,
+} from "./platform/provision-users";
 import { jsonResponse } from "./lib/http";
 import { clientIp, enforceRateLimit } from "./lib/rate-limit";
 import {
@@ -78,6 +82,7 @@ const ADMIN_DISCOUNT_CODE_PATH_PREFIX = "/v1/admin/discount-codes/";
 const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
 const PLATFORM_BOOTSTRAP_PATH = "/v1/platform/bootstrap";
+const PLATFORM_USERS_PATH = "/v1/platform/users";
 const REQUIRED_MIGRATION = "0010_discount_codes.sql";
 
 const MINUTE_MS = 60 * 1_000;
@@ -894,6 +899,66 @@ async function handlePlatformBootstrapRoute(
   return jsonResponse({ user: result.user }, 201);
 }
 
+/**
+ * Platform-provisioned user creation — the only HTTP path that mints an account
+ * once bootstrap has gone dead. See src/platform/provision-users.ts for why it
+ * exists, why platform_admin is not a creatable kind, and why this authenticated
+ * surface carries no rate limiter.
+ *
+ * Same fail-closed shape as the rest of the platform surface: the live D1
+ * session check AND the strict same-origin check both run before the body is
+ * touched, so a caller without platform rights cannot learn that a
+ * user-provisioning surface exists, let alone probe it for which addresses are
+ * already taken. Only past both guards can a 400 or a 409 be reached, which
+ * makes either one proof of an authorized caller rather than a leak to an
+ * anonymous one.
+ */
+async function handlePlatformUserRoute(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  const principal = await authorizePlatformRequest(env, request);
+  if (principal === null || !isSameOriginRequest(request)) {
+    return adminNotFoundResponse();
+  }
+
+  if (request.method !== "POST") {
+    return adminNotFoundResponse();
+  }
+
+  const input = parseCreateUserInput(await readJsonBody(request));
+  if (input === null) {
+    return invalidRequestResponse();
+  }
+
+  const result = await createPlatformUser(env, principal, input, Date.now());
+
+  // A bare 409 that names neither the email nor which half of the identity
+  // already existed. The operator learns the address is taken and nothing more.
+  if (result.status === "conflict") {
+    return jsonResponse(
+      {
+        error: {
+          code: "conflict",
+          message: "Request conflicts with an existing identity",
+        },
+      },
+      409,
+    );
+  }
+
+  // Better Auth's own password policy rejection lands here, indistinguishable
+  // from a malformed body and echoing nothing back.
+  if (result.status !== "ok") {
+    return invalidRequestResponse();
+  }
+
+  // The identity and nothing else: no session cookie, no password echo. The new
+  // user signs in through the normal mounted sign-in route, and the operator
+  // feeds the returned userId to POST /v1/platform/tenants/{id}/admins.
+  return jsonResponse({ user: result.user }, 201);
+}
+
 async function handlePlatformTenantRoute(
   env: Env,
   request: Request,
@@ -1046,6 +1111,10 @@ export default {
 
     if (url.pathname === PLATFORM_BOOTSTRAP_PATH) {
       return handlePlatformBootstrapRoute(env, request);
+    }
+
+    if (url.pathname === PLATFORM_USERS_PATH) {
+      return handlePlatformUserRoute(env, request);
     }
 
     if (

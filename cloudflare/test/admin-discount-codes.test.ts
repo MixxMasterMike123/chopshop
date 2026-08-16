@@ -37,6 +37,10 @@ let adminA: SignedUpUser;
 let adminB: SignedUpUser;
 let ordinary: SignedUpUser;
 
+// One password for every fixture identity: sign-up and the sign-in that
+// follows it must agree, so the value lives in one place.
+const FIXTURE_PASSWORD = "test-password-long-enough";
+
 async function signUp(email: string): Promise<SignedUpUser> {
   // Better Auth caps /sign-up at 3 requests per 10s in a shared bucket when no
   // client IP is forwarded; drain the ledger between fixtures rather than sleep.
@@ -47,18 +51,35 @@ async function signUp(email: string): Promise<SignedUpUser> {
       body: JSON.stringify({
         email,
         name: email,
-        password: "test-password-long-enough",
+        password: FIXTURE_PASSWORD,
       }),
       headers: { "content-type": "application/json", origin: AUTH_ORIGIN },
       method: "POST",
     }),
   );
   const body = await response.json<{ user: { id: string } }>();
-  const setCookie = response.headers.get("set-cookie");
 
   expect(response.status).toBe(200);
+
+  // autoSignIn is deliberately off (see create-auth.ts), so signing up creates
+  // an identity and no session. A fixture that needs a session therefore signs
+  // in for it, exactly as a real provisioned user does.
+  await env.DB.prepare('DELETE FROM "rateLimit"').run();
+  const signedIn = await createAuth(env).handler(
+    new Request(`${AUTH_ORIGIN}/api/auth/sign-in/email`, {
+      body: JSON.stringify({ email, password: FIXTURE_PASSWORD }),
+      headers: {
+        "content-type": "application/json",
+        origin: AUTH_ORIGIN,
+      },
+      method: "POST",
+    }),
+  );
+  const setCookie = signedIn.headers.get("set-cookie");
+
+  expect(signedIn.status).toBe(200);
   if (setCookie === null) {
-    throw new Error("Better Auth sign-up did not return a session cookie");
+    throw new Error("Better Auth sign-in did not return a session cookie");
   }
 
   const cookie = setCookie.split(";", 1)[0];
