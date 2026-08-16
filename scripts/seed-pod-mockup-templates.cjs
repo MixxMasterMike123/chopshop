@@ -70,28 +70,24 @@ const APPAREL_COLORWAYS = [
 // print size ↔ podProfiles apparel_dtg (300×400 mm, 3:4). The rects share that 3:4
 // aspect so preview scale ↔ physical scale stay consistent.
 // ── T-SHIRT: REAL PHOTO TEMPLATE (2026-08-10) ────────────────────────────────
-// B&C Exact 150 (TU01T) — Kim's actual blank. Official B&C ghost-mannequin
-// packshots (615×700, uniformly framed → ONE printArea calibration for every
-// colourway), front + back per colour, served from hosting /pod-garments/tee/.
-// 10 colourways: svart+vit = Kim's ALWAYS-IN-STOCK tier (XS–XXL); the other 8
-// are limited stock ("mindre antal", Kim 2026-08-10). Hexes are sampled from
-// the actual photos (40×40 chest patch average) — used for strip/publish dots.
-// 'navy' photo = B&C "urban navy" (the P-series has no plain navy packshot).
-const TEE_PHOTO = '/pod-garments/tee';
+// B&C Exact 150 (TU01T) — Kim's actual blank. Consistently framed hanging-shirt
+// photos (1920×2186 originals), front + back per colour, served as optimized WebP
+// from hosting /pod-garments/tee-hanging/. The template coordinate space is half
+// the asset dimensions so mockupRender's 2× export lands at the native 1920×2186
+// resolution instead of upscaling it.
+const TEE_PHOTO = '/pod-garments/tee-hanging';
 const TEE_COLORWAYS = [
   { id: 'white', label: 'Vit', hex: '#f3f3f3' },
   { id: 'black', label: 'Svart', hex: '#363435' },
   { id: 'navy', label: 'Marinblå', hex: '#3e3f53' },
   { id: 'sport-grey', label: 'Gråmelerad', hex: '#a5a5a5' },
-  { id: 'ash', label: 'Ljusgrå', hex: '#cacaca' },
   { id: 'red', label: 'Röd', hex: '#cf0d25' },
   { id: 'royal-blue', label: 'Kungsblå', hex: '#124c8c' },
-  { id: 'bottle-green', label: 'Flaskgrön', hex: '#415d47' },
   { id: 'burgundy', label: 'Vinröd', hex: '#6a3844' },
   { id: 'sand', label: 'Sand', hex: '#d3bda5' },
 ];
 const teePhotoUrls = (view) =>
-  Object.fromEntries(TEE_COLORWAYS.map((c) => [c.id, `${TEE_PHOTO}/${c.id}_${view}.jpg`]));
+  Object.fromEntries(TEE_COLORWAYS.map((c) => [c.id, `${TEE_PHOTO}/${c.id}_${view}.webp`]));
 
 const TEMPLATES = [
   {
@@ -102,26 +98,24 @@ const TEMPLATES = [
     // Static per-product cost until per-slot costing lands (plan beslut 3).
     costSek: 100,
     photo: {
-      w: 615,
-      h: 700,
+      w: 960,
+      h: 1093,
       urls: teePhotoUrls('front'),
       backUrls: teePhotoUrls('back'),
     },
     colorways: TEE_COLORWAYS,
-    // CALIBRATION (measured on black_front.jpg): torso x 155..458 (center 307),
-    // collar seam ~y105, hem y667. Worn-shape photo → compromise scale
-    // ~0.74 px/mm (chest-derived and length-derived scales disagree on a worn
-    // garment; 0.74 makes a 250 mm print read visually right on the chest).
-    // Aspect guard: every px rect matches its mm aspect within 1%.
+    // CALIBRATION (measured on the 960×1093 half-resolution coordinate space):
+    // the front/back zones sit below the collar and remain inside the torso on
+    // every uniformly framed colourway. Each px rect matches its mm aspect.
     printAreas: {
-      front: { x: 215, y: 153, w: 185, h: 259 },  // 250×350 mm (5:7)
-      back: { x: 196, y: 123, w: 222, h: 296 },   // 300×400 mm (3:4), back photo
-      pocket: { x: 345, y: 153, w: 74, h: 74 },   // 100×100 mm
-      left_sleeve: { x: 505, y: 190, w: 59, h: 59 },  // wearer LEFT = viewer right
-      right_sleeve: { x: 51, y: 190, w: 59, h: 59 },  // wearer RIGHT = viewer left
+      front: { x: 365, y: 365, w: 230, h: 322 },  // 250×350 mm (5:7)
+      back: { x: 340, y: 340, w: 280, h: 373 },   // 300×400 mm (3:4), back photo
+      pocket: { x: 535, y: 365, w: 92, h: 92 },   // 100×100 mm
+      left_sleeve: { x: 725, y: 365, w: 74, h: 74 },  // wearer LEFT = viewer right
+      right_sleeve: { x: 160, y: 365, w: 74, h: 74 }, // wearer RIGHT = viewer left
     },
     // Discrete pocket positions (wearer's perspective): x offsets only, same y/w/h.
-    pocketPositions: { left: { x: 345 }, center: { x: 270 }, right: { x: 195 } },
+    pocketPositions: { left: { x: 535 }, center: { x: 434 }, right: { x: 333 } },
     printAreaMm: {
       front: { w: 250, h: 350 },
       back: { w: 300, h: 400 },

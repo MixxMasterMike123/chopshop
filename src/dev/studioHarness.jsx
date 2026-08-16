@@ -709,35 +709,33 @@ const WIZARD_TEE_COLORWAYS = [
   { id: 'black', label: 'Svart', hex: '#363435' },
   { id: 'navy', label: 'Marinblå', hex: '#3e3f53' },
   { id: 'sport-grey', label: 'Gråmelerad', hex: '#a5a5a5' },
-  { id: 'ash', label: 'Ljusgrå', hex: '#cacaca' },
   { id: 'red', label: 'Röd', hex: '#cf0d25' },
   { id: 'royal-blue', label: 'Kungsblå', hex: '#124c8c' },
-  { id: 'bottle-green', label: 'Flaskgrön', hex: '#415d47' },
   { id: 'burgundy', label: 'Vinröd', hex: '#6a3844' },
   { id: 'sand', label: 'Sand', hex: '#d3bda5' },
 ];
 const wizardTeeUrls = (view) =>
-  Object.fromEntries(WIZARD_TEE_COLORWAYS.map((c) => [c.id, `/pod-garments/tee/${c.id}_${view}.jpg`]));
+  Object.fromEntries(WIZARD_TEE_COLORWAYS.map((c) => [c.id, `/pod-garments/tee-hanging/${c.id}_${view}.webp`]));
 const WIZARD_TEE = {
   id: 'tee_bc_e150',
   label: 'T-shirt',
   profileId: 'apparel_dtg',
   costSek: 100,
   photo: {
-    w: 615,
-    h: 700,
+    w: 960,
+    h: 1093,
     urls: wizardTeeUrls('front'),
     backUrls: wizardTeeUrls('back'),
   },
   colorways: WIZARD_TEE_COLORWAYS,
   printAreas: {
-    front: { x: 215, y: 153, w: 185, h: 259 },
-    back: { x: 196, y: 123, w: 222, h: 296 },
-    pocket: { x: 345, y: 153, w: 74, h: 74 },
-    left_sleeve: { x: 505, y: 190, w: 59, h: 59 },
-    right_sleeve: { x: 51, y: 190, w: 59, h: 59 },
+    front: { x: 365, y: 365, w: 230, h: 322 },
+    back: { x: 340, y: 340, w: 280, h: 373 },
+    pocket: { x: 535, y: 365, w: 92, h: 92 },
+    left_sleeve: { x: 725, y: 365, w: 74, h: 74 },
+    right_sleeve: { x: 160, y: 365, w: 74, h: 74 },
   },
-  pocketPositions: { left: { x: 345 }, center: { x: 270 }, right: { x: 195 } },
+  pocketPositions: { left: { x: 535 }, center: { x: 434 }, right: { x: 333 } },
   printAreaMm: {
     front: { w: 250, h: 350 },
     back: { w: 300, h: 400 },

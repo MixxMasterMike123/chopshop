@@ -121,6 +121,9 @@ const TemplateBackground = ({ template, colorway, slot = 'front', className = ''
         <img
           src={url}
           alt=""
+          width={vb?.w}
+          height={vb?.h}
+          decoding="async"
           draggable={false}
           className={`block h-auto w-full ${className}`}
         />
