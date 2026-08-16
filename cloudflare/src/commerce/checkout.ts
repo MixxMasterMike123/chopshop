@@ -1,4 +1,10 @@
 import type { TenantContext } from "../tenancy/resolve-tenant";
+import type { ResolvedDiscount } from "./discount-codes";
+import {
+  isValidDiscountCode,
+  normalizeDiscountCode,
+  resolveDiscount,
+} from "./discount-codes";
 import type {
   DeliveryMethod,
   ShippingRates,
@@ -20,6 +26,12 @@ export interface CheckoutItemInput {
 
 export interface CreateCheckoutInput {
   deliveryMethod: DeliveryMethod;
+  /**
+   * The normalized (trimmed, uppercased) campaign code the buyer presented, or
+   * null when they presented none. Presenting one that does not resolve is not
+   * an error — see resolveDiscount.
+   */
+  discountCode: string | null;
   email: string;
   idempotencyKey: string;
   items: CheckoutItemInput[];
@@ -56,6 +68,19 @@ export interface Checkout {
   checkoutId: string;
   currency: string;
   deliveryMethod: DeliveryMethod;
+  /**
+   * The normalized code the buyer presented, echoed back so the storefront can
+   * show what it applied, or null when none was presented.
+   *
+   * Deliberately minimal, and deliberately present even when the code resolved
+   * to nothing: an ineligible code returns its own string beside a
+   * discountMinor of 0, which is precisely what production's client displays.
+   * Nothing else about the code leaves this surface — not its window, its usage
+   * counters, its scope, its type, nor whether a row exists at all. A buyer may
+   * learn what their basket costs; they may not enumerate a merchant's campaign
+   * state by watching which strings answer differently.
+   */
+  discountCode: string | null;
   discountMinor: number;
   expiresAt: number;
   items: CheckoutLine[];
@@ -94,6 +119,7 @@ interface CheckoutRow {
   currency: string;
   customer_email: string;
   delivery_method: DeliveryMethod;
+  discount_code_id: string | null;
   discount_minor: number;
   expires_at: number;
   shipping_country: string | null;
@@ -134,6 +160,7 @@ const MAX_UNIT_PRICE_MINOR = 100_000_000;
 
 const CHECKOUT_KEYS = [
   "deliveryMethod",
+  "discountCode",
   "email",
   "idempotencyKey",
   "items",
@@ -267,6 +294,13 @@ function parseItem(value: unknown): CheckoutItemInput | null {
  * country is self-contradictory, and the schema stores NULL there, so honouring
  * such a body would mean silently discarding a field the caller believed
  * mattered.
+ *
+ * `discountCode` is optional. Absent means no code. A code of the wrong TYPE,
+ * or one that is empty or malformed after normalization, is a 400 here — that
+ * is a shape failure, and distinguishing it from an unknown-but-well-formed
+ * code leaks nothing, because it is decided without touching the database. A
+ * well-formed code that does not resolve or is not eligible is NOT an error; it
+ * is worth zero, silently. See resolveDiscount.
  */
 export function parseCreateCheckoutInput(
   body: unknown,
@@ -280,6 +314,21 @@ export function parseCreateCheckoutInput(
   const deliveryMethod = parseDeliveryMethod(body.deliveryMethod);
   if (email === null || idempotencyKey === null || deliveryMethod === null) {
     return null;
+  }
+
+  let discountCode: string | null = null;
+  if (body.discountCode !== undefined) {
+    if (typeof body.discountCode !== "string") {
+      return null;
+    }
+    // Normalized here, once, so everything downstream — the lookup, the stored
+    // row, the replay fingerprint, the echoed response — agrees on one spelling
+    // of the code. Production normalizes at every call site instead; doing it at
+    // the boundary means a future call site cannot forget.
+    discountCode = normalizeDiscountCode(body.discountCode);
+    if (!isValidDiscountCode(discountCode)) {
+      return null;
+    }
   }
 
   let shippingCountry: string | null = null;
@@ -311,6 +360,7 @@ export function parseCreateCheckoutInput(
 
   return {
     deliveryMethod,
+    discountCode,
     email,
     idempotencyKey,
     items,
@@ -532,10 +582,53 @@ function resolveCurrency(lines: ResolvedLine[]): string | null {
  * `every` is the right quantifier in both directions. One ineligible line makes
  * the whole basket ineligible, because a basket is fulfilled as one shipment.
  */
-function quoteTotals(
+function quoteCarriage(
   lines: ResolvedLine[],
   deliveryMethod: DeliveryMethod,
   shippingCountry: string | null,
+): { shippingMinor: number; subtotalMinor: number } | null {
+  const subtotal = lines.reduce(
+    (total, line) => total + line.lineTotalMinor,
+    0,
+  );
+
+  if (deliveryMethod === "pickup") {
+    return lines.every((line) => line.allowPickup)
+      ? { shippingMinor: 0, subtotalMinor: subtotal }
+      : null;
+  }
+
+  if (!lines.every((line) => line.allowShipping) || shippingCountry === null) {
+    return null;
+  }
+
+  // The base tariff comes from the FIRST line's product, mirroring production's
+  // cart. resolveLines has already guaranteed at least one line.
+  const first = lines[0] as ResolvedLine;
+  return {
+    shippingMinor: shippingMinor(
+      getShippingRegion(shippingCountry),
+      first.shippingRates,
+      lines,
+    ),
+    subtotalMinor: subtotal,
+  };
+}
+
+/**
+ * Closes the quote once the discount is known.
+ *
+ * The v2 contract: total = subtotal + shipping - discount. Prices are
+ * VAT-INCLUSIVE, so VAT is deliberately not a term — adding it would charge the
+ * tax already inside subtotal a second time. VAT is then derived from the
+ * DISCOUNTED total, which is the same thing production does (`vat = total -
+ * total/(1+rate)` where total is already net of the discount): a discount
+ * reduces what the buyer pays, so it reduces the tax contained in it.
+ */
+function closeQuote(
+  subtotalMinor: number,
+  shippingMinor: number,
+  discountMinor: number,
   vatRateBp: number,
 ): {
   shippingMinor: number;
@@ -543,42 +636,7 @@ function quoteTotals(
   totalMinor: number;
   vatMinor: number;
 } | null {
-  const subtotal = lines.reduce(
-    (total, line) => total + line.lineTotalMinor,
-    0,
-  );
-
-  let shipping = 0;
-  if (deliveryMethod === "pickup") {
-    if (!lines.every((line) => line.allowPickup)) {
-      return null;
-    }
-  } else {
-    if (!lines.every((line) => line.allowShipping)) {
-      return null;
-    }
-    if (shippingCountry === null) {
-      return null;
-    }
-
-    // The base tariff comes from the FIRST line's product, mirroring
-    // production's cart. resolveLines has already guaranteed at least one line.
-    const first = lines[0] as ResolvedLine;
-    shipping = shippingMinor(
-      getShippingRegion(shippingCountry),
-      first.shippingRates,
-      lines,
-    );
-  }
-
-  // The v2 contract: total = subtotal + shipping - discount. Prices are
-  // VAT-inclusive, so VAT is deliberately not a term — adding it would charge
-  // the tax already inside subtotal a second time. The discount engine is a
-  // later checkpoint; naming its contribution here rather than omitting the
-  // term keeps this expression the same shape as the schema CHECK it must
-  // satisfy, so the two can be read against each other.
-  const discount = 0;
-  const total = subtotal + shipping - discount;
+  const total = subtotalMinor + shippingMinor - discountMinor;
 
   // A basket beyond the range VAT can be derived exactly for. The column
   // ceilings permit it arithmetically — 50 lines × 999 units × the maximum unit
@@ -587,13 +645,17 @@ function quoteTotals(
   // or a deliberate overflow probe. It is refused as unprocessable rather than
   // quoted imprecisely or thrown as a 500: the buyer gets the same opaque
   // answer as any other unpriceable basket, and no imprecise money is stored.
-  if (total > MAX_VAT_SAFE_TOTAL_MINOR) {
+  //
+  // The check is on the total AFTER the discount because that is the number the
+  // derivation consumes. It is bounded above by subtotal + shipping, so a
+  // discount can only ever move a basket INTO range, never out of it.
+  if (total < 0 || total > MAX_VAT_SAFE_TOTAL_MINOR) {
     return null;
   }
 
   return {
-    shippingMinor: shipping,
-    subtotalMinor: subtotal,
+    shippingMinor,
+    subtotalMinor,
     totalMinor: total,
     // Derived last and stored for the invoice, never added to the total.
     vatMinor: vatMinor(total, vatRateBp),
@@ -622,14 +684,25 @@ async function loadVatRateBp(
   return row?.vat_rate_bp ?? 2_500;
 }
 
+/**
+ * A replayed checkout is described from the STORED row, except for the code
+ * string, which is taken from the request that replayed it. The row deliberately
+ * does not store the raw code — only the resolved row id — because the code is a
+ * spendable capability and the checkout table has no business holding a second
+ * copy of it. The replay has already been proven to be the same request, and
+ * part of that proof is that it resolved to the same code id, so echoing the
+ * caller's own normalized string is honest rather than convenient.
+ */
 function toCheckout(
   row: CheckoutRow,
   lines: CheckoutLine[],
+  discountCode: string | null,
 ): Checkout {
   return {
     checkoutId: row.checkout_id,
     currency: row.currency,
     deliveryMethod: row.delivery_method,
+    discountCode,
     discountMinor: row.discount_minor,
     expiresAt: row.expires_at,
     items: lines,
@@ -670,6 +743,8 @@ function matchesExisting(
   lines: CheckoutLine[],
   quote: {
     deliveryMethod: DeliveryMethod;
+    discountCodeId: string | null;
+    discountMinor: number;
     shippingCountry: string | null;
     shippingMinor: number;
     vatRateBp: number;
@@ -678,6 +753,21 @@ function matchesExisting(
   if (
     existing.customer_email !== email ||
     existing.currency !== currency ||
+    // The FRESHLY RESOLVED discount, both its amount and what authorized it.
+    // This is the discount's equivalent of the recomputed carriage above, and
+    // it is what makes a changed campaign a conflict rather than a silently
+    // honoured stale price: a code deactivated, expired, filled up, re-valued,
+    // or re-scoped between the two attempts resolves to a different amount or a
+    // different id now, and replaying the stored checkout would charge the
+    // buyer under terms the merchant has withdrawn.
+    //
+    // BOTH are compared, not just the amount. Two different codes can be worth
+    // the same money — 100 kr off and 10% off a 1000 kr basket — and the id is
+    // what the payment checkpoint will burn a use against, so a replay that
+    // silently swapped which campaign paid for the discount would misattribute
+    // a real usage count.
+    existing.discount_minor !== quote.discountMinor ||
+    existing.discount_code_id !== quote.discountCodeId ||
     // The delivery decision is priced, so it is part of the fingerprint. A
     // replay that switched from pickup to shipping (or the reverse) is a
     // different purchase at a different price under a reused key, and answering
@@ -731,7 +821,7 @@ async function loadExisting(
       `SELECT
          checkout_id, currency, customer_email, delivery_method,
          shipping_country, expires_at, subtotal_minor, shipping_minor,
-         vat_minor, vat_rate_bp, discount_minor, total_minor
+         vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor
        FROM checkouts
        WHERE tenant_id = ?
          AND idempotency_key_hash = ?
@@ -794,16 +884,40 @@ export async function createCheckout(
   }
 
   const vatRateBp = await loadVatRateBp(db, tenant);
-  const quote = quoteTotals(
+  const carriage = quoteCarriage(
     lines,
     input.deliveryMethod,
     input.shippingCountry,
-    vatRateBp,
   );
   // A basket whose products do not all permit the requested delivery method is
   // not purchasable that way. It answers the same opaque 422 as an unresolvable
   // line, and for the same reason: naming the offending product would turn the
   // route into an oracle for which items a tenant offers for collection.
+  if (carriage === null) {
+    return { status: "invalid_items" };
+  }
+
+  // At most ONE extra D1 read per request, and only when a code was presented.
+  // The base is computed from the line snapshots already resolved above, so no
+  // product is queried a second time.
+  const discount: ResolvedDiscount =
+    input.discountCode === null
+      ? { code: "", discountCodeId: null, discountMinor: 0 }
+      : await resolveDiscount(
+          db,
+          tenant.tenantId,
+          input.discountCode,
+          lines,
+          carriage.subtotalMinor,
+          now,
+        );
+
+  const quote = closeQuote(
+    carriage.subtotalMinor,
+    carriage.shippingMinor,
+    discount.discountMinor,
+    vatRateBp,
+  );
   if (quote === null) {
     return { status: "invalid_items" };
   }
@@ -821,10 +935,10 @@ export async function createCheckout(
         `INSERT INTO checkouts (
           checkout_id, tenant_id, status, customer_email, currency,
           delivery_method, shipping_country, subtotal_minor, shipping_minor,
-          vat_minor, vat_rate_bp, discount_minor, total_minor,
+          vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
           payment_intent_id, idempotency_key_hash,
           expires_at, created_at, updated_at
-        ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
       )
       .bind(
         checkoutId,
@@ -837,6 +951,13 @@ export async function createCheckout(
         quote.shippingMinor,
         quote.vatMinor,
         vatRateBp,
+        discount.discountMinor,
+        // The resolved code row, frozen here so the PAYMENT checkpoint can
+        // increment its used_count atomically against the paid order. This
+        // checkout does NOT increment it: a checkout is not a sale, and
+        // production increments only in the Stripe webhook after the order row
+        // exists. Nothing here or in the admin surface may write that counter.
+        discount.discountCodeId,
         quote.totalMinor,
         idempotencyKeyHash,
         expiresAt,
@@ -912,6 +1033,8 @@ export async function createCheckout(
         lines,
         {
           deliveryMethod: input.deliveryMethod,
+          discountCodeId: discount.discountCodeId,
+          discountMinor: discount.discountMinor,
           shippingCountry: input.shippingCountry,
           shippingMinor: quote.shippingMinor,
           vatRateBp,
@@ -922,7 +1045,11 @@ export async function createCheckout(
     }
 
     return {
-      checkout: toCheckout(existing.row, existing.lines.map(storedLine)),
+      checkout: toCheckout(
+        existing.row,
+        existing.lines.map(storedLine),
+        input.discountCode,
+      ),
       replayed: true,
       status: "ok",
     };
@@ -933,7 +1060,8 @@ export async function createCheckout(
       checkoutId,
       currency,
       deliveryMethod: input.deliveryMethod,
-      discountMinor: 0,
+      discountCode: input.discountCode,
+      discountMinor: discount.discountMinor,
       expiresAt,
       // Projected field by field rather than spread: currency is a
       // checkout-level value and must not reappear on every line, and the

@@ -34,6 +34,7 @@ interface CheckoutBody {
     checkoutId: string;
     currency: string;
     deliveryMethod: string;
+    discountCode: string | null;
     discountMinor: number;
     expiresAt: number;
     items: {
@@ -459,6 +460,7 @@ describe("POST /v1/checkout", () => {
       "checkoutId",
       "currency",
       "deliveryMethod",
+      "discountCode",
       "discountMinor",
       "expiresAt",
       "items",
@@ -2057,6 +2059,11 @@ describe("checkout database invariants", () => {
       country?: string | null;
       deliveryMethod?: string;
       discount?: number;
+      // Explicit only when a test is about the discount CHECK itself. It
+      // otherwise defaults to a placeholder id whenever a discount is present,
+      // so a test about the TOTALS contract is not incidentally failed by the
+      // "discounted money was authorized by something" invariant.
+      discountCodeId?: string | null;
       shipping?: number;
       subtotal: number;
       total: number;
@@ -2065,14 +2072,15 @@ describe("checkout database invariants", () => {
     },
   ): Promise<D1Result> {
     const deliveryMethod = columns.deliveryMethod ?? "shipping";
+    const discount = columns.discount ?? 0;
 
     return env.DB.prepare(
       `INSERT INTO checkouts (
         checkout_id, tenant_id, status, customer_email, currency,
         delivery_method, shipping_country, subtotal_minor, shipping_minor,
-        vat_minor, vat_rate_bp, discount_minor,
+        vat_minor, vat_rate_bp, discount_minor, discount_code_id,
         total_minor, idempotency_key_hash, expires_at, created_at, updated_at
-      ) VALUES (?, ?, 'open', 'invariant@example.test', 'SEK', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, 'open', 'invariant@example.test', 'SEK', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         checkoutId,
@@ -2087,7 +2095,12 @@ describe("checkout database invariants", () => {
         columns.shipping ?? 0,
         columns.vat ?? 0,
         columns.vatRateBp ?? 2_500,
-        columns.discount ?? 0,
+        discount,
+        columns.discountCodeId === undefined
+          ? discount === 0
+            ? null
+            : `code-${checkoutId}`
+          : columns.discountCodeId,
         columns.total,
         `hash-${checkoutId}`,
         NOW + DAY_MS,

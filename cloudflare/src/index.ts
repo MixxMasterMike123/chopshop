@@ -30,6 +30,14 @@ import {
   createCheckout,
   parseCreateCheckoutInput,
 } from "./commerce/checkout";
+import type { AdminDiscountCodeResult } from "./commerce/admin-discount-codes";
+import {
+  createAdminDiscountCode,
+  getAdminDiscountCode,
+  parseCreateDiscountCodeInput,
+  parseUpdateDiscountCodeInput,
+  updateAdminDiscountCode,
+} from "./commerce/admin-discount-codes";
 import {
   deleteAdminObject,
   deliverAdminObject,
@@ -65,10 +73,12 @@ const ADMIN_PRODUCTS_PATH = "/v1/admin/products";
 const ADMIN_PRODUCT_PATH_PREFIX = "/v1/admin/products/";
 const ADMIN_OBJECTS_PATH = "/v1/admin/objects";
 const ADMIN_OBJECT_PATH_PREFIX = "/v1/admin/objects/";
+const ADMIN_DISCOUNT_CODES_PATH = "/v1/admin/discount-codes";
+const ADMIN_DISCOUNT_CODE_PATH_PREFIX = "/v1/admin/discount-codes/";
 const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
 const PLATFORM_BOOTSTRAP_PATH = "/v1/platform/bootstrap";
-const REQUIRED_MIGRATION = "0009_checkout_totals_v2.sql";
+const REQUIRED_MIGRATION = "0010_discount_codes.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -573,6 +583,134 @@ async function handleAdminObjectRoute(
     : adminNotFoundResponse();
 }
 
+function discountCodeConflictResponse(): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "conflict",
+        message: "Request conflicts with the current discount code state",
+      },
+    },
+    409,
+  );
+}
+
+function discountCodeResultResponse(
+  result: AdminDiscountCodeResult,
+  successStatus: number,
+): Response {
+  if (result.status === "ok") {
+    return jsonResponse({ discountCode: result.discountCode }, successStatus);
+  }
+  if (result.status === "conflict") {
+    return discountCodeConflictResponse();
+  }
+  if (result.status === "invalid") {
+    return invalidRequestResponse();
+  }
+  return adminNotFoundResponse();
+}
+
+function discountCodeIdFromPath(pathname: string): string | null {
+  if (!pathname.startsWith(ADMIN_DISCOUNT_CODE_PATH_PREFIX)) {
+    return null;
+  }
+
+  const segments = pathname
+    .slice(ADMIN_DISCOUNT_CODE_PATH_PREFIX.length)
+    .split("/");
+  const [rawId, ...rest] = segments;
+  if (rawId === undefined || rest.length > 0) {
+    return null;
+  }
+
+  return decodeSegment(rawId);
+}
+
+/**
+ * Tenant-admin campaign discount codes. Same guard order as the products
+ * surface: the live D1 session/membership check AND the strict same-origin
+ * check run before any body is read, so an unauthorized or cross-site caller
+ * cannot learn that this surface exists, let alone which codes a tenant runs.
+ *
+ * The same-origin check applies to STATE CHANGES only, matching the objects
+ * surface rather than the products one. Browsers do not send an Origin header
+ * on a same-origin GET, and this check fails closed on a missing one, so
+ * demanding it on the read would make the read unusable from the very admin UI
+ * it exists for. The GET is still fully privileged — it is behind the same live
+ * session and membership guard — and CSRF is meaningless for a request that
+ * changes nothing: an attacker who forges one cannot read the response.
+ *
+ * ACTIVATION is a PATCH field (`active`), not a pair of action verbs. The
+ * products surface uses POST .../publish because publishing writes a separate
+ * projection row; here it is one boolean on one row, and a dedicated verb would
+ * mean two paths writing the same column.
+ */
+async function handleAdminDiscountCodeRoute(
+  env: Env,
+  request: Request,
+  url: URL,
+): Promise<Response> {
+  const principal = await authorizeTenantAdminRequest(env, request);
+  if (principal === null) {
+    return adminNotFoundResponse();
+  }
+
+  if (request.method !== "GET" && !isSameOriginRequest(request)) {
+    return adminNotFoundResponse();
+  }
+
+  const now = Date.now();
+
+  if (url.pathname === ADMIN_DISCOUNT_CODES_PATH) {
+    if (request.method !== "POST") {
+      return adminNotFoundResponse();
+    }
+
+    const input = parseCreateDiscountCodeInput(await readJsonBody(request));
+    if (input === null) {
+      return invalidRequestResponse();
+    }
+
+    return discountCodeResultResponse(
+      await createAdminDiscountCode(env.DB, principal, input, now),
+      201,
+    );
+  }
+
+  const discountCodeId = discountCodeIdFromPath(url.pathname);
+  if (discountCodeId === null) {
+    return adminNotFoundResponse();
+  }
+
+  if (request.method === "GET") {
+    return discountCodeResultResponse(
+      await getAdminDiscountCode(env.DB, principal, discountCodeId),
+      200,
+    );
+  }
+
+  if (request.method !== "PATCH") {
+    return adminNotFoundResponse();
+  }
+
+  const input = parseUpdateDiscountCodeInput(await readJsonBody(request));
+  if (input === null) {
+    return invalidRequestResponse();
+  }
+
+  return discountCodeResultResponse(
+    await updateAdminDiscountCode(
+      env.DB,
+      principal,
+      discountCodeId,
+      input,
+      now,
+    ),
+    200,
+  );
+}
+
 function unprocessableResponse(): Response {
   return jsonResponse(
     {
@@ -897,6 +1035,13 @@ export default {
       url.pathname.startsWith(ADMIN_OBJECT_PATH_PREFIX)
     ) {
       return handleAdminObjectRoute(env, request, url);
+    }
+
+    if (
+      url.pathname === ADMIN_DISCOUNT_CODES_PATH ||
+      url.pathname.startsWith(ADMIN_DISCOUNT_CODE_PATH_PREFIX)
+    ) {
+      return handleAdminDiscountCodeRoute(env, request, url);
     }
 
     if (url.pathname === PLATFORM_BOOTSTRAP_PATH) {
