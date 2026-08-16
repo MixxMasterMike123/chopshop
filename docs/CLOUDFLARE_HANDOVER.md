@@ -260,6 +260,15 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Local gate 242/242 green; control-byte source scan clean.
 - When buckets are created: add the `PRIVATE_BUCKET` binding for `meteorshop-stg-private` to `wrangler.jsonc`, redeploy, and the upload path lights up with no code change.
 
+## Checkpoint 17 — One-time platform bootstrap (deployed)
+
+- `BETTER_AUTH_SECRET` was set by the owner on 2026-08-16; live sign-in verified (401 bad-creds, 403 hostile-origin, sign-up still 404, anonymous get-session null).
+- `POST /v1/platform/bootstrap` mints the FIRST platform admin, then goes permanently dead: requires configured auth + `BOOTSTRAP_TOKEN` secret (≥32 chars) + matching `x-bootstrap-token` header (SHA-256-then-timingSafeEqual compare — hashing first is required, not optional: `timingSafeEqual` throws on unequal lengths, which would leak token length) + **zero existing `identity_access` platform_admin rows of ANY status** (a suspended admin still means bootstrap happened). Every failure is an indistinguishable 404; a 400 is only reachable after the token gate.
+- Creates the user via Better Auth server API (`api.signUpEmail`), re-checks zero-admin, then INSERTs `identity_access` + audit row in one batch (PK makes a racing bootstrap lose loudly with 409; the loser's orphan user is privilege-less by construction and documented). No session cookie returned — admin signs in via the normal mounted route. Audit metadata carries no email.
+- Type gotcha recorded: `crypto.subtle.timingSafeEqual` exists in workers-types but the tsconfig `WebWorker` lib shadows it; reached via a single-method cast with rationale comment.
+- Gate 280/280 green; control-byte scan clean. Full loop proven in tests: bootstrap → sign-in through the worker → `POST /v1/platform/tenants` 201.
+- Bootstrap procedure for the owner: `openssl rand -base64 48 | npx wrangler secret put BOOTSTRAP_TOKEN` (from `cloudflare/`), then one `POST /v1/platform/bootstrap` with header `x-bootstrap-token` and body `{email, password}`. Afterward the token secret can be deleted (`npx wrangler secret delete BOOTSTRAP_TOKEN`) — the route is dead either way once an admin exists.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.

@@ -34,6 +34,11 @@ import {
   reserveAdminObject,
   uploadAdminObject,
 } from "./storage/object-routes";
+import {
+  bootstrapPlatformAdmin,
+  isBootstrapAllowed,
+  parseBootstrapInput,
+} from "./platform/bootstrap";
 import { jsonResponse } from "./lib/http";
 import {
   authorizePlatformRequest,
@@ -56,6 +61,7 @@ const ADMIN_OBJECTS_PATH = "/v1/admin/objects";
 const ADMIN_OBJECT_PATH_PREFIX = "/v1/admin/objects/";
 const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
+const PLATFORM_BOOTSTRAP_PATH = "/v1/platform/bootstrap";
 const REQUIRED_MIGRATION = "0006_object_store.sql";
 
 type AdminProductAction = "publish" | "unpublish";
@@ -537,6 +543,45 @@ function platformResultResponse(
   return jsonResponse({ membership: result.membership }, successStatus);
 }
 
+/**
+ * One-time platform bootstrap. This route exists only to mint the very first
+ * platform admin on a platform that has none, and goes permanently dead the
+ * moment it succeeds: the zero-admin check inside isBootstrapAllowed can never
+ * pass again.
+ *
+ * No session and no same-origin check are involved — the token in the
+ * x-bootstrap-token header is the entire credential, so cookies are ignored.
+ * Every guard failure returns the same 404 as a nonexistent route, so a caller
+ * cannot tell an unconfigured token from a wrong one from an already-used
+ * surface. Body validation runs only after the token gate has passed, so a 400
+ * is itself proof of a correct token and never reaches an unauthorized caller.
+ */
+async function handlePlatformBootstrapRoute(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  if (request.method !== "POST" || !(await isBootstrapAllowed(env, request))) {
+    return adminNotFoundResponse();
+  }
+
+  const input = parseBootstrapInput(await readJsonBody(request));
+  if (input === null) {
+    return invalidRequestResponse();
+  }
+
+  const result = await bootstrapPlatformAdmin(env, input, Date.now());
+  if (result.status === "conflict") {
+    return platformConflictResponse();
+  }
+  if (result.status !== "ok") {
+    return adminNotFoundResponse();
+  }
+
+  // Nothing beyond the identity itself, and no session cookie: the new admin
+  // signs in through the normal mounted sign-in route.
+  return jsonResponse({ user: result.user }, 201);
+}
+
 async function handlePlatformTenantRoute(
   env: Env,
   request: Request,
@@ -674,6 +719,10 @@ export default {
       url.pathname.startsWith(ADMIN_OBJECT_PATH_PREFIX)
     ) {
       return handleAdminObjectRoute(env, request, url);
+    }
+
+    if (url.pathname === PLATFORM_BOOTSTRAP_PATH) {
+      return handlePlatformBootstrapRoute(env, request);
     }
 
     if (

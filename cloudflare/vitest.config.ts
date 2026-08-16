@@ -20,6 +20,8 @@ export default defineConfig({
           bindings: {
             BETTER_AUTH_SECRET:
               "test-only-better-auth-secret-at-least-32-characters",
+            BOOTSTRAP_TOKEN:
+              "test-only-bootstrap-token-at-least-32-characters",
             TEST_MIGRATIONS: migrations,
           },
           // Test-only: the deploy config has no R2 binding yet, so the object
