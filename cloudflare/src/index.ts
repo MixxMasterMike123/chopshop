@@ -44,6 +44,7 @@ import {
   parseBootstrapInput,
 } from "./platform/bootstrap";
 import { jsonResponse } from "./lib/http";
+import { clientIp, enforceRateLimit } from "./lib/rate-limit";
 import {
   authorizePlatformRequest,
   authorizeTenantAdminRequest,
@@ -67,7 +68,28 @@ const ADMIN_OBJECT_PATH_PREFIX = "/v1/admin/objects/";
 const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
 const PLATFORM_BOOTSTRAP_PATH = "/v1/platform/bootstrap";
-const REQUIRED_MIGRATION = "0007_checkout.sql";
+const REQUIRED_MIGRATION = "0008_rate_limits.sql";
+
+const MINUTE_MS = 60 * 1_000;
+
+// Checkout is an unauthenticated write, so it carries two independent limits.
+// The per-IP one is the flood shield and is deliberately tight. The per-email
+// one is looser but wider-reaching: it survives an attacker rotating addresses
+// through a proxy pool, which the IP limit alone cannot.
+export const CHECKOUT_IP_SCOPE = "checkout-ip";
+export const CHECKOUT_IP_LIMIT = 10;
+export const CHECKOUT_IP_WINDOW_MS = MINUTE_MS;
+export const CHECKOUT_EMAIL_SCOPE = "checkout-email";
+export const CHECKOUT_EMAIL_LIMIT = 30;
+export const CHECKOUT_EMAIL_WINDOW_MS = 60 * MINUTE_MS;
+
+// A cheap shield in front of the bootstrap token compare. Legitimate use of
+// that route is one successful call in the lifetime of the platform, so five
+// attempts per ten minutes is generous for an operator and hostile to a
+// brute-force.
+export const BOOTSTRAP_IP_SCOPE = "bootstrap-ip";
+export const BOOTSTRAP_IP_LIMIT = 5;
+export const BOOTSTRAP_IP_WINDOW_MS = 10 * MINUTE_MS;
 
 type AdminProductAction = "publish" | "unpublish";
 
@@ -114,6 +136,27 @@ function invalidRequestResponse(): Response {
     },
     400,
   );
+}
+
+/**
+ * The message names no limit, no window and no remaining allowance: telling a
+ * caller which of several limits it tripped would let it map the limiter and
+ * tune around it. Retry-After is the one hint given, because an honest client
+ * needs it to back off correctly.
+ */
+function rateLimitedResponse(retryAfterSeconds: number): Response {
+  const response = jsonResponse(
+    {
+      error: {
+        code: "rate_limited",
+        message: "Too many requests",
+      },
+    },
+    429,
+  );
+
+  response.headers.set("Retry-After", retryAfterSeconds.toString());
+  return response;
 }
 
 function conflictResponse(): Response {
@@ -559,9 +602,12 @@ function unprocessableResponse(): Response {
  * item would turn this route into a catalogue oracle that reveals which product
  * and variant ids exist, are active, and belong to this tenant.
  *
- * TODO(rate-limit checkpoint): this is an unauthenticated write that inserts
- * rows and runs one query per item. It needs a per-tenant and per-IP limiter
- * before it faces real traffic.
+ * Being an unauthenticated write that inserts rows and runs a query per item,
+ * it is rate limited twice. The per-IP limit runs BEFORE the body is parsed, so
+ * a flood is refused without the worker doing the parsing work it is trying to
+ * provoke. The per-email limit can only run after parsing — the address is what
+ * it keys on — and catches the distributed case the IP limit cannot: one buyer
+ * address driven from many addresses.
  */
 async function handleCheckoutRoute(
   env: Env,
@@ -576,12 +622,38 @@ async function handleCheckoutRoute(
     return notFoundResponse("Checkout not found");
   }
 
+  const now = Date.now();
+
+  const byIp = await enforceRateLimit(env.DB, {
+    key: clientIp(request),
+    limit: CHECKOUT_IP_LIMIT,
+    now,
+    scope: CHECKOUT_IP_SCOPE,
+    windowMs: CHECKOUT_IP_WINDOW_MS,
+  });
+  if (!byIp.allowed) {
+    return rateLimitedResponse(byIp.retryAfterSeconds);
+  }
+
   const input = parseCreateCheckoutInput(await readJsonBody(request));
   if (input === null) {
     return invalidRequestResponse();
   }
 
-  const result = await createCheckout(env.DB, tenant, input, Date.now());
+  // Keyed on the parsed address, which parseCreateCheckoutInput has already
+  // lowercased, so casing variants cannot be used to mint fresh buckets.
+  const byEmail = await enforceRateLimit(env.DB, {
+    key: input.email,
+    limit: CHECKOUT_EMAIL_LIMIT,
+    now,
+    scope: CHECKOUT_EMAIL_SCOPE,
+    windowMs: CHECKOUT_EMAIL_WINDOW_MS,
+  });
+  if (!byEmail.allowed) {
+    return rateLimitedResponse(byEmail.retryAfterSeconds);
+  }
+
+  const result = await createCheckout(env.DB, tenant, input, now);
   if (result.status === "ok") {
     // A replay answers 200 rather than 201: the checkout already existed, and
     // the status code is the only honest way to say so without changing body.
@@ -636,12 +708,33 @@ function platformResultResponse(
  * cannot tell an unconfigured token from a wrong one from an already-used
  * surface. Body validation runs only after the token gate has passed, so a 400
  * is itself proof of a correct token and never reaches an unauthorized caller.
+ *
+ * A per-IP limit runs in front of the token compare as a cheap shield: the
+ * compare hashes both sides on every attempt, and this route is a brute-force
+ * target by nature. It deliberately answers the SAME 404 as every other failure
+ * here rather than the 429 the checkout route uses. That is not an oversight —
+ * a 429 would confirm the surface exists and is worth attacking, and would let
+ * a caller distinguish "throttled" from "wrong token", which is precisely the
+ * distinction the rest of this route spends its effort hiding. The honest
+ * operator hitting this limit is a person retrying by hand, who is no worse off
+ * for seeing the same 404 they would see with a typo'd token.
  */
 async function handlePlatformBootstrapRoute(
   env: Env,
   request: Request,
 ): Promise<Response> {
-  if (request.method !== "POST" || !(await isBootstrapAllowed(env, request))) {
+  if (request.method !== "POST") {
+    return adminNotFoundResponse();
+  }
+
+  const byIp = await enforceRateLimit(env.DB, {
+    key: clientIp(request),
+    limit: BOOTSTRAP_IP_LIMIT,
+    now: Date.now(),
+    scope: BOOTSTRAP_IP_SCOPE,
+    windowMs: BOOTSTRAP_IP_WINDOW_MS,
+  });
+  if (!byIp.allowed || !(await isBootstrapAllowed(env, request))) {
     return adminNotFoundResponse();
   }
 

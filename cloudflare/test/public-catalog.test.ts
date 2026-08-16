@@ -433,7 +433,7 @@ describe("catalogue database invariants", () => {
 });
 
 describe("GET /ready", () => {
-  it("reports the checkout migration as applied", async () => {
+  it("reports the rate limit migration as applied", async () => {
     const response = await exports.default.fetch(
       "https://a.catalog.test/ready",
     );
@@ -441,7 +441,7 @@ describe("GET /ready", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       database: "ready",
-      migration: "0007_checkout.sql",
+      migration: "0008_rate_limits.sql",
       status: "ok",
     });
   });

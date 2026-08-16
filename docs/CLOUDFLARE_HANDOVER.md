@@ -279,6 +279,14 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Known accepted gaps for later checkpoints (documented in code): no rate limiting on this anonymous write (amplification ~50 D1 reads/request — must land before real traffic), line-resolution timing reveals resolve depth, no Turnstile, no shipping/VAT/discount, no PaymentIntent (nullable unique `payment_intent_id` column is the Stripe seam).
 - Migration 0007 applied to staging D1; `/ready` requires it. Gate 356/356 green (76 new tests); deployed and smoke-tested live.
 
+## Checkpoint 19 — Durable D1-backed rate limiting (deployed)
+
+- `0008_rate_limits.sql`: `rate_limit_windows` (WITHOUT ROWID, PK scope/key_hash/window_start) — disposable operational data, deliberately no tenant/FK/immutability. Keys are SHA-256(`scope:key`); raw IPs/emails never reach D1 or logs.
+- `src/lib/rate-limit.ts`: single-statement atomic upsert with `RETURNING count` (probed: works in D1 though undocumented — a null return throws rather than silently disabling the limiter), fixed windows, count ceiling, opportunistic bounded cleanup (`DELETE…LIMIT`, documented D1 support) on fresh windows, fail-closed on D1 errors. `clientIp` trusts only `CF-Connecting-IP`; missing header shares one stricter bucket.
+- Builder caught a real production bug in its own first version: colo clock skew could drive `updated_at` backwards past the schema CHECK, turning the limiter into a 500 on the route it protects — fixed with `MAX(stored, excluded)` + skew regression test.
+- Limits: checkout 10/min per IP (before body parsing) + 30/hour per email (after); over → 429 with `Retry-After`, message names no specific limit. Bootstrap: 5 per 10 min per IP, checked before the token compare, and over-limit returns the standard indistinguishable 404 (tested byte-identical, including with a CORRECT token — the limiter cannot be used as a token oracle).
+- Migration 0008 applied to staging; `/ready` requires it. Gate 384/384 green; deployed and smoke-tested (429 verified live).
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.

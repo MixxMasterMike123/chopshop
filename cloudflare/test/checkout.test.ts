@@ -120,6 +120,21 @@ async function seedVariant(
     .run();
 }
 
+let ipCounter = 0;
+
+/**
+ * A distinct client address per request unless the caller pins one. The route
+ * is rate limited per IP, and these suites fire far more than one window's
+ * allowance between them; without this every test after the tenth would be
+ * throttled by its predecessors rather than exercising what it names. The
+ * limiter itself is proven in rate-limit.test.ts and in the suite below, which
+ * pin the address deliberately.
+ */
+function nextIp(): string {
+  ipCounter += 1;
+  return `198.51.100.${ipCounter % 256}:${ipCounter}`;
+}
+
 function checkoutRequest(
   hostname: string,
   body: unknown,
@@ -127,7 +142,11 @@ function checkoutRequest(
 ): Request {
   return new Request(`https://${hostname}/v1/checkout`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...headers },
+    headers: {
+      "cf-connecting-ip": nextIp(),
+      "content-type": "application/json",
+      ...headers,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -851,6 +870,202 @@ describe("POST /v1/checkout idempotency", () => {
 
     const second = await post(HOST_A, payload);
     expect(second.status).toBe(409);
+  });
+});
+
+describe("POST /v1/checkout rate limiting", () => {
+  it("throttles the eleventh request from one address and frees the next", async () => {
+    const ip = "198.51.100.201";
+    const other = "198.51.100.202";
+
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      const allowed = await post(
+        HOST_A,
+        {
+          email: `flood-${attempt}@example.test`,
+          idempotencyKey: nextKey(),
+          items: [{ productId: "ck-a-live", quantity: 1 }],
+        },
+        { "cf-connecting-ip": ip },
+      );
+
+      expect(allowed.status).toBe(201);
+    }
+
+    const before = await countCheckouts(TENANT_A);
+    const denied = await post(
+      HOST_A,
+      {
+        email: "flood-11@example.test",
+        idempotencyKey: nextKey(),
+        items: [{ productId: "ck-a-live", quantity: 1 }],
+      },
+      { "cf-connecting-ip": ip },
+    );
+
+    expect(denied.status).toBe(429);
+    await expect(denied.json()).resolves.toEqual({
+      error: { code: "rate_limited", message: "Too many requests" },
+    });
+
+    const retryAfter = Number(denied.headers.get("retry-after"));
+    expect(retryAfter).toBeGreaterThanOrEqual(1);
+    expect(retryAfter).toBeLessThanOrEqual(60);
+
+    // Refused before createCheckout ran, so the throttled request wrote nothing.
+    await expect(countCheckouts(TENANT_A)).resolves.toBe(before);
+
+    // The limit is per address, not global: an unrelated buyer is unaffected.
+    const unaffected = await post(
+      HOST_A,
+      {
+        email: "unaffected@example.test",
+        idempotencyKey: nextKey(),
+        items: [{ productId: "ck-a-live", quantity: 1 }],
+      },
+      { "cf-connecting-ip": other },
+    );
+
+    expect(unaffected.status).toBe(201);
+  });
+
+  it("throttles a malformed body flood before the body is judged", async () => {
+    const ip = "198.51.100.203";
+
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      const rejected = await post(
+        HOST_A,
+        { email: "not-an-email", idempotencyKey: "x", items: [] },
+        { "cf-connecting-ip": ip },
+      );
+
+      expect(rejected.status).toBe(400);
+    }
+
+    // The IP limit runs BEFORE parsing, so a caller cannot spend an unlimited
+    // number of cheap 400s: the eleventh is throttled like any other request.
+    const denied = await post(
+      HOST_A,
+      { email: "not-an-email", idempotencyKey: "x", items: [] },
+      { "cf-connecting-ip": ip },
+    );
+
+    expect(denied.status).toBe(429);
+  });
+
+  it("throttles one address across many client addresses", async () => {
+    const email = "distributed@example.test";
+
+    // Thirty allowed, spread two per address so the per-IP limit of ten never
+    // fires and the per-email limit is unambiguously the thing under test.
+    for (let attempt = 1; attempt <= 30; attempt += 1) {
+      const allowed = await post(
+        HOST_A,
+        {
+          email,
+          idempotencyKey: nextKey(),
+          items: [{ productId: "ck-a-live", quantity: 1 }],
+        },
+        { "cf-connecting-ip": `198.51.101.${attempt}` },
+      );
+
+      expect(allowed.status).toBe(201);
+    }
+
+    const denied = await post(
+      HOST_A,
+      {
+        email,
+        idempotencyKey: nextKey(),
+        items: [{ productId: "ck-a-live", quantity: 1 }],
+      },
+      // A fresh address with its own untouched per-IP allowance: only the
+      // per-email limit can be what refuses this.
+      { "cf-connecting-ip": "198.51.102.1" },
+    );
+
+    expect(denied.status).toBe(429);
+    expect(Number(denied.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+
+    // Casing cannot mint a fresh bucket: the address is lowercased before the
+    // limit keys on it.
+    const recased = await post(
+      HOST_A,
+      {
+        email: "Distributed@Example.TEST",
+        idempotencyKey: nextKey(),
+        items: [{ productId: "ck-a-live", quantity: 1 }],
+      },
+      { "cf-connecting-ip": "198.51.102.2" },
+    );
+
+    expect(recased.status).toBe(429);
+  });
+
+  it("counts replays against the limit without breaking idempotency", async () => {
+    const ip = "198.51.100.204";
+    const payload = {
+      email: "replay-limited@example.test",
+      idempotencyKey: nextKey(),
+      items: [{ productId: "ck-a-live", quantity: 1 }],
+    };
+
+    const first = await post(HOST_A, payload, { "cf-connecting-ip": ip });
+    const firstBody = (await first.json()) as CheckoutBody;
+    expect(first.status).toBe(201);
+
+    // Replays are ordinary requests to the limiter — they still cost an
+    // allowance — but the ones that get through must still replay correctly.
+    for (let attempt = 2; attempt <= 10; attempt += 1) {
+      const replayed = await post(HOST_A, payload, { "cf-connecting-ip": ip });
+      const replayedBody = (await replayed.json()) as CheckoutBody;
+
+      expect(replayed.status).toBe(200);
+      expect(replayedBody.checkout).toEqual(firstBody.checkout);
+    }
+
+    await expect(
+      post(HOST_A, payload, { "cf-connecting-ip": ip }),
+    ).resolves.toMatchObject({ status: 429 });
+
+    // Still exactly one checkout: nothing the limiter did duplicated a row.
+    await expect(
+      env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM checkouts
+         WHERE tenant_id = ? AND customer_email = ?`,
+      )
+        .bind(TENANT_A, "replay-limited@example.test")
+        .first<{ total: number }>(),
+    ).resolves.toEqual({ total: 1 });
+  });
+
+  it("stores no raw address for a throttled caller", async () => {
+    const ip = "198.51.100.205";
+    const email = "traceable-buyer@example.test";
+
+    for (let attempt = 1; attempt <= 11; attempt += 1) {
+      await post(
+        HOST_A,
+        {
+          email,
+          idempotencyKey: nextKey(),
+          items: [{ productId: "ck-a-live", quantity: 1 }],
+        },
+        { "cf-connecting-ip": ip },
+      );
+    }
+
+    const dumped = JSON.stringify(
+      (
+        await env.DB.prepare("SELECT * FROM rate_limit_windows").all<
+          Record<string, unknown>
+        >()
+      ).results,
+    );
+
+    expect(dumped).not.toContain(ip);
+    expect(dumped).not.toContain(email);
+    expect(dumped).not.toContain("traceable-buyer");
   });
 });
 

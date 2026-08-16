@@ -22,8 +22,22 @@ function withEnv(overrides: Partial<Env>): Env {
   return { ...env, ...overrides };
 }
 
+let ipCounter = 0;
+
+/**
+ * A distinct client address per request unless the caller pins one. The route
+ * is rate limited to five attempts per IP per ten minutes, and this file makes
+ * far more than that; without a fresh address each test after the fifth would
+ * see the limiter's 404 rather than the guard it means to exercise. The limit
+ * itself is pinned deliberately in the suite at the end of this file.
+ */
+function nextIp(): string {
+  ipCounter += 1;
+  return `203.0.113.${ipCounter % 256}:${ipCounter}`;
+}
+
 function bootstrapRequest(
-  options: { body?: unknown; token?: string | null } = {},
+  options: { body?: unknown; ip?: string; token?: string | null } = {},
 ): Request {
   const headers = new Headers();
   const token = options.token === undefined ? TOKEN : options.token;
@@ -33,6 +47,7 @@ function bootstrapRequest(
   if (options.body !== undefined) {
     headers.set("content-type", "application/json");
   }
+  headers.set("cf-connecting-ip", options.ip ?? nextIp());
 
   return new Request(`${AUTH_ORIGIN}/v1/platform/bootstrap`, {
     body:
@@ -49,6 +64,7 @@ function bootstrapRequest(
 async function bootstrap(
   options: {
     body?: unknown;
+    ip?: string;
     overrides?: Partial<Env>;
     token?: string | null;
   } = {},
@@ -59,7 +75,7 @@ async function bootstrap(
       : options.body;
 
   return worker.fetch(
-    bootstrapRequest({ body, token: options.token }),
+    bootstrapRequest({ body, ip: options.ip, token: options.token }),
     options.overrides === undefined ? env : withEnv(options.overrides),
   );
 }
@@ -255,6 +271,70 @@ describe("platform bootstrap guards before any admin exists", () => {
       await removeSeededAdmin(seeded);
     },
   );
+});
+
+describe("platform bootstrap rate limiting", () => {
+  it("hides the limit behind the same 404, never a 429", async () => {
+    const ip = "203.0.113.240";
+    const wrongToken = "completely-different-token-of-sufficient-length";
+    const before = await countUsers();
+
+    // Five attempts are allowed through to the token compare, which refuses
+    // them on their own merits.
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const rejected = await bootstrap({ ip, token: wrongToken });
+
+      expect(rejected.status).toBe(404);
+    }
+
+    // The sixth never reaches the compare. The status, body and headers must be
+    // byte-identical to the five before it: a 429, a Retry-After, or a
+    // different message would tell an attacker the surface is real and worth
+    // continuing against, which is exactly what the uniform 404 exists to deny.
+    const throttled = await bootstrap({ ip, token: wrongToken });
+
+    expect(throttled.status).toBe(404);
+    await expect(throttled.json()).resolves.toEqual({
+      error: {
+        code: "not_found",
+        message: "Route not found",
+      },
+    });
+    expect(throttled.headers.get("retry-after")).toBeNull();
+
+    // A CORRECT token is refused just the same once the address is throttled,
+    // so the limiter cannot be used to distinguish a good token from a bad one.
+    const throttledWithGoodToken = await bootstrap({ ip });
+
+    expect(throttledWithGoodToken.status).toBe(404);
+    await expect(throttledWithGoodToken.json()).resolves.toEqual({
+      error: {
+        code: "not_found",
+        message: "Route not found",
+      },
+    });
+
+    // And nothing was created along the way — the platform still has no admin,
+    // which the ordered suites below depend on.
+    await expect(countUsers()).resolves.toBe(before);
+  });
+
+  it("does not throttle an unrelated address", async () => {
+    const response = await bootstrap({
+      ip: "203.0.113.241",
+      token: "completely-different-token-of-sufficient-length",
+    });
+
+    // Same 404 either way, so the assertion that matters is the counter: this
+    // address must still have its own untouched allowance.
+    expect(response.status).toBe(404);
+
+    const windows = await env.DB.prepare(
+      "SELECT count FROM rate_limit_windows WHERE scope = 'bootstrap-ip' ORDER BY count DESC",
+    ).all<{ count: number }>();
+
+    expect(windows.results.some((row) => row.count === 1)).toBe(true);
+  });
 });
 
 describe("platform bootstrap happy path", () => {
