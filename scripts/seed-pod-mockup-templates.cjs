@@ -124,7 +124,9 @@ const TEMPLATES = [
     // the front/back zones sit below the collar and remain inside the torso on
     // every uniformly framed colourway. Each px rect matches its mm aspect.
     printAreas: {
-      front: { x: 365, y: 365, w: 230, h: 322 },  // 250×350 mm (5:7)
+      // front y 365→411 (2026-08-17): Mikael's calibration — the zone sat too
+      // close under the collar; +46 px = +5 cm at this template's 0.92 px/mm.
+      front: { x: 365, y: 411, w: 230, h: 322 },  // 250×350 mm (5:7)
       back: { x: 340, y: 340, w: 280, h: 373 },   // 300×400 mm (3:4), back photo
       pocket: { x: 535, y: 365, w: 92, h: 92 },   // 100×100 mm
       left_sleeve: { x: 725, y: 365, w: 74, h: 74 },  // wearer LEFT = viewer right

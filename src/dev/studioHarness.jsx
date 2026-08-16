@@ -742,7 +742,7 @@ const WIZARD_TEE = {
   },
   colorways: WIZARD_TEE_COLORWAYS,
   printAreas: {
-    front: { x: 365, y: 365, w: 230, h: 322 },
+    front: { x: 365, y: 411, w: 230, h: 322 },
     back: { x: 340, y: 340, w: 280, h: 373 },
     pocket: { x: 535, y: 365, w: 92, h: 92 },
     left_sleeve: { x: 725, y: 365, w: 74, h: 74 },

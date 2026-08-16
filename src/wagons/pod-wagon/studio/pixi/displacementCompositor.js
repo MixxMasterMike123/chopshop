@@ -235,15 +235,19 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   // 2) Artwork layer: a container masked to the print area; the sprite inside is
   // anchored at its centre so rotationDeg rotates in place.
   //
-  // MASK ORDER (probed, do NOT restructure): the mask on the filtered container
-  // clips the filter's INPUT, so with filter.padding the warped ink can travel up
-  // to scale/2 px past the artwork's edge — including past the print-area rect
-  // when the artwork abuts it (measured: 424 dark px in the spill probe at scale
-  // 100). ACCEPTED: this surface is the product IMAGE only (never a print
-  // instruction), the spill is bounded (≤scale/2 px ≈ mm at photo scale) and
-  // reads as natural fabric pull. Moving the mask to a parent wrapper DOES clip
-  // the output — but it black-slabs the advanced blend modes (multiply meanLum=0,
-  // the historical regression), so the wrapper variant is off the table.
+  // MASK BLEED (re-probed 2026-08-17, current Pixi clips the filter's OUTPUT at
+  // the mask — a full-printyta artwork rendered ZERO ink pixels outside the
+  // rect, contradicting the earlier input-clip observation): a mask drawn
+  // exactly on the print-area rect slices the warp's fabric waves ruler-flat at
+  // the boundary, which reads as a printed sticker instead of ink on cloth. The
+  // rect mask is therefore EXPANDED by the filter's own padding (= the shader's
+  // max displacement excursion, scale/2 px, plus headroom — see applyTuning), so
+  // warped ink survives just past the printyta the way pulled fabric would,
+  // while the mask still stops anything from reaching collar/sleeves/backdrop.
+  // Display-only by construction: placement stays clamped INSIDE the printyta
+  // and the print file is the artwork original — the bleed exists only on the
+  // product image. The Graphics rect is (re)drawn in applyTuning, which owns the
+  // padding value it must track (and setSurface re-runs it on view changes).
   const artLayer = new Container();
   root.addChild(artLayer);
 
@@ -253,11 +257,23 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     mask.width = view.w;
     mask.height = view.h;
   } else {
+    // Placeholder rect — applyTuning() below immediately redraws it with the
+    // scale-dependent bleed before the first render.
     const r = view.printArea;
     mask = new Graphics().rect(r.x, r.y, r.w, r.h).fill(0xffffff);
   }
   root.addChild(mask);
   artLayer.mask = mask;
+
+  // Redraw the generated rect mask around the CURRENT print area with the
+  // CURRENT warp bleed. No-op for registered photo-alpha masks (maskTex).
+  const redrawRectMask = (bleed) => {
+    if (maskTex || !(mask instanceof Graphics)) return;
+    const r = view.printArea;
+    mask.clear()
+      .rect(r.x - bleed, r.y - bleed, r.w + bleed * 2, r.h + bleed * 2)
+      .fill(0xffffff);
+  };
 
   const artSprite = new Sprite();
   artSprite.anchor.set(0.5);
@@ -306,6 +322,9 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     // shader's max shift is scale/2 px ((map−0.5)·scale, |map−0.5| ≤ 0.5); pad
     // by that plus headroom so the artwork edges genuinely warp.
     dispFilter.padding = Math.ceil(8 + (state.displacementScale || 0) * 0.6);
+    // Mask bleed tracks the padding: the mask must admit exactly as much warp
+    // excursion as the filter can produce (see MASK BLEED above).
+    redrawRectMask(dispFilter.padding);
     // Blend/alpha go on the FILTERED CONTAINER, not the sprite: a filtered
     // container renders its children into an intermediate texture first, so a
     // sprite-level multiply blends against that buffer's EMPTY (black) backdrop
@@ -510,10 +529,8 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       pxPerMmY = printArea.h / nextAreaMm.h;
 
       // Registered tee surfaces use the generated rectangular mask. Rebuild it
-      // in place so front/back can share one renderer and one React canvas.
-      if (!maskTex && mask instanceof Graphics) {
-        mask.clear().rect(printArea.x, printArea.y, printArea.w, printArea.h).fill(0xffffff);
-      }
+      // in place (with the warp bleed) so front/back can share one renderer.
+      redrawRectMask(dispFilter.padding);
       applyPlacement();
       render();
     },
