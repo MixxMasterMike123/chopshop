@@ -54,6 +54,28 @@ export const templateViewBox = (template) => {
   return GARMENT_VIEWBOX[template.garment] || null;
 };
 
+/**
+ * Effective displacement tuning for one colourway: the template's base knobs
+ * merged with `displacement.perColorway[colorwayId]`. Blend physics is
+ * colour-dependent (probed on the B&C tee sheet 2026-08-17): 'multiply' @ 0.8
+ * inks into LIGHT fabric beautifully (white artwork backgrounds vanish — the
+ * 3D-view look), but on dark/saturated garments multiply erases the print
+ * (black × ink = black), where 'normal' is both legible and physically honest
+ * (real DTG prints an opaque white underbase on darks). So light colourways
+ * ride the base tuning and darks override blend per colourway in the seed.
+ */
+export const displacementTuningFor = (displacement, colorwayId) => {
+  if (!displacement) return null;
+  const per = displacement.perColorway?.[colorwayId] || {};
+  return {
+    displacementScale: per.displacementScale ?? displacement.scale ?? 30,
+    displacementBlur: per.displacementBlur ?? displacement.blur ?? 6,
+    displacementContrast: per.displacementContrast ?? displacement.contrast ?? 1,
+    blend: per.blend ?? displacement.blend ?? 'normal',
+    alpha: per.alpha ?? displacement.alpha ?? 1,
+  };
+};
+
 /** The blank-garment photo url for a colourway on a PHOTO template, or null when
  *  that colourway has no photo yet. Not used for flat templates. The BACK view
  *  (slot 'back') uses photo.backUrls when present, else falls back to the front

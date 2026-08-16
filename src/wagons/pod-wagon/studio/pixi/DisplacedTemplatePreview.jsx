@@ -11,7 +11,9 @@
 // the table: destroy() loses the context, and a StrictMode re-run or effect
 // re-run would then re-init on a canvas that can never render again.
 import React, { useEffect, useRef } from 'react';
-import { backgroundUrl, templateViewBox, viewForSlot } from '../TemplateBackground';
+import {
+  backgroundUrl, templateViewBox, viewForSlot, displacementTuningFor,
+} from '../TemplateBackground';
 
 const DisplacedTemplatePreview = ({
   template, colorway, slot, artworkUrl, placement,
@@ -31,6 +33,11 @@ const DisplacedTemplatePreview = ({
   const photoUrl = backgroundUrl(template, colorway, slot);
   photoUrlRef.current = photoUrl;
   artworkUrlRef.current = artworkUrl;
+  // Blend/alpha depend on the COLOURWAY (multiply on light, normal on dark);
+  // kept in a ref so the mount effect always reads the current colour's tuning.
+  const tuning = displacementTuningFor(displacement, colorway?.id);
+  const tuningRef = useRef(tuning);
+  tuningRef.current = tuning;
   const area = template?.printAreas?.[slot];
   const areaMm = template?.printAreaMm?.[slot];
   const mapW = displacement?.w || viewBox?.w;
@@ -71,13 +78,7 @@ const DisplacedTemplatePreview = ({
           // Context revoked under GPU pressure → drop straight to the flat DOM
           // preview via the parent's error path (the compositor is inert now).
           onContextLost: () => onError(new Error('WebGL-kontexten gick förlorad.')),
-          tuning: {
-            displacementScale: displacement.scale ?? 30,
-            displacementBlur: displacement.blur ?? 6,
-            displacementContrast: displacement.contrast ?? 1,
-            blend: displacement.blend || 'multiply',
-            alpha: displacement.alpha ?? 0.8,
-          },
+          tuning: tuningRef.current,
           // The map retains its full-resolution coordinate field, while the live
           // canvas only renders at the template/display resolution for snappy drag.
           output: { w: viewBox.w, h: viewBox.h },
@@ -93,6 +94,7 @@ const DisplacedTemplatePreview = ({
           await compositor.setSurface(surfaceRef.current);
         }
         if (cancelled) { compositor.destroy(); return; }
+        compositor.setTuning(tuningRef.current); // colourway may have changed mid-init
         compositor.setPlacement(placementRef.current);
         if (!compositor.hasVisibleArtwork()) {
           throw new Error('WebGL-renderingen utelämnade motivet.');
@@ -139,6 +141,14 @@ const DisplacedTemplatePreview = ({
     if (!compositor || !photoUrl) return;
     compositor.setPhoto(photoUrl).catch(onError);
   }, [photoUrl]);
+
+  // …and the colourway's blend tuning follows (multiply↔normal across the
+  // light/dark boundary; contrast stays uniform so no map rebuild happens).
+  useEffect(() => {
+    const compositor = compositorRef.current;
+    if (!compositor) return;
+    try { compositor.setTuning(tuningRef.current); } catch (error) { onError(error); }
+  }, [colorway?.id]);
 
   useEffect(() => {
     const compositor = compositorRef.current;

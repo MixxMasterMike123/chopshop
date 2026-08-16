@@ -10,7 +10,9 @@
 // The background comes from backgroundImageSource (templateBackground): a photo url
 // for photo templates, or the SVG flat as a data URL for flat templates. Explicit
 // width/height on the flat's root <svg> keep Safari from rasterizing it at 0×0.
-import { templateViewBox, backgroundImageSource, viewForSlot } from './TemplateBackground';
+import {
+  templateViewBox, backgroundImageSource, viewForSlot, displacementTuningFor,
+} from './TemplateBackground';
 import {
   pxPerMm, isComposable, placementHeightMm, clampPlacement, defaultPlacement,
 } from './placementMath';
@@ -126,6 +128,9 @@ export const renderMockup = async ({
       w: areaRect.w * sx,
       h: areaRect.h * sy,
     };
+    // Blend/alpha are colourway-dependent (multiply on light garments, normal
+    // on darks — see displacementTuningFor); resolve per item.
+    const tuning = displacementTuningFor(displacement, colorway?.id);
     let compositor = session?._get(sessionKey) || null;
     // A reused session compositor may sit on a REVOKED WebGL context (the
     // browser reclaims contexts under GPU pressure — Firefox does this mid-
@@ -136,26 +141,22 @@ export const renderMockup = async ({
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         if (compositor) {
-          // Reused renderer: swap the view's map/geometry and this colourway's
-          // photo. The compositor caches processed map textures per (url, area),
-          // so front/back alternation costs no re-processing.
+          // Reused renderer: swap the view's map/geometry, this colourway's
+          // photo and its blend tuning. The compositor caches processed map
+          // textures per (url, area), so front/back alternation costs no
+          // re-processing (contrast is uniform across colourways → no rebuild).
           await compositor.setSurface({
             printArea, printAreaMm: template.printAreaMm?.[slot], displacementUrl,
           });
           await compositor.setPhoto(bgSrc);
+          compositor.setTuning(tuning);
         } else {
           const { createDisplacementCompositor } = await import('./pixi/displacementCompositor');
           compositor = await createDisplacementCompositor({
             view: { w: mapW, h: mapH, printArea },
             printAreaMm: template.printAreaMm?.[slot],
             assets: { photoUrl: bgSrc, displacementUrl },
-            tuning: {
-              displacementScale: displacement.scale ?? 30,
-              displacementBlur: displacement.blur ?? 6,
-              displacementContrast: displacement.contrast ?? 1,
-              blend: displacement.blend || 'normal',
-              alpha: displacement.alpha ?? 1,
-            },
+            tuning,
             output: { w: W, h: H },
           });
           session?._set(sessionKey, compositor);

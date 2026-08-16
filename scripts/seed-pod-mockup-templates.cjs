@@ -112,11 +112,26 @@ const TEMPLATES = [
           front: `${TEE_PHOTO}/white_front_dm.webp`,
           back: `${TEE_PHOTO}/white_back_dm.webp`,
         },
-        scale: 40,
+        // 2026-08-17 recalibration to the 3D-view keeper look (blend sheet
+        // probed on white/grey/red/black): scale 30 + contrast 2 gives this
+        // map (print-area sd≈24, weak) the same effective fold strength as
+        // the reference 3D map (sd≈54) — ≈11px typical warp.
+        scale: 30,
         blur: 6,
-        contrast: 1,
-        blend: 'normal',
+        contrast: 2,
+        // Base = LIGHT garments: multiply inks into the fabric and vanishes
+        // white artwork backgrounds (the 3D-view look). Dark/saturated
+        // colourways override to 'normal' — multiply erases prints there,
+        // and real DTG darks carry an opaque white underbase anyway.
+        blend: 'multiply',
         alpha: 0.8,
+        perColorway: {
+          black: { blend: 'normal' },
+          navy: { blend: 'normal' },
+          red: { blend: 'normal' },
+          'royal-blue': { blend: 'normal' },
+          burgundy: { blend: 'normal' },
+        },
       },
     },
     colorways: TEE_COLORWAYS,
