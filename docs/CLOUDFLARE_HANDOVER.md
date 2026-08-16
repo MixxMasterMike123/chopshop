@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 21 deployed — Fable orchestrating, Opus building, Fable reviewing
+**Last updated:** 2026-08-16, checkpoint 22 deployed — Fable orchestrating, Opus building, Fable reviewing
 **Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,10 +8,10 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest implementation checkpoint: checkpoint 21 — VAT-inclusive totals contract v2 + delivery method + shipping engine (see below)
+- Latest implementation checkpoint: checkpoint 22 — campaign discount engine (see below)
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
-- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0009), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
+- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0010), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
 - No **production** resources, DNS records, custom routes, Containers, Stripe endpoints, or email integrations have been created.
 - The user's personal Cloudflare account is designated for staging/non-production.
 - A separate Cloudflare production account is required before cutover, but does not need to exist yet.
@@ -310,6 +310,17 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Local gate 533/533 (149 new tests, incl. 7-case tier-boundary parity walk, migration-survival suite, VAT precision suite); mutation-tested guards (pickup `every`→`some`, fingerprint reversion, totals CHECK, packaging/default-weight constants — each broke exactly the right tests). Deployed and smoke-tested: `/ready` at 0009, all guarded surfaces fail-closed 404.
 - Known accepted gaps (unchanged from 18 unless noted): discount engine (column live, hard-coded 0), Turnstile, PaymentIntent seam, checkout expiry sweep. Test-suite note: per-case email addresses are now needed in pricing suites — the 30/hour per-email rate limit otherwise turns extra tests into misleading 429s.
 
+## Checkpoint 22 — Campaign discount engine (deployed)
+
+- Built by an Opus subagent, line-by-line reviewed by Fable; commit `45d9cb2`, deployed as version `0eed0cc9`, migration `0010_discount_codes.sql` applied to staging.
+- `discount_codes`: per-tenant UNIQUE uppercase codes (≤50 chars, prod's trim+uppercase normalization reproduced at the parse boundary), `fixed`/`percent` value XOR CHECK, inclusive `starts_at`/`ends_at` window, nullable `max_uses` + non-writable `used_count`, `min_spend_minor` compared against the FULL subtotal (prod parity, even for scoped codes), scope `all`/`products` with a loose JSON product-id list (deliberately NOT an FK join table — prod tolerates deleted products contributing 0 to the base). Percent stored as BASIS POINTS so fractional percents stay exact; math is `ceil(base×bp/10000)` via remainder decomposition because the naive product overflows 2^53 inside legal column bounds (differential + boundary tested; ceiling matches prod's client-parity-critical `Math.ceil`).
+- **Probed D1 facts:** `ALTER TABLE ... ADD COLUMN` accepts AND enforces a multi-column CHECK on insert and update — `checkouts.discount_code_id` carries both `discount>0 ⇒ code id` and `discount ≤ subtotal` without recreating the table. `json_valid()`/`json_type()` work in CHECKs. Table-level CHECKs must follow all column defs.
+- Checkout: optional `discountCode` (wrong shape = 400 decided pre-DB; well-formed unknown/ineligible = silently 0 — prod client parity AND no code-enumeration oracle). One extra D1 read only when a code is present; base computed from the already-resolved line snapshots. VAT derived from the discounted total (prod parity). Replay fingerprint pins BOTH `discount_minor` and `discount_code_id` (twin codes worth the same money must not misattribute usage). `used_count` increment is the PAYMENT checkpoint's job against the frozen code id; a zero-worth resolved code stores NO id (deliberate divergence: prod would freeze an id beside a 0 discount and let the webhook burn a use on nothing — judged a latent prod bug, not imported).
+- Tenant-admin CRUD `/v1/admin/discount-codes` (POST create / GET / PATCH; activation is a PATCH field since it's one boolean on one row; GET is CSRF-exempt like the objects surface because same-origin GETs carry no Origin header — still behind the live session+membership guard). `used_count` absent from every allowlist. Audit rows field-names-only.
+- Other explicit divergences/gaps: `percentBp` wire field (not prod's float `value` — future admin UI must convert); no tenant feature-flag gate yet (prod gates on the discountCodes add-on; all D1 tenants have the engine); no listing endpoint yet; `MAX_DISCOUNT_PRODUCT_IDS = 500` containment bound (prod has none); affiliate branch is a marked seam ABOVE the campaign lookup in `resolveDiscount` (prod checks affiliates first and they win collisions).
+- **Test-fixture trap (record):** the shared `NOW = 1_787_200_000_000` constant sits days in the future of a real run; window fixtures anchored to it as `NOW ± DAY` can silently pass while testing nothing. Time-dependent suites must anchor to `Date.now()`.
+- Local gate 646/646 (113 new); 15-mutation kill log (eligibility guards, scope base, fingerprint fields independently, uppercase normalization, clamps, tenant binding, PATCH coherence, zero-discount id rule — each caught by the right tests). Deployed and smoke-tested: `/ready` at 0010, all new surfaces fail-closed 404.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -334,7 +345,7 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 ## Next safe actions
 
 1. **Owner:** run the checkpoint 17 bootstrap on staging (`openssl rand -base64 48 | npx wrangler secret put BOOTSTRAP_TOKEN` from `cloudflare/`, then one `POST /v1/platform/bootstrap`) to mint the first platform admin — this unblocks live provisioning of a staging tenant + tenant admin and the authenticated upload/checkout smoke.
-2. Continue Wave-4 checkout: discount engine on the v2 totals contract, then the payment-provider seam (`payment_intent_id` column is the Stripe seam). Stripe secrets remain owner actions.
+2. Continue Wave-4 checkout: the payment-provider seam (`payment_intent_id` + frozen `discount_code_id` are the Stripe seam; the payment checkpoint owns the atomic `used_count` increment). Stripe secrets remain owner actions.
 3. Turnstile (or equivalent) on the anonymous checkout surface before any real traffic.
 4. Onboard a MeteorShop sending domain only at the explicit DNS/provider canary checkpoint; the unrelated existing domain stays untouched.
 5. Keep Firebase as the sole production side-effect owner throughout these staging waves.
