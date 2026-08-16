@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 22 deployed — Fable orchestrating, Opus building, Fable reviewing
+**Last updated:** 2026-08-16, checkpoint 23 deployed — Fable orchestrating, Opus building, Fable reviewing
 **Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,8 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest implementation checkpoint: checkpoint 22 — campaign discount engine (see below)
+- Latest implementation checkpoint: checkpoint 23 — platform-provisioned users (see below)
+- Staging bootstrap has RUN: one platform admin exists (owner's identity); the bootstrap route is permanently dead (verified 404 on replay; D1 readback: 1 user / 1 active platform_admin / 1 audit row).
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
 - Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0010), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
@@ -321,6 +322,18 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - **Test-fixture trap (record):** the shared `NOW = 1_787_200_000_000` constant sits days in the future of a real run; window fixtures anchored to it as `NOW ± DAY` can silently pass while testing nothing. Time-dependent suites must anchor to `Date.now()`.
 - Local gate 646/646 (113 new); 15-mutation kill log (eligibility guards, scope base, fingerprint fields independently, uppercase normalization, clamps, tenant binding, PATCH coherence, zero-discount id rule — each caught by the right tests). Deployed and smoke-tested: `/ready` at 0010, all new surfaces fail-closed 404.
 
+## Checkpoint 23 — Platform-provisioned users (deployed)
+
+- Built by an Opus subagent, reviewed by Fable with one review finding that cascaded; commit `d87284e`, deployed as version `1a317c60`. No migration; `/ready` stays at 0010.
+- `POST /v1/platform/users` (platform-guarded + CSRF before body parse, fail-closed 404): mints `tenant_admin` / `print_operator` identities via the Better Auth server API, then `identity_access` + audit row (account type only, never the email) in one batch. **`platform_admin` is deliberately NOT creatable over HTTP** — a hijacked platform session must not mint more of itself; raising that floor needs its own checkpoint with a second-factor story. Interim credential model: operator sets the initial password (mirrors prod's superadmin create-user flow minus the credentials email); the invitation flow supersedes it when Email Service lands. Password policy stays Better Auth's alone (probed: 8–128), mapped to opaque 400s.
+- **Better Auth 1.6.29 facts probed:** error discrimination must use `body.code`, NOT `instanceof APIError` (the VALIDATION_ERROR branch throws from a different module instance). Duplicate email = `USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL` (422), password codes 400.
+- **Review finding (real, fixed):** `autoSignIn` defaulted TRUE — `signUpEmail` minted an orphan session row per provisioned user (probed: 1 row each, token discarded), bootstrap included. Now `autoSignIn: false` in `create-auth.ts`, pinned by a 6.1-style config regression test + zero-session assertions in bootstrap and provisioning suites; sign-in still mints exactly one session (probed by test).
+- **Cascade finding:** under `autoSignIn: false`, Better Auth SWALLOWS duplicate sign-ups — returns success with a fabricated, never-persisted user id (two calls → two different ids, only the first is a row). Sound enumeration-hardening for public sign-up, but it made the thrown-duplicate branch unreachable and would have turned a duplicate provision into a FK-violation 500. Fixed with a duplicate pre-check (common case → clean 409; explicitly NOT a TOCTOU guarantee) + a persistence check on the returned id (raced case → 409); the throwing branch stays as defence in depth, and a test pins the swallowed-duplicate behaviour so a future upgrade fails loudly.
+- Server-API `signUpEmail` bypasses Better Auth's rate limiter (probed: `rateLimit` table stays empty) — fixture draining applies only to handler-driven sign-ins. No limiter on this route, matching every platform surface: it sits behind a live platform session; abuse accounting is the audit trail's job.
+- Mutation log: 8 mutations, one of which exposed a real test-suite gap (cross-origin denials all sent well-formed bodies, so moving the origin check after body parse leaked a 400 with the suite green — now pinned with malformed-body cross-site tests). The unreachable-over-HTTP batch-UNIQUE branch is flagged honestly as not fully kill-tested; the dangerous regression (silent account-kind conversion) is killed by 4 tests.
+- Gate 702/702 (56 new). Deployed and smoked: anonymous `POST/GET /v1/platform/users` fail-closed 404.
+- **Operator smoke scripts** (in `cloudflare/scripts/`, credentials prompted locally): `stg-smoke.sh` (platform basics: provision demo tenant bound to the workers.dev hostname, storefront resolution, suspend/activate gate, one-kind boundary) and `stg-e2e.sh` (full loop: provision tenant admin via checkpoint 23 → product with weight/carriage/pickup → activate+publish → discount code → R2 reserve/upload/download/delete → anonymous checkouts asserting EXACT engine money: 19900 subtotal / 5800 carriage (40g+20g pack, 2 tiers) / 1990 discount / 23710 total / 4742 VAT, pickup variant, and idempotent replay).
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -344,7 +357,7 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. **Owner:** run the checkpoint 17 bootstrap on staging (`openssl rand -base64 48 | npx wrangler secret put BOOTSTRAP_TOKEN` from `cloudflare/`, then one `POST /v1/platform/bootstrap`) to mint the first platform admin — this unblocks live provisioning of a staging tenant + tenant admin and the authenticated upload/checkout smoke.
+1. **Owner:** run `bash scripts/stg-e2e.sh` from `cloudflare/` (bootstrap is DONE; the script provisions the demo tenant + tenant admin and asserts the full commerce loop live). Optionally `npx wrangler secret delete BOOTSTRAP_TOKEN` — the route is dead either way.
 2. Continue Wave-4 checkout: the payment-provider seam (`payment_intent_id` + frozen `discount_code_id` are the Stripe seam; the payment checkpoint owns the atomic `used_count` increment). Stripe secrets remain owner actions.
 3. Turnstile (or equivalent) on the anonymous checkout surface before any real traffic.
 4. Onboard a MeteorShop sending domain only at the explicit DNS/provider canary checkpoint; the unrelated existing domain stays untouched.
