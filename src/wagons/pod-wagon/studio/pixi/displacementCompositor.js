@@ -36,7 +36,7 @@
 // Import this module LAZILY (dynamic import) — pixi.js is its own chunk and must
 // not enter the main admin bundle.
 import {
-  Application, Container, Sprite, Graphics, DisplacementFilter, Texture,
+  Application, Container, Sprite, Graphics, DisplacementFilter, Rectangle, Texture,
 } from 'pixi.js';
 // Side-effect import REQUIRED for multiply/overlay & co in Pixi v8: they are
 // "advanced" blend modes implemented via backdrop-reading filters — without this
@@ -337,6 +337,63 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   };
 
   const render = () => { if (!destroyed) app.render(); };
+  const contextIsLost = () => Boolean(
+    app.renderer?.context?.isLost || app.renderer?.gl?.isContextLost?.()
+  );
+
+  // Firefox can occasionally complete a filtered render without throwing while
+  // returning only the garment photograph. Verify the feature's actual output
+  // instead of browser-sniffing: compare a small artwork-region readback with
+  // the same scene while the artwork is hidden. This costs two tiny (≤96 px)
+  // probes once per preview/mockup, not two full-size exports.
+  const hasVisibleArtwork = () => {
+    if (destroyed || contextIsLost() || !state.placement || !artSprite.visible) return false;
+    const p = state.placement;
+    const tex = artSprite.texture;
+    if (!tex || tex.width <= 1) return false;
+
+    const outScaleX = outW / view.w;
+    const outScaleY = outH / view.h;
+    const w = p.wMm * pxPerMmX * outScaleX;
+    const h = p.wMm * pxPerMmX * (tex.height / tex.width) * outScaleY;
+    const x = (view.printArea.x + p.xMm * pxPerMmX) * outScaleX;
+    const y = (view.printArea.y + p.yMm * pxPerMmY) * outScaleY;
+    const radians = ((p.rotationDeg || 0) * Math.PI) / 180;
+    const rotatedW = Math.abs(w * Math.cos(radians)) + Math.abs(h * Math.sin(radians));
+    const rotatedH = Math.abs(w * Math.sin(radians)) + Math.abs(h * Math.cos(radians));
+    const padX = Math.ceil((dispFilter.padding || 0) * outScaleX);
+    const padY = Math.ceil((dispFilter.padding || 0) * outScaleY);
+    const left = Math.max(0, Math.floor(x + w / 2 - rotatedW / 2 - padX));
+    const top = Math.max(0, Math.floor(y + h / 2 - rotatedH / 2 - padY));
+    const right = Math.min(outW, Math.ceil(x + w / 2 + rotatedW / 2 + padX));
+    const bottom = Math.min(outH, Math.ceil(y + h / 2 + rotatedH / 2 + padY));
+    const frame = new Rectangle(left, top, Math.max(1, right - left), Math.max(1, bottom - top));
+    const resolution = Math.min(1, 96 / Math.max(frame.width, frame.height));
+    const read = () => app.renderer.extract.pixels({
+      target: app.stage, frame, resolution, clearColor: '#ffffff',
+    });
+
+    render();
+    const withArtwork = read();
+    artSprite.visible = false;
+    render();
+    const withoutArtwork = read();
+    artSprite.visible = true;
+    render();
+    if (contextIsLost() || withArtwork.width !== withoutArtwork.width || withArtwork.height !== withoutArtwork.height) {
+      return false;
+    }
+
+    const a = withArtwork.pixels;
+    const b = withoutArtwork.pixels;
+    let changed = 0;
+    const pixelCount = Math.min(a.length, b.length) / 4;
+    for (let i = 0; i < pixelCount * 4; i += 4) {
+      const delta = Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+      if (delta >= 18) changed += 1;
+    }
+    return changed >= Math.max(4, Math.floor(pixelCount * 0.001));
+  };
 
   // Rebuild the displacement texture with the current contrast (re-runs the
   // canvas pass on the original map image) and hot-swap it into the sprite. The
@@ -464,10 +521,15 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       if (contrastChanged) rebuildDisplacement();
     },
 
+    hasVisibleArtwork,
+
     async extractPNG() {
       if (destroyed) throw new Error('Mockup-kompositorn är stängd.');
+      if (contextIsLost()) throw new Error('WebGL-kontexten för mockupen gick förlorad.');
       render();
+      if (contextIsLost()) throw new Error('WebGL-kontexten för mockupen gick förlorad.');
       const canvas = app.renderer.extract.canvas(app.stage);
+      if (contextIsLost()) throw new Error('WebGL-kontexten för mockupen gick förlorad.');
       return new Promise((resolve, reject) => {
         canvas.toBlob(
           (blob) => (blob ? resolve(blob) : reject(new Error('Kunde inte skapa produktbilden.'))),

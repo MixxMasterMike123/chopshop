@@ -82,6 +82,9 @@ const DisplacedTemplatePreview = ({
         }
         if (cancelled) { compositor.destroy(); return; }
         compositor.setPlacement(placementRef.current);
+        if (!compositor.hasVisibleArtwork()) {
+          throw new Error('WebGL-renderingen utelämnade motivet.');
+        }
         compositorRef.current = compositor;
       } catch (error) {
         try { compositor?.destroy(); } catch { /* renderer may already be invalid */ }

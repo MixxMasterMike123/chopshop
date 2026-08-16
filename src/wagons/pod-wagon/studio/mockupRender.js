@@ -112,6 +112,9 @@ export const renderMockup = async ({
       });
       await compositor.setArtwork(artwork.previewUrl);
       compositor.setPlacement(p);
+      if (!compositor.hasVisibleArtwork()) {
+        throw new Error('WebGL-renderingen utelämnade motivet.');
+      }
       // Pixi extraction is deliberately PNG: browser WebP encoders can leave a
       // WebGL readback promise unresolved (observed in headless Chrome). Return
       // the actual type so upload paths and download extensions stay truthful.
@@ -157,8 +160,10 @@ export const renderMockup = async ({
     if (deg) {
       ctx.translate(x + w / 2, y + h / 2);
       ctx.rotate((deg * Math.PI) / 180);
+      ctx.globalAlpha = displacement ? (displacement.alpha ?? 1) : 1;
       ctx.drawImage(artImg, -w / 2, -h / 2, w, h);
     } else {
+      ctx.globalAlpha = displacement ? (displacement.alpha ?? 1) : 1;
       ctx.drawImage(artImg, x, y, w, h);
     }
     ctx.restore();
