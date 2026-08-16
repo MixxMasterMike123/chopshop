@@ -23,6 +23,7 @@
     "wrangler": "4.123.0"
   },
   "dependencies": {
-    "better-auth": "1.6.29"
+    "better-auth": "1.6.29",
+    "stripe": "22.5.0"
   }
 }

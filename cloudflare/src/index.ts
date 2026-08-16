@@ -30,6 +30,11 @@ import {
   createCheckout,
   parseCreateCheckoutInput,
 } from "./commerce/checkout";
+import { createCheckoutPayment } from "./commerce/payment";
+import {
+  isStripeConfigured,
+  resolveStripeGateway,
+} from "./commerce/stripe-client";
 import type { AdminDiscountCodeResult } from "./commerce/admin-discount-codes";
 import {
   createAdminDiscountCode,
@@ -73,6 +78,7 @@ const STOREFRONT_PATH = "/v1/storefront";
 const PRODUCTS_PATH = "/v1/products";
 const PRODUCT_PATH_PREFIX = "/v1/products/";
 const CHECKOUT_PATH = "/v1/checkout";
+const CHECKOUT_PATH_PREFIX = "/v1/checkout/";
 const ADMIN_PRODUCTS_PATH = "/v1/admin/products";
 const ADMIN_PRODUCT_PATH_PREFIX = "/v1/admin/products/";
 const ADMIN_OBJECTS_PATH = "/v1/admin/objects";
@@ -97,6 +103,19 @@ export const CHECKOUT_IP_WINDOW_MS = MINUTE_MS;
 export const CHECKOUT_EMAIL_SCOPE = "checkout-email";
 export const CHECKOUT_EMAIL_LIMIT = 30;
 export const CHECKOUT_EMAIL_WINDOW_MS = 60 * MINUTE_MS;
+
+// The payment route's per-IP shield. Deliberately TWICE the checkout limit
+// rather than equal to it: one buyer legitimately creates one checkout and then
+// polls its intent — a page reload, a browser back-navigation, a re-mounted
+// payment element each retrieve the same intent — so a limit equal to
+// checkout's would throttle the honest flow before it throttled anything else.
+// It is still tight in absolute terms, and it must be, because past this gate
+// sits an outbound network call to a third party: an unthrottled caller is a
+// cost and reputation vector against the platform's Stripe account, not merely
+// a load on D1. The same window as checkout keeps the two comparable.
+export const PAYMENT_IP_SCOPE = "checkout-payment-ip";
+export const PAYMENT_IP_LIMIT = 20;
+export const PAYMENT_IP_WINDOW_MS = MINUTE_MS;
 
 // A cheap shield in front of the bootstrap token compare. Legitimate use of
 // that route is one successful call in the lifetime of the platform, so five
@@ -821,6 +840,162 @@ async function handleCheckoutRoute(
   );
 }
 
+/**
+ * Parses `/v1/checkout/{checkoutId}/payment` and nothing else.
+ *
+ * Strict two-segment shape with the same safe percent-decoding the other id
+ * routes use: a malformed path, an extra segment, or any action other than
+ * `payment` is not a route here, and the caller learns that as the same 404 an
+ * unknown checkout gets.
+ */
+function checkoutPaymentIdFromPath(pathname: string): string | null {
+  if (!pathname.startsWith(CHECKOUT_PATH_PREFIX)) {
+    return null;
+  }
+
+  const segments = pathname.slice(CHECKOUT_PATH_PREFIX.length).split("/");
+  const [rawCheckoutId, rawAction, ...rest] = segments;
+  if (rawCheckoutId === undefined || rawAction !== "payment" || rest.length > 0) {
+    return null;
+  }
+
+  return decodeSegment(rawCheckoutId);
+}
+
+/**
+ * Every failure on the payment route answers with this one shape.
+ *
+ * ONE opaque failure for unknown ids, foreign tenants, expired quotes,
+ * non-open statuses, and terminal intents — deliberately not a 410 for expiry
+ * and a 404 for the rest. The checkout id is a bearer capability, and the only
+ * way to hold one is to have been handed it; distinguishing "this id never
+ * existed" from "this id is yours but dead" would turn the route into an oracle
+ * that confirms an id is real, which is precisely the fact a leaked or guessed
+ * id is trying to establish. A buyer whose own checkout died learns the same
+ * thing either way — they need a new checkout — and 404 says that without
+ * telling an attacker anything.
+ */
+function paymentNotFoundResponse(): Response {
+  return notFoundResponse("Checkout not found");
+}
+
+/**
+ * Anonymous, server-authoritative PaymentIntent creation for one checkout.
+ *
+ * The checkout id in the path is the entire capability, matching production's
+ * trust model: possession of the id is what a buyer has, and the tenancy is
+ * still resolved from the verified hostname, so an id from tenant A is not a
+ * capability on tenant B's storefront.
+ *
+ * THE ROUTE READS NO BODY AT ALL, and a non-empty one is refused. The amount is
+ * the checkout's frozen total and the currency is its own; there is nothing a
+ * caller could put in a body that this route would be willing to honour, so
+ * accepting-and-ignoring one would be a lie about the interface. Refusing is
+ * also what makes the interface auditable: nobody can later "just read one
+ * field" from a body the contract says does not exist.
+ *
+ * The whole surface fails closed 404 while STRIPE_SECRET_KEY is unset, exactly
+ * as the auth namespace does without its secret — staging deploys dark and
+ * lights up on the secret alone.
+ */
+async function handleCheckoutPaymentRoute(
+  env: Env,
+  request: Request,
+  url: URL,
+): Promise<Response> {
+  // The unconfigured gate runs FIRST, before the method check and before any
+  // D1 work, so an unconfigured deployment is indistinguishable from one where
+  // the route was never written.
+  if (!isStripeConfigured(env)) {
+    return paymentNotFoundResponse();
+  }
+
+  if (request.method !== "POST") {
+    return paymentNotFoundResponse();
+  }
+
+  const checkoutId = checkoutPaymentIdFromPath(url.pathname);
+  if (checkoutId === null) {
+    return paymentNotFoundResponse();
+  }
+
+  // A body is a contract violation, not a validation failure, so it is refused
+  // before the tenant is resolved and before the limiter counts the request:
+  // the caller is not describing anything this route does.
+  //
+  // Both signals are checked because either alone is defeatable: a
+  // Content-Length of 0 with a chunked body, or a body with no length header at
+  // all. `request.body !== null` is the runtime's own answer to "did this
+  // request carry a body", and it is the authority here.
+  if (request.body !== null || request.headers.get("content-length") !== null) {
+    return paymentNotFoundResponse();
+  }
+
+  const tenant = await resolveRequestTenant(env.DB, request);
+  if (tenant === null) {
+    return paymentNotFoundResponse();
+  }
+
+  const now = Date.now();
+
+  // Before any checkout read and — the point of putting it here — before Stripe
+  // is touched. Past this gate is an outbound call to a third party, so the
+  // limiter must be the first thing a flood meets, not the last.
+  const byIp = await enforceRateLimit(env.DB, {
+    key: clientIp(request),
+    limit: PAYMENT_IP_LIMIT,
+    now,
+    scope: PAYMENT_IP_SCOPE,
+    windowMs: PAYMENT_IP_WINDOW_MS,
+  });
+  if (!byIp.allowed) {
+    return rateLimitedResponse(byIp.retryAfterSeconds);
+  }
+
+  const outcome = await createCheckoutPayment(
+    env.DB,
+    resolveStripeGateway(env),
+    tenant,
+    checkoutId,
+    now,
+  );
+
+  if (outcome.status === "not_available") {
+    return paymentNotFoundResponse();
+  }
+
+  // The gateway failed. 502 rather than 500 because the failure is upstream and
+  // an honest client may retry — the deterministic idempotency key means a retry
+  // reaches the same intent rather than minting a second one. The body names
+  // neither Stripe nor its error: see StripeGatewayError.
+  if (outcome.status === "gateway_error") {
+    return jsonResponse(
+      {
+        error: {
+          code: "payment_unavailable",
+          message: "Payment could not be prepared",
+        },
+      },
+      502,
+    );
+  }
+
+  // 201 when this request minted the intent, 200 when it re-served an existing
+  // one — the same honest distinction the creation route draws for a replay.
+  // The client secret is the only capability handed back; the intent id travels
+  // with it because the storefront needs it for Stripe.js. jsonResponse already
+  // sets no-store, which matters more here than anywhere else on this worker.
+  return jsonResponse(
+    {
+      payment: {
+        clientSecret: outcome.result.clientSecret,
+        paymentIntentId: outcome.result.paymentIntentId,
+      },
+    },
+    outcome.result.created ? 201 : 200,
+  );
+}
+
 function platformResultResponse(
   result: DomainResult | MembershipResult | TenantResult,
   successStatus: number,
@@ -1086,6 +1261,10 @@ export default {
 
     if (url.pathname === CHECKOUT_PATH) {
       return handleCheckoutRoute(env, request);
+    }
+
+    if (url.pathname.startsWith(CHECKOUT_PATH_PREFIX)) {
+      return handleCheckoutPaymentRoute(env, request, url);
     }
 
     if (
