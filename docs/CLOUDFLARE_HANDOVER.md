@@ -357,7 +357,7 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 
 ## Next safe actions
 
-1. **Owner:** run `bash scripts/stg-e2e.sh` from `cloudflare/` (bootstrap is DONE; the script provisions the demo tenant + tenant admin and asserts the full commerce loop live). Optionally `npx wrangler secret delete BOOTSTRAP_TOKEN` — the route is dead either way.
+1. ✅ **Full authenticated e2e VERIFIED LIVE 2026-08-16** (owner ran `stg-e2e.sh`): platform sign-in → demo tenant → checkpoint-23 tenant-admin provisioning → grant → product create/activate/publish → discount code → R2 reserve/upload/download-byte-identical/delete(204) → anonymous shipped checkout with EXACT engine money (19900/5800/1990/23710/4742) → pickup variant (0/17910/3582) → idempotent replay returning the same checkout. 28/28 after correcting the script's delete expectation to the designed 204. Staging tenant admin: tenant-admin@demo.invalid. Optionally `npx wrangler secret delete BOOTSTRAP_TOKEN` — the route is dead either way.
 2. Continue Wave-4 checkout: the payment-provider seam (`payment_intent_id` + frozen `discount_code_id` are the Stripe seam; the payment checkpoint owns the atomic `used_count` increment). Stripe secrets remain owner actions.
 3. Turnstile (or equivalent) on the anonymous checkout surface before any real traffic.
 4. Onboard a MeteorShop sending domain only at the explicit DNS/provider canary checkpoint; the unrelated existing domain stays untouched.
