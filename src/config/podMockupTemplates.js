@@ -42,6 +42,11 @@
 //     photo: {
 //       w: 2000, h: 2250,          // photo pixel dims = this template's coord space
 //       urls: { white: 'https://…', black: 'https://…' },  // photo PER colourway id
+//       displacement?: {           // optional shared fabric warp maps per view
+//         w: 2000, h: 2250,        // map/source-photo coordinate space
+//         urls: { front: '…', back: '…' },
+//         scale: 30, blur: 6, contrast: 1, blend: 'normal', alpha: 1,
+//       },
 //     },
 //     colorways: [{ id, label, hex }, …],   // hex still drives the colour-dot chips
 //     printAreas: { front: {x,y,w,h}, … },  // px rects IN PHOTO COORDS (calibrated)

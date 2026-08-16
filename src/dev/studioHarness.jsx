@@ -726,6 +726,19 @@ const WIZARD_TEE = {
     h: 1093,
     urls: wizardTeeUrls('front'),
     backUrls: wizardTeeUrls('back'),
+    displacement: {
+      w: 1920,
+      h: 2186,
+      urls: {
+        front: '/pod-garments/tee-hanging/white_front_dm.webp',
+        back: '/pod-garments/tee-hanging/white_back_dm.webp',
+      },
+      scale: 30,
+      blur: 6,
+      contrast: 1,
+      blend: 'normal',
+      alpha: 1,
+    },
   },
   colorways: WIZARD_TEE_COLORWAYS,
   printAreas: {
@@ -743,6 +756,49 @@ const WIZARD_TEE = {
     left_sleeve: { w: 80, h: 80 },
     right_sleeve: { w: 80, h: 80 },
   },
+};
+
+const MockupDmVerifyBench = () => {
+  const art = useMemo(
+    () => makeArtwork('dm-grid', 'Displacement-test', 1200, 1600, '#e2574c', '#2c4b6e', '#ffffff'),
+    []
+  );
+  const [renders, setRenders] = useState([]);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    const colorway = WIZARD_TEE_COLORWAYS.find((c) => c.id === 'white');
+    Promise.all(['front', 'back'].map(async (slot) => {
+      const result = await renderMockup({
+        template: WIZARD_TEE, colorway, slot, artwork: art, scale: 1,
+      });
+      return { slot, url: URL.createObjectURL(result.blob) };
+    })).then((next) => {
+      if (!alive) return next.forEach((item) => URL.revokeObjectURL(item.url));
+      setRenders(next);
+      window.__mockupDmReady = true;
+    }).catch((e) => { if (alive) setError(e?.message || String(e)); });
+    return () => {
+      alive = false;
+      renders.forEach((item) => URL.revokeObjectURL(item.url));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [art]);
+  return (
+    <div className="mx-auto max-w-[1000px] p-6">
+      <h1 className="mb-1 text-[16px] font-semibold text-admin-text">Mockup displacement verify</h1>
+      <p className="mb-4 text-[12px] text-admin-text-muted">Befintliga fram-/bakmått · scale 30 · blur 6 · contrast 1</p>
+      {error && <p className="text-admin-critical-text">{error}</p>}
+      <div className="grid grid-cols-2 gap-5">
+        {renders.map((item) => (
+          <figure key={item.slot}>
+            <img src={item.url} alt={item.slot} className="w-full bg-white" />
+            <figcaption className="mt-2 text-center text-[12px] text-admin-text-muted">{item.slot}</figcaption>
+          </figure>
+        ))}
+      </div>
+    </div>
+  );
 };
 
 const WizardBench = () => {
@@ -769,6 +825,9 @@ const HarnessRoot = () => {
   // ?verify=contrast → the deterministic Kartkontrast bench ONLY (headless driving).
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('verify') === 'contrast') {
     return <VerifyBench />;
+  }
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('verify') === 'mockup-dm') {
+    return <MockupDmVerifyBench />;
   }
   // ?wizard=1 → the FULL DesignStudio (wizard build 2026-08-10). Seed the module
   // caches BEFORE the studio's mount effect calls the loaders (idempotent).

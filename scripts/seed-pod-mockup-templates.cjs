@@ -102,6 +102,22 @@ const TEMPLATES = [
       h: 1093,
       urls: teePhotoUrls('front'),
       backUrls: teePhotoUrls('back'),
+      // Full-resolution maps registered to the 1920×2186 source photos. The
+      // renderer scales the existing printAreas into this map coordinate space;
+      // physical front/back dimensions and placement remain unchanged.
+      displacement: {
+        w: 1920,
+        h: 2186,
+        urls: {
+          front: `${TEE_PHOTO}/white_front_dm.webp`,
+          back: `${TEE_PHOTO}/white_back_dm.webp`,
+        },
+        scale: 30,
+        blur: 6,
+        contrast: 1,
+        blend: 'normal',
+        alpha: 1,
+      },
     },
     colorways: TEE_COLORWAYS,
     // CALIBRATION (measured on the 960×1093 half-resolution coordinate space):

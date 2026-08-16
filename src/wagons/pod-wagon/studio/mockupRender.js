@@ -10,7 +10,7 @@
 // The background comes from backgroundImageSource (templateBackground): a photo url
 // for photo templates, or the SVG flat as a data URL for flat templates. Explicit
 // width/height on the flat's root <svg> keep Safari from rasterizing it at 0×0.
-import { templateViewBox, backgroundImageSource } from './TemplateBackground';
+import { templateViewBox, backgroundImageSource, viewForSlot } from './TemplateBackground';
 import {
   pxPerMm, isComposable, placementHeightMm, clampPlacement, defaultPlacement,
 } from './placementMath';
@@ -61,6 +61,66 @@ export const renderMockup = async ({
   const W = Math.round(viewBox.w * scale);
   const H = Math.round(viewBox.h * scale);
 
+  const areaRect = template.printAreas?.[slot];
+  const ppm = pxPerMm(template, slot);
+  const p = artwork && isComposable(artwork) && areaRect && ppm
+    ? clampPlacement(
+        placement || defaultPlacement(template, slot, artwork, minDpi),
+        template, slot, artwork, minDpi
+      )
+    : null;
+
+  // Photo templates may carry a registered fabric displacement map per view.
+  // Reuse the proven Pixi compositor lazily so the ordinary bundle does not pay
+  // for WebGL unless a warped mockup is actually generated. The template's
+  // existing print area/mm mapping remains the source of truth; only its px rect
+  // is scaled into the full-resolution map/photo coordinate space.
+  const displacement = template?.photo?.displacement;
+  const displacementUrl = displacement?.urls?.[viewForSlot(slot)] || null;
+  if (p && displacementUrl) {
+    const bgSrc = await backgroundImageSource(template, colorway, {
+      widthPx: W, heightPx: H, slot,
+    });
+    const mapW = displacement.w || template.photo.w;
+    const mapH = displacement.h || template.photo.h;
+    const sx = mapW / viewBox.w;
+    const sy = mapH / viewBox.h;
+    const { createDisplacementCompositor } = await import('./pixi/displacementCompositor');
+    const compositor = await createDisplacementCompositor({
+      view: {
+        w: mapW,
+        h: mapH,
+        printArea: {
+          x: areaRect.x * sx,
+          y: areaRect.y * sy,
+          w: areaRect.w * sx,
+          h: areaRect.h * sy,
+        },
+      },
+      printAreaMm: template.printAreaMm?.[slot],
+      assets: { photoUrl: bgSrc, displacementUrl },
+      tuning: {
+        displacementScale: displacement.scale ?? 30,
+        displacementBlur: displacement.blur ?? 6,
+        displacementContrast: displacement.contrast ?? 1,
+        blend: displacement.blend || 'normal',
+        alpha: displacement.alpha ?? 1,
+      },
+      output: { w: W, h: H },
+    });
+    try {
+      await compositor.setArtwork(artwork.previewUrl);
+      compositor.setPlacement(p);
+      // Pixi extraction is deliberately PNG: browser WebP encoders can leave a
+      // WebGL readback promise unresolved (observed in headless Chrome). Return
+      // the actual type so upload paths and download extensions stay truthful.
+      const blob = await compositor.extractPNG();
+      return { blob, type: blob.type, width: W, height: H };
+    } finally {
+      compositor.destroy();
+    }
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
@@ -75,35 +135,27 @@ export const renderMockup = async ({
   const bgImg = await loadImage(bgSrc);
   ctx.drawImage(bgImg, 0, 0, W, H);
 
-  const areaRect = template.printAreas?.[slot];
-  const ppm = pxPerMm(template, slot);
-  if (artwork && isComposable(artwork) && areaRect && ppm) {
-    const p = clampPlacement(
-      placement || defaultPlacement(template, slot, artwork, minDpi),
-      template, slot, artwork, minDpi
-    );
-    if (p) {
-      const artImg = await loadImage(artwork.previewUrl);
-      const x = (areaRect.x + p.xMm * ppm.x) * scale;
-      const y = (areaRect.y + p.yMm * ppm.y) * scale;
-      const w = p.wMm * ppm.x * scale;
-      const h = placementHeightMm(p, artwork) * ppm.y * scale;
-      // Clip to the print area (belt-and-braces with the clamp), then rotate
-      // around the artwork's centre — same semantics as the canvas + 3D view.
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(areaRect.x * scale, areaRect.y * scale, areaRect.w * scale, areaRect.h * scale);
-      ctx.clip();
-      const deg = p.rotationDeg || 0;
-      if (deg) {
-        ctx.translate(x + w / 2, y + h / 2);
-        ctx.rotate((deg * Math.PI) / 180);
-        ctx.drawImage(artImg, -w / 2, -h / 2, w, h);
-      } else {
-        ctx.drawImage(artImg, x, y, w, h);
-      }
-      ctx.restore();
+  if (p) {
+    const artImg = await loadImage(artwork.previewUrl);
+    const x = (areaRect.x + p.xMm * ppm.x) * scale;
+    const y = (areaRect.y + p.yMm * ppm.y) * scale;
+    const w = p.wMm * ppm.x * scale;
+    const h = placementHeightMm(p, artwork) * ppm.y * scale;
+    // Clip to the print area (belt-and-braces with the clamp), then rotate
+    // around the artwork's centre — same semantics as the canvas + 3D view.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(areaRect.x * scale, areaRect.y * scale, areaRect.w * scale, areaRect.h * scale);
+    ctx.clip();
+    const deg = p.rotationDeg || 0;
+    if (deg) {
+      ctx.translate(x + w / 2, y + h / 2);
+      ctx.rotate((deg * Math.PI) / 180);
+      ctx.drawImage(artImg, -w / 2, -h / 2, w, h);
+    } else {
+      ctx.drawImage(artImg, x, y, w, h);
     }
+    ctx.restore();
   }
 
   const blob = await canvasToBlob(canvas, type, quality);
