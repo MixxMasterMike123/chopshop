@@ -152,6 +152,9 @@ const CompositorCanvas = ({
   const dragRef = useRef(null);
   const [dragUi, setDragUi] = useState(null); // { mode, snappedX, snappedY } | null
   const [displacementFailed, setDisplacementFailed] = useState(false);
+  // true once the warped WebGL canvas is verified and on screen — until then the
+  // flat DOM artwork below stays visible (no black/blank frame while Pixi boots).
+  const [displacementReady, setDisplacementReady] = useState(false);
 
   const viewBox = templateViewBox(template);
   const areaRect = template?.printAreas?.[slot] || null;
@@ -166,6 +169,9 @@ const CompositorCanvas = ({
   const handleDisplacementError = useCallback((error) => {
     console.warn('Displacement preview failed; using the flat preview.', error);
     setDisplacementFailed(true);
+  }, []);
+  const handleDisplacementReady = useCallback((ready) => {
+    setDisplacementReady(ready);
   }, []);
 
   const composable = isComposable(artwork);
@@ -317,6 +323,7 @@ const CompositorCanvas = ({
             artworkUrl={artwork.previewUrl}
             placement={effective}
             onError={handleDisplacementError}
+            onReadyChange={handleDisplacementReady}
           />
         )}
 
@@ -440,7 +447,7 @@ const CompositorCanvas = ({
               src={artwork.previewUrl}
               alt=""
               draggable={false}
-              className={`h-full w-full object-fill ${useDisplacement ? 'opacity-0' : ''}`}
+              className={`h-full w-full object-fill ${useDisplacement && displacementReady ? 'opacity-0' : ''}`}
             />
             {/* Hairline so a white artwork on a white tee still shows its bounds. */}
             <div className="pointer-events-none absolute inset-0 border border-admin-info-dot/50" />

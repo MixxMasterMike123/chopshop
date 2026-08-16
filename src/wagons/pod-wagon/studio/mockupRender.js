@@ -39,7 +39,34 @@ const canvasToBlob = (canvas, type, quality) => new Promise((resolve, reject) =>
 });
 
 /**
- * renderMockup({ template, colorway, slot, artwork, placement, … }) →
+ * createMockupSession() — shared WebGL state for a RUN of renderMockup calls.
+ *
+ * The generation loop renders (colourways × slots) mockups. Without a session
+ * every displacement mockup spins up its OWN Pixi Application: a fresh WebGL
+ * context (browsers cap ~16 live contexts and evict the oldest — which is the
+ * step-4 preview's canvas → it goes black) and a full re-decode + blur +
+ * contrast pass over the full-resolution fabric map, per mockup. With a session
+ * the loop reuses ONE compositor: the map is processed once per view and only
+ * photo/artwork/placement swap between renders. Call close() in a finally —
+ * it drops the GPU context and all textures.
+ */
+export const createMockupSession = () => {
+  const compositors = new Map();
+  return {
+    _get: (key) => compositors.get(key) || null,
+    _set: (key, compositor) => { compositors.set(key, compositor); },
+    _drop: (key) => { compositors.delete(key); },
+    close: () => {
+      for (const compositor of compositors.values()) {
+        try { compositor.destroy(); } catch { /* renderer may already be gone */ }
+      }
+      compositors.clear();
+    },
+  };
+};
+
+/**
+ * renderMockup({ template, colorway, slot, artwork, placement, session, … }) →
  *   Promise<{ blob, type: 'image/webp'|'image/png', width, height }>
  *
  * One mockup = one garment view: the garment background (flat in the colourway's
@@ -55,6 +82,7 @@ const canvasToBlob = (canvas, type, quality) => new Promise((resolve, reject) =>
 export const renderMockup = async ({
   template, colorway, slot = 'front', artwork = null, placement = null, minDpi = null,
   scale = MOCKUP_SCALE, type = 'image/webp', quality = 0.92, background = '#ffffff',
+  session = null,
 }) => {
   const viewBox = templateViewBox(template);
   if (!viewBox) throw new Error('Okänd mall — kan inte generera mockup.');
@@ -78,38 +106,53 @@ export const renderMockup = async ({
   const displacement = template?.photo?.displacement;
   const displacementUrl = displacement?.urls?.[viewForSlot(slot)] || null;
   if (p && displacementUrl) {
-    let compositor = null;
+    // One compositor per (template, output size) within a session; without a
+    // session the compositor lives for this single render only.
+    const sessionKey = `${template.id}:${W}x${H}`;
+    // Resolve the backdrop BEFORE touching the session compositor: a colourway
+    // without a photo rejects here (benign per-item skip), and must not tear
+    // down the session's renderer that later colourways still need. Its Swedish
+    // error surfaces through the flat path below, same as before.
+    const bgSrc = await backgroundImageSource(template, colorway, {
+      widthPx: W, heightPx: H, slot,
+    });
+    let compositor = session?._get(sessionKey) || null;
     try {
-      const bgSrc = await backgroundImageSource(template, colorway, {
-        widthPx: W, heightPx: H, slot,
-      });
       const mapW = displacement.w || template.photo.w;
       const mapH = displacement.h || template.photo.h;
       const sx = mapW / viewBox.w;
       const sy = mapH / viewBox.h;
-      const { createDisplacementCompositor } = await import('./pixi/displacementCompositor');
-      compositor = await createDisplacementCompositor({
-        view: {
-          w: mapW,
-          h: mapH,
-          printArea: {
-            x: areaRect.x * sx,
-            y: areaRect.y * sy,
-            w: areaRect.w * sx,
-            h: areaRect.h * sy,
+      const printArea = {
+        x: areaRect.x * sx,
+        y: areaRect.y * sy,
+        w: areaRect.w * sx,
+        h: areaRect.h * sy,
+      };
+      if (compositor) {
+        // Reused renderer: swap the view's map/geometry and this colourway's
+        // photo. The compositor caches processed map textures per (url, area),
+        // so front/back alternation costs no re-processing.
+        await compositor.setSurface({
+          printArea, printAreaMm: template.printAreaMm?.[slot], displacementUrl,
+        });
+        await compositor.setPhoto(bgSrc);
+      } else {
+        const { createDisplacementCompositor } = await import('./pixi/displacementCompositor');
+        compositor = await createDisplacementCompositor({
+          view: { w: mapW, h: mapH, printArea },
+          printAreaMm: template.printAreaMm?.[slot],
+          assets: { photoUrl: bgSrc, displacementUrl },
+          tuning: {
+            displacementScale: displacement.scale ?? 30,
+            displacementBlur: displacement.blur ?? 6,
+            displacementContrast: displacement.contrast ?? 1,
+            blend: displacement.blend || 'normal',
+            alpha: displacement.alpha ?? 1,
           },
-        },
-        printAreaMm: template.printAreaMm?.[slot],
-        assets: { photoUrl: bgSrc, displacementUrl },
-        tuning: {
-          displacementScale: displacement.scale ?? 30,
-          displacementBlur: displacement.blur ?? 6,
-          displacementContrast: displacement.contrast ?? 1,
-          blend: displacement.blend || 'normal',
-          alpha: displacement.alpha ?? 1,
-        },
-        output: { w: W, h: H },
-      });
+          output: { w: W, h: H },
+        });
+        session?._set(sessionKey, compositor);
+      }
       await compositor.setArtwork(artwork.previewUrl);
       compositor.setPlacement(p);
       if (!compositor.hasVisibleArtwork()) {
@@ -119,13 +162,14 @@ export const renderMockup = async ({
       // WebGL readback promise unresolved (observed in headless Chrome). Return
       // the actual type so upload paths and download extensions stay truthful.
       const blob = await compositor.extractPNG();
+      if (!session) compositor.destroy();
       return { blob, type: blob.type, width: W, height: H };
     } catch (error) {
       // WebGL can be evicted or unavailable on memory-constrained admin tabs.
       // A product image is still more useful than a frozen workflow, so this
       // one output continues through the deterministic flat 2D renderer below.
       console.warn('Displacement mockup failed; using the flat renderer.', error);
-    } finally {
+      session?._drop(sessionKey);
       try { compositor?.destroy(); } catch { /* renderer may already be invalid */ }
     }
   }

@@ -1,13 +1,23 @@
 // Live photo-displacement layer for the ordinary step-4 placement canvas.
 // The Pixi engine itself is dynamically imported so it stays out of the main
 // studio bundle until a template actually has registered fabric maps.
+//
+// CANVAS LIFECYCLE (same pattern as the proven DisplacementPreview): the
+// compositor OWNS its canvas, and this component appends it to a host <div>
+// only after init + first verified render. Until then the parent's flat DOM
+// artwork stays fully visible (`onReadyChange(false)`), so the seller never
+// sees the black window a fresh WebGL canvas shows while the context spins up
+// and the photo/map textures load. Handing Pixi a React-owned canvas is off
+// the table: destroy() loses the context, and a StrictMode re-run or effect
+// re-run would then re-init on a canvas that can never render again.
 import React, { useEffect, useRef } from 'react';
 import { backgroundUrl, templateViewBox, viewForSlot } from '../TemplateBackground';
 
 const DisplacedTemplatePreview = ({
-  template, colorway, slot, artworkUrl, placement, onError = () => {},
+  template, colorway, slot, artworkUrl, placement,
+  onError = () => {}, onReadyChange = () => {},
 }) => {
-  const canvasRef = useRef(null);
+  const hostRef = useRef(null);
   const compositorRef = useRef(null);
   const placementRef = useRef(placement);
   const photoUrlRef = useRef(null);
@@ -43,8 +53,7 @@ const DisplacedTemplatePreview = ({
   useEffect(() => {
     let cancelled = false;
     let compositor = null;
-    const canvas = canvasRef.current;
-    if (!canvas || !viewBox || !surfaceRef.current || !photoUrlRef.current || !artworkUrlRef.current) return undefined;
+    if (!viewBox || !surfaceRef.current || !photoUrlRef.current || !artworkUrlRef.current) return undefined;
 
     (async () => {
       try {
@@ -68,7 +77,7 @@ const DisplacedTemplatePreview = ({
           },
           // The map retains its full-resolution coordinate field, while the live
           // canvas only renders at the template/display resolution for snappy drag.
-          output: { w: viewBox.w, h: viewBox.h, canvas },
+          output: { w: viewBox.w, h: viewBox.h },
         });
         if (cancelled) { compositor.destroy(); return; }
         await compositor.setArtwork(artworkUrlRef.current);
@@ -85,7 +94,15 @@ const DisplacedTemplatePreview = ({
         if (!compositor.hasVisibleArtwork()) {
           throw new Error('WebGL-renderingen utelämnade motivet.');
         }
+        if (cancelled || !hostRef.current) { compositor.destroy(); return; }
+        // Verified — only now does the canvas become visible, replacing the
+        // parent's flat artwork in one frame (no black/loading state on screen).
+        const canvas = compositor.canvas;
+        canvas.className = 'pointer-events-none absolute inset-0 block h-auto w-full';
+        canvas.setAttribute('aria-hidden', 'true');
+        hostRef.current.appendChild(canvas);
         compositorRef.current = compositor;
+        onReadyChange(true);
       } catch (error) {
         try { compositor?.destroy(); } catch { /* renderer may already be invalid */ }
         if (!cancelled) onError(error);
@@ -94,13 +111,14 @@ const DisplacedTemplatePreview = ({
 
     return () => {
       cancelled = true;
+      onReadyChange(false);
       if (compositorRef.current === compositor) compositorRef.current = null;
       try { compositor?.destroy(); } catch { /* already torn down */ }
     };
   }, [
     template?.id, viewBox?.w, viewBox?.h, displacement?.w, displacement?.h,
     displacement?.scale, displacement?.blur, displacement?.contrast,
-    displacement?.blend, displacement?.alpha, onError,
+    displacement?.blend, displacement?.alpha, onError, onReadyChange,
   ]);
 
   // Front/back changes hot-swap the registered map and physical print geometry
@@ -131,13 +149,7 @@ const DisplacedTemplatePreview = ({
   }, [placement?.xMm, placement?.yMm, placement?.wMm, placement?.rotationDeg]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={viewBox?.w || 1}
-      height={viewBox?.h || 1}
-      className="pointer-events-none absolute inset-0 block h-auto w-full"
-      aria-hidden="true"
-    />
+    <div ref={hostRef} className="pointer-events-none absolute inset-0" aria-hidden="true" />
   );
 };
 

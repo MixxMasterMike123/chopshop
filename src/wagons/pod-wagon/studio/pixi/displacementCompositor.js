@@ -36,7 +36,7 @@
 // Import this module LAZILY (dynamic import) — pixi.js is its own chunk and must
 // not enter the main admin bundle.
 import {
-  Application, Container, Sprite, Graphics, DisplacementFilter, Rectangle, Texture,
+  Application, Container, Sprite, Graphics, DisplacementFilter, Texture,
 } from 'pixi.js';
 // Side-effect import REQUIRED for multiply/overlay & co in Pixi v8: they are
 // "advanced" blend modes implemented via backdrop-reading filters — without this
@@ -176,13 +176,17 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
 
   const outW = Math.round(output?.w || 1600);
   const outH = Math.round(output?.h || Math.round((outW * view.h) / view.w));
-  const ownsCanvas = !output?.canvas;
 
+  // The compositor ALWAYS owns its canvas (callers append app.canvas to the DOM
+  // once ready). Never init Pixi onto a caller-owned canvas: destroy() runs
+  // WEBGL_lose_context.loseContext(), and a canvas whose context was lost can
+  // never hand out a fresh one — a second init on the same element (StrictMode
+  // double-mount, effect re-run) then renders into a dead context → permanently
+  // black canvas. That was the step-4 "flickering black screen".
   const app = new Application();
   await app.init({
     width: outW,
     height: outH,
-    canvas: output?.canvas,
     autoStart: false,          // render-on-demand — this is a compositor, not a scene
     antialias: true,
     backgroundAlpha: 1,
@@ -341,11 +345,34 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     app.renderer?.context?.isLost || app.renderer?.gl?.isContextLost?.()
   );
 
-  // Firefox can occasionally complete a filtered render without throwing while
-  // returning only the garment photograph. Verify the feature's actual output
-  // instead of browser-sniffing: compare a small artwork-region readback with
-  // the same scene while the artwork is hidden. This costs two tiny (≤96 px)
-  // probes once per preview/mockup, not two full-size exports.
+  // Read back what the compositor ACTUALLY drew, from the presented canvas.
+  //
+  // NEVER via app.renderer.extract: Pixi's extract system re-renders the stage
+  // into an offscreen texture, and in Firefox that offscreen pass silently drops
+  // the DisplacementFilter's output — extract sees only the garment photograph
+  // while the live canvas shows the warped artwork perfectly (probed 2026-08-16
+  // with a with/without-artwork pixel diff: extract delta = 0 in every renderer
+  // config, live-canvas delta = thousands of px; Chrome extract works). The old
+  // extract-based probe therefore declared healthy Firefox renders blank and
+  // pushed every Firefox user onto the flat un-warped fallback.
+  //
+  // drawImage(app.canvas) into a 2D canvas reads the real framebuffer in every
+  // browser — but ONLY in the same task as app.render(): the context runs with
+  // preserveDrawingBuffer:false, so the buffer is not guaranteed to survive the
+  // browser's next composite.
+  const captureRegion = (sx, sy, sw, sh, dw, dh, g) => {
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, dw, dh);
+    g.drawImage(app.canvas, sx, sy, sw, sh, 0, 0, dw, dh);
+    return g.getImageData(0, 0, dw, dh).data;
+  };
+
+  // Truth-check for the render pipeline: does the artwork actually appear on the
+  // canvas? Compares a small (≤96 px) capture of the artwork's region with the
+  // same scene while the artwork is hidden — cheap, and immune to "the render
+  // completed without throwing but drew nothing" failure modes (context loss,
+  // driver drops). Runs BEFORE a preview canvas is shown, so the visibility
+  // toggle never flashes on screen.
   const hasVisibleArtwork = () => {
     if (destroyed || contextIsLost() || !state.placement || !artSprite.visible) return false;
     const p = state.placement;
@@ -367,29 +394,31 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     const top = Math.max(0, Math.floor(y + h / 2 - rotatedH / 2 - padY));
     const right = Math.min(outW, Math.ceil(x + w / 2 + rotatedW / 2 + padX));
     const bottom = Math.min(outH, Math.ceil(y + h / 2 + rotatedH / 2 + padY));
-    const frame = new Rectangle(left, top, Math.max(1, right - left), Math.max(1, bottom - top));
-    const resolution = Math.min(1, 96 / Math.max(frame.width, frame.height));
-    const read = () => app.renderer.extract.pixels({
-      target: app.stage, frame, resolution, clearColor: '#ffffff',
-    });
+    const srcW = Math.max(1, right - left);
+    const srcH = Math.max(1, bottom - top);
+    const probeScale = Math.min(1, 96 / Math.max(srcW, srcH));
+    const dw = Math.max(1, Math.round(srcW * probeScale));
+    const dh = Math.max(1, Math.round(srcH * probeScale));
+    const probe = document.createElement('canvas');
+    probe.width = dw;
+    probe.height = dh;
+    const g = probe.getContext('2d', { willReadFrequently: true });
 
     render();
-    const withArtwork = read();
+    const withArtwork = captureRegion(left, top, srcW, srcH, dw, dh, g);
     artSprite.visible = false;
     render();
-    const withoutArtwork = read();
+    const withoutArtwork = captureRegion(left, top, srcW, srcH, dw, dh, g);
     artSprite.visible = true;
     render();
-    if (contextIsLost() || withArtwork.width !== withoutArtwork.width || withArtwork.height !== withoutArtwork.height) {
-      return false;
-    }
+    if (contextIsLost()) return false;
 
-    const a = withArtwork.pixels;
-    const b = withoutArtwork.pixels;
     let changed = 0;
-    const pixelCount = Math.min(a.length, b.length) / 4;
-    for (let i = 0; i < pixelCount * 4; i += 4) {
-      const delta = Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+    const pixelCount = withArtwork.length / 4;
+    for (let i = 0; i < withArtwork.length; i += 4) {
+      const delta = Math.abs(withArtwork[i] - withoutArtwork[i])
+        + Math.abs(withArtwork[i + 1] - withoutArtwork[i + 1])
+        + Math.abs(withArtwork[i + 2] - withoutArtwork[i + 2]);
       if (delta >= 18) changed += 1;
     }
     return changed >= Math.max(4, Math.floor(pixelCount * 0.001));
@@ -528,7 +557,13 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       if (contextIsLost()) throw new Error('WebGL-kontexten för mockupen gick förlorad.');
       render();
       if (contextIsLost()) throw new Error('WebGL-kontexten för mockupen gick förlorad.');
-      const canvas = app.renderer.extract.canvas(app.stage);
+      // Same-task copy of the presented framebuffer — NOT renderer.extract (its
+      // offscreen re-render drops the displacement warp in Firefox, see the
+      // captureRegion comment above).
+      const canvas = document.createElement('canvas');
+      canvas.width = outW;
+      canvas.height = outH;
+      canvas.getContext('2d').drawImage(app.canvas, 0, 0);
       if (contextIsLost()) throw new Error('WebGL-kontexten för mockupen gick förlorad.');
       return new Promise((resolve, reject) => {
         canvas.toBlob(
@@ -546,9 +581,9 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       artworkToken += 1;
       parkedTextures.length = 0;
       surfaceTextures.clear();
-      // Live step-4 previews pass a React-owned canvas. Destroy the renderer and
-      // GPU resources there, but leave the DOM node for React to reconcile.
-      app.destroy(ownsCanvas, { children: true });
+      // removeView:true — the compositor owns its canvas; if a caller appended
+      // it to the DOM, destroy detaches it there too.
+      app.destroy(true, { children: true });
     },
   };
 };

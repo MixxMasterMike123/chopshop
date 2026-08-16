@@ -35,7 +35,7 @@ import { loadPodProfiles, clearPodProfilesCache, getProfileById } from '../../..
 import { loadPod3dModels, clearPod3dModelsCache } from '../../../config/pod3dModels';
 import { tierLabel } from '../components/podTier';
 import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, templateWithPocketPosition } from './placementMath';
-import { renderMockup } from './mockupRender';
+import { renderMockup, createMockupSession } from './mockupRender';
 import { uploadMockup } from './mockupUpload';
 import TemplateBackground, { viewForSlot } from './TemplateBackground';
 import CompositorCanvas from './CompositorCanvas';
@@ -427,6 +427,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     const uploadPromises = [];
     let uploadFailures = 0;
     let renderSkips = 0;
+    // One shared WebGL compositor for the whole run (colourways × slots) — see
+    // createMockupSession: per-mockup contexts both re-process the fabric map
+    // every time and can evict the live placement canvas's WebGL context.
+    const renderSession = createMockupSession();
     try {
       for (const cw of (selectedTemplate.colorways || []).filter((item) => selectedColorwayIds.has(item.id))) {
         for (const s of designedSlots(selectedTemplate)) {
@@ -440,6 +444,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             ({ blob, type } = await renderMockup({
               template: effTemplate, colorway: cw, slot: s, minDpi: profile?.min_dpi ?? null,
               artwork: art, placement: effectivePlacementFor(s, art),
+              session: renderSession,
             }));
           } catch (e) {
             renderSkips += 1;
@@ -492,6 +497,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       urls.forEach((u) => URL.revokeObjectURL(u));
       setMockupError(e?.message || 'Mockup-genereringen misslyckades.');
     } finally {
+      renderSession.close();
       setGenerating(false);
     }
   };
