@@ -733,11 +733,11 @@ const WIZARD_TEE = {
         front: '/pod-garments/tee-hanging/white_front_dm.webp',
         back: '/pod-garments/tee-hanging/white_back_dm.webp',
       },
-      scale: 30,
+      scale: 40,
       blur: 6,
       contrast: 1,
-      blend: 'normal',
-      alpha: 1,
+      blend: 'multiply',
+      alpha: 0.83,
     },
   },
   colorways: WIZARD_TEE_COLORWAYS,
@@ -785,11 +785,21 @@ const MockupDmVerifyBench = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [art]);
   return (
-    <div className="mx-auto max-w-[1000px] p-6">
+    <div className="mx-auto max-w-[1400px] p-6">
       <h1 className="mb-1 text-[16px] font-semibold text-admin-text">Mockup displacement verify</h1>
-      <p className="mb-4 text-[12px] text-admin-text-muted">Befintliga fram-/bakmått · scale 30 · blur 6 · contrast 1</p>
+      <p className="mb-4 text-[12px] text-admin-text-muted">Befintliga fram-/bakmått · scale 40 · blur 6 · multiply · 83%</p>
       {error && <p className="text-admin-critical-text">{error}</p>}
-      <div className="grid grid-cols-2 gap-5">
+      <div className="grid grid-cols-3 gap-5">
+        <figure>
+          <CompositorCanvas
+            template={WIZARD_TEE}
+            colorway={WIZARD_TEE_COLORWAYS[0]}
+            slot="front"
+            artwork={art}
+            profile={{ min_dpi: 72, target_dpi: 150 }}
+          />
+          <figcaption className="mt-2 text-center text-[12px] text-admin-text-muted">step 4 · live</figcaption>
+        </figure>
         {renders.map((item) => (
           <figure key={item.slot}>
             <img src={item.url} alt={item.slot} className="w-full bg-white" />

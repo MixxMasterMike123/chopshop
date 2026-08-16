@@ -45,7 +45,7 @@
 //       displacement?: {           // optional shared fabric warp maps per view
 //         w: 2000, h: 2250,        // map/source-photo coordinate space
 //         urls: { front: '…', back: '…' },
-//         scale: 30, blur: 6, contrast: 1, blend: 'normal', alpha: 1,
+//         scale: 40, blur: 6, contrast: 1, blend: 'multiply', alpha: 0.83,
 //       },
 //     },
 //     colorways: [{ id, label, hex }, …],   // hex still drives the colour-dot chips

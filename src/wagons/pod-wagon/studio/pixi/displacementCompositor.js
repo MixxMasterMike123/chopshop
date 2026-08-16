@@ -175,11 +175,13 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
 
   const outW = Math.round(output?.w || 1600);
   const outH = Math.round(output?.h || Math.round((outW * view.h) / view.w));
+  const ownsCanvas = !output?.canvas;
 
   const app = new Application();
   await app.init({
     width: outW,
     height: outH,
+    canvas: output?.canvas,
     autoStart: false,          // render-on-demand — this is a compositor, not a scene
     antialias: true,
     backgroundAlpha: 1,
@@ -409,7 +411,9 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       // owned by dispSprite and freed by app.destroy(texture:true) below.
       for (const t of parkedTextures) { try { t.destroy(true); } catch { /* already gone */ } }
       parkedTextures.length = 0;
-      app.destroy(true, { children: true, texture: true });
+      // Live step-4 previews pass a React-owned canvas. Destroy the renderer and
+      // GPU resources there, but leave the DOM node for React to reconcile.
+      app.destroy(ownsCanvas, { children: true, texture: true });
     },
   };
 };

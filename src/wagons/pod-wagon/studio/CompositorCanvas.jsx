@@ -27,8 +27,9 @@
 //   • placement  — { xMm, yMm, wMm } for THIS slot, or null (→ default used).
 //   • onPlacementChange — (placement) => void on every move/resize/nudge.
 import React, { useMemo, useRef, useState } from 'react';
-import TemplateBackground, { templateViewBox } from './TemplateBackground';
+import TemplateBackground, { templateViewBox, viewForSlot } from './TemplateBackground';
 import HelpPopover from './HelpPopover';
+import DisplacedTemplatePreview from './pixi/DisplacedTemplatePreview';
 import {
   MIN_ART_WIDTH_MM, SNAP_SCREEN_PX, MAX_ROTATION_DEG,
   pxPerMm, isComposable, maxWidthAtMm, maxWidthForRotationMm, maxWidthForDpiMm, clampRotationDeg,
@@ -155,6 +156,7 @@ const CompositorCanvas = ({
   const areaRect = template?.printAreas?.[slot] || null;
   const areaMm = template?.printAreaMm?.[slot] || null;
   const ppm = template ? pxPerMm(template, slot) : null;
+  const displacementUrl = template?.photo?.displacement?.urls?.[viewForSlot(slot)] || null;
 
   const composable = isComposable(artwork);
   // Hard resolution floor (docs/POD_PRINT_SPEC.md): the artwork can never be
@@ -283,6 +285,7 @@ const CompositorCanvas = ({
 
   // Artwork rect in viewBox px (placement mm → px via the template's px↔mm map).
   const artVb = effective ? placementToViewBoxRect(effective, template, slot, artwork) : null;
+  const useDisplacement = Boolean(artVb && displacementUrl);
 
   const dragging = Boolean(dragUi);
 
@@ -292,6 +295,19 @@ const CompositorCanvas = ({
         {/* Garment background — SVG flat or per-colourway photo (placeholder when
             a photo colourway has no photo yet; artwork placement still works). */}
         <TemplateBackground template={template} colorway={colorway} slot={slot} />
+
+        {/* Registered fabric maps use the exact same Pixi recipe as exported
+            mockups. The ordinary DOM artwork remains underneath as an instant
+            fallback, then becomes transparent once the warped layer is ready. */}
+        {useDisplacement && (
+          <DisplacedTemplatePreview
+            template={template}
+            colorway={colorway}
+            slot={slot}
+            artworkUrl={artwork.previewUrl}
+            placement={effective}
+          />
+        )}
 
         {/* Print area (safe zone) with its physical size labelled in cm. */}
         {areaRect && (
@@ -413,7 +429,7 @@ const CompositorCanvas = ({
               src={artwork.previewUrl}
               alt=""
               draggable={false}
-              className="h-full w-full object-fill"
+              className={`h-full w-full object-fill ${useDisplacement ? 'opacity-0' : ''}`}
             />
             {/* Hairline so a white artwork on a white tee still shows its bounds. */}
             <div className="pointer-events-none absolute inset-0 border border-admin-info-dot/50" />
