@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 20 deployed — Fable orchestrating, Opus building, Fable reviewing
+**Last updated:** 2026-08-16, checkpoint 21 deployed — Fable orchestrating, Opus building, Fable reviewing
 **Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,10 +8,10 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest implementation checkpoint: checkpoint 20 — staging R2 buckets created and `PRIVATE_BUCKET` bound (see below)
+- Latest implementation checkpoint: checkpoint 21 — VAT-inclusive totals contract v2 + delivery method + shipping engine (see below)
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
-- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0008), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
+- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0009), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
 - No **production** resources, DNS records, custom routes, Containers, Stripe endpoints, or email integrations have been created.
 - The user's personal Cloudflare account is designated for staging/non-production.
 - A separate Cloudflare production account is required before cutover, but does not need to exist yet.
@@ -296,6 +296,20 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Live smoke green: `/health` 200; `/ready` 200 at `0008_rate_limits.sql`; anonymous reserve/upload/delivery/delete on `/v1/admin/objects*` all fail-closed 404; sign-up 404; unknown-host storefront 404; anonymous checkout 404.
 - Authenticated end-to-end upload smoke is still blocked on owner bootstrap: no platform admin exists in staging yet (`BOOTSTRAP_TOKEN` procedure in checkpoint 17), so no tenant/tenant-admin can be provisioned to exercise the live upload path.
 
+## Checkpoint 21 — VAT-inclusive totals contract v2 + delivery method + shipping engine (deployed)
+
+- Built by an Opus subagent, line-by-line reviewed by Fable; one review overrule (see weight parity below), commit `3f96401`, deployed as version `008f89a6`.
+- **Money-semantics correction:** production prices are SEK VAT-INCLUSIVE (`functions/src/payment/createPaymentIntent.ts`: `total = subtotal − discount + shipping`, `vat = total − total/(1+rate)` derived/informational). 0007's CHECK `total = subtotal + shipping + vat − discount` was VAT-exclusive arithmetic that would double-count tax the moment a VAT engine landed. Migration `0009_checkout_totals_v2.sql` replaces it with `total = subtotal + shipping − discount`, `vat_minor` as contained VAT (`0 ≤ vat ≤ total`), `pickup ⇒ shipping = 0`, `delivery_method`/`shipping_country` (equivalence CHECK: pickup ⇔ no country), and frozen `vat_rate_bp` per row.
+- **D1 migration facts probed, not assumed:** `PRAGMA defer_foreign_keys` does NOT persist across D1 statements (each runs in its own implicit transaction), so `DROP TABLE checkouts` fails under child FKs, and `legacy_alter_table=0` makes RENAME silently re-point the child's FK. The only sound recreate rebuilds BOTH tables: snapshot to staging copies → drop child, parent → create parent + copy → create child + copy → drop copies → re-declare all 9 triggers + 3 indexes. Structural tests prove the triggers survived and the child FK still names `checkouts`; remote WEUR readback after apply confirmed 9 triggers / 3 indexes / 0 rows.
+- Also in 0009: `tenants.vat_rate_bp` (default 2500 = Swedish standard), `products.weight_grams` / `allow_shipping` (default 1) / `allow_pickup` (default 0) / `shipping_json`.
+- **Shipping engine** (`src/commerce/shipping.ts`, pure integer): prod-parity term for term — region map (SE→sweden, DK/FI/NO→nordic, EU set→eu, else worldwide = most expensive), base tariff from the FIRST line's product for the region, fallback 2900/4900 minor, tiers `ceil((Σ(weight||10)×qty + 20g packaging)/50)`. The builder initially dropped the `+20 g`/`||10` constants claiming they only affected weightless baskets; Fable's review showed the packaging constant shifts EVERY basket's tier boundary (40 g: 2 tiers in prod, 1 without) — a systematic carriage undersell — and the exact prod math was restored. A basket therefore never ships free (floor 30 g = one tier).
+- **VAT derivation**: exact remainder-based integer round-half-up (`q = ⌊total·10⁴/d⌋; net = q + (2r ≥ d)`), because the naive `(2·total·10⁴+d)/(2d)` intermediate leaves the safe-integer range within legal column bounds (differentially tested against exact rationals, 200k cases). Totals past `MAX_VAT_SAFE_TOTAL_MINOR` (~9.0e11) are refused as an opaque 422, never quoted imprecisely; carriage capped at 10,000,000 minor to keep products exact.
+- **Eligibility is server-decided (P1-06 mirror):** pickup only when EVERY line's product allows it, shipping likewise; failure is the same opaque answer as an unresolvable line so the route is no oracle for collection eligibility.
+- **Replay fingerprint extended:** delivery method, destination, freshly-recomputed carriage, and frozen VAT rate all pin the replay — a reused key after the merchant edits a shipping table/weight (across a tier boundary), a rate change, or a method switch is a 409, never a stale honored quote. total/vat deliberately not compared (pure functions of pinned fields).
+- **Admin catalogue:** create/PATCH accept `weightGrams`, `allowShipping`, `allowPickup`, `shippingRates` (`{region:{cost}}` wire shape, unknown regions/keys rejected whole, explicit null clears, empty ≡ null, round-trip tested); canonical-product fields only, never projected. Audit rows carry field names only via the existing generic `Object.keys(input)`.
+- Local gate 533/533 (149 new tests, incl. 7-case tier-boundary parity walk, migration-survival suite, VAT precision suite); mutation-tested guards (pickup `every`→`some`, fingerprint reversion, totals CHECK, packaging/default-weight constants — each broke exactly the right tests). Deployed and smoke-tested: `/ready` at 0009, all guarded surfaces fail-closed 404.
+- Known accepted gaps (unchanged from 18 unless noted): discount engine (column live, hard-coded 0), Turnstile, PaymentIntent seam, checkout expiry sweep. Test-suite note: per-case email addresses are now needed in pricing suites — the 30/hour per-email rate limit otherwise turns extra tests into misleading 429s.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.
@@ -320,7 +334,7 @@ Wrangler/Vitest local analysis requires loopback access in the Codex sandbox and
 ## Next safe actions
 
 1. **Owner:** run the checkpoint 17 bootstrap on staging (`openssl rand -base64 48 | npx wrangler secret put BOOTSTRAP_TOKEN` from `cloudflare/`, then one `POST /v1/platform/bootstrap`) to mint the first platform admin — this unblocks live provisioning of a staging tenant + tenant admin and the authenticated upload/checkout smoke.
-2. Continue Wave-4 checkout: shipping/VAT/discount engines on the checkout totals contract, then the payment-provider seam (`payment_intent_id` column is the Stripe seam). Stripe secrets remain owner actions.
+2. Continue Wave-4 checkout: discount engine on the v2 totals contract, then the payment-provider seam (`payment_intent_id` column is the Stripe seam). Stripe secrets remain owner actions.
 3. Turnstile (or equivalent) on the anonymous checkout surface before any real traffic.
 4. Onboard a MeteorShop sending domain only at the explicit DNS/provider canary checkpoint; the unrelated existing domain stays untouched.
 5. Keep Firebase as the sole production side-effect owner throughout these staging waves.
