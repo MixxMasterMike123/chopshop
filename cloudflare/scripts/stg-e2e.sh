@@ -33,10 +33,24 @@ read -rp  "Platform admin email: " PEMAIL
 read -rsp "Platform admin password: " PPASSWORD; echo
 read -rsp "Tenant admin password (created on first run, reused after): " TPASSWORD; echo
 
-body() { python3 -c 'import json,os;print(json.dumps({k:os.environ[v] for k,v in [("email","B_EMAIL"),("password","B_PW")]}))'; }
+# JSON built by python with env-var inputs: quotes/backslashes in passwords
+# survive, and the secret never appears in argv. Single-quoted python source so
+# the shell leaves the braces alone.
+credentials_json() { # credentials_json <email> <password>
+  J_EMAIL="$1" J_PW="$2" python3 -c \
+'import json,os
+print(json.dumps({"email": os.environ["J_EMAIL"], "password": os.environ["J_PW"]}))'
+}
+user_json() { # user_json <email> <password> <accountType>
+  J_EMAIL="$1" J_PW="$2" J_KIND="$3" python3 -c \
+'import json,os
+print(json.dumps({"email": os.environ["J_EMAIL"], "password": os.environ["J_PW"], "accountType": os.environ["J_KIND"]}))'
+}
 
 # --- Platform admin session -------------------------------------------------
-code=$(B_EMAIL="$PEMAIL" B_PW="$PPASSWORD" sh -c 'curl -s -o /dev/null -w "%{http_code}" -c '"$PJAR"' -X POST '"$BASE"'/api/auth/sign-in/email -H "content-type: application/json" -H "origin: '"$BASE"'" -d "$(python3 -c "import json,os;print(json.dumps({\"email\":os.environ[\"B_EMAIL\"],\"password\":os.environ[\"B_PW\"]}))")"')
+code=$(curl -s -o /dev/null -w "%{http_code}" -c "$PJAR" -X POST "$BASE/api/auth/sign-in/email" \
+  -H "content-type: application/json" -H "origin: $BASE" \
+  -d "$(credentials_json "$PEMAIL" "$PPASSWORD")")
 check "platform sign-in" 200 "$code"
 [ "$code" = 200 ] || { echo "cannot continue"; exit 1; }
 
@@ -50,14 +64,18 @@ case "$code" in
 esac
 
 # --- Tenant-admin user (checkpoint 23 surface) ------------------------------
-code=$(B_EMAIL="$TADMIN_EMAIL" B_PW="$TPASSWORD" sh -c 'curl -s -o '"$TMPD"'/user.json -w "%{http_code}" -b '"$PJAR"' -X POST '"$BASE"'/v1/platform/users -H "content-type: application/json" -H "origin: '"$BASE"'" -d "$(python3 -c "import json,os;print(json.dumps({\"email\":os.environ[\"B_EMAIL\"],\"password\":os.environ[\"B_PW\"],\"accountType\":\"tenant_admin\"}))")"')
+code=$(curl -s -o "$TMPD/user.json" -w "%{http_code}" -b "$PJAR" -X POST "$BASE/v1/platform/users" \
+  -H "content-type: application/json" -H "origin: $BASE" \
+  -d "$(user_json "$TADMIN_EMAIL" "$TPASSWORD" "tenant_admin")")
 case "$code" in
   201|409) printf 'PASS  tenant-admin user created or already present (%s)\n' "$code"; PASS=$((PASS+1)) ;;
   *) check "create tenant-admin user" "201 or 409" "$code" ;;
 esac
 
 # --- Tenant-admin session (also yields the userId for the grant) ------------
-code=$(B_EMAIL="$TADMIN_EMAIL" B_PW="$TPASSWORD" sh -c 'curl -s -o /dev/null -w "%{http_code}" -c '"$TJAR"' -X POST '"$BASE"'/api/auth/sign-in/email -H "content-type: application/json" -H "origin: '"$BASE"'" -d "$(python3 -c "import json,os;print(json.dumps({\"email\":os.environ[\"B_EMAIL\"],\"password\":os.environ[\"B_PW\"]}))")"')
+code=$(curl -s -o /dev/null -w "%{http_code}" -c "$TJAR" -X POST "$BASE/api/auth/sign-in/email" \
+  -H "content-type: application/json" -H "origin: $BASE" \
+  -d "$(credentials_json "$TADMIN_EMAIL" "$TPASSWORD")")
 check "tenant-admin sign-in" 200 "$code"
 [ "$code" = 200 ] || { echo "cannot continue (wrong tenant-admin password for an existing user?)"; exit 1; }
 
