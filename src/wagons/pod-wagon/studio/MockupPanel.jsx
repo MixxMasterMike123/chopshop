@@ -6,25 +6,61 @@
 //   • a per-image "Ladda ner" link — the flat mockup file is also the input for
 //     external tools (e.g. feeding an image model to make photo/3D renders).
 //
+// STREAMING: DesignStudio publishes the full card list up front (entries with
+// pending:true) and fills each card in as its render completes — the seller
+// sees every upcoming mockup as a spinner card instantly, and images flow into
+// the grid one by one with a fade (no dead "Skapar mockuper…" wait).
+//
 // Presentational: generation state + the mockup map live in DesignStudio.
-import React from 'react';
+import React, { useState } from 'react';
 import { PhotoIcon } from '@heroicons/react/24/outline';
 import { slotLabel } from '../../../config/podSlots';
 
+// Mockup image that eases in once its bitmap is decoded. The aspect-ratio box
+// reserves the final size, so the spinner→image swap never shifts the grid.
+const FadeInImage = ({ src, alt, aspectRatio }) => {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <img
+      src={src}
+      alt={alt}
+      decoding="async"
+      onLoad={() => setLoaded(true)}
+      style={aspectRatio ? { aspectRatio } : undefined}
+      // bg-white is DELIBERATE in both themes: mockups rasterize on white and
+      // the swatch must show the garment colour truthfully.
+      className={`w-full rounded-[6px] border border-admin-border-soft bg-white transition-opacity duration-300 ease-in ${
+        loaded ? 'opacity-100' : 'opacity-0'
+      }`}
+    />
+  );
+};
+
 /**
  * Props:
- *   mockups     — array of { key, colorwayLabel, slot, objectUrl, url?, type }
+ *   mockups     — array of { key, colorwayLabel, slot, objectUrl, url?, type,
+ *                 pending? } — pending entries render as spinner cards.
  *   heroKey     — key of the hero mockup (or null)
  *   onPickHero(key)
  *   onGenerate()
  *   generating  — bool
  *   error       — string | null (e.g. upload warning; generation still shown)
  *   canGenerate — bool (a composable artwork is selected)
+ *   aspectRatio — number | null: the template's viewBox w/h, so pending cards
+ *                 reserve exactly the finished image's footprint.
  */
 const MockupPanel = ({
   mockups = [], heroKey = null, onPickHero, onGenerate, generating = false,
-  error = null, canGenerate = false,
-}) => (
+  error = null, canGenerate = false, aspectRatio = null,
+}) => {
+  const doneCount = mockups.filter((m) => !m.pending).length;
+  const statusText = generating
+    ? `Skapar mockuper… ${doneCount} av ${mockups.length} klara.`
+    : mockups.length
+      ? `${mockups.length} mockuper klara. Välj huvudbild och fortsätt till Publicera.`
+      : '';
+
+  return (
   <div>
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
@@ -43,9 +79,7 @@ const MockupPanel = ({
       </button>
     </div>
 
-    <div className="sr-only" aria-live="polite">
-      {generating ? 'Mockuper skapas.' : mockups.length ? `${mockups.length} mockuper är klara.` : ''}
-    </div>
+    <div className="sr-only" aria-live="polite">{statusText}</div>
 
     {error && (
       <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
@@ -62,8 +96,11 @@ const MockupPanel = ({
       </div>
     ) : (
       <div>
-        <p className="mt-3 text-[12px] text-admin-success-text" role="status">
-          {mockups.length} mockuper klara. Välj huvudbild och fortsätt till Publicera.
+        <p
+          className={`mt-3 text-[12px] ${generating ? 'text-admin-text-muted' : 'text-admin-success-text'}`}
+          role="status"
+        >
+          {statusText}
         </p>
         <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {mockups.map((m) => {
@@ -76,38 +113,53 @@ const MockupPanel = ({
                   isHero ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40' : 'border-admin-border'
                 }`}
               >
-              {/* bg-white is DELIBERATE in both themes: mockups rasterize on
-                  white and the swatch must show the garment colour truthfully. */}
-              <img
-                src={m.objectUrl}
-                alt={`Mockup ${m.colorwayLabel}`}
-                loading="lazy"
-                decoding="async"
-                className="w-full rounded-[6px] border border-admin-border-soft bg-white"
-              />
+              {m.pending ? (
+                <div
+                  style={aspectRatio ? { aspectRatio } : undefined}
+                  className={`grid w-full place-items-center rounded-[6px] border border-admin-border-soft bg-admin-surface-2 ${
+                    aspectRatio ? '' : 'min-h-32'
+                  }`}
+                >
+                  <span
+                    className="h-5 w-5 animate-spin rounded-full border-2 border-admin-border border-t-admin-primary"
+                    aria-hidden="true"
+                  />
+                </div>
+              ) : (
+                <FadeInImage
+                  src={m.objectUrl}
+                  alt={`Mockup ${m.colorwayLabel}`}
+                  aspectRatio={aspectRatio}
+                />
+              )}
               <div className="mt-1.5 flex items-center justify-between gap-1">
                 <span className="truncate text-[11px] font-medium text-admin-text">
                   {m.colorwayLabel}
                   {m.slot !== 'front' ? ` · ${slotLabel(m.slot)}` : ''}
                 </span>
-                <a
-                  href={m.objectUrl}
-                  download={`mockup-${m.colorwayLabel}-${m.slot}.${ext}`.toLowerCase().replace(/\s+/g, '-')}
-                  className="shrink-0 px-1 py-1 -my-1 text-[11px] text-admin-info-text hover:underline"
-                >
-                  Ladda ner
-                </a>
+                {!m.pending && (
+                  <a
+                    href={m.objectUrl}
+                    download={`mockup-${m.colorwayLabel}-${m.slot}.${ext}`.toLowerCase().replace(/\s+/g, '-')}
+                    className="shrink-0 px-1 py-1 -my-1 text-[11px] text-admin-info-text hover:underline"
+                  >
+                    Ladda ner
+                  </a>
+                )}
               </div>
-              <label className="mt-1 flex cursor-pointer items-center gap-1.5 py-1 text-[11px] text-admin-text-muted">
-                <input
-                  type="radio"
-                  name="mockup-hero"
-                  checked={isHero}
-                  onChange={() => onPickHero(m.key)}
-                  className="h-4 w-4 accent-admin-primary"
-                />
-                Huvudbild
-              </label>
+              {/* Hero pick appears with the image — a spinner can't be a huvudbild. */}
+              {!m.pending && (
+                <label className="mt-1 flex cursor-pointer items-center gap-1.5 py-1 text-[11px] text-admin-text-muted">
+                  <input
+                    type="radio"
+                    name="mockup-hero"
+                    checked={isHero}
+                    onChange={() => onPickHero(m.key)}
+                    className="h-4 w-4 accent-admin-primary"
+                  />
+                  Huvudbild
+                </label>
+              )}
               </div>
             );
           })}
@@ -115,6 +167,7 @@ const MockupPanel = ({
       </div>
     )}
   </div>
-);
+  );
+};
 
 export default MockupPanel;

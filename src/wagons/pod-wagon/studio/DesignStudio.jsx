@@ -37,7 +37,7 @@ import { tierLabel } from '../components/podTier';
 import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, templateWithPocketPosition } from './placementMath';
 import { renderMockup, createMockupSession } from './mockupRender';
 import { uploadMockup } from './mockupUpload';
-import TemplateBackground, { viewForSlot } from './TemplateBackground';
+import TemplateBackground, { viewForSlot, templateViewBox } from './TemplateBackground';
 import CompositorCanvas from './CompositorCanvas';
 import ColorSelectionPanel from './ColorSelectionPanel';
 import ColorwayStrip from './ColorwayStrip';
@@ -422,7 +422,27 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     if (!selectedTemplate || generating || publishing) return;
     setGenerating(true);
     setMockupError(null);
-    const next = [];
+    // The full work list is computed UP FRONT so the grid can show every
+    // upcoming mockup as a spinner card instantly; each card's image then
+    // streams in the moment its render completes (MockupPanel fades it in).
+    const jobs = [];
+    for (const cw of (selectedTemplate.colorways || []).filter((item) => selectedColorwayIds.has(item.id))) {
+      for (const s of designedSlots(selectedTemplate)) {
+        const art = resolveArtwork(s, cw.id);
+        if (!art || !isComposable(art)) continue;
+        jobs.push({ cw, s, art });
+      }
+    }
+    const next = jobs.map(({ cw, s }) => ({
+      key: `${cw.id}:${s}`, colorwayId: cw.id, colorwayLabel: cw.label,
+      slot: s, objectUrl: null, type: null,
+      url: null, storagePath: null,
+      pending: true,
+    }));
+    // State gets COPIES; `next` stays the mutable source of truth this run
+    // (uploads write url/storagePath onto its entries) and is re-published
+    // into state per completion and once more after the uploads settle.
+    setMockups(next.map((e) => ({ ...e })));
     const urls = [];
     const uploadPromises = [];
     let uploadFailures = 0;
@@ -432,57 +452,53 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     // every time and can evict the live placement canvas's WebGL context.
     const renderSession = createMockupSession();
     try {
-      for (const cw of (selectedTemplate.colorways || []).filter((item) => selectedColorwayIds.has(item.id))) {
-        for (const s of designedSlots(selectedTemplate)) {
-          const art = resolveArtwork(s, cw.id);
-          if (!art || !isComposable(art)) continue;
-          // Per-item try/catch: one un-renderable colourway (e.g. a photo
-          // template missing that colourway's photo) skips, not aborts —
-          // the other colourways' mockups still generate.
-          let blob, type;
-          try {
-            ({ blob, type } = await renderMockup({
-              template: effTemplate, colorway: cw, slot: s, minDpi: profile?.min_dpi ?? null,
-              artwork: art, placement: effectivePlacementFor(s, art),
-              session: renderSession,
-            }));
-          } catch (e) {
-            renderSkips += 1;
-            console.warn('DesignStudio: mockup render skipped', cw.id, s, e?.message);
-            continue;
-          }
-          const objectUrl = URL.createObjectURL(blob);
-          urls.push(objectUrl);
-          const entry = {
-            key: `${cw.id}:${s}`, colorwayId: cw.id, colorwayLabel: cw.label,
-            slot: s, objectUrl, type,
-            url: null, storagePath: null,
-          };
-          next.push(entry);
-          // Uploads overlap the remaining renders (fire-and-collect): render
-          // stays serial (one canvas rasterization at a time), but the ~0.3-0.8s
-          // Storage round-trips no longer serialize the whole generation.
-          if (shopId) {
-            uploadPromises.push(
-              uploadMockup({
-                blob, type, shopId,
-                templateId: selectedTemplate.id, slot: s, colorwayId: cw.id,
-              }).then((uploaded) => {
-                entry.url = uploaded?.url || null;
-                entry.storagePath = uploaded?.storagePath || null;
-              }).catch((e) => {
-                uploadFailures += 1;
-                console.warn('DesignStudio: mockup upload failed', cw.id, s, e?.message);
-              })
-            );
-          }
+      for (const [i, { cw, s, art }] of jobs.entries()) {
+        const entry = next[i];
+        // Per-item try/catch: one un-renderable colourway (e.g. a photo
+        // template missing that colourway's photo) skips, not aborts —
+        // the other colourways' mockups still generate.
+        let blob, type;
+        try {
+          ({ blob, type } = await renderMockup({
+            template: effTemplate, colorway: cw, slot: s, minDpi: profile?.min_dpi ?? null,
+            artwork: art, placement: effectivePlacementFor(s, art),
+            session: renderSession,
+          }));
+        } catch (e) {
+          renderSkips += 1;
+          console.warn('DesignStudio: mockup render skipped', cw.id, s, e?.message);
+          entry.failed = true;
+          setMockups((prev) => prev.filter((m) => m.key !== entry.key));
+          continue;
+        }
+        const objectUrl = URL.createObjectURL(blob);
+        urls.push(objectUrl);
+        Object.assign(entry, { objectUrl, type, pending: false });
+        setMockups((prev) => prev.map((m) => (m.key === entry.key ? { ...entry } : m)));
+        // Uploads overlap the remaining renders (fire-and-collect): render
+        // stays serial (one canvas rasterization at a time), but the ~0.3-0.8s
+        // Storage round-trips no longer serialize the whole generation.
+        if (shopId) {
+          uploadPromises.push(
+            uploadMockup({
+              blob, type, shopId,
+              templateId: selectedTemplate.id, slot: s, colorwayId: cw.id,
+            }).then((uploaded) => {
+              entry.url = uploaded?.url || null;
+              entry.storagePath = uploaded?.storagePath || null;
+            }).catch((e) => {
+              uploadFailures += 1;
+              console.warn('DesignStudio: mockup upload failed', cw.id, s, e?.message);
+            })
+          );
         }
       }
       await Promise.all(uploadPromises);
+      const done = next.filter((e) => !e.pending && !e.failed);
       replaceObjectUrls(urls);
-      setMockups(next);
-      setHeroKey((prev) => (prev && next.some((m) => m.key === prev) ? prev : next[0]?.key || null));
-      if (next.length === 0) {
+      setMockups(done.map((e) => ({ ...e })));
+      setHeroKey((prev) => (prev && done.some((m) => m.key === prev) ? prev : done[0]?.key || null));
+      if (done.length === 0) {
         setMockupError(renderSkips > 0
           ? 'Inga mockuper kunde genereras — plaggfoton saknas för mallens färger.'
           : 'Inget att generera — välj ett original som kan förhandsgranskas.');
@@ -495,6 +511,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     } catch (e) {
       console.warn('DesignStudio: mockup generation failed', e);
       urls.forEach((u) => URL.revokeObjectURL(u));
+      // State already holds this run's placeholder/streamed cards — clear them
+      // (the pre-run grid is gone; a half-grid of spinners must not linger).
+      setMockups([]);
       setMockupError(e?.message || 'Mockup-genereringen misslyckades.');
     } finally {
       renderSession.close();
@@ -555,6 +574,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     const selectedSet = new Set(selectedColorwayIds || []);
     if (selectedSet.size === 0) { setPublishError('Välj minst en färg att publicera.'); return; }
     if (mockups.length === 0) { setPublishError('Generera mockuper först.'); return; }
+    // Streaming generation publishes placeholder cards into `mockups` mid-run —
+    // publishing then would ship half a grid (null objectUrls crash the fetch).
+    if (generating || mockups.some((m) => m.pending)) { setPublishError('Vänta tills alla mockuper är klara.'); return; }
 
     publishingRef.current = true;
     setPublishing(true);
@@ -791,6 +813,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     if (selectedSet.size === 0) { setPublishError('Välj minst en färg.'); return; }
     const pubMockups = mockups.filter((m) => selectedSet.has(m.colorwayId));
     if (pubMockups.length === 0) { setPublishError('Inga mockuper för de valda färgerna — generera om.'); return; }
+    if (generating || pubMockups.some((m) => m.pending)) { setPublishError('Vänta tills alla mockuper är klara.'); return; }
 
     publishingRef.current = true;
     setPublishing(true);
@@ -1016,8 +1039,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     .filter((cw) => selectedColorwayIds.has(cw.id));
   const s5done = selectedColorways.length > 0;
   const s6done = s5done && selectedColorways.every((cw) => reviewedColorways.has(cw.id));
-  const mockupColorwayIds = new Set(mockups.map((m) => m.colorwayId));
-  const s7done = s6done && selectedColorways.every((cw) => mockupColorwayIds.has(cw.id));
+  // Pending (streaming) cards don't count — step 7 is done when every selected
+  // colourway has a FINISHED mockup, not a spinner placeholder.
+  const mockupColorwayIds = new Set(mockups.filter((m) => !m.pending).map((m) => m.colorwayId));
+  const s7done = s6done && !generating && selectedColorways.every((cw) => mockupColorwayIds.has(cw.id));
   const STEP_META = [
     { n: 1, label: 'Plagg', done: s1done },
     { n: 2, label: 'Tryckytor', done: s2done },
@@ -1607,6 +1632,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         <MockupPanel
           mockups={mockups}
           heroKey={heroKey}
+          aspectRatio={(() => { const vb = templateViewBox(effTemplate); return vb ? vb.w / vb.h : null; })()}
           onPickHero={setHeroKey}
           onGenerate={generateMockups}
           generating={generating}
