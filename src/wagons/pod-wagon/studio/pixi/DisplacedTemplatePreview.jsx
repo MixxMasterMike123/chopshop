@@ -5,7 +5,7 @@ import React, { useEffect, useRef } from 'react';
 import { backgroundUrl, templateViewBox, viewForSlot } from '../TemplateBackground';
 
 const DisplacedTemplatePreview = ({
-  template, colorway, slot, artworkUrl, placement,
+  template, colorway, slot, artworkUrl, placement, onError = () => {},
 }) => {
   const canvasRef = useRef(null);
   const compositorRef = useRef(null);
@@ -83,20 +83,21 @@ const DisplacedTemplatePreview = ({
         if (cancelled) { compositor.destroy(); return; }
         compositor.setPlacement(placementRef.current);
         compositorRef.current = compositor;
-      } catch {
-        compositor?.destroy();
+      } catch (error) {
+        try { compositor?.destroy(); } catch { /* renderer may already be invalid */ }
+        if (!cancelled) onError(error);
       }
     })();
 
     return () => {
       cancelled = true;
       if (compositorRef.current === compositor) compositorRef.current = null;
-      compositor?.destroy();
+      try { compositor?.destroy(); } catch { /* already torn down */ }
     };
   }, [
     template?.id, viewBox?.w, viewBox?.h, displacement?.w, displacement?.h,
     displacement?.scale, displacement?.blur, displacement?.contrast,
-    displacement?.blend, displacement?.alpha,
+    displacement?.blend, displacement?.alpha, onError,
   ]);
 
   // Front/back changes hot-swap the registered map and physical print geometry
@@ -104,7 +105,7 @@ const DisplacedTemplatePreview = ({
   useEffect(() => {
     const compositor = compositorRef.current;
     if (!compositor || !surface) return;
-    compositor.setSurface(surface).catch(() => {});
+    compositor.setSurface(surface).catch(onError);
   }, [surface?.key]);
 
   // Colour changes replace one photo texture inside the existing renderer. The
@@ -112,17 +113,18 @@ const DisplacedTemplatePreview = ({
   useEffect(() => {
     const compositor = compositorRef.current;
     if (!compositor || !photoUrl) return;
-    compositor.setPhoto(photoUrl).catch(() => {});
+    compositor.setPhoto(photoUrl).catch(onError);
   }, [photoUrl]);
 
   useEffect(() => {
     const compositor = compositorRef.current;
     if (!compositor || !artworkUrl) return;
-    compositor.setArtwork(artworkUrl).catch(() => {});
+    compositor.setArtwork(artworkUrl).catch(onError);
   }, [artworkUrl]);
 
   useEffect(() => {
-    if (placement) compositorRef.current?.setPlacement(placement);
+    if (!placement) return;
+    try { compositorRef.current?.setPlacement(placement); } catch (error) { onError(error); }
   }, [placement?.xMm, placement?.yMm, placement?.wMm, placement?.rotationDeg]);
 
   return (

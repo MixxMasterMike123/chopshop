@@ -26,7 +26,7 @@
 //   • profile    — the template's print profile (podProfiles) for DPI thresholds.
 //   • placement  — { xMm, yMm, wMm } for THIS slot, or null (→ default used).
 //   • onPlacementChange — (placement) => void on every move/resize/nudge.
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TemplateBackground, { templateViewBox, viewForSlot } from './TemplateBackground';
 import HelpPopover from './HelpPopover';
 import DisplacedTemplatePreview from './pixi/DisplacedTemplatePreview';
@@ -151,12 +151,22 @@ const CompositorCanvas = ({
   // Full drag data in a ref (no re-render churn mid-gesture); visual flags in state.
   const dragRef = useRef(null);
   const [dragUi, setDragUi] = useState(null); // { mode, snappedX, snappedY } | null
+  const [displacementFailed, setDisplacementFailed] = useState(false);
 
   const viewBox = templateViewBox(template);
   const areaRect = template?.printAreas?.[slot] || null;
   const areaMm = template?.printAreaMm?.[slot] || null;
   const ppm = template ? pxPerMm(template, slot) : null;
   const displacementUrl = template?.photo?.displacement?.urls?.[viewForSlot(slot)] || null;
+
+  useEffect(() => {
+    setDisplacementFailed(false);
+  }, [template?.id, colorway?.id, slot, artwork?.previewUrl, displacementUrl]);
+
+  const handleDisplacementError = useCallback((error) => {
+    console.warn('Displacement preview failed; using the flat preview.', error);
+    setDisplacementFailed(true);
+  }, []);
 
   const composable = isComposable(artwork);
   // Hard resolution floor (docs/POD_PRINT_SPEC.md): the artwork can never be
@@ -285,7 +295,7 @@ const CompositorCanvas = ({
 
   // Artwork rect in viewBox px (placement mm → px via the template's px↔mm map).
   const artVb = effective ? placementToViewBoxRect(effective, template, slot, artwork) : null;
-  const useDisplacement = Boolean(artVb && displacementUrl);
+  const useDisplacement = Boolean(artVb && displacementUrl && !displacementFailed);
 
   const dragging = Boolean(dragUi);
 
@@ -306,6 +316,7 @@ const CompositorCanvas = ({
             slot={slot}
             artworkUrl={artwork.previewUrl}
             placement={effective}
+            onError={handleDisplacementError}
           />
         )}
 

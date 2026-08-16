@@ -78,37 +78,38 @@ export const renderMockup = async ({
   const displacement = template?.photo?.displacement;
   const displacementUrl = displacement?.urls?.[viewForSlot(slot)] || null;
   if (p && displacementUrl) {
-    const bgSrc = await backgroundImageSource(template, colorway, {
-      widthPx: W, heightPx: H, slot,
-    });
-    const mapW = displacement.w || template.photo.w;
-    const mapH = displacement.h || template.photo.h;
-    const sx = mapW / viewBox.w;
-    const sy = mapH / viewBox.h;
-    const { createDisplacementCompositor } = await import('./pixi/displacementCompositor');
-    const compositor = await createDisplacementCompositor({
-      view: {
-        w: mapW,
-        h: mapH,
-        printArea: {
-          x: areaRect.x * sx,
-          y: areaRect.y * sy,
-          w: areaRect.w * sx,
-          h: areaRect.h * sy,
-        },
-      },
-      printAreaMm: template.printAreaMm?.[slot],
-      assets: { photoUrl: bgSrc, displacementUrl },
-      tuning: {
-        displacementScale: displacement.scale ?? 30,
-        displacementBlur: displacement.blur ?? 6,
-        displacementContrast: displacement.contrast ?? 1,
-        blend: displacement.blend || 'normal',
-        alpha: displacement.alpha ?? 1,
-      },
-      output: { w: W, h: H },
-    });
+    let compositor = null;
     try {
+      const bgSrc = await backgroundImageSource(template, colorway, {
+        widthPx: W, heightPx: H, slot,
+      });
+      const mapW = displacement.w || template.photo.w;
+      const mapH = displacement.h || template.photo.h;
+      const sx = mapW / viewBox.w;
+      const sy = mapH / viewBox.h;
+      const { createDisplacementCompositor } = await import('./pixi/displacementCompositor');
+      compositor = await createDisplacementCompositor({
+        view: {
+          w: mapW,
+          h: mapH,
+          printArea: {
+            x: areaRect.x * sx,
+            y: areaRect.y * sy,
+            w: areaRect.w * sx,
+            h: areaRect.h * sy,
+          },
+        },
+        printAreaMm: template.printAreaMm?.[slot],
+        assets: { photoUrl: bgSrc, displacementUrl },
+        tuning: {
+          displacementScale: displacement.scale ?? 30,
+          displacementBlur: displacement.blur ?? 6,
+          displacementContrast: displacement.contrast ?? 1,
+          blend: displacement.blend || 'normal',
+          alpha: displacement.alpha ?? 1,
+        },
+        output: { w: W, h: H },
+      });
       await compositor.setArtwork(artwork.previewUrl);
       compositor.setPlacement(p);
       // Pixi extraction is deliberately PNG: browser WebP encoders can leave a
@@ -116,8 +117,13 @@ export const renderMockup = async ({
       // the actual type so upload paths and download extensions stay truthful.
       const blob = await compositor.extractPNG();
       return { blob, type: blob.type, width: W, height: H };
+    } catch (error) {
+      // WebGL can be evicted or unavailable on memory-constrained admin tabs.
+      // A product image is still more useful than a frozen workflow, so this
+      // one output continues through the deterministic flat 2D renderer below.
+      console.warn('Displacement mockup failed; using the flat renderer.', error);
     } finally {
-      compositor.destroy();
+      try { compositor?.destroy(); } catch { /* renderer may already be invalid */ }
     }
   }
 

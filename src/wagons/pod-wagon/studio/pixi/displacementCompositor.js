@@ -347,16 +347,12 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   // resolves after a newer one must NOT overwrite the newer texture. Bails if the
   // compositor was destroyed mid-rebuild.
   //
-  // TEXTURE LIFECYCLE: we do NOT free swapped-out displacement textures during a
-  // live session. Pixi caches a GPU BindGroup keyed on the map's TextureSource,
-  // and destroy(true) frees that source out from under a still-cached bind group
-  // → a null-resource crash inside DisplacementFilter.apply on the very next
-  // render (reproduced: rapid slider drags). Even deferring one generation isn't
-  // safe — the cache can hold it longer. Instead we PARK old textures and free
-  // them all in destroy() (app.destroy(texture:true) also frees the live one).
-  // A slider session leaks a handful of small canvas textures until teardown —
-  // negligible, and correctness beats it. The dead ones from stale/aborted
-  // rebuilds (never rendered, never bound) ARE safe to free immediately.
+  // TEXTURE LIFECYCLE: never explicitly destroy a Texture or TextureSource here.
+  // Pixi may reuse Texture objects and cache GPU BindGroups across compositors;
+  // destroying a source during one mockup's teardown can therefore leave the
+  // still-live step-4 preview with a null bind-group resource. Renderer teardown
+  // releases this compositor's GPU resources. We only drop our JS references and
+  // let Pixi/the browser collect the texture objects once nobody uses them.
   const parkedTextures = [];
   const surfaceKeyFor = (url, area, contrast = state.displacementContrast) =>
     `${url}:${area.x}:${area.y}:${area.w}:${area.h}:${dispBlur}:${contrast}`;
@@ -375,7 +371,7 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       const texture = await loadDisplacementTexture(
         image, dispBlur, state.displacementContrast, area
       );
-      if (destroyed) { texture.destroy(true); return null; }
+      if (destroyed) return null;
       const loaded = { texture, image };
       surfaceTextures.set(key, loaded);
       return { key, ...loaded };
@@ -386,8 +382,7 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
   const rebuildDisplacement = async () => {
     const myToken = ++contrastToken;
     const nextTex = await loadDisplacementTexture(dispImg, dispBlur, state.displacementContrast, view.printArea);
-    if (destroyed) { nextTex.destroy(true); return; }
-    if (myToken !== contrastToken) { nextTex.destroy(true); return; } // never bound
+    if (destroyed || myToken !== contrastToken) return;
     const oldTex = dispSprite.texture;
     dispSprite.texture = nextTex;
     if (oldTex && oldTex !== nextTex) parkedTextures.push(oldTex); // free at teardown
@@ -405,7 +400,7 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     async setPhoto(url) {
       const myToken = ++photoToken;
       const tex = await loadTexture(url);
-      if (destroyed || myToken !== photoToken) { tex.destroy(true); return; }
+      if (destroyed || myToken !== photoToken) return;
       const oldTex = photo.texture;
       photo.texture = tex;
       photo.width = view.w;
@@ -440,7 +435,7 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
     async setArtwork(url) {
       const myToken = ++artworkToken;
       const tex = await loadTexture(url);
-      if (destroyed || myToken !== artworkToken) { tex.destroy(true); return; }
+      if (destroyed || myToken !== artworkToken) return;
       const oldTex = artSprite.texture;
       artSprite.texture = tex;
       if (oldTex && oldTex !== Texture.EMPTY && oldTex !== tex) parkedTextures.push(oldTex);
@@ -487,18 +482,11 @@ export const createDisplacementCompositor = async ({ view, printAreaMm, assets, 
       surfaceToken += 1;
       photoToken += 1;
       artworkToken += 1;
-      // Free the parked (swapped-out) displacement textures. The LIVE one is
-      // owned by dispSprite and freed by app.destroy(texture:true) below.
-      const liveDispTexture = dispSprite.texture;
-      const retiredTextures = new Set(parkedTextures);
-      for (const item of surfaceTextures.values()) retiredTextures.add(item.texture);
-      retiredTextures.delete(liveDispTexture);
-      for (const t of retiredTextures) { try { t.destroy(true); } catch { /* already gone */ } }
       parkedTextures.length = 0;
       surfaceTextures.clear();
       // Live step-4 previews pass a React-owned canvas. Destroy the renderer and
       // GPU resources there, but leave the DOM node for React to reconcile.
-      app.destroy(ownsCanvas, { children: true, texture: true });
+      app.destroy(ownsCanvas, { children: true });
     },
   };
 };
