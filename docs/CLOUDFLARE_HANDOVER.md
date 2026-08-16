@@ -251,6 +251,15 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - `/ready` now requires `0006_object_store.sql`. Local gate 204/204 green.
 - Next R2 step for the owner/agent: create `meteorshop-stg-public`, `meteorshop-stg-private`, `meteorshop-stg-temp` buckets, add the bindings to `wrangler.jsonc`, and build upload-grant/finalize + delivery routes on top of these contracts.
 
+## Checkpoint 16 — Admin object upload + delivery routes (deployed; dark until buckets exist)
+
+- Routes (all tenant-admin guarded + CSRF on state changes): `POST /v1/admin/objects` (reserve, private kinds only), `PUT /v1/admin/objects/{id}/content` (streamed upload), `GET .../{id}` (metadata, objectKey never exposed), `GET .../{id}/content` (authorized delivery, `no-store` + `nosniff`), `DELETE .../{id}` (tombstone row first, then bytes — a failed R2 delete leaves unreachable garbage, never a live object without a record).
+- Integrity model: client declares sha256+size at reserve; the declared hash is handed to `R2Bucket.put` as the expected checksum so **R2 itself verifies the bytes** — probed in miniflare: mismatch throws and stores nothing, row stays `pending` and retryable. Bytes stream through the isolate unbuffered; 100 MB cap; Content-Length must match the declared size.
+- Runtime quirk discovered: Workers synthesizes `content-length` for byte-backed request bodies; the absent-header branch is only reachable with a genuinely unknown-length stream (tests use `IdentityTransformStream`).
+- All upload/delivery legs fail closed 404 while `PRIVATE_BUCKET` is undefined (current staging state); reserve/metadata are D1-only and work now. Deploy dry-run confirms no R2 binding.
+- Local gate 242/242 green; control-byte source scan clean.
+- When buckets are created: add the `PRIVATE_BUCKET` binding for `meteorshop-stg-private` to `wrangler.jsonc`, redeploy, and the upload path lights up with no code change.
+
 ## Verification and research completed
 
 - Read the complete Cloudflare platform, Wrangler, and Workers best-practices skills and their required review references.

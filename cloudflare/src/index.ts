@@ -26,6 +26,14 @@ import {
   getPublicProduct,
   listPublicProducts,
 } from "./catalog/public-catalog";
+import {
+  deleteAdminObject,
+  deliverAdminObject,
+  getAdminObjectMetadata,
+  parseReserveObjectInput,
+  reserveAdminObject,
+  uploadAdminObject,
+} from "./storage/object-routes";
 import { jsonResponse } from "./lib/http";
 import {
   authorizePlatformRequest,
@@ -44,6 +52,8 @@ const PRODUCTS_PATH = "/v1/products";
 const PRODUCT_PATH_PREFIX = "/v1/products/";
 const ADMIN_PRODUCTS_PATH = "/v1/admin/products";
 const ADMIN_PRODUCT_PATH_PREFIX = "/v1/admin/products/";
+const ADMIN_OBJECTS_PATH = "/v1/admin/objects";
+const ADMIN_OBJECT_PATH_PREFIX = "/v1/admin/objects/";
 const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
 const REQUIRED_MIGRATION = "0006_object_store.sql";
@@ -60,6 +70,11 @@ interface AdminProductRoute {
 interface PlatformTenantRoute {
   action: PlatformTenantAction;
   tenantId: string;
+}
+
+interface AdminObjectRoute {
+  content: boolean;
+  objectId: string;
 }
 
 function notFoundResponse(message: string): Response {
@@ -169,6 +184,29 @@ function adminProductRouteFromPath(pathname: string): AdminProductRoute | null {
   }
 
   return null;
+}
+
+function adminObjectRouteFromPath(pathname: string): AdminObjectRoute | null {
+  if (!pathname.startsWith(ADMIN_OBJECT_PATH_PREFIX)) {
+    return null;
+  }
+
+  const segments = pathname.slice(ADMIN_OBJECT_PATH_PREFIX.length).split("/");
+  const [rawObjectId, rawContent, ...rest] = segments;
+  if (rawObjectId === undefined || rest.length > 0) {
+    return null;
+  }
+
+  const objectId = decodeSegment(rawObjectId);
+  if (objectId === null) {
+    return null;
+  }
+
+  if (rawContent === undefined) {
+    return { content: false, objectId };
+  }
+
+  return rawContent === "content" ? { content: true, objectId } : null;
 }
 
 function platformTenantRouteFromPath(
@@ -338,6 +376,149 @@ async function handleAdminProductRoute(
   );
 }
 
+function payloadTooLargeResponse(): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "payload_too_large",
+        message: "Upload exceeds the maximum allowed size",
+      },
+    },
+    413,
+  );
+}
+
+function objectConflictResponse(): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "conflict",
+        message: "Request conflicts with the current object state",
+      },
+    },
+    409,
+  );
+}
+
+async function handleAdminObjectRoute(
+  env: Env,
+  request: Request,
+  url: URL,
+): Promise<Response> {
+  // Guard and CSRF check run before any parsing — including before the body is
+  // touched — so an unauthorized caller can never stream bytes into the worker
+  // or learn that the object surface exists.
+  const principal = await authorizeTenantAdminRequest(env, request);
+  if (principal === null) {
+    return adminNotFoundResponse();
+  }
+
+  const isStateChanging = request.method !== "GET";
+  if (isStateChanging && !isSameOriginRequest(request)) {
+    return adminNotFoundResponse();
+  }
+
+  const now = Date.now();
+
+  if (url.pathname === ADMIN_OBJECTS_PATH) {
+    if (request.method !== "POST") {
+      return adminNotFoundResponse();
+    }
+
+    const input = parseReserveObjectInput(await readJsonBody(request));
+    if (input === null) {
+      return invalidRequestResponse();
+    }
+
+    const reserved = await reserveAdminObject(env.DB, principal, input, now);
+    if (reserved.status === "conflict") {
+      return objectConflictResponse();
+    }
+    if (reserved.status !== "ok") {
+      return invalidRequestResponse();
+    }
+
+    return jsonResponse({ object: reserved.object }, 201);
+  }
+
+  const route = adminObjectRouteFromPath(url.pathname);
+  if (route === null) {
+    return adminNotFoundResponse();
+  }
+
+  if (route.content) {
+    if (request.method === "PUT") {
+      const uploaded = await uploadAdminObject(
+        env,
+        env.DB,
+        principal,
+        route.objectId,
+        request,
+        now,
+      );
+
+      if (uploaded.status === "ok") {
+        return jsonResponse({ object: uploaded.object }, 200);
+      }
+      if (uploaded.status === "conflict") {
+        return objectConflictResponse();
+      }
+      if (uploaded.status === "too_large") {
+        return payloadTooLargeResponse();
+      }
+      if (uploaded.status === "invalid") {
+        return invalidRequestResponse();
+      }
+      return adminNotFoundResponse();
+    }
+
+    if (request.method !== "GET") {
+      return adminNotFoundResponse();
+    }
+
+    const delivered = await deliverAdminObject(
+      env,
+      env.DB,
+      principal,
+      route.objectId,
+    );
+
+    return delivered ?? adminNotFoundResponse();
+  }
+
+  if (request.method === "GET") {
+    const metadata = await getAdminObjectMetadata(
+      env.DB,
+      principal,
+      route.objectId,
+    );
+
+    return metadata === null
+      ? adminNotFoundResponse()
+      : jsonResponse({ object: metadata });
+  }
+
+  if (request.method !== "DELETE") {
+    return adminNotFoundResponse();
+  }
+
+  const deleted = await deleteAdminObject(
+    env,
+    env.DB,
+    principal,
+    route.objectId,
+    now,
+  );
+
+  if (deleted.status === "conflict") {
+    return objectConflictResponse();
+  }
+
+  return deleted.status === "ok"
+    ? new Response(null, { status: 204 })
+    : adminNotFoundResponse();
+}
+
 function platformResultResponse(
   result: DomainResult | MembershipResult | TenantResult,
   successStatus: number,
@@ -486,6 +667,13 @@ export default {
       url.pathname.startsWith(ADMIN_PRODUCT_PATH_PREFIX)
     ) {
       return handleAdminProductRoute(env, request, url);
+    }
+
+    if (
+      url.pathname === ADMIN_OBJECTS_PATH ||
+      url.pathname.startsWith(ADMIN_OBJECT_PATH_PREFIX)
+    ) {
+      return handleAdminObjectRoute(env, request, url);
     }
 
     if (

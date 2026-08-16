@@ -43,6 +43,11 @@ export type ObjectMutationResult =
 export interface ReserveObjectInput {
   bucket: ObjectBucket;
   contentType: string;
+  // Hash and size the client claims the bytes will have. Recorded on the
+  // pending row so the upload leg can hand them to R2, which is what actually
+  // makes them trustworthy; until then they are an unverified claim.
+  declaredSha256?: string;
+  declaredSizeBytes?: number;
   fileName?: string;
   kind: ObjectKind;
 }
@@ -197,9 +202,17 @@ export async function reservePendingObject(
   input: ReserveObjectInput,
   now: number,
 ): Promise<ReserveObjectResult> {
+  const declaredSha256 = input.declaredSha256 ?? null;
+  const declaredSizeBytes = input.declaredSizeBytes ?? null;
+
   if (
     !isBucketAllowed(input.kind, input.bucket) ||
-    !isValidContentType(input.contentType)
+    !isValidContentType(input.contentType) ||
+    (declaredSha256 !== null && !SHA256_PATTERN.test(declaredSha256)) ||
+    (declaredSizeBytes !== null &&
+      (!Number.isSafeInteger(declaredSizeBytes) ||
+        declaredSizeBytes < 0 ||
+        declaredSizeBytes > SIZE_BYTES_MAX))
   ) {
     return { status: "invalid" };
   }
@@ -214,7 +227,7 @@ export async function reservePendingObject(
           `INSERT INTO stored_objects (
             object_id, tenant_id, bucket, object_key, kind, content_type,
             size_bytes, sha256, status, immutable, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'pending', 0, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
         )
         .bind(
           objectId,
@@ -223,6 +236,8 @@ export async function reservePendingObject(
           objectKey,
           input.kind,
           input.contentType,
+          declaredSizeBytes,
+          declaredSha256,
           now,
           now,
         ),
@@ -352,6 +367,21 @@ export async function getAuthorizedObject(
   const row = await loadObject(db, tenant.tenantId, objectId);
 
   return row === null || row.status !== "active" ? null : toStoredObject(row);
+}
+
+/**
+ * Load a row for an upload leg, which must see `pending` rows that
+ * `getAuthorizedObject` deliberately hides. This grants no access to bytes: the
+ * caller still has to enforce status and bucket before touching R2.
+ */
+export async function getUploadTargetObject(
+  db: D1Database,
+  tenant: TenantContext,
+  objectId: string,
+): Promise<StoredObject | null> {
+  const row = await loadObject(db, tenant.tenantId, objectId);
+
+  return row === null ? null : toStoredObject(row);
 }
 
 /**
