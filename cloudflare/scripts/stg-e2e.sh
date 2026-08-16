@@ -145,7 +145,7 @@ fi
 
 code=$(curl -s -o /dev/null -w "%{http_code}" -b "$TJAR" -X DELETE "$BASE/v1/admin/objects/$OBJECT_ID" \
   -H "origin: $BASE")
-check "delete object" 200 "$code"
+check "delete object" 204 "$code"
 
 # --- Anonymous checkout: shipping + VAT + discount, EXACT money -------------
 # Expected (engine parity math):
