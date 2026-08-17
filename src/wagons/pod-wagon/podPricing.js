@@ -49,3 +49,37 @@ export const priceFloor = (costSek, vatRate = 0.25) => {
   if (!Number.isFinite(costSek) || costSek < 0) return null;
   return Math.ceil((costSek * (1 + vatRate) + FEE_FIXED) / (1 - FEE_RATE));
 };
+
+/**
+ * The price INKL. moms where sellerMargin() lands exactly on `marginFrac` (0..1)
+ * — the inverse of the margin formula above, so "jag vill ha 40 %" and the
+ * marginal-kolumnen tell the same story instead of two different ones.
+ *
+ * Derivation (m = marginFrac, r = FEE_RATE, F = FEE_FIXED, c = costSek):
+ *   vinst(p) = (p − r·p − F) / (1 + moms) − c
+ *   marginal = vinst(p) / (p / (1 + moms)) = (p(1 − r) − F − c(1 + moms)) / p
+ *   m·p = p(1 − r) − F − c(1 + moms)
+ *   ⇒  p = (c · (1 + moms) + F) / (1 − r − m)
+ *
+ * Note the denominator: the margin can never reach 1 − FEE_RATE (the fee eats a
+ * fixed share of every krona), and p → ∞ as m approaches it. We refuse just
+ * short of that asymptote rather than returning an absurd price. NO rounding
+ * here — …9-priser är presentation, se roundUpTo9.
+ *
+ * Returns null when the inputs are unusable or the margin is unreachable.
+ */
+export const priceForMargin = (costSek, marginFrac, vatRate = 0.25) => {
+  if (!Number.isFinite(costSek) || costSek < 0) return null;
+  if (!Number.isFinite(marginFrac) || marginFrac < 0) return null;
+  if (marginFrac >= 1 - FEE_RATE - 0.005) return null; // asymptote guard
+  return (costSek * (1 + vatRate) + FEE_FIXED) / (1 - FEE_RATE - marginFrac);
+};
+
+// Round a price UP to the nearest number ending in 9 (…9): 260.75 → 269, 269 → 269.
+// Presentation policy, not economics — kept here so the studio and the product
+// form round the same way from the same source.
+export const roundUpTo9 = (value) => {
+  const n = Math.ceil(value);
+  const rem = ((n - 9) % 10 + 10) % 10; // distance above the previous …9
+  return n + ((10 - rem) % 10);
+};

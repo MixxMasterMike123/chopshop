@@ -69,7 +69,7 @@ import SortableImageGallery from './SortableImageGallery';
 import { withShopId } from '../../config/withShopId';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { listMappings } from '../../utils/podMappings';
-import { priceFloor, sellerProfitExVat, FEE_RATE, FEE_FIXED } from '../../wagons/pod-wagon/podPricing';
+import { priceFloor, sellerProfitExVat, sellerMargin, priceForMargin, roundUpTo9, FEE_RATE, FEE_FIXED } from '../../wagons/pod-wagon/podPricing';
 import { CardSection, RightRail, Button } from './ui';
 import { skuFromName, uniqueSku } from '../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../utils/variantDerivation';
@@ -384,6 +384,10 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   const podFloor = podEnabled && formData.isPodProduct && Number.isFinite(product?.podCostSek)
     ? priceFloor(product.podCostSek)
     : null;
+  // Margin target for the "räkna fram ett pris"-verktyget under prisfältet. Pure
+  // UI state — it never leaves the form; only the button writes formData.price.
+  // 40 % matches the Studio's default so the two surfaces suggest the same price.
+  const [podMarginTarget, setPodMarginTarget] = useState('40');
 
   // Main B2C image.
   const [mainImageFile, setMainImageFile] = useState(null);
@@ -1216,18 +1220,63 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                 <input type="number" name="price" min="0" step="0.01" value={formData.price} onChange={handleInput} className={inputCls} />
                 {podFloor != null && (
                   <>
+                    {/* Inköpspriset FÖRST och som ETT tal — säljaren vill veta vad
+                        plagget kostar honom, inte se en uträkning. Golvraden under
+                        upprepar därför inte längre kostnadsposterna. */}
+                    <p className="mt-2 text-[13px] text-admin-text-muted">
+                      Inköp: <span className="font-medium text-admin-text">{product.podCostSek} kr</span>
+                    </p>
                     <p className={`mt-1 text-[12px] ${parseFloat(formData.price) < podFloor ? 'text-admin-critical-text' : 'text-admin-text-muted'}`}>
                       Prisgolv: <span className="font-medium">{podFloor} kr</span> — vid det priset tjänar du 0 kr
-                      (produktion {product.podCostSek} kr + avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr inräknat).
+                      (avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr inräknad).
                     </p>
                     {(() => {
                       const pNow = parseFloat(formData.price);
                       const profitNow = sellerProfitExVat(pNow, product.podCostSek);
+                      const marginNow = sellerMargin(pNow, product.podCostSek);
                       return profitNow != null && pNow >= podFloor ? (
                         <p className="mt-0.5 text-[12px] text-admin-text-muted">
-                          Vid {pNow} kr tjänar du ca <span className="font-medium text-admin-text">{Math.round(profitNow)} kr</span> per försäljning (exkl. moms).
+                          Vid {pNow} kr tjänar du ca <span className="font-medium text-admin-text">{Math.round(profitNow)} kr</span> per försäljning
+                          {marginNow != null && ` (${Math.round(marginNow * 100)} % marginal, exkl. moms)`}.
                         </p>
                       ) : null;
+                    })()}
+                    {/* Marginal → pris, samma verktyg som i Designstudion: skriv
+                        målmarginalen, få ett …9-pris som faktiskt GER den marginalen
+                        (priceForMargin är avgiftsmedveten), aldrig under golvet. */}
+                    {(() => {
+                      const m = parseFloat(podMarginTarget);
+                      const raw = Number.isFinite(m) ? priceForMargin(product.podCostSek, m / 100) : null;
+                      const suggested = raw == null ? null : Math.max(roundUpTo9(raw), podFloor);
+                      // flex-wrap: fältet ligger i en max-w-xs-kolumn, så
+                      // förhandsvisning + knapp lägger sig på egen rad när det knappar.
+                      return (
+                        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                          <span className="text-[12px] text-admin-text-muted">Önskad marginal</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="85"
+                            step="1"
+                            value={podMarginTarget}
+                            aria-label="Önskad marginal i procent"
+                            onChange={(e) => setPodMarginTarget(e.target.value)}
+                            className="w-16 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2 py-1 text-[12px] text-admin-text focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
+                          />
+                          <span className="text-[12px] text-admin-text-muted">%</span>
+                          <span className="text-[12px] text-admin-text-muted">
+                            Rekommenderat pris: <span className="font-medium text-admin-text">{suggested == null ? '—' : `${suggested} kr`}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => suggested != null && setField('price', String(suggested))}
+                            disabled={suggested == null}
+                            className="rounded-[var(--radius-admin-el)] border border-admin-border px-2.5 py-1 text-[12px] text-admin-text hover:bg-admin-surface-2 disabled:cursor-default disabled:opacity-40"
+                          >
+                            Använd priset
+                          </button>
+                        </div>
+                      );
                     })()}
                   </>
                 )}

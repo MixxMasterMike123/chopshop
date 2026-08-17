@@ -13,7 +13,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
-import { sellerProfitExVat, sellerMargin, priceFloor, FEE_RATE, FEE_FIXED } from '../podPricing';
+import { sellerProfitExVat, sellerMargin, priceFloor, priceForMargin, roundUpTo9, FEE_RATE, FEE_FIXED } from '../podPricing';
 
 const DEFAULT_SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
 
@@ -28,13 +28,6 @@ const fmtSek = (n) => {
 };
 const fmtKr = (n) => (Number.isFinite(n) ? `${fmtSek(n)} kr` : '—');
 const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` : '—');
-
-// Round a price UP to the nearest number ending in 9 (…9): 260.75 → 269, 269 → 269.
-const roundUpTo9 = (value) => {
-  const n = Math.ceil(value);
-  const rem = ((n - 9) % 10 + 10) % 10; // distance above the previous …9
-  return n + ((10 - rem) % 10);
-};
 
 /**
  * Props:
@@ -140,7 +133,12 @@ const PublishPanel = ({
   const applyMarginToPrice = () => {
     const m = parseFloat(margin);
     if (cost == null || !(m >= 0)) return;
-    const target = cost * (1 + m / 100) * (1 + vatRate);
+    // Fee-aware inverse of sellerMargin(). The old formula was markup-on-cost
+    // (cost · (1 + m) · moms) and ignored the transaction fee, so typing 40 %
+    // produced a price the marginal-kolumnen right below then reported as ~22 %.
+    // Now the typed % and the displayed % are the same number.
+    const target = priceForMargin(cost, m / 100, vatRate);
+    if (target == null) return; // margin unreachable (fee asymptote) — no-op
     // Never suggest below break-even — the floor wins over a low margin target.
     setPrice(String(Math.max(roundUpTo9(target), floor ?? 0)));
   };
@@ -467,6 +465,7 @@ const PublishPanel = ({
               <input
                 type="number"
                 min="0"
+                max="85"
                 step="1"
                 value={margin}
                 aria-label="Marginal i procent"
