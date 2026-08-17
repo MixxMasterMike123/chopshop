@@ -89,6 +89,37 @@ const TEE_COLORWAYS = [
 const teePhotoUrls = (view) =>
   Object.fromEntries(TEE_COLORWAYS.map((c) => [c.id, `${TEE_PHOTO}/${c.id}_${view}.webp`]));
 
+// ── HOODIE photo assets (2026-08-17, designer's hanging-hoodie set) ──────────
+// hex sampled from each front photo's chest patch (chip matches the photo).
+const HOODIE_PHOTO = '/pod-garments/hoodie-hanging';
+const HOODIE_COLORWAYS = [
+  { id: 'white', label: 'Vit', hex: '#e9e5eb' },
+  { id: 'black', label: 'Svart', hex: '#222023' },
+  { id: 'sporty-grey', label: 'Sporty grå', hex: '#8a8380' },
+  { id: 'red', label: 'Röd', hex: '#aa1326' },
+  { id: 'atoll', label: 'Atoll blå', hex: '#1097b8' },
+  { id: 'azure', label: 'Azure blå', hex: '#255070' },
+  { id: 'electric', label: 'Electric blå', hex: '#2b3b74' },
+  { id: 'gold', label: 'Gold gul', hex: '#c0810d' },
+  { id: 'orchid', label: 'Orchid grön', hex: '#97ae41' },
+  { id: 'pistachio', label: 'Pistachio grön', hex: '#4f5b25' },
+];
+const hoodiePhotoUrls = (view) =>
+  Object.fromEntries(HOODIE_COLORWAYS.map((c) => [c.id, `${HOODIE_PHOTO}/${c.id}_${view}.webp`]));
+// Dark/saturated colourways render the print with 'normal' (multiply erases
+// ink there); light ones ride the multiply base. Borderlines settled on the
+// blend contact sheet 2026-08-17.
+const HOODIE_DARK_COLORWAYS = {
+  black: { blend: 'normal' },
+  red: { blend: 'normal' },
+  azure: { blend: 'normal' },
+  electric: { blend: 'normal' },
+  pistachio: { blend: 'normal' },
+  // atoll is bright but SATURATED cyan — multiply turned a red motif nearly
+  // black on it (sheet 2026-08-17); gold/orchid survived multiply fine.
+  atoll: { blend: 'normal' },
+};
+
 const TEMPLATES = [
   {
     id: 'tee_bc_e150',
@@ -157,33 +188,59 @@ const TEMPLATES = [
       right_sleeve: { w: 80, h: 80 },
     },
   },
+  // ── HOODIE: REAL PHOTO TEMPLATE (2026-08-17) ─────────────────────────────
+  // Hanging-hoodie photos from the designer (public/images/hoddies originals),
+  // 1920×2208 per view, 10 colourways, front + back. FRAMING GOTCHA: the front
+  // garment is shot ~30% larger in frame than the back (front torso ≈1134 px
+  // ≈ 58 cm → ~1.96 px/mm; back ≈897 px → ~1.55 px/mm) — each view's printArea
+  // rect is calibrated to ITS OWN photo, so the mm math stays honest per view.
+  // FRONT print band is squeezed between the hood drape and the kangaroo
+  // pocket → 250×320 mm (the apparel 350 mm height physically does not fit
+  // above the pocket on this garment). Back takes the full 300×400 mm.
   {
-    id: 'hoodie_flat',
+    id: 'hoodie_hanging',
     label: 'Hoodie',
-    garment: 'hoodie',
     profileId: 'apparel_dtg',
-    // PROVISIONAL production cost until the printshop price matrix (Kent checklist #2).
-    costSek: 249,
-    colorways: APPAREL_COLORWAYS,
-    // Front chest 250×350 mm: centred (x 285..515 on the 200..600 torso), below
-    // the drawstring bobbins (~y274), ABOVE the kangaroo pocket (top ~y596).
-    // 230×322 px = 5:7 ↔ 250×350 mm (y 250..572 clears the pocket top ~y596).
-    // Back 300×400 mm renders on HoodieBackFlat (hood seen from behind).
-    // Pocket at chest height between bobbins and kangaroo; sleeves on the long
-    // sleeves' upper arm.
-    printAreas: {
-      front: { x: 285, y: 250, w: 230, h: 322 },
-      back: { x: 286, y: 240, w: 228, h: 304 },
-      pocket: { x: 430, y: 255, w: 80, h: 80 },
-      // Sleeve rects calibrated against HoodieFlat's outer sleeve cubic
-      // (x≈662@y319 → 677@y396, mirrored): moved DOWN to y340 where the sleeve
-      // is wide enough; 6–17 px outer margin, ≥9 px from the torso edge.
-      left_sleeve: { x: 604, y: 340, w: 56, h: 56 },   // wearer LEFT = viewer right
-      right_sleeve: { x: 140, y: 340, w: 56, h: 56 },  // wearer RIGHT = viewer left
+    // Kim's price list 2026-08-10: blank hoodie 380:- + ett stort tryck 40:-.
+    costSek: 420,
+    photo: {
+      w: 960,
+      h: 1104,
+      urls: hoodiePhotoUrls('front'),
+      backUrls: hoodiePhotoUrls('back'),
+      // Maps BAKED from the white garment (grayscale → blur σ3 → mean-centred
+      // stretch to print-area sd≈40, mean 128) — the raw fleece field was far
+      // too flat (sd 5 front / 13 back): a runtime contrast of ×8-10 would
+      // posterize 8-bit steps into stair-step warp, so the strength lives in
+      // the file and contrast stays 1. Regenerate: scratchpad hoodie-dm.mjs.
+      displacement: {
+        w: 1920,
+        h: 2208,
+        urls: {
+          front: `${HOODIE_PHOTO}/white_front_dm.webp`,
+          back: `${HOODIE_PHOTO}/white_back_dm.webp`,
+        },
+        scale: 30,
+        blur: 4,
+        contrast: 1,
+        blend: 'multiply',
+        alpha: 0.8,
+        perColorway: HOODIE_DARK_COLORWAYS,
+      },
     },
-    pocketPositions: { left: { x: 430 }, center: { x: 360 }, right: { x: 290 } },
+    colorways: HOODIE_COLORWAYS,
+    // CALIBRATION (960×1104 half-res coords; overlay-verified on the white
+    // photos): front centred between hood drape and kangaroo pocket.
+    printAreas: {
+      front: { x: 361, y: 387, w: 245, h: 313 },      // 250×320 mm
+      back: { x: 366, y: 350, w: 228, h: 304 },       // 300×400 mm
+      pocket: { x: 542, y: 387, w: 98, h: 98 },       // 100×100 mm
+      left_sleeve: { x: 735, y: 410, w: 78, h: 78 },  // wearer LEFT = viewer right
+      right_sleeve: { x: 155, y: 410, w: 78, h: 78 }, // wearer RIGHT = viewer left
+    },
+    pocketPositions: { left: { x: 542 }, center: { x: 434 }, right: { x: 327 } },
     printAreaMm: {
-      front: { w: 250, h: 350 },
+      front: { w: 250, h: 320 },
       back: { w: 300, h: 400 },
       pocket: { w: 100, h: 100 },
       left_sleeve: { w: 80, h: 80 },
