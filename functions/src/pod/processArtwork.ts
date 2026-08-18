@@ -35,6 +35,7 @@ import sharp, { type Metadata } from 'sharp';
 import { db } from '../config/database';
 import { appUrls } from '../config/app-urls';
 import { requireAdminOfShop } from '../email-orchestrator/functions/authGuard';
+import { isShopFeatureEnabled } from '../config/shopFeatures';
 
 export const PIPELINE_VERSION = 1;
 
@@ -344,6 +345,12 @@ const OPTS = { region: 'us-central1', memory: '2GiB', timeoutSeconds: 300, cors:
 export const processPodArtwork = onCall(OPTS, async (request) => {
   const shopId = String(request.data?.shopId || '').trim();
   await requireAdminOfShop(shopId, request.auth?.uid);
+
+  // D6/Slice C: pod-disabled shops get no artwork pipeline — same predicate as
+  // everywhere else (isShopFeatureEnabled), default-ON until D3 flips polarity.
+  if (!(await isShopFeatureEnabled(shopId, 'pod'))) {
+    throw new HttpsError('failed-precondition', 'Print on demand is not enabled for this shop.');
+  }
 
   const artworkId = String(request.data?.artworkId || '').trim();
 

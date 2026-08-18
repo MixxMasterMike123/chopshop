@@ -12,7 +12,7 @@
 //     and never mounts; POD must be true.)
 //   • Per-shop entitlement is a SEPARATE layer: shops/{id}.features.pod (toggled in
 //     the platform /addons console). The route + menu item appear only when BOTH
-//     manifest.enabled AND features.pod (default-ON) are true — App.jsx wraps the
+//     manifest.enabled AND features.pod (explicit OPT-IN since the 2026-08-18 D3 flip) are true — App.jsx wraps the
 //     wagon route in <AddonGate feature="pod"> and AppLayout filters the menu item
 //     by the same key (config/addons.js WAGON_FEATURE_KEY['pod-wagon'] === 'pod').
 //

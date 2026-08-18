@@ -1432,7 +1432,24 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                       id="isPodProduct"
                       type="checkbox"
                       checked={formData.isPodProduct}
-                      onChange={(e) => setField('isPodProduct', e.target.checked)}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        // Guard the check→uncheck transition on a product that HAS a
+                        // live print connection: unchecking demotes it to a regular
+                        // product and the tryckkoppling goes inert (no mapping
+                        // cleanup happens here). Warn before applying; cancel keeps
+                        // the checkbox checked. Every other toggle is untouched.
+                        // While mappings are still loading (podMappingSkus null) an
+                        // EXISTING product's connection state is unknown — fail SAFE
+                        // and warn anyway rather than silently skipping the guard.
+                        if (formData.isPodProduct && !next && (podConnected || (product && podMappingSkus === null))) {
+                          const ok = window.confirm(
+                            'Produkten har en tryckkoppling. Om du tar bort POD-markeringen slutar kopplingen att gälla och produkten behandlas som en vanlig produkt. Fortsätta?'
+                          );
+                          if (!ok) return;
+                        }
+                        setField('isPodProduct', next);
+                      }}
                       className={checkboxCls}
                     />
                     Print on demand-produkt

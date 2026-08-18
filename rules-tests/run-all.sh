@@ -16,6 +16,10 @@
 #   - dispute-recovery.test.cjs       } functions/lib compiled (tsc) first.
 #   - print-outbox.test.cjs           } durable printer-notify decision/lease core.
 #   - production-snapshot.test.cjs    } immutable paid-order artwork/mapping core.
+#   - pod-shop-gating-pure.test.cjs   } pod-shop-type-selector Slice C: pod-gating
+#                                        decision shapes (notifyOutbox trigger/sweep,
+#                                        createPaymentIntent/stripeWebhook snapshot skip).
+#   - pod-shop-gating.test.cjs        → FIRESTORE emulator (getPrintShopContext D6 gate).
 #
 # Local run:
 #   JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
@@ -64,13 +68,16 @@ echo "==> [1/3] print-outbox (pure unit test — durable printer notification)"
 node rules-tests/print-outbox.test.cjs
 echo "==> [1/3] production-snapshot (pure unit test — immutable paid-order artwork)"
 node rules-tests/production-snapshot.test.cjs
+echo "==> [1/3] pod-shop-gating-pure (pure unit test — Slice C pod-gating decision shapes)"
+node rules-tests/pod-shop-gating-pure.test.cjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"
 $FIREBASE emulators:exec --only firestore --project "$PROJECT" \
   'node rules-tests/firestore-rules.test.cjs \
    && node rules-tests/firestore-isolation.test.cjs \
-   && node rules-tests/functions-isolation.test.cjs'
+   && node rules-tests/functions-isolation.test.cjs \
+   && node rules-tests/pod-shop-gating.test.cjs'
 
 # 3) The storage-emulator suite. If a Storage emulator is ALREADY listening on
 #    9199 (a dev left one running from a prior `emulators:start`), reuse it —

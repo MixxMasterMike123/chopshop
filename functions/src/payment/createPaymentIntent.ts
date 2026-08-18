@@ -510,6 +510,14 @@ export const createPaymentIntentV2 = onRequest(
         }
       }
 
+      // D7 (pod-shop-type-selector plan): a pod-disabled shop skips the POD
+      // production-snapshot machinery entirely — orders flow as regular
+      // products even if a stray isPodProduct:true doc exists. Read ONCE and
+      // reuse below; default-ON until D3 flips pod to explicit opt-in. This
+      // does NOT touch price/fee/transfer computation (computeOrderTotalsSek
+      // below is unaffected) — the snapshot feeds the print projection only.
+      const podEnabled = await isShopFeatureEnabled(resolvedShopId, 'pod');
+
       // Tenant display name for Stripe-visible strings (description, card-
       // statement suffix). Buyers know the SHOP, never the platform brand.
       const tenantName = String(shopSnap.data()?.storeIdentity?.shopName || resolvedShopId);
@@ -744,8 +752,12 @@ export const createPaymentIntentV2 = onRequest(
             version: 'enhanced_v2', // server-priced metadata
             // Webhook must load the graph frozen before this PI's client secret
             // was released; old in-flight PIs lack this marker and use the
-            // explicit legacy fallback there.
-            productionSnapshotRequired: 'true',
+            // explicit legacy fallback there. A pod-disabled shop needs no
+            // snapshot at all (D7) — 'false' short-circuits the webhook's
+            // required-snapshot branch instead of falling into the legacy
+            // rebuild-from-live-mappings path (which is for pre-migration PIs,
+            // not this case).
+            productionSnapshotRequired: podEnabled ? 'true' : 'false',
 
             // Right-of-withdrawal proof (empty {} for standard-options carts)
             ...withdrawalMeta,
@@ -766,38 +778,46 @@ export const createPaymentIntentV2 = onRequest(
       // Freeze production identity before the buyer can confirm payment. This
       // prevents a mapping/artwork edit between checkout and webhook delivery
       // from changing what the print shop receives.
-      let checkoutProductionSnapshot;
-      try {
-        checkoutProductionSnapshot = await buildProductionSnapshotAtomically({
-          shopId: resolvedShopId,
-          items: totals.serverLines,
-        });
-        const unresolvedLines = checkoutProductionSnapshot.lines.filter((line) => line.unresolvedReason);
-        if (unresolvedLines.length > 0) {
-          logger.error('⛔ Checkout blocked — POD production snapshot is unresolved', {
+      //
+      // D7: a pod-disabled shop skips this entirely — no snapshot to freeze,
+      // no unresolved-line check, no checkout doc write below. This gate is
+      // purely about the print-projection graph; it does not read or affect
+      // totals/amountInOre/connectParams/baseMetadata money fields, all of
+      // which were already computed above.
+      let checkoutProductionSnapshot: Awaited<ReturnType<typeof buildProductionSnapshotAtomically>> | null = null;
+      if (podEnabled) {
+        try {
+          checkoutProductionSnapshot = await buildProductionSnapshotAtomically({
             shopId: resolvedShopId,
-            lines: unresolvedLines.map((line) => ({
-              sku: line.sku,
-              placementSlot: line.placementSlot,
-              reason: line.unresolvedReason,
-            })),
+            items: totals.serverLines,
           });
-          response.status(409).json({
-            error: 'A product is temporarily unavailable for production',
+          const unresolvedLines = checkoutProductionSnapshot.lines.filter((line) => line.unresolvedReason);
+          if (unresolvedLines.length > 0) {
+            logger.error('⛔ Checkout blocked — POD production snapshot is unresolved', {
+              shopId: resolvedShopId,
+              lines: unresolvedLines.map((line) => ({
+                sku: line.sku,
+                placementSlot: line.placementSlot,
+                reason: line.unresolvedReason,
+              })),
+            });
+            response.status(409).json({
+              error: 'A product is temporarily unavailable for production',
+              success: false,
+            });
+            return;
+          }
+        } catch (snapshotError: any) {
+          logger.error('❌ Could not freeze checkout production snapshot', {
+            shopId: resolvedShopId,
+            error: snapshotError?.message,
+          });
+          response.status(503).json({
+            error: 'Checkout is temporarily unavailable',
             success: false,
           });
           return;
         }
-      } catch (snapshotError: any) {
-        logger.error('❌ Could not freeze checkout production snapshot', {
-          shopId: resolvedShopId,
-          error: snapshotError?.message,
-        });
-        response.status(503).json({
-          error: 'Checkout is temporarily unavailable',
-          success: false,
-        });
-        return;
       }
 
       // Create Payment Intent with simplified configuration for live mode
@@ -846,15 +866,21 @@ export const createPaymentIntentV2 = onRequest(
         status: paymentIntent.status
       });
 
-      // This rules-locked write is REQUIRED. Until it succeeds, the client must
-      // not receive the secret that can confirm the payment. Cancel the unused
-      // PI on failure so it cannot become a paid order without its snapshot.
+      // This rules-locked write is REQUIRED when pod is enabled — until it
+      // succeeds, the client must not receive the secret that can confirm the
+      // payment. Cancel the unused PI on failure so it cannot become a paid
+      // order without its snapshot. A pod-disabled shop has no snapshot to
+      // persist (D7) — the checkout doc simply never gets the
+      // productionSnapshotRequired/productionSnapshot fields, matching the
+      // 'false' marker already in baseMetadata.
       try {
-        await writeCheckoutProductionSnapshot(
-          paymentIntent.id,
-          resolvedShopId,
-          checkoutProductionSnapshot
-        );
+        if (checkoutProductionSnapshot) {
+          await writeCheckoutProductionSnapshot(
+            paymentIntent.id,
+            resolvedShopId,
+            checkoutProductionSnapshot
+          );
+        }
       } catch (snapshotWriteError: any) {
         logger.error('❌ Could not persist checkout production snapshot', {
           paymentIntentId: paymentIntent.id,
