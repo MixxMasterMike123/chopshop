@@ -50,6 +50,19 @@ const args = process.argv.slice(2);
 const COMMIT = args.includes('--commit');
 const FORCE = args.includes('--force');
 
+// ── Systema-priser: moms-tolkning ────────────────────────────────────────────
+// ANTAGANDE (Mikael 2026-08-18, EJ bekräftat av Systema): listpriserna är
+// INKL. moms. Kostnadsmodellen (podPricing) räknar EXKL. moms, så listpriser
+// divideras med 1,25 vid seedning. Siffrorna nedan står EXAKT som Kim
+// citerade dem — ändra ALDRIG dem för momsens skull. När Systema svarar:
+// exkl. moms → sätt SYSTEMA_PRICES_INCLUDE_VAT = false och re-seeda; klart.
+// ⚠️ Risknot: om antagandet är FEL (priserna är exkl.) ligger golven ~20 %
+// för lågt och säljare kan gå under vattnet — motsatt antagande är det säkra.
+const SYSTEMA_PRICES_INCLUDE_VAT = true;
+const sek = (listPrice) => (SYSTEMA_PRICES_INCLUDE_VAT
+  ? Math.round((listPrice / 1.25) * 100) / 100
+  : listPrice);
+
 admin.initializeApp(); // default credentials, like scripts/seed-default-shop.cjs
 const db = getFirestore('b8s-reseller-db'); // the CORRECT named database
 db.settings({ ignoreUndefinedProperties: true });
@@ -128,15 +141,15 @@ const TEMPLATES = [
     // Kim's price list 2026-08-10: blank tee 60:-, stort tryck (fram/bak) 40:-,
     // pocket 20:-. The seller's cost is summed per DESIGNED slot in podPricing's
     // podCostForSlots (+ the flat platform cut), so front+back costs one print more.
-    blankCostSek: 60,
+    blankCostSek: sek(60),
     printCostSek: {
-      front: 40,
-      back: 40,
-      pocket: 20,
+      front: sek(40),
+      back: sek(40),
+      pocket: sek(20),
       // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
-      left_sleeve: 20,
+      left_sleeve: sek(20),
       // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
-      right_sleeve: 20,
+      right_sleeve: sek(20),
     },
     photo: {
       w: 960,
@@ -212,15 +225,15 @@ const TEMPLATES = [
     label: 'Hoodie',
     profileId: 'apparel_dtg',
     // Kim's price list 2026-08-10: blank hoodie 380:-, stort tryck 40:-, pocket 20:-.
-    blankCostSek: 380,
+    blankCostSek: sek(380),
     printCostSek: {
-      front: 40,
-      back: 40,
-      pocket: 20,
+      front: sek(40),
+      back: sek(40),
+      pocket: sek(20),
       // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
-      left_sleeve: 20,
+      left_sleeve: sek(20),
       // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
-      right_sleeve: 20,
+      right_sleeve: sek(20),
     },
     photo: {
       w: 960,
@@ -274,15 +287,15 @@ const TEMPLATES = [
     // PROVISORISKT: sweatshirt-plagget saknas i Kims prislista — 159:- är den
     // gamla schablonen 199 minus ett stort tryck (40). Tryckpriserna delas med
     // tee/hoodie (samma ytor, samma DTG-process).
-    blankCostSek: 159,
+    blankCostSek: sek(159),
     printCostSek: {
-      front: 40,
-      back: 40,
-      pocket: 20,
+      front: sek(40),
+      back: sek(40),
+      pocket: sek(20),
       // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
-      left_sleeve: 20,
+      left_sleeve: sek(20),
       // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
-      right_sleeve: 20,
+      right_sleeve: sek(20),
     },
     colorways: APPAREL_COLORWAYS,
     // Same print surfaces as the tee (spec §1: t-shirt/hoodie/sweatshirt share
@@ -314,8 +327,8 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'bag_dtg',
-    blankCostSek: 25, // Systema-prislistan 2026-08-10: Tygkasse standard 25:-
-    printCostSek: { front: 40 }, // stort tryck
+    blankCostSek: sek(25), // Systema-prislistan 2026-08-10: Tygkasse standard 25:-
+    printCostSek: { front: sek(40) }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 250, y: 330, w: 300, h: 300 } }, // 1:1 ↔ 250×250 mm
     printAreaMm: { front: { w: 250, h: 250 } },
@@ -328,8 +341,8 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'cap_dtg',
-    blankCostSek: 50, // Systema-prislistan 2026-08-10: Keps 50:-
-    printCostSek: { front: 40 }, // stort tryck
+    blankCostSek: sek(50), // Systema-prislistan 2026-08-10: Keps 50:-
+    printCostSek: { front: sek(40) }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 330, y: 330, w: 140, h: 100 } }, // 7:5 ↔ 70×50 mm
     printAreaMm: { front: { w: 70, h: 50 } },
@@ -342,8 +355,8 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'beanie_dtg',
-    blankCostSek: 50, // Systema-prislistan 2026-08-10: Mössa 50:- (Beanie-raden 40:- är en annan produkt)
-    printCostSek: { front: 40 }, // stort tryck
+    blankCostSek: sek(50), // Systema-prislistan 2026-08-10: Mössa 50:- (Beanie-raden 40:- är en annan produkt)
+    printCostSek: { front: sek(40) }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 265, y: 560, w: 270, h: 120 } }, // 9:4 ↔ 90×40 mm (on the cuff)
     printAreaMm: { front: { w: 90, h: 40 } },
@@ -356,8 +369,8 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'flatcap_dtg',
-    blankCostSek: 59, // PROVISORISKT: flat mössa saknas i Systemas prislista
-    printCostSek: { front: 40 }, // stort tryck
+    blankCostSek: sek(59), // PROVISORISKT: flat mössa saknas i Systemas prislista
+    printCostSek: { front: sek(40) }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 250, y: 470, w: 300, h: 120 } }, // 10:4 ↔ 100×40 mm
     printAreaMm: { front: { w: 100, h: 40 } },
