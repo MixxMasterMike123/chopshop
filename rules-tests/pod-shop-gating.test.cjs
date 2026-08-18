@@ -12,9 +12,10 @@
  *     re-implementation — because unlike the onCall-wrapped callables it is a
  *     plain exported async function with no Functions-Framework wrapping.
  *
- *   • isShopFeatureEnabled default-ON semantics are re-verified here in the
- *     specific shapes the gate depends on (no shop doc, no features map,
- *     explicit false, explicit true, non-boolean-false).
+ *   • isShopFeatureEnabled semantics are re-verified here in the specific
+ *     shapes the gate depends on. POST D3 FLIP: `pod` is explicit OPT-IN
+ *     (missing doc/map/flag → OFF); legacy keys stay default-ON (true unless
+ *     literal false).
  *
  * RUN (never touches prod — uses a fake project + the Firestore emulator):
  *   1) JAVA_HOME=<jdk21> firebase emulators:start --only firestore --project demo-rules-test
@@ -65,14 +66,17 @@ async function assertOk(p, msg) {
 }
 
 // EXACT re-implementation of isShopFeatureEnabled(shopId, key) from
-// functions/src/config/shopFeatures.ts — default-ON: true unless the flag is
-// the literal boolean false.
+// functions/src/config/shopFeatures.ts — POST D3 polarity flip: `pod` (and
+// contentStudio) are explicit OPT-IN (only literal true enables; missing
+// doc/map/flag → OFF); legacy keys stay default-ON (true unless literal false).
+const OPT_IN_KEYS = new Set(['pod', 'contentStudio']);
 async function isShopFeatureEnabled(shopId, key) {
   const id = (shopId || '__unresolved__').trim() || '__unresolved__';
   const snap = await db.collection('shops').doc(id).get();
-  if (!snap.exists) return true;
-  const features = snap.data().features;
-  if (!features || typeof features !== 'object') return true;
+  const raw = snap.exists ? snap.data().features : undefined;
+  const features = raw && typeof raw === 'object' ? raw : undefined;
+  if (OPT_IN_KEYS.has(key)) return features?.[key] === true;
+  if (!features) return true;
   return features[key] !== false;
 }
 
@@ -114,13 +118,14 @@ async function seed() {
   await wipe('shops');
 
   // shopPod: pod explicitly true. shopNoPod: pod explicitly false.
-  // shopLegacy: no features map at all (pre-existing shop, default-ON).
-  // shopMissingKey: features map exists but 'pod' key absent (default-ON).
+  // shopLegacy: no features map at all — post-flip, pod reads OFF (opt-in),
+  // while legacy keys (affiliate) still read default-ON.
+  // shopMissingKey: features map exists but 'pod' key absent — pod OFF post-flip.
   await db.collection('shops').doc('shopPod').set({ features: { pod: true } });
   await db.collection('shops').doc('shopNoPod').set({ features: { pod: false } });
   await db.collection('shops').doc('shopLegacy').set({ name: 'Legacy shop, no features map' });
   await db.collection('shops').doc('shopMissingKey').set({ features: { affiliate: true } });
-  // No doc at all for 'shopGhost' — isShopFeatureEnabled must default-ON.
+  // No doc at all for 'shopGhost' — pod reads OFF post-flip (opt-in).
 
   await db.collection('users').doc('printerBoth').set({
     role: 'print_shop', active: true, printShopShops: ['shopPod', 'shopNoPod'],
@@ -139,12 +144,14 @@ async function seed() {
 async function run() {
   await seed();
 
-  console.log('\n=== isShopFeatureEnabled(shopId, "pod") — default-ON semantics ===');
+  console.log('\n=== isShopFeatureEnabled(shopId, "pod") — OPT-IN semantics (post D3 flip) ===');
   await check('explicit pod:true → enabled', async () => assert((await isShopFeatureEnabled('shopPod', 'pod')) === true));
   await check('explicit pod:false → disabled', async () => assert((await isShopFeatureEnabled('shopNoPod', 'pod')) === false));
-  await check('no features map at all → default-ON', async () => assert((await isShopFeatureEnabled('shopLegacy', 'pod')) === true));
-  await check('features map present, "pod" key absent → default-ON', async () => assert((await isShopFeatureEnabled('shopMissingKey', 'pod')) === true));
-  await check('no shop doc at all → default-ON (fails open)', async () => assert((await isShopFeatureEnabled('shopGhost', 'pod')) === true));
+  await check('no features map at all → OFF (opt-in)', async () => assert((await isShopFeatureEnabled('shopLegacy', 'pod')) === false));
+  await check('features map present, "pod" key absent → OFF (opt-in)', async () => assert((await isShopFeatureEnabled('shopMissingKey', 'pod')) === false));
+  await check('no shop doc at all → OFF (opt-in)', async () => assert((await isShopFeatureEnabled('shopGhost', 'pod')) === false));
+  await check('legacy key (affiliate) still default-ON on a shop with no features map', async () => assert((await isShopFeatureEnabled('shopLegacy', 'affiliate')) === true));
+  await check('legacy key (affiliate) explicit true still enabled', async () => assert((await isShopFeatureEnabled('shopMissingKey', 'affiliate')) === true));
 
   console.log('\n=== getPrintShopContext: D6 pod-disabled shop filtered out of printShopShops ===');
   await check('printer assigned to [pod-shop, non-pod-shop] → context keeps ONLY the pod shop', async () => {
@@ -154,10 +161,8 @@ async function run() {
   });
   await check('printer assigned ONLY to a pod-disabled shop → permission-denied (distinct message)', () =>
     assertThrows(getPrintShopContext('printerOnlyDisabled'), 'not enabled for any of your assigned shops'));
-  await check('printer on legacy/default-ON shops (no explicit pod flag) → all three shops kept', async () => {
-    const ctx = await assertOk(getPrintShopContext('printerLegacy'));
-    assert(ctx.printShopShops.length === 3, `expected 3 shops (default-ON), got ${ctx.printShopShops.length}`);
-  });
+  await check('printer on legacy shops (no explicit pod flag) → denied post-flip (opt-in: missing = OFF)', () =>
+    assertThrows(getPrintShopContext('printerLegacy'), 'not enabled for any of your assigned shops'));
   await check('inactive printer still denied before the pod check runs', () =>
     assertThrows(getPrintShopContext('printerInactive'), 'Print shop access required'));
 

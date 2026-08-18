@@ -39,7 +39,7 @@ console.log('\n=== onOrderProductionReady: pod-disabled shop early-returns befor
 ok(triggerShouldProceed('shopPod', true) === true, 'pod-enabled shop proceeds to freeze/enqueue');
 ok(triggerShouldProceed('shopNoPod', false) === false, 'pod-disabled shop early-returns (no freeze, no enqueue, no notify)');
 ok(triggerShouldProceed('', true) === false, 'blank shopId (untenanted order) still returns regardless of pod flag');
-ok(triggerShouldProceed('shopLegacy', true) === true, 'legacy shop (default-ON, no explicit flag) proceeds unchanged');
+ok(triggerShouldProceed('shopLegacy', true) === true, 'shop whose pod flag resolves enabled proceeds unchanged (post D3 flip that requires explicit pod:true)');
 
 // ─────────────────────────────────────────────────────────────────────────
 // 2) sweepPrintNotifyOutbox retry loop — notifyOutbox.ts:387

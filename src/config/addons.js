@@ -39,8 +39,17 @@ export const ADDON_CATALOG = [
   { key: 'contentStudio', label: 'Innehållsstudio', description: 'AI-studio för sociala medier: ladda upp råmaterial, få färdiga inlägg (hook, caption, hashtags) för TikTok/Reels/Shorts och automatiskt ihopklippt vertikal video i takt med musiken.' },
 ];
 
-// Default-ON: a feature is enabled unless EXPLICITLY set to false. This keeps the
-// existing shops (which predate the `features` field) and any shop
-// missing a flag fully working — nothing disappears until an operator turns it
-// off from the platform. New shops get explicit defaults from ProvisionShopModal.
-export const isFeatureEnabled = (features, key) => features?.[key] !== false;
+// Explicit OPT-IN keys: enabled only when the flag is the literal true. `pod`
+// flipped to opt-in 2026-08-18 (pod-shop-type-selector plan D3) AFTER every
+// existing shop got an explicit backfilled value — a missing flag must mean a
+// things shop, never a silently POD-entitled one. `contentStudio` was always
+// opt-in (its gates check === true directly); listing it here also makes the
+// /addons toggle grid display its true state.
+const OPT_IN_KEYS = new Set(['pod', 'contentStudio']);
+
+// Legacy keys are default-ON: enabled unless EXPLICITLY set to false. This keeps
+// shops that predate the `features` field fully working — nothing disappears
+// until an operator turns it off. New shops get explicit defaults for ALL keys
+// from ProvisionShopModal, so the default only matters for legacy docs.
+export const isFeatureEnabled = (features, key) =>
+  OPT_IN_KEYS.has(key) ? features?.[key] === true : features?.[key] !== false;
