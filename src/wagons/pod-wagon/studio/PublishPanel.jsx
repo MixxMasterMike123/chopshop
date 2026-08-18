@@ -13,7 +13,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
-import { sellerProfitExVat, sellerMargin, priceFloor, priceForMargin, roundUpTo9, FEE_RATE, FEE_FIXED } from '../podPricing';
+import { sellerProfitExVat, sellerMargin, priceFloor, priceForMargin, roundUpTo9, podCostForSlots, FEE_RATE, FEE_FIXED } from '../podPricing';
 
 const DEFAULT_SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
 
@@ -32,7 +32,8 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
 /**
  * Props:
  *   mockups        — [{ key, colorwayId, colorwayLabel, slot, objectUrl, ... }]
- *   template       — selectedTemplate (reads .costSek + .colorways for labels)
+ *   template       — selectedTemplate (reads the cost fields via podCostForSlots
+ *                     + .colorways for labels)
  *   vatRate        — number (e.g. 0.25)
  *   hasArtwork     — bool (the trycklista has ≥1 print AND every row has a motif —
  *                     publish needs a mapping motif per designed slot)
@@ -107,7 +108,11 @@ const PublishPanel = ({
   // Per-colourway explicit price override (empty = inherit product price).
   const [rowPrices, setRowPrices] = useState({});
 
-  const cost = Number.isFinite(template?.costSek) ? template.costSek : null;
+  // Seller cost for THIS design: plagg + ett tryckpris per designad yta +
+  // plattformsuttaget (podPricing). printSummary är precis de ytor som trycks,
+  // så fram+bak kostar ett tryck mer än bara fram — och golvet följer med.
+  // null (okänd mall-kostnad) → "Produktionskostnad saknas" längre ner.
+  const cost = podCostForSlots(template, printSummary.map((p) => p.slot));
 
   const selectedColorways = availableColorways;
   const selectedColorwayIds = selectedColorways.map((c) => c.id);

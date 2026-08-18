@@ -125,9 +125,19 @@ const TEMPLATES = [
     id: 'tee_bc_e150',
     label: 'T-shirt',
     profileId: 'apparel_dtg',
-    // Kim's price list 2026-08-10: blank tee 60:- + ett stort tryck 40:- = 100.
-    // Static per-product cost until per-slot costing lands (plan beslut 3).
-    costSek: 100,
+    // Kim's price list 2026-08-10: blank tee 60:-, stort tryck (fram/bak) 40:-,
+    // pocket 20:-. The seller's cost is summed per DESIGNED slot in podPricing's
+    // podCostForSlots (+ the flat platform cut), so front+back costs one print more.
+    blankCostSek: 60,
+    printCostSek: {
+      front: 40,
+      back: 40,
+      pocket: 20,
+      // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
+      left_sleeve: 20,
+      // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
+      right_sleeve: 20,
+    },
     photo: {
       w: 960,
       h: 1093,
@@ -201,8 +211,17 @@ const TEMPLATES = [
     id: 'hoodie_hanging',
     label: 'Hoodie',
     profileId: 'apparel_dtg',
-    // Kim's price list 2026-08-10: blank hoodie 380:- + ett stort tryck 40:-.
-    costSek: 420,
+    // Kim's price list 2026-08-10: blank hoodie 380:-, stort tryck 40:-, pocket 20:-.
+    blankCostSek: 380,
+    printCostSek: {
+      front: 40,
+      back: 40,
+      pocket: 20,
+      // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
+      left_sleeve: 20,
+      // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
+      right_sleeve: 20,
+    },
     photo: {
       w: 960,
       h: 1104,
@@ -252,8 +271,19 @@ const TEMPLATES = [
     label: 'Sweatshirt',
     garment: 'sweatshirt',
     profileId: 'apparel_dtg',
-    // PROVISIONAL production cost until the printshop price matrix (Kent checklist #2).
-    costSek: 199,
+    // PROVISORISKT: sweatshirt-plagget saknas i Kims prislista — 159:- är den
+    // gamla schablonen 199 minus ett stort tryck (40). Tryckpriserna delas med
+    // tee/hoodie (samma ytor, samma DTG-process).
+    blankCostSek: 159,
+    printCostSek: {
+      front: 40,
+      back: 40,
+      pocket: 20,
+      // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
+      left_sleeve: 20,
+      // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
+      right_sleeve: 20,
+    },
     colorways: APPAREL_COLORWAYS,
     // Same print surfaces as the tee (spec §1: t-shirt/hoodie/sweatshirt share
     // areas). Front sits slightly lower (heavier collar), sleeves on the long
@@ -284,7 +314,8 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'bag_dtg',
-    costSek: 129, // PROVISIONAL
+    blankCostSek: 89, // PROVISORISKT: kassen saknas i tryckeriets prislista
+    printCostSek: { front: 40 }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 250, y: 330, w: 300, h: 300 } }, // 1:1 ↔ 250×250 mm
     printAreaMm: { front: { w: 250, h: 250 } },
@@ -297,7 +328,8 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'cap_dtg',
-    costSek: 129, // PROVISIONAL
+    blankCostSek: 89, // PROVISORISKT: kepsen saknas i tryckeriets prislista
+    printCostSek: { front: 40 }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 330, y: 330, w: 140, h: 100 } }, // 7:5 ↔ 70×50 mm
     printAreaMm: { front: { w: 70, h: 50 } },
@@ -310,7 +342,8 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'beanie_dtg',
-    costSek: 99, // PROVISIONAL
+    blankCostSek: 59, // PROVISORISKT: mössan saknas i tryckeriets prislista
+    printCostSek: { front: 40 }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 265, y: 560, w: 270, h: 120 } }, // 9:4 ↔ 90×40 mm (on the cuff)
     printAreaMm: { front: { w: 90, h: 40 } },
@@ -323,7 +356,8 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'flatcap_dtg',
-    costSek: 99, // PROVISIONAL
+    blankCostSek: 59, // PROVISORISKT: flatmössan saknas i tryckeriets prislista
+    printCostSek: { front: 40 }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 250, y: 470, w: 300, h: 120 } }, // 10:4 ↔ 100×40 mm
     printAreaMm: { front: { w: 100, h: 40 } },

@@ -54,7 +54,7 @@ import { withShopId } from '../../../config/withShopId';
 import { skuFromName, uniqueSku } from '../../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../../utils/variantDerivation';
 import { setMapping } from '../../../utils/podMappings';
-import { priceFloor } from '../podPricing';
+import { priceFloor, podCostForSlots } from '../podPricing';
 import { STORE } from '../../../config/store';
 import { orderedVariantMockupUrls } from './mockupVariantImages';
 
@@ -586,7 +586,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // too, but the handler is the gate that actually creates a sellable
       // product; podPricing.js is the single formula source).
       {
-        const floorP = Number.isFinite(selectedTemplate?.costSek) ? priceFloor(selectedTemplate.costSek) : null;
+        // Same cost basis as the stamp below and as PublishPanel's readout: the
+        // DESIGNED slots decide the print cost, so the gate can't enforce a
+        // cheaper floor than the one the seller was just shown.
+        const costP = podCostForSlots(selectedTemplate, publishSlots);
+        const floorP = costP != null ? priceFloor(costP) : null;
         if (floorP != null) {
           if (!(parseFloat(price) >= floorP)) {
             throw new Error(`Priset måste vara minst prisgolvet ${floorP} kr — under det tjänar säljaren 0 kr.`);
@@ -751,9 +755,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         isPersonalized: false,
         // POD marker + economics: lets the product form gate "live" on a print
         // connection and compute the break-even price floor (podPricing.js)
-        // without loading the template. costSek is the platform's base revenue.
+        // without loading the template. The cost is computed from the DESIGNED
+        // slots — plagg + ett tryckpris per tryckt yta + plattformsuttaget — så
+        // fram+bak stämplar mer än bara fram.
         isPodProduct: true,
-        ...(Number.isFinite(selectedTemplate?.costSek) ? { podCostSek: selectedTemplate.costSek } : {}),
+        ...(() => {
+          const c = podCostForSlots(selectedTemplate, publishSlots);
+          return c != null ? { podCostSek: c } : {};
+        })(),
         sizeGuide: '',
         weight: { value: 0, unit: 'g' },
         dimensions: {
@@ -863,7 +872,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // PRISGOLV: becoming a POD product stamps this template's cost — the
       // product's EXISTING prices must clear the floor that cost implies, or the
       // seller would lose money on every sale from the moment this connects.
-      const floorU = Number.isFinite(selectedTemplate?.costSek) ? priceFloor(selectedTemplate.costSek) : null;
+      const costU = podCostForSlots(selectedTemplate, publishSlots);
+      const floorU = costU != null ? priceFloor(costU) : null;
       if (floorU != null) {
         const prodPrice = prod.b2cPrice || prod.basePrice || 0;
         if (!(prodPrice >= floorU)) {
@@ -997,9 +1007,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       await Promise.all(writes);
 
       // Same POD stamps as the create path — an existing product that gets a
-      // studio design IS a POD product from now on.
+      // studio design IS a POD product from now on. costU (computed for the
+      // floor gate above) is the DESIGNED-slot cost: plagg + tryck per tryckt
+      // yta + plattformsuttaget, så fram+bak stämplar mer än bara fram.
       updates.isPodProduct = true;
-      if (Number.isFinite(selectedTemplate?.costSek)) updates.podCostSek = selectedTemplate.costSek;
+      if (costU != null) updates.podCostSek = costU;
       await updateDoc(prodRef, updates);
       docTouched = true;
 
