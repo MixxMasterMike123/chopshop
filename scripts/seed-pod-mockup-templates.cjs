@@ -126,6 +126,43 @@ const HOODIE_COLORWAYS = [
 ];
 const hoodiePhotoUrls = (view) =>
   Object.fromEntries(HOODIE_COLORWAYS.map((c) => [c.id, `${HOODIE_PHOTO}/${c.id}_${view}.webp`]));
+
+// ── LONGSLEEVE photo assets (2026-08-18, designer's hanging-longsleeve set) ──
+// hex sampled from each front photo's chest patch (chip matches the photo).
+const LONGSLEEVE_PHOTO = '/pod-garments/longsleeve-hanging';
+const LONGSLEEVE_COLORWAYS = [
+  { id: 'white', label: 'Vit', hex: '#e8e5ed' },
+  { id: 'black', label: 'Svart', hex: '#2b262d' },
+  { id: 'red', label: 'Röd', hex: '#ab2031' },
+  { id: 'sporty-grey', label: 'Sporty grå', hex: '#a29e9f' },
+  { id: 'atoll', label: 'Atoll blå', hex: '#257aa9' },
+  { id: 'azure', label: 'Azure blå', hex: '#58739d' },
+  { id: 'electric', label: 'Electric blå', hex: '#27326a' },
+  { id: 'gold', label: 'Gold gul', hex: '#f2aa20' },
+  // Fixes the designer's filename typo "Orcid grön" -> Orchid grön.
+  { id: 'orchid', label: 'Orchid grön', hex: '#9fbf3b' },
+  { id: 'pistachio', label: 'Pistachio', hex: '#939d70' },
+  { id: 'bottle-green', label: 'Bottle grön', hex: '#3f5341' },
+  { id: 'green', label: 'Grön', hex: '#969e62' },
+];
+const longsleevePhotoUrls = (view) =>
+  Object.fromEntries(LONGSLEEVE_COLORWAYS.map((c) => [c.id, `${LONGSLEEVE_PHOTO}/${c.id}_${view}.webp`]));
+// THE BLEND RULE (docs/POD_MOCKUP_TEMPLATES.md, locked 2026-08-18): multiply is
+// honest ONLY on white — every non-white colourway renders 'normal', no
+// per-color probing.
+const LONGSLEEVE_NORMAL_COLORWAYS = {
+  black: { blend: 'normal' },
+  red: { blend: 'normal' },
+  'sporty-grey': { blend: 'normal' },
+  atoll: { blend: 'normal' },
+  azure: { blend: 'normal' },
+  electric: { blend: 'normal' },
+  gold: { blend: 'normal' },
+  orchid: { blend: 'normal' },
+  pistachio: { blend: 'normal' },
+  'bottle-green': { blend: 'normal' },
+  green: { blend: 'normal' },
+};
 // RULE (revised 2026-08-18, Mikael's live-mockup verdict): multiply tints the
 // WHOLE print by the garment colour, so it is honest ONLY on white — real DTG
 // prints on a white underbase and looks like the artwork on every colour.
@@ -298,6 +335,96 @@ const TEMPLATES = [
     pocketPositions: { left: { x: 542 }, center: { x: 434 }, right: { x: 327 } },
     printAreaMm: {
       front: { w: 250, h: 320 },
+      back: { w: 300, h: 400 },
+      pocket: { w: 100, h: 100 },
+      left_sleeve: { w: 80, h: 80 },
+      right_sleeve: { w: 80, h: 80 },
+    },
+  },
+  // ── LONGSLEEVE: REAL PHOTO TEMPLATE (2026-08-18) ─────────────────────────
+  // Hanging-longsleeve photos from the designer (public/images/LongSleeves
+  // originals), 1920×2208 per view (4 of 24 shot at 2210 — symmetric 1px
+  // top+bottom crop to the standard size; content-edge measurement confirmed
+  // the extra rows were even head/footroom, not a framing shift), 12
+  // colourways, front + back. Same hanging B&C-style shoot/framing as the
+  // tee (torso extent measured at ~0.92 px/mm, matching the tee exactly).
+  // Front print band sits below the collar AND the brand tag (tag runs
+  // ~y245–305 on the half-res photo) — 250×350 mm fits comfortably above the
+  // hem, same as the tee (this garment has no kangaroo pocket to dodge).
+  {
+    id: 'longsleeve_hanging',
+    label: 'Långärmad',
+    profileId: 'apparel_dtg',
+    // Kim's price list 2026-08-10: stort tryck (fram/bak) 40:-, pocket 20:-.
+    // PROVISORISKT: blank longsleeve saknas i Systemas prislista — 72:- är en
+    // grov uppskattning (mellan tee 60:- och sweatshirt 159:-, ≈90 kr inkl
+    // moms). Mikael bekräftar blank-pris.
+    blankCostSek: 72,
+    printCostSek: {
+      front: sek(40),
+      back: sek(40),
+      pocket: sek(20),
+      // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
+      left_sleeve: sek(20),
+      // PROVISORISKT: ärmpris ej bekräftat av tryckeriet
+      right_sleeve: sek(20),
+    },
+    photo: {
+      w: 960,
+      h: 1104,
+      urls: longsleevePhotoUrls('front'),
+      backUrls: longsleevePhotoUrls('back'),
+      // Maps BAKED from the white garment (grayscale → blur σ3 → mean-centred
+      // stretch to print-area sd≈45 front / 41 back, mean 128) — the raw
+      // fabric field was extremely flat (sd 3.5 both views): a runtime
+      // contrast multiplier would posterize 8-bit steps into stair-step warp,
+      // so the strength lives in the file and contrast stays 1 (same recipe
+      // as the hoodie). Same-shoot correlation probe (bandpass high-pass,
+      // print-area only) confirmed all 12 colourways match the white base's
+      // fold structure (front 0.44–0.82, back 0.75–0.86) EXCEPT sporty-grey
+      // back (-0.03) — visually confirmed identical pose/hanger/framing; the
+      // melange fabric's own dense fleck texture swamps the low-amplitude
+      // fold signal at this probe sensitivity (same failure mode as the
+      // tee's sport-grey and hoodie's melange colourway). Shipped as one
+      // shared map — not a real shoot mismatch.
+      displacement: {
+        w: 1920,
+        h: 2208,
+        urls: {
+          front: `${LONGSLEEVE_PHOTO}/white_front_dm.webp`,
+          back: `${LONGSLEEVE_PHOTO}/white_back_dm.webp`,
+        },
+        scale: 30,
+        blur: 4,
+        contrast: 1,
+        blend: 'multiply',
+        alpha: 0.8,
+        perColorway: LONGSLEEVE_NORMAL_COLORWAYS,
+      },
+    },
+    colorways: LONGSLEEVE_COLORWAYS,
+    // CALIBRATION (960×1104 half-res coords; overlay-verified on the white
+    // photos; px/mm≈0.92, measured off the torso extent — matches the tee's
+    // shoot exactly). Front sits below the collar seam AND the brand tag;
+    // sleeve rects sit on the upper arm, clear of both the torso seam and
+    // the background (axis-aligned rects fit cleanly despite the sleeve's
+    // diagonal taper — verified by overlay, no need to drop the slots).
+    // Fable review 2026-08-18: front/back tops LOWERED to match the tee's
+    // CALIBRATED placement (Mikael's +5cm front rule: print starts a hand's
+    // width below the neck seam — collar bottom ≈y300 half-res, +~92px≈100mm
+    // → front y≈400; back seam ≈y230, generous hand → y≈340, matching the
+    // tee's back proportion). Pocket tracks ~45px above the front top like
+    // the tee (365 vs 411).
+    printAreas: {
+      front: { x: 360, y: 400, w: 230, h: 322 },      // 250×350 mm
+      back: { x: 342, y: 340, w: 276, h: 368 },       // 300×400 mm
+      pocket: { x: 530, y: 355, w: 92, h: 92 },       // 100×100 mm
+      left_sleeve: { x: 700, y: 415, w: 74, h: 74 },  // wearer LEFT = viewer right
+      right_sleeve: { x: 186, y: 415, w: 74, h: 74 }, // wearer RIGHT = viewer left
+    },
+    pocketPositions: { left: { x: 530 }, center: { x: 429 }, right: { x: 328 } },
+    printAreaMm: {
+      front: { w: 250, h: 350 },
       back: { w: 300, h: 400 },
       pocket: { w: 100, h: 100 },
       left_sleeve: { w: 80, h: 80 },
