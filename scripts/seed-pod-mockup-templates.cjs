@@ -126,18 +126,24 @@ const HOODIE_COLORWAYS = [
 ];
 const hoodiePhotoUrls = (view) =>
   Object.fromEntries(HOODIE_COLORWAYS.map((c) => [c.id, `${HOODIE_PHOTO}/${c.id}_${view}.webp`]));
-// Dark/saturated colourways render the print with 'normal' (multiply erases
-// ink there); light ones ride the multiply base. Borderlines settled on the
-// blend contact sheet 2026-08-17.
+// RULE (revised 2026-08-18, Mikael's live-mockup verdict): multiply tints the
+// WHOLE print by the garment colour, so it is honest ONLY on white — real DTG
+// prints on a white underbase and looks like the artwork on every colour.
+// Every NON-WHITE colourway therefore renders 'normal'; only white rides the
+// multiply base (its job there: white artwork backgrounds melt into the
+// fabric texture instead of showing a flat white box). Supersedes the
+// 2026-08-17 light/dark borderline probing — sporty-grey dimmed the print,
+// gold crushed its blues on Mikael's real artwork.
 const HOODIE_DARK_COLORWAYS = {
   black: { blend: 'normal' },
   red: { blend: 'normal' },
   azure: { blend: 'normal' },
   electric: { blend: 'normal' },
   pistachio: { blend: 'normal' },
-  // atoll is bright but SATURATED cyan — multiply turned a red motif nearly
-  // black on it (sheet 2026-08-17); gold/orchid survived multiply fine.
   atoll: { blend: 'normal' },
+  'sporty-grey': { blend: 'normal' },
+  gold: { blend: 'normal' },
+  orchid: { blend: 'normal' },
 };
 
 const TEMPLATES = [
@@ -186,25 +192,24 @@ const TEMPLATES = [
         // and real DTG darks carry an opaque white underbase anyway.
         blend: 'multiply',
         alpha: 0.8,
+        // RULE (revised 2026-08-18, Mikael's live-mockup verdict): multiply is
+        // honest ONLY on white — it tints the whole print by the garment
+        // colour (gråmelerad dimmed the artwork, sand warm-tinted it, gul
+        // crushed its blues on the real album art). Every NON-WHITE colourway
+        // renders 'normal' (matches DTG's white underbase); only white rides
+        // the multiply base so white artwork backgrounds melt into the fabric.
         perColorway: {
           black: { blend: 'normal' },
           navy: { blend: 'normal' },
           red: { blend: 'normal' },
           'royal-blue': { blend: 'normal' },
           burgundy: { blend: 'normal' },
-          // 2026-08-18 blend probe (studio-harness ?verify=mockup-dm-newcolors,
-          // contact sheet eyeballed front+back both blends): lite-blue and
-          // lite-green are light in LUMINANCE but multiply still crushed the
-          // test print's red/orange into a muddy brown (their blue/low channels
-          // drag it down) — normal reads true. moss-green is a genuinely dark
-          // olive (all RGB channels <120) — same reasoning as the existing dark
-          // overrides above. yellow is the one true "light" base here (R/G
-          // channels near-max) — multiply kept the print colour faithful AND
-          // showed the most fold/fabric texture, so it stays on the light
-          // (multiply) rule and needs NO override.
           'lite-blue': { blend: 'normal' },
           'lite-green': { blend: 'normal' },
           'moss-green': { blend: 'normal' },
+          'sport-grey': { blend: 'normal' },
+          sand: { blend: 'normal' },
+          yellow: { blend: 'normal' },
         },
       },
     },
