@@ -314,7 +314,7 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'bag_dtg',
-    blankCostSek: 89, // PROVISORISKT: kassen saknas i tryckeriets prislista
+    blankCostSek: 25, // Systema-prislistan 2026-08-10: Tygkasse standard 25:-
     printCostSek: { front: 40 }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 250, y: 330, w: 300, h: 300 } }, // 1:1 ↔ 250×250 mm
@@ -328,7 +328,7 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'cap_dtg',
-    blankCostSek: 89, // PROVISORISKT: kepsen saknas i tryckeriets prislista
+    blankCostSek: 50, // Systema-prislistan 2026-08-10: Keps 50:-
     printCostSek: { front: 40 }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 330, y: 330, w: 140, h: 100 } }, // 7:5 ↔ 70×50 mm
@@ -342,7 +342,7 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'beanie_dtg',
-    blankCostSek: 59, // PROVISORISKT: mössan saknas i tryckeriets prislista
+    blankCostSek: 50, // Systema-prislistan 2026-08-10: Mössa 50:- (Beanie-raden 40:- är en annan produkt)
     printCostSek: { front: 40 }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 265, y: 560, w: 270, h: 120 } }, // 9:4 ↔ 90×40 mm (on the cuff)
@@ -356,7 +356,7 @@ const TEMPLATES = [
     // garment (Kent bug 2026-08-11). Studio prefers this per-template label.
     slotLabels: { front: 'Framsida' },
     profileId: 'flatcap_dtg',
-    blankCostSek: 59, // PROVISORISKT: flatmössan saknas i tryckeriets prislista
+    blankCostSek: 59, // PROVISORISKT: flat mössa saknas i Systemas prislista
     printCostSek: { front: 40 }, // stort tryck
     colorways: APPAREL_COLORWAYS,
     printAreas: { front: { x: 250, y: 470, w: 300, h: 120 } }, // 10:4 ↔ 100×40 mm
