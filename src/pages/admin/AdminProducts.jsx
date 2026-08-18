@@ -5,17 +5,18 @@
 // storefront drag-sort mode (persists per-product sortOrder), and group-name
 // collection for the form's autocomplete.
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { collection, getDocs, doc, deleteDoc, updateDoc, writeBatch, serverTimestamp, query, where } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
+import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import toast from 'react-hot-toast';
 import ProductMenu from '../../components/ProductMenu';
 import AppLayout from '../../components/layout/AppLayout';
 import ProductForm from '../../components/admin/ProductForm';
 import { Page, DataTable, StatusPill, Button } from '../../components/admin/ui';
-import { TrashIcon, StarIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, StarIcon, CubeIcon, PaintBrushIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarSolidIcon } from '@heroicons/react/24/solid';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -82,6 +83,8 @@ const SortableProductRow = ({ product, position }) => {
 const AdminProducts = () => {
   const { isAdmin } = useAuth();
   const shopId = useShopId();
+  const navigate = useNavigate();
+  const { isEnabled } = useShopFeatures();
 
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -89,7 +92,9 @@ const AdminProducts = () => {
   const [availableCategories, setAvailableCategories] = useState([]);
   const [availableTags, setAvailableTags] = useState([]);
 
-  // Form state: null = list view; { product: null } = create; { product } = edit.
+  // Form state: null = list view; { choosing: true } = "what kind of product?"
+  // chooser (POD shops only); { product: null } = create plain product;
+  // { product } = edit an existing product.
   const [editing, setEditing] = useState(null);
 
   // List filter (ProductMenu).
@@ -350,6 +355,43 @@ const AdminProducts = () => {
 
   const rows = filteredProduct ? [filteredProduct] : products;
 
+  // ── Chooser view: POD shops pick "Vanlig produkt" vs "POD-produkt" before
+  // the create form opens. Same <Page> frame as the form so the transition
+  // from list → chooser → form reads as one flow, not a detour. ──
+  if (editing?.choosing) {
+    return (
+      <AppLayout>
+        <Page title="Ny produkt" back={{ to: '/admin/products', label: 'Produkter' }}>
+          <p className="mb-4 text-[13px] text-admin-text-muted">Vad vill du skapa?</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setEditing({ product: null })}
+              className="rounded-admin border border-admin-border bg-admin-surface p-5 text-left hover:border-admin-text-faint hover:bg-admin-surface-2 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
+            >
+              <CubeIcon className="h-6 w-6 text-admin-text-muted" />
+              <div className="mt-3 text-[14px] font-semibold text-admin-text">Vanlig produkt</div>
+              <p className="mt-1 text-[12px] text-admin-text-muted">
+                Lägg upp en produkt med bilder, pris och varianter.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/admin/pod?tab=studio')}
+              className="rounded-admin border border-admin-border bg-admin-surface p-5 text-left hover:border-admin-text-faint hover:bg-admin-surface-2 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
+            >
+              <PaintBrushIcon className="h-6 w-6 text-admin-text-muted" />
+              <div className="mt-3 text-[14px] font-semibold text-admin-text">POD-produkt</div>
+              <p className="mt-1 text-[12px] text-admin-text-muted">
+                Designa tryck i studion — produkten skapas när du publicerar.
+              </p>
+            </button>
+          </div>
+        </Page>
+      </AppLayout>
+    );
+  }
+
   // ── Form view: keep ProductForm host untouched (slice 1e redesigns it). ──
   if (editing) {
     return (
@@ -417,7 +459,10 @@ const AdminProducts = () => {
             <Button variant="secondary" onClick={enterSortMode} disabled={loading || products.length < 2}>
               Ändra ordning
             </Button>
-            <Button variant="primary" onClick={() => setEditing({ product: null })}>
+            <Button
+              variant="primary"
+              onClick={() => (isEnabled('pod') ? setEditing({ choosing: true }) : setEditing({ product: null }))}
+            >
               Lägg till produkt
             </Button>
           </>

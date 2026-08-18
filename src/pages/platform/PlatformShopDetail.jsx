@@ -15,6 +15,7 @@ import MigrateShopifyModal from '../../components/platform/MigrateShopifyModal';
 import MigrateWooModal from '../../components/platform/MigrateWooModal';
 import { connectLabel, LegalCell, CommissionCell } from './shopCells';
 import { getLegalReadiness } from '../../utils/legalPageReadiness';
+import { ADDON_CATALOG, isFeatureEnabled } from '../../config/addons';
 import toast from 'react-hot-toast';
 import {
   ArrowLeftIcon,
@@ -277,6 +278,43 @@ const PlatformShopDetail = () => {
                   <div className="text-2xl font-bold tabular-nums text-white">{val ?? '–'}</div>
                   <div className="mt-1 text-xs text-gray-500">{label}</div>
                 </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* Funktioner — display-only. Butikstyp pill is derived from LIVE
+              features.pod (never the immutable shopType audit crumb, D1), so it
+              always reflects reality even if /addons toggled pod after creation.
+              /addons stays the single write surface — no toggles here. */}
+          <Card
+            title="Funktioner"
+            action={
+              <Link to="/addons" className="text-sm text-indigo-300 hover:text-indigo-200">
+                Hantera tillägg →
+              </Link>
+            }
+          >
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-sm text-gray-400">Butikstyp</span>
+              <span
+                className={
+                  'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ' +
+                  (isFeatureEnabled(shop.features, 'pod') ? 'bg-indigo-500/15 text-indigo-300' : 'bg-white/5 text-gray-300')
+                }
+              >
+                {isFeatureEnabled(shop.features, 'pod') ? 'POD-butik' : 'Vanlig butik'}
+              </span>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {ADDON_CATALOG.filter((a) =>
+                a.key === 'contentStudio' ? shop.features?.contentStudio === true : isFeatureEnabled(shop.features, a.key)
+              ).map((a) => (
+                <span
+                  key={a.key}
+                  className="inline-flex items-center rounded-full bg-white/5 px-2.5 py-0.5 text-xs text-gray-300"
+                >
+                  {a.label}
+                </span>
               ))}
             </div>
           </Card>

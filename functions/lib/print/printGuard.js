@@ -10,9 +10,21 @@ exports.assertShopAllowed = exports.getPrintShopContext = void 0;
 // (no token-TTL window, matching the firestore.rules "authority from the doc" rule).
 const https_1 = require("firebase-functions/v2/https");
 const database_1 = require("../config/database");
+const shopFeatures_1 = require("../config/shopFeatures");
 /**
  * Assert the caller is an ACTIVE print_shop user; return their allowed shop list.
  * Throws (unauthenticated / permission-denied) otherwise. Reads the live doc.
+ *
+ * D6 (pod-shop-type-selector plan): a printer's assignment to a shop is not
+ * enough — the shop must ALSO have the `pod` add-on enabled. Filtering HERE
+ * (the one entry point every print callable calls first — getPrintQueue,
+ * getPrintJob, getPrintQueueExport, getPrintArtworkLibrary,
+ * getPrintArtworkDownload, setPrintJobStatus all start with this call) means
+ * the pod-disabled shop simply never appears in printShopShops: the queue/
+ * export/library loops skip it, and assertShopAllowed denies it for the
+ * per-resource callables — one gate, six call sites, no per-file duplication.
+ * Uses the SAME predicate as everywhere else (isShopFeatureEnabled), so this
+ * stays default-ON until D3 flips pod to explicit opt-in.
  */
 async function getPrintShopContext(authUid) {
     if (!authUid) {
@@ -23,10 +35,17 @@ async function getPrintShopContext(authUid) {
     if (!data || data.role !== 'print_shop' || data.active !== true) {
         throw new https_1.HttpsError('permission-denied', 'Print shop access required');
     }
-    const shops = Array.isArray(data.printShopShops) ? data.printShopShops.filter((s) => typeof s === 'string') : [];
-    if (shops.length === 0) {
+    const assignedShops = Array.isArray(data.printShopShops) ? data.printShopShops.filter((s) => typeof s === 'string') : [];
+    if (assignedShops.length === 0) {
         // A printer with no assigned shops can see nothing — explicit, not a silent empty.
         throw new https_1.HttpsError('permission-denied', 'No shops assigned to this print account');
+    }
+    const podFlags = await Promise.all(assignedShops.map((shopId) => (0, shopFeatures_1.isShopFeatureEnabled)(shopId, 'pod')));
+    const shops = assignedShops.filter((_, i) => podFlags[i]);
+    if (shops.length === 0) {
+        // Every assigned shop has pod disabled — distinct message from "no shops
+        // assigned" so a printer/operator can tell the two cases apart.
+        throw new https_1.HttpsError('permission-denied', 'Print on demand is not enabled for any of your assigned shops');
     }
     return { uid: authUid, printShopShops: shops };
 }

@@ -21,13 +21,43 @@ const SHOP_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // "admin" would be unreachable) + infra hostnames reserved by architecture.
 const RESERVED_IDS = new Set([...NON_SHOP_FIRST_SEGMENTS, 'api', 'www', 'shop', 'print']);
 
-// Default add-ons for a new shop (manual toggles; plans come later). All five
-// add-on keys are explicit so a new shop's defaults are unambiguous (writers is
+// Default add-ons for a new shop (manual toggles; plans come later). All 11
+// catalog keys are explicit so a new shop's defaults are unambiguous (writers is
 // also off — it's manifest-disabled globally too). Existing shops with no
 // `features` field default-ON for everything (see config/addons.js isFeatureEnabled).
 // contentStudio is EXPLICIT OPT-IN (gated on features.contentStudio === true,
-// not the default-ON helper) — new shops start with it off.
-const DEFAULT_FEATURES = { affiliate: true, campaigns: true, dining: false, ambassador: false, writers: false, pod: false, contentStudio: false };
+// not the default-ON helper) — new shops start with it off. `pod` is the one key
+// that varies by the Butikstyp choice below (see PRESETS).
+const BASE_FEATURES = {
+  affiliate: true,
+  campaigns: true,
+  dining: false,
+  ambassador: false,
+  writers: false,
+  contentStudio: false,
+  discountCodes: true,
+  abandonedCheckout: true,
+  productReviews: true,
+  b2b: false,
+};
+
+// Butikstyp presets (plan D2). The choice only changes `pod`; `shopType` is
+// written alongside as an immutable audit crumb (D1) — runtime gating always
+// reads live features.pod, never shopType.
+const SHOP_TYPES = [
+  {
+    type: 'things',
+    title: 'Vanlig butik',
+    description: 'Säljer vanliga produkter.',
+    features: { ...BASE_FEATURES, pod: false },
+  },
+  {
+    type: 'pod',
+    title: 'POD-butik',
+    description: 'Design Studio, tryck och merch. Kan även sälja vanliga produkter.',
+    features: { ...BASE_FEATURES, pod: true },
+  },
+];
 
 const slugifyId = (s) =>
   (s || '')
@@ -46,6 +76,8 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
   const [shopId, setShopId] = useState('');
   const [shopIdTouched, setShopIdTouched] = useState(false);
   const [accent, setAccent] = useState('#0E5E63');
+  // No preselection (D8) — the choice is the whole point, don't default it.
+  const [shopType, setShopType] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -67,6 +99,8 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
     if (RESERVED_IDS.has(id)) {
       return setError(`Butiks-ID "${id}" är reserverat av plattformen. Välj ett annat.`);
     }
+    const preset = SHOP_TYPES.find((t) => t.type === shopType);
+    if (!preset) return setError('Välj butikstyp.');
 
     try {
       setSaving(true);
@@ -89,7 +123,11 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
         // clicks GO LIVE on the shop detail page. (status=active is the kill-switch;
         // published controls search-engine indexing only.)
         published: false,
-        features: DEFAULT_FEATURES,
+        features: preset.features,
+        // Immutable audit crumb (D1) — written once at creation, never read at
+        // runtime. Live gating always reads features.pod; this field only
+        // records what was chosen at provisioning time.
+        shopType: preset.type,
         ownerUid: null, // owner assignment is a later slice (P4.6)
         createdAt: serverTimestamp(),
         provisionedVia: 'platform',
@@ -154,6 +192,33 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
             </div>
           </div>
 
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Butikstyp</label>
+            <div className="grid grid-cols-2 gap-2">
+              {SHOP_TYPES.map((t) => {
+                const selected = shopType === t.type;
+                return (
+                  <button
+                    key={t.type}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setShopType(t.type)}
+                    className={
+                      'flex flex-col items-start rounded-lg border p-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ' +
+                      (selected
+                        ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400'
+                        : 'border-white/10 bg-gray-800 hover:bg-white/5')
+                    }
+                  >
+                    <div className="text-sm font-medium text-white">{t.title}</div>
+                    <div className="text-xs text-gray-500">{t.description}</div>
+                  </button>
+                );
+              })}
+            </div>
+            {!shopType && <p className="mt-1 text-xs text-gray-600">Välj butikstyp</p>}
+          </div>
+
           {error && <p className="text-sm text-red-400">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2">
@@ -166,7 +231,7 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
             </button>
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || !shopType}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
             >
               {saving ? 'Skapar…' : 'Skapa butik'}

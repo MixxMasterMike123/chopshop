@@ -41,6 +41,7 @@ const sharp_1 = __importDefault(require("sharp"));
 const database_1 = require("../config/database");
 const app_urls_1 = require("../config/app-urls");
 const authGuard_1 = require("../email-orchestrator/functions/authGuard");
+const shopFeatures_1 = require("../config/shopFeatures");
 exports.PIPELINE_VERSION = 1;
 // libvips' operation cache holds decoded pixels across WARM invocations — with
 // ~200MB raw per 7000px image that intermittently OOMed the instance (observed
@@ -319,6 +320,11 @@ const OPTS = { region: 'us-central1', memory: '2GiB', timeoutSeconds: 300, cors:
 exports.processPodArtwork = (0, https_1.onCall)(OPTS, async (request) => {
     const shopId = String(request.data?.shopId || '').trim();
     await (0, authGuard_1.requireAdminOfShop)(shopId, request.auth?.uid);
+    // D6/Slice C: pod-disabled shops get no artwork pipeline — same predicate as
+    // everywhere else (isShopFeatureEnabled), default-ON until D3 flips polarity.
+    if (!(await (0, shopFeatures_1.isShopFeatureEnabled)(shopId, 'pod'))) {
+        throw new https_1.HttpsError('failed-precondition', 'Print on demand is not enabled for this shop.');
+    }
     const artworkId = String(request.data?.artworkId || '').trim();
     // ---- REPROCESS mode: revalidate an existing doc's original ----
     if (artworkId) {

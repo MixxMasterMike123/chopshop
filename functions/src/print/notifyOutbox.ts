@@ -27,6 +27,7 @@ import { logger } from 'firebase-functions';
 import { FieldValue } from 'firebase-admin/firestore';
 import { randomUUID } from 'crypto';
 import { db } from '../config/database';
+import { isShopFeatureEnabled } from '../config/shopFeatures';
 import {
   shouldEnqueuePrintNotify,
   isPaidLifecycleStatus,
@@ -256,6 +257,11 @@ export const onOrderProductionReady = onDocumentWritten(
     const shopId = String(after.shopId || '').trim();
     if (!shopId) return; // untenanted/sentinel orders have no printer to notify
 
+    // Add-on gate (default-ON): this trigger fires on EVERY shop's every order
+    // write, so a pod-disabled shop must be filtered here — mirrors the sweep
+    // pattern (product-reviews/checkout-recovery), same predicate everywhere.
+    if (!(await isShopFeatureEnabled(shopId, 'pod'))) return;
+
     // Freeze B2B (and any future) orders that first become production-ready
     // without a snapshot. B2C already snapshots before order creation. The
     // print portal fails closed while productionSnapshotRequired is true and
@@ -372,6 +378,19 @@ export const sweepPrintNotifyOutbox = onSchedule(
         // Each event isolated. The transaction is the concurrency boundary:
         // overlapping sweeps simply fail to claim an already-leased event.
         try {
+          // Add-on gate (default-ON), re-checked per retry: a shop's pod flag
+          // may have flipped OFF after this event was enqueued (e.g. the
+          // shop's original enqueue happened while pod was on). Resolve it
+          // 'skipped' rather than retrying forever — mirrors the existing
+          // no-printer-assigned skip outcome.
+          const docShopId = String((snap.data() as OutboxDoc | undefined)?.shopId || '');
+          if (docShopId && !(await isShopFeatureEnabled(docShopId, 'pod'))) {
+            await snap.ref.set(
+              { status: 'skipped', resolvedAt: new Date(now), skipReason: 'pod-disabled', nextAttemptAt: FieldValue.delete() },
+              { merge: true }
+            );
+            continue;
+          }
           const claimed = await claimPrintNotification(snap.ref, false);
           if (claimed) await deliverPrintNotification(snap.ref, claimed);
         } catch (eventErr: any) {

@@ -469,28 +469,40 @@ exports.stripeWebhookV2 = (0, https_1.onRequest)({
                 // returned. The webhook must consume that exact server-only snapshot;
                 // rebuilding here would let a mapping edit between pay and webhook
                 // delivery change the production artifact.
-                let productionSnapshot;
-                if (metadata.productionSnapshotRequired === 'true') {
-                    const checkoutSnap = await db.collection('checkouts').doc(paymentIntent.id).get();
-                    const checkout = checkoutSnap.data();
-                    const candidate = checkout?.productionSnapshot;
-                    if (!checkoutSnap.exists ||
-                        checkout?.shopId !== orderData.shopId ||
-                        candidate?.version !== printProjection_1.PRODUCTION_SNAPSHOT_VERSION ||
-                        !Array.isArray(candidate?.lines)) {
-                        throw new Error('Required pre-payment production snapshot is missing or invalid');
-                    }
-                    productionSnapshot = candidate;
+                //
+                // D7 (pod-shop-type-selector plan): createPaymentIntent decided
+                // productionSnapshotRequired at PI-creation time from the shop's pod
+                // flag at that moment — the webhook propagates that same decision
+                // rather than re-reading the flag (avoids a toggle-between-PI-and-
+                // webhook race, and this branch never touches price/fee/transfer
+                // math, only the print-projection snapshot).
+                if (metadata.productionSnapshotRequired === 'false') {
+                    Object.assign(orderData, { productionSnapshotRequired: false });
                 }
                 else {
-                    // Compatibility only for PaymentIntents already created before this
-                    // release. Every new PI carries productionSnapshotRequired=true.
-                    firebase_functions_1.logger.warn('P1-16: legacy PaymentIntent missing pre-payment production snapshot marker', {
-                        paymentIntentId: paymentIntent.id,
-                    });
-                    productionSnapshot = await (0, printProjection_1.buildProductionSnapshotAtomically)(orderData);
+                    let productionSnapshot;
+                    if (metadata.productionSnapshotRequired === 'true') {
+                        const checkoutSnap = await db.collection('checkouts').doc(paymentIntent.id).get();
+                        const checkout = checkoutSnap.data();
+                        const candidate = checkout?.productionSnapshot;
+                        if (!checkoutSnap.exists ||
+                            checkout?.shopId !== orderData.shopId ||
+                            candidate?.version !== printProjection_1.PRODUCTION_SNAPSHOT_VERSION ||
+                            !Array.isArray(candidate?.lines)) {
+                            throw new Error('Required pre-payment production snapshot is missing or invalid');
+                        }
+                        productionSnapshot = candidate;
+                    }
+                    else {
+                        // Compatibility only for PaymentIntents already created before this
+                        // release. Every new PI carries productionSnapshotRequired=true|false.
+                        firebase_functions_1.logger.warn('P1-16: legacy PaymentIntent missing pre-payment production snapshot marker', {
+                            paymentIntentId: paymentIntent.id,
+                        });
+                        productionSnapshot = await (0, printProjection_1.buildProductionSnapshotAtomically)(orderData);
+                    }
+                    Object.assign(orderData, { productionSnapshotRequired: true, productionSnapshot });
                 }
-                Object.assign(orderData, { productionSnapshotRequired: true, productionSnapshot });
                 await orderRef.create(orderData);
             }
             catch (createError) {
