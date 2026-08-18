@@ -98,6 +98,13 @@ const TEE_COLORWAYS = [
   { id: 'royal-blue', label: 'Kungsblå', hex: '#124c8c' },
   { id: 'burgundy', label: 'Vinröd', hex: '#6a3844' },
   { id: 'sand', label: 'Sand', hex: '#d3bda5' },
+  // 2026-08-18 — 4 more colourways (designer's second hanging-tee shoot, same
+  // base garment/pose/framing as the original 8 — wrinkle-identity confirmed
+  // by correlation probe, DM reuse is correct; see scripts commit notes).
+  { id: 'lite-blue', label: 'Ljusblå', hex: '#5689ba' },
+  { id: 'lite-green', label: 'Ljusgrön', hex: '#b2c085' },
+  { id: 'moss-green', label: 'Mossgrön', hex: '#70694c' },
+  { id: 'yellow', label: 'Gul', hex: '#eda815' },
 ];
 const teePhotoUrls = (view) =>
   Object.fromEntries(TEE_COLORWAYS.map((c) => [c.id, `${TEE_PHOTO}/${c.id}_${view}.webp`]));
@@ -185,6 +192,19 @@ const TEMPLATES = [
           red: { blend: 'normal' },
           'royal-blue': { blend: 'normal' },
           burgundy: { blend: 'normal' },
+          // 2026-08-18 blend probe (studio-harness ?verify=mockup-dm-newcolors,
+          // contact sheet eyeballed front+back both blends): lite-blue and
+          // lite-green are light in LUMINANCE but multiply still crushed the
+          // test print's red/orange into a muddy brown (their blue/low channels
+          // drag it down) — normal reads true. moss-green is a genuinely dark
+          // olive (all RGB channels <120) — same reasoning as the existing dark
+          // overrides above. yellow is the one true "light" base here (R/G
+          // channels near-max) — multiply kept the print colour faithful AND
+          // showed the most fold/fabric texture, so it stays on the light
+          // (multiply) rule and needs NO override.
+          'lite-blue': { blend: 'normal' },
+          'lite-green': { blend: 'normal' },
+          'moss-green': { blend: 'normal' },
         },
       },
     },
