@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-22, checkpoint 25 deployed dark (webhook awaits owner's Stripe endpoint + STRIPE_WEBHOOK_SECRET) — Fable orchestrating, Opus building, Fable reviewing
+**Last updated:** 2026-08-22, checkpoint 26 committed (hybrid keystone; render-farm endpoint dark, deploy only post-merge from main) — Fable orchestrating, Opus building, Fable reviewing
 **Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest implementation checkpoint: checkpoint 25 — Stripe webhook → orders → discount burn, deployed dark (see below)
+- Latest implementation checkpoint: checkpoint 26 — hybrid keystone: pure artwork pipeline core + dark render-farm job endpoint (see below)
 - Staging bootstrap has RUN: one platform admin exists (owner's identity); the bootstrap route is permanently dead (verified 404 on replay; D1 readback: 1 user / 1 active platform_admin / 1 audit row).
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
@@ -485,6 +485,120 @@ The checkpoint-19 limiter keys on `CF-Connecting-IP`, and Stripe delivers from a
 - **Connect** still platform-direct; the `transfer_data`/`application_fee_amount` seam remains in `stripe-client.ts`.
 - No **production snapshot** (POD print graph) — prod builds one in the webhook transaction; that lands with the print domain.
 - **⚠️ CUTOVER ITEM (unchanged from 24, now sharper):** prod pins `2023-10-16` on the live account **and on its webhook endpoint**, while this worker pins `2026-07-29.dahlia`. The account version, the webhook endpoint version, and `STRIPE_API_VERSION` must be reconciled as ONE decision before cutover — an intent created under one version and read by a webhook pinned to another is exactly the drift that silently changes field shapes.
+
+## Checkpoint 26 — The HYBRID keystone: pure pipeline core + dark render-farm job endpoint (COMMITTED `b9b5870`; deliberately NOT deployed)
+
+- Built by an Opus subagent, Fable-reviewed line-by-line (endpoint security, extraction parity incl. the maxPrintMm rounding site, verification re-run independently), committed `b9b5870` with the regenerated `functions/lib/` included per repo convention. **Nothing deployed — see the deployment caveat below**; `cloudflare/` untouched. This is the Firebase half of `docs/RENDER_FARM_CONTRACT.md` v0 — the seam that makes the hybrid end-state buildable. Nothing is deleted this checkpoint: the `processPodArtwork` callable stays whole for the live app until the CF POD domain lands, and the demolition ledger opens at checkpoint 27.
+- **First action on the target file was `git checkout main -- functions/src/pod/processArtwork.ts`.** This branch's copy had drifted BEHIND main (it was missing main's `isShopFeatureEnabled(shopId, 'pod')` feature gate), so the extraction was performed against main's newer code and the eventual merge is clean rather than silently reverting the gate.
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `functions/src/pod/artworkPipelineCore.ts` | **NEW.** The pure compute half, moved verbatim. Imports `sharp` and nothing else. `runArtworkPipeline(buf, profile)` → rejection, or `{ printPng, previewWebp, notices, meta }`. |
+| `functions/src/pod/processArtwork.ts` | **REFACTORED** (from main's version). Now the Firebase wrapper only: auth guard, feature gate, path-prefix guards, download, upload, tokenised URLs, Firestore doc assembly, orphan cleanup. |
+| `functions/src/render-farm/processArtworkJob.ts` | **NEW.** The dark `onRequest` job endpoint implementing contract v0 for `jobType: "pod.process_artwork"`. |
+| `functions/src/index.ts` | One new export, `renderFarmProcessArtwork`, with a comment saying it is dark until the secret exists. |
+| `functions/scripts/verify-pipeline-core.mjs` | **NEW.** The behavior pin — there is no test framework in `functions/`. |
+
+### The extraction was mechanically verified as a MOVE, not a rewrite
+
+A python line-comparison of the moved regions against `git show main:functions/src/pod/processArtwork.ts`:
+
+| Block | Result |
+|---|---|
+| The compute body (size gate → transparency notices) | **122 vs 122 lines, 0 differing** |
+| Constants (`MM_PER_INCH`, `MAX_SOURCE_PX`, `PREVIEW_MAX_EDGE`, alpha thresholds) | IDENTICAL (11 lines) |
+| Gate math (`maxPrintMmFor`/`containDpiFor`/`requiredPxFor`/`formatMmAsCm`) | IDENTICAL (15 lines) |
+| `SPECIAL_FORMAT_FAIL` + `FORMAT_TO_EXT` | IDENTICAL (8 lines) |
+| `looksLikeHeic` | IDENTICAL (3 lines) |
+| `alphaProfile` | IDENTICAL (25 lines) |
+
+Every gate check, threshold, Swedish user-facing message, reason code, notice code and the EXIF-rotate/trim/ICC/encode ordering is unchanged. `sharp.cache(false)` and `sharp.concurrency(1)` moved into the core as a module-load side effect, so **both** callers inherit the 2026-07-27 OOM lessons by importing the pipeline rather than by remembering to set them.
+
+**The extraction made the OOM settings structurally safer, not just equal.** A repo-wide grep confirms `artworkPipelineCore.ts` is now the **only** file in `functions/src` that imports sharp at all. The process-global `cache(false)`/`concurrency(1)` therefore cannot be raced by some other sharp importer loading first — there is no other importer. Before, the settings sat in the same file as the callable and were correct by coincidence of there being one sharp user; now they are correct because the one sharp user *is* the module that sets them.
+
+### What moved wrapper ↔ core (the full ledger)
+
+**Moved INTO the core:** the byte-size gate, content identification, the HEIC sniff, the special-format and accepted-format rejections, the dimension read, the EXIF-orientation axis swap, the `MAX_SOURCE_PX` ceiling, the rotate/trim/sRGB single-pass encode, the trim notice, **the 300-DPI contain gate**, the alpha profile with its fully-transparent rejection and opaque/semi-transparent notices, and **the preview WebP render**.
+
+**Stayed in the wrapper (IO by nature):** the storage existence check and download, `randomUUID()` id and download tokens, the `pod-artwork/{shopId}/print|previews/...` paths, both uploads, `tokenUrl(...)`, `loadProfile` (Firestore), the auth guard, the pod feature gate, both path-prefix guards, the reprocess-mode Firestore updates and the reject-path orphan deletes.
+
+**Fields whose CONSTRUCTION moved (values unchanged — enumerated as required):**
+
+- `sourceWidthPx` / `sourceHeightPx` — the core measures them (`meta.widthPx` / `meta.heightPx`); the wrapper copies them onto the doc under the old names.
+- `validation.effectiveDpi` — computed in the core, copied by the wrapper.
+- `validation.maxPrintMm` — **the `Math.round()` moved into the core** (`meta.maxPrintMm` is already the rounded `{w,h}`); the wrapper no longer rounds. Same numbers, one rounding site.
+- `validation.profileId` — now sourced from `meta.profileId` rather than `profile.id` directly. Same value; the core echoes back the profile id it used.
+- `validation.pipelineVersion` — from `meta.pipelineVersion`. `PIPELINE_VERSION` itself now lives in the core and is **re-exported** from `processArtwork.ts` so existing importers are untouched.
+- `validation.checkedAt` — **deliberately NOT moved.** It stays a `new Date().toISOString()` in the wrapper. A wall-clock read is not part of a pure pipeline, and moving it would have broken the contract's principle 3 (same job in → same bytes out) that the determinism test pins.
+- `printUrl` / `printStoragePath` / `previewUrl` / `previewStoragePath` / `status` / `gate` / `tier` / `reasons` / `notices` — untouched, still assembled exactly where they were.
+
+**One ordering note, stated plainly:** the preview WebP is now rendered inside the core, i.e. *before* the id/token minting instead of after. Nothing observable depends on this — both sit between the gate verdict and the first storage write, so a preview-render throw still happens with zero objects written, exactly as before.
+
+### Independent adversarial review of the extraction (read-only subagent, before the Fable pass)
+
+A separate read-only agent diffed the new pair against `git show main:functions/src/pod/processArtwork.ts` with comments and blank lines stripped, hunting only for behavior differences. Verdict on all five assigned items: **SAME — no client-visible behavior difference.** Independently confirmed, matching the mechanical diff above:
+
+- The **callable handler itself** (`export const processPodArtwork = onCall(...)` through EOF) is **byte-identical, zero lines changed** — both modes, both path-prefix guards, the feature gate, the dotted `validation.*` reprocess update, the old-preview cleanup and the orphan delete.
+- Every result field derives identically, `maxPrintMm`'s `Math.round` **applied exactly once** (in the core, not double-rounded in the wrapper), and `checkedAt` correctly still stamped by the wrapper.
+- The full reason-code set (`file_too_large`, `format_heic`, `unreadable`×3, `format_${fmt}`, `format_not_accepted`, `px_too_large`, `resolution_too_low`, `fully_transparent`) and notice-code set (`cmyk_converted`, `trimmed`, `opaque`, `semi_transparent`) — **none added, none dropped, order unchanged.**
+- **No external importer of `PIPELINE_VERSION` exists anywhere** (functions or frontend), so the re-export is defensive-only. The frontend calls the callable by *name* over `httpsCallable`, insulating it from the file split entirely. No import cycle: the core imports nothing from the wrapper.
+
+Its one flagged delta was the preview-render/UUID reordering already recorded above, which it independently reasoned to **nil impact** — including the useful confirmation that a preview-render throw leaves *the same* residue in both versions (zero print/preview objects, original retained, because the throw escapes past the orphan-cleanup `try` in both). The pre-existing hole where `save(print)` succeeds and `save(preview)` throws is unchanged and still covered by the lifecycle sweep.
+
+**One review suggestion was acted on:** a maintainer note was added above `sharp.cache(false)` in the core recording that this module is currently the *only* sharp importer in `functions/src` — which is what makes the import side effect airtight — and that any future sharp user must import through it or repeat the two lines, and must never do sharp *work* at module scope.
+
+### Part B — the dark endpoint
+
+- **`onRequest`, not `onCall`, and that is the point.** The caller is a Worker: no Firebase client SDK, no App Check, no Firebase Auth token anywhere in this path. `onCall`'s protocol envelope would be dead weight and a second, weaker auth story. **No `cors` option** either — no browser reaches this, so declaring an origin allowlist would only imply one exists.
+- **Fail-closed dark, mirroring the CF worker.** `RENDER_FARM_TOKEN` absent, empty, or shorter than 16 chars ⇒ the surface **does not exist**: a constant `404 {error:{code:'not_found'}}` **before the method check and before the body is read**, so an unconfigured deployment is indistinguishable from one where the function was never written. This is `isStripeWebhookConfigured` / `notFoundResponse` from `cloudflare/src/index.ts`, and the code says so.
+- **Auth runs before body parse.** `Authorization: Bearer <token>`, compared with `crypto.timingSafeEqual` over **sha256 digests of both sides** — `timingSafeEqual` throws on unequal lengths, which would itself leak the secret's length, so the hash *is* the length equalization (not a pad). Mismatch or absent ⇒ constant 401. Wrong method ⇒ the same constant 404 as unconfigured.
+- **Envelope validation** per the contract: `contract === 1`, `jobType === 'pod.process_artwork'`, non-empty `jobId`, `input.url` string, `input.maxBytes` a positive **safe** integer, the five profile fields shape-validated (including per-entry `accepted_formats[].ext`), both output PUT URLs strings. Every malformation answers the same `400 {error:{code:'invalid_job'}}` — nothing names the offending field.
+- **SSRF discipline (`ALLOWED_INPUT_HOST_SUFFIXES = ['.r2.cloudflarestorage.com']`)** applies to the input GET URL **and both output PUT URLs** — an unchecked PUT target is an exfiltration primitive, not merely an SSRF one. Suffix match on the *parsed* `URL.hostname` plus https-only, which is what defeats `https://evil.com/?x=.r2.cloudflarestorage.com`. `redirect: 'error'` on every fetch, because a redirect moves the request to a host the allowlist never approved.
+- **Streaming cap** = `min(input.maxBytes, profile.max_file_mb·1MiB, 200 MB hard ceiling)`. A lying/absent `content-length` changes nothing: the running total is the authority and the reader is cancelled the moment the cap is passed, so bytes past the cap are never buffered and sharp never sees an oversized file. (`max_file_mb` is *also* re-checked inside the core — that is what produces the Swedish `file_too_large` verdict.)
+- **A gate rejection is a RESULT:** `200 {ok:false, reasons}` with the Swedish messages unchanged. Only job-level faults are non-2xx: input fetch, output PUT, or a pipeline crash ⇒ constant `502 {error:{code:'job_failed'}}`, detail in the logs only.
+- **sha256 double-report: the contract's open question, answered yes.** The 200 carries `outputs.{printPng,previewWebp}.{sha256,bytes}` — one hash over data already in memory, and it turns a silently truncated PUT into a detectable one.
+- **Logs never contain URLs** (they are bearer capabilities). Only `jobId`, sizes, verdict, reason codes and the error class/message.
+- **Rotation (v0):** one token. A second accepted secret is a second thing to leak and there is no traffic yet to protect; when rotation matters, add `RENDER_FARM_TOKEN_NEXT` as a second timing-safe comparison and nothing else in the file changes. Documented in the header.
+
+### Verification (no test framework exists in `functions/`)
+
+- `cd functions && npm run build` (tsc, strict) — **green.**
+- `node scripts/verify-pipeline-core.mjs` — **ALL PASS, 8 passed, 0 failed.** The script imports the **compiled** core from `lib/` in a bare node process, which also proves the purity contract: a module that had picked up firebase-admin, Firestore or auth would not load at all.
+
+| # | Case | Asserted |
+|---|---|---|
+| 1 | 3200×3200 transparent PNG | `ok:true`; dims 3200×3200; **effectiveDpi 325** (hand-computed `round(3200/(250/25.4))`); `maxPrintMm {250,250}`; print PNG **keeps alpha**; preview is WebP with longest edge ≤ 800 |
+| 2 | 900×900 undersized | `resolution_too_low`; message carries `900 × 900 px`, `25 × 25 cm`, **91 DPI**, `minimikravet är 300 DPI`, and **`minst 2953 × 2953 px`** (hand-computed `round(250/25.4·300)`) |
+| 3 | file over `max_file_mb` | `file_too_large`, message reports the real MB and the cap |
+| 4 | WebP against a png-only profile | `format_not_accepted`, `Formatet .webp stöds inte`, `Tillåtna format: PNG.` |
+| 5 | opaque JPEG | **PASSES** with the inform-only `opaque` notice (transparency is inform-only per spec — a rejection here would be a spec violation); output still PNG |
+| 5b | 4000px canvas, 3200px motif | trims to the motif, `trimmed` notice reads `4000 × 4000 → 3200 × 3200 px` |
+| 5c | fully transparent | `fully_transparent` |
+| 6 | same input twice | **byte-identical** print PNG and preview WebP sha256, identical meta and notices — contract principle 3 |
+
+- Endpoint **import side-effect safety**: `env -u RENDER_FARM_TOKEN node -e "require('./lib/render-farm/processArtworkJob.js')"` loads clean and exports the function.
+- **Control-byte scan** (python, not grep) over all five touched files: CLEAN — valid UTF-8, no control bytes, no BOM, no CRLF.
+
+**One fixture correction worth recording** (the gate caught the test, not the other way round): the determinism fixture was first written as a 0.9 motif on a 3200 canvas. It **correctly rejected** — trim reduces it to 2880 px ⇒ 293 DPI ⇒ below the gate. The canvas was resized to 3600 (trimmed motif 3240 px ⇒ 329 DPI). The gate measuring the *trimmed motif* rather than the artboard is exactly the behavior the spec demands, and it was demonstrated live.
+
+### ⚠️ DEPLOYMENT CAVEAT — READ BEFORE ANY `firebase deploy`
+
+**Firebase deploys must come from `main`, or from `cloudflare-migration` only AFTER it is merged with main.** This branch's `functions/` tree **lags main**: the `processArtwork.ts` drift found at the start of this checkpoint (a missing `isShopFeatureEnabled` pod gate) was almost certainly not the only one, since only that one file was checked. **Deploying `functions/` from this branch as it stands would regress production** — it would ship older code over newer live code for every function the branch has not kept current. Merge first, then deploy. This checkpoint deliberately deployed nothing.
+
+### One housekeeping note for whoever commits this
+
+`functions/lib/` is **tracked in git** in this repo, so running `npm run build` dirtied the compiled output alongside the sources (`lib/index.*`, `lib/pod/processArtwork.*`, plus new `lib/pod/artworkPipelineCore.*` and `lib/render-farm/`, and `tsconfig.tsbuildinfo`). That is the pre-existing convention here, not something this checkpoint introduced — but the commit should either include the regenerated `lib/` consistently or exclude it consistently, not half of each.
+
+### Owner steps to eventually light the endpoint up (do NOT do these yet)
+
+1. Merge `cloudflare-migration` → `main` (or cherry-pick this checkpoint), resolving `functions/` in favour of main wherever the branch lags.
+2. Create the secret with a high-entropy value, e.g. `openssl rand -base64 32`:
+   `firebase functions:secrets:set RENDER_FARM_TOKEN`
+3. Deploy only the new function: `firebase deploy --only functions:renderFarmProcessArtwork`. **Until step 2 exists the deployed function answers 404 to everything**, which is a safe intermediate state — deploying before creating the secret is fine.
+4. Set the SAME value as a Cloudflare Worker secret when the CF POD checkpoint lands, and point the Worker at the deployed function URL.
+5. Nothing is retired at that point either — the callable and the endpoint run side by side through the dual-run transition.
 
 ## Verification and research completed
 
