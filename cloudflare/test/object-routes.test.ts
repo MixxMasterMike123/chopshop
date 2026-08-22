@@ -424,11 +424,14 @@ describe("admin object deletion", () => {
 
     // Freezing happens when paid or production state starts referencing the
     // object; there is no route for it yet, so drive the store directly.
+    // Real clock, not NOW: the object row was created by the live route with
+    // the real clock, and CHECK (updated_at >= created_at) fails once the
+    // frozen NOW constant falls behind it.
     await markObjectImmutable(
       env.DB,
       { domainKind: "admin", hostname: "", tenantId: TENANT_A },
       reserved.objectId,
-      NOW,
+      Date.now(),
     );
 
     const response = await exports.default.fetch(

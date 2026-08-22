@@ -359,7 +359,10 @@ describe("platform tenant provisioning lifecycle", () => {
       .bind(
         "secret-support@lifecycle.test",
         '{"secret":"internal"}',
-        NOW + 1,
+        // Real clock, not NOW: this row was created by the live route with the
+        // real clock, and CHECK (updated_at >= created_at) fails once the
+        // frozen NOW constant falls behind it.
+        Date.now(),
         "lifecycle-shop",
       )
       .run();
