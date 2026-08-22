@@ -1,20 +1,13 @@
-export declare const PIPELINE_VERSION = 1;
-interface Reason {
-    code: string;
-    message: string;
-}
-interface Notice {
-    code: string;
-    message: string;
-}
+import { PIPELINE_VERSION } from './artworkPipelineCore';
+export { PIPELINE_VERSION };
 export declare const processPodArtwork: import("firebase-functions/v2/https").CallableFunction<any, Promise<{
     ok: false;
-    reasons: Reason[];
+    reasons: import("./artworkPipelineCore").Reason[];
     notices?: undefined;
     fields?: undefined;
 } | {
     ok: true;
-    notices: Notice[];
+    notices: import("./artworkPipelineCore").Notice[];
     fields: {
         status: string;
         printUrl: string;
@@ -31,7 +24,7 @@ export declare const processPodArtwork: import("firebase-functions/v2/https").Ca
                 w: number;
                 h: number;
             };
-            notices: Notice[];
+            notices: import("./artworkPipelineCore").Notice[];
             reasons: never[];
             checkedAt: string;
             profileId: string;
@@ -40,4 +33,3 @@ export declare const processPodArtwork: import("firebase-functions/v2/https").Ca
     };
     reasons?: undefined;
 }>, unknown>;
-export {};

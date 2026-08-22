@@ -28,6 +28,7 @@ export { getPrintQueue, getPrintJob, getPrintQueueExport, getPrintArtworkLibrary
 export { setPrintJobStatus } from './print/setPrintJobStatus';
 export { onOrderProductionReady, sweepPrintNotifyOutbox } from './print/notifyOutbox';
 export { processPodArtwork } from './pod/processArtwork';
+export { renderFarmProcessArtwork } from './render-farm/processArtworkJob';
 export { submitLead } from './leads/submitLead';
 export { sweepAbandonedCheckouts } from './checkout-recovery/sweep';
 export { resolveCheckoutRecovery, unsubscribeCheckout } from './checkout-recovery/callables';

@@ -226,6 +226,13 @@ export { onOrderProductionReady, sweepPrintNotifyOutbox } from './print/notifyOu
 // convert-to-PNG + trim + sRGB + BLOCKING 300-DPI contain gate (docs/POD_PRINT_SPEC.md).
 export { processPodArtwork } from './pod/processArtwork';
 
+// renderFarmProcessArtwork — the RENDER FARM's `pod.process_artwork` job endpoint
+// (docs/RENDER_FARM_CONTRACT.md v0). Server-to-server onRequest, Bearer-authed with
+// RENDER_FARM_TOKEN, sharing the exact pipeline core with processPodArtwork above.
+// DARK until the secret exists AND the Cloudflare Worker starts dispatching jobs:
+// with no RENDER_FARM_TOKEN set it answers a constant 404 to everything.
+export { renderFarmProcessArtwork } from './render-farm/processArtworkJob';
+
 // Landing-page lead form ("Vill du ha en egen butik?") — public callable that
 // writes a platform-level `leads` doc + best-effort admin notification email.
 export { submitLead } from './leads/submitLead';
