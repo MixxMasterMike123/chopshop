@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-16, checkpoint 23 deployed — Fable orchestrating, Opus building, Fable reviewing
+**Last updated:** 2026-08-22, checkpoint 24.1 deployed + live-smoked — Fable orchestrating, Opus building, Fable reviewing
 **Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,7 +8,7 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest implementation checkpoint: checkpoint 23 — platform-provisioned users (see below)
+- Latest implementation checkpoint: checkpoint 24.1 — payment route live and idempotency proven (see below)
 - Staging bootstrap has RUN: one platform admin exists (owner's identity); the bootstrap route is permanently dead (verified 404 on replay; D1 readback: 1 user / 1 active platform_admin / 1 audit row).
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
@@ -334,7 +334,7 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Gate 702/702 (56 new). Deployed and smoked: anonymous `POST/GET /v1/platform/users` fail-closed 404.
 - **Operator smoke scripts** (in `cloudflare/scripts/`, credentials prompted locally): `stg-smoke.sh` (platform basics: provision demo tenant bound to the workers.dev hostname, storefront resolution, suspend/activate gate, one-kind boundary) and `stg-e2e.sh` (full loop: provision tenant admin via checkpoint 23 → product with weight/carriage/pickup → activate+publish → discount code → R2 reserve/upload/download/delete → anonymous checkouts asserting EXACT engine money: 19900 subtotal / 5800 carriage (40g+20g pack, 2 tiers) / 1990 discount / 23710 total / 4742 VAT, pickup variant, and idempotent replay).
 
-## Checkpoint 24 — Server-authoritative PaymentIntent creation (built local-only; NOT deployed, NOT committed)
+## Checkpoint 24 — Server-authoritative PaymentIntent creation (deployed; see 24.1 for the live fix)
 
 - Built by an Opus subagent; awaiting Fable review. No migration — `payment_intent_id` has existed since 0007; `/ready` stays at `0010`. `wrangler.jsonc` untouched (secrets are bindings-invisible; dry-run confirms no new binding).
 - `POST /v1/checkout/{checkoutId}/payment` — public/anonymous, hostname tenancy REQUIRED and the checkout row must belong to the resolved tenant. Platform-direct PI only; **Stripe Connect is a marked seam** in `stripe-client.ts` noting prod's "Marknadsplats" destination-charge model with NO `on_behalf_of` (moving the merchant of record would move the VAT liability).
@@ -360,6 +360,15 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
   8. rate limiter moved AFTER the Stripe call → killed by the "before Stripe is touched" test.
 - Local gate **747/747 green** (45 new). Control-byte scan clean on all touched files. `npm audit` on `stripe@22.5.0`: **0 vulnerabilities**. Dry-run **1826.87 → 2502.73 KiB (+675.86; gzip 319.85 → 397.88, +78.03)**; startup active 46 ms → **64.3 ms**, no startup blocker. Bindings list unchanged.
 - **To light this up in staging:** owner runs `npx wrangler secret put STRIPE_SECRET_KEY` (a **TEST-MODE** key) from `cloudflare/`. No code change, no config change, no redeploy of config — the surface is dark until then.
+
+## Checkpoint 24.1 — Edge-normalization fix: payment route live-verified (deployed 2026-08-22)
+
+- Checkpoint 24 was committed as `7adccef` and deployed (version `00c9491b`); live smoke then found the route 404'ing every legitimate bodyless POST while all local tests stayed green. **Root cause:** Cloudflare's edge normalizes ordinary bodyless POSTs (curl, fetch over HTTP/2) by stamping `Content-Length: 0`, and the deployed no-body check treated any Content-Length header as a body declaration. Local Request objects are built without edge normalization, so no local gate can catch this class — only live smoke can.
+- **Fix (`0925796`):** a declared `Content-Length: 0` is accepted as the authoritative "no body"; a non-zero declared length still refuses, and an absent length with a present stream (chunked) still refuses. Three regression tests pin the accepted and refused shapes.
+- **Test time bombs defused (`0f39df2`):** two tests (provision-tenants "never leaks internal tenant columns", object-routes "refuses to delete a frozen object") wrote their file's frozen `NOW` constant into `updated_at` of rows the live routes had created with the real clock; once the real date overtook the constants (2026-08-21/22), `CHECK (updated_at >= created_at)` began failing. Those two write sites now use the real clock. `rate-limit.test.ts`'s still-future `NOW` (`1_787_500_000_000`, passes 2026-08-23) was audited and is safe: it injects `NOW` as the limiter's own clock and seeds self-consistent `NOW, NOW` pairs. **Pattern for future fixtures:** never mix a frozen test clock into rows the routes created with the real clock.
+- Full gate green: types current, TypeScript clean, **749/749** tests. Deployed as version `ac1a0f05-9bea-454f-a57f-a1f612f434ce`.
+- **Live smoke 9/9 (anonymous, no credentials needed):** published product → fresh pickup checkout → bodyless POST minted the **first real test-mode PaymentIntent** (`pi_3U7JGuKAaBMOW5AC0UQYvjiI`, client secret matching), repeat call answered 200 with the **same** intent id (same-PI idempotency proven live), non-empty body still 404, unknown checkout still opaque 404. Smoke script shape preserved in this checkpoint's session; it reuses the stg-e2e catalogue, so it needs no sign-in.
+- **Next: checkpoint 25 — Stripe webhook → orders → discount `used_count` increment** (the frozen `discount_code_id` on the checkout row is the seam; the webhook reads the checkout from D1, never from PI metadata).
 
 ## Verification and research completed
 
