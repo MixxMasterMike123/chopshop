@@ -759,10 +759,54 @@ describe("denials", () => {
     expect(stripe.totalCalls).toBe(0);
   });
 
-  it("rejects even an empty-string body", async () => {
+  /**
+   * The edge-normalized shapes of "no body" are ACCEPTED. Cloudflare's edge
+   * stamps `content-length: 0` onto ordinary bodyless POSTs (curl, fetch over
+   * HTTP/2) before the worker sees them, and workerd synthesizes the same
+   * header for a zero-byte body — both are byte-identical on the wire to a
+   * bodyless request, so treating either as a body violation would 404 every
+   * legitimate live caller. The first deployed version of this route did
+   * exactly that: every local test built Requests without edge normalization
+   * and stayed green while live smoke 404'd. These two cases pin the fix.
+   */
+  it("accepts the edge-normalized bodyless POST (content-length: 0)", async () => {
     const checkoutId = nextCheckoutId();
     await seedCheckout({ checkoutId, tenantId: TENANT_A });
 
+    const response = await postPayment(HOST_A, checkoutId, {
+      headers: { "content-length": "0" },
+    });
+
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as {
+      payment: { paymentIntentId: string };
+    };
+    await expect(readPaymentIntentId(checkoutId)).resolves.toBe(
+      body.payment.paymentIntentId,
+    );
+  });
+
+  it("accepts a zero-byte body that declares its emptiness", async () => {
+    const checkoutId = nextCheckoutId();
+    await seedCheckout({ checkoutId, tenantId: TENANT_A });
+
+    // An empty stream under a declared zero length — the other shape the edge
+    // can present for "no body".
+    const response = await postPayment(HOST_A, checkoutId, {
+      body: "",
+      headers: { "content-length": "0" },
+    });
+
+    expect(response.status).toBe(201);
+  });
+
+  it("refuses an undeclared stream even when it happens to be empty", async () => {
+    const checkoutId = nextCheckoutId();
+    await seedCheckout({ checkoutId, tenantId: TENANT_A });
+
+    // No declared length + a present stream reads as a chunked body. Its
+    // emptiness cannot be verified without consuming it, and the live edge
+    // always declares emptiness explicitly, so refusing costs no real caller.
     const response = await postPayment(HOST_A, checkoutId, { body: "" });
 
     expect(response.status).toBe(404);

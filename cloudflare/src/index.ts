@@ -923,11 +923,21 @@ async function handleCheckoutPaymentRoute(
   // before the tenant is resolved and before the limiter counts the request:
   // the caller is not describing anything this route does.
   //
-  // Both signals are checked because either alone is defeatable: a
-  // Content-Length of 0 with a chunked body, or a body with no length header at
-  // all. `request.body !== null` is the runtime's own answer to "did this
-  // request carry a body", and it is the authority here.
-  if (request.body !== null || request.headers.get("content-length") !== null) {
+  // A declared `Content-Length: 0` is the authoritative statement of "no body"
+  // and is ACCEPTED: Cloudflare's edge normalizes ordinary bodyless POSTs
+  // (curl, fetch over HTTP/2) into exactly that shape before the worker sees
+  // them, so rejecting it — as the first deployed version of this route did —
+  // 404s every legitimate caller while passing every local test, where Request
+  // objects are built without edge normalization. Live smoke caught it; local
+  // gates cannot. Beyond that declared-empty case, either signal refuses: a
+  // non-zero length declares a body outright, and an absent length with a
+  // present stream is a chunked body. Content-Length cannot lie low — HTTP
+  // forbids it coexisting with a longer body, and the edge enforces that
+  // before the worker runs.
+  const contentLength = request.headers.get("content-length");
+  const declaresBody = contentLength !== null && contentLength !== "0";
+  const undeclaredStream = contentLength === null && request.body !== null;
+  if (declaresBody || undeclaredStream) {
     return paymentNotFoundResponse();
   }
 
