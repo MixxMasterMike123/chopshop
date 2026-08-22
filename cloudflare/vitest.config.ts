@@ -28,6 +28,12 @@ export default defineConfig({
             // sk_test_ shape is cosmetic — it documents that this surface is
             // test mode only.
             STRIPE_SECRET_KEY: "sk_test_fake-key-for-workers-tests-only",
+            // Test-only signing secret. Unlike the API key this one is USED for
+            // real: the webhook suite signs its payloads with the SDK's own
+            // generateTestHeaderStringAsync against this value and lets the
+            // production constructEventAsync verify them, so the real
+            // verification code runs under test rather than being stubbed out.
+            STRIPE_WEBHOOK_SECRET: "whsec_fake-signing-secret-for-tests-only",
             TEST_MIGRATIONS: migrations,
           },
           // Test-only: the deploy config has no R2 binding yet, so the object

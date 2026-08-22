@@ -441,7 +441,7 @@ describe("GET /ready", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       database: "ready",
-      migration: "0010_discount_codes.sql",
+      migration: "0011_orders.sql",
       status: "ok",
     });
   });

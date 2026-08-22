@@ -31,9 +31,13 @@ import {
   parseCreateCheckoutInput,
 } from "./commerce/checkout";
 import { createCheckoutPayment } from "./commerce/payment";
+import { handleStripeWebhookEvent } from "./commerce/webhook";
 import {
   isStripeConfigured,
+  isStripeWebhookConfigured,
   resolveStripeGateway,
+  resolveStripeWebhookVerifier,
+  StripeSignatureError,
 } from "./commerce/stripe-client";
 import type { AdminDiscountCodeResult } from "./commerce/admin-discount-codes";
 import {
@@ -89,7 +93,15 @@ const PLATFORM_TENANTS_PATH = "/v1/platform/tenants";
 const PLATFORM_TENANT_PATH_PREFIX = "/v1/platform/tenants/";
 const PLATFORM_BOOTSTRAP_PATH = "/v1/platform/bootstrap";
 const PLATFORM_USERS_PATH = "/v1/platform/users";
-const REQUIRED_MIGRATION = "0010_discount_codes.sql";
+// PLATFORM-level, not tenant-level, and deliberately so: Stripe is configured
+// with ONE endpoint URL per account and calls it for every event on that
+// account, regardless of which storefront the money belonged to. There is no
+// storefront hostname on these requests to resolve a tenant from — the tenant
+// comes from the checkout row the intent id finds. Grouping it under /v1/webhooks
+// rather than /v1/platform keeps it out of the namespace whose other routes all
+// require a live platform session; nothing here has a session at all.
+const STRIPE_WEBHOOK_PATH = "/v1/webhooks/stripe";
+const REQUIRED_MIGRATION = "0011_orders.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -880,6 +892,31 @@ function paymentNotFoundResponse(): Response {
 }
 
 /**
+ * The one answer to a request that failed to prove it came from Stripe.
+ *
+ * 400 rather than 401/403 because that is Stripe's own documented convention for
+ * a signature failure, and because it is what their dashboard's endpoint health
+ * view expects to see. It is also correct on the merits: an unsigned or
+ * mis-signed request is malformed as a webhook, not merely unauthorized.
+ *
+ * The body is a constant. It does not say whether the header was missing or
+ * wrong, whether the timestamp was stale, or whether the secret is the problem —
+ * an attacker probing a public URL learns nothing from it, and Stripe does not
+ * read it.
+ */
+function webhookSignatureFailureResponse(): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "invalid_signature",
+        message: "Request signature could not be verified",
+      },
+    },
+    400,
+  );
+}
+
+/**
  * Anonymous, server-authoritative PaymentIntent creation for one checkout.
  *
  * The checkout id in the path is the entire capability, matching production's
@@ -1004,6 +1041,107 @@ async function handleCheckoutPaymentRoute(
     },
     outcome.result.created ? 201 : 200,
   );
+}
+
+/**
+ * The Stripe webhook endpoint — where a succeeded payment becomes an order.
+ *
+ * ── AUTHENTICATION ───────────────────────────────────────────────────────────
+ * The signature is the whole of it, and it is enough: verifying it proves the
+ * request was produced by someone holding STRIPE_WEBHOOK_SECRET, which is Stripe
+ * and this worker and nobody else. There is no session (Stripe has no account
+ * here), no same-origin check (a server-to-server call sends no Origin), and no
+ * tenant hostname (Stripe calls one URL per account, not one per storefront).
+ * Every one of those absences is a consequence of who the caller is, not a gap.
+ *
+ * ── WHY THERE IS NO RATE LIMITER ─────────────────────────────────────────────
+ * Considered and deliberately omitted. The checkpoint-19 limiter keys on
+ * CF-Connecting-IP, and Stripe delivers from a small pool of its own addresses:
+ * every legitimate event for every tenant on this account arrives from those few
+ * IPs, so any limit tight enough to matter would throttle real payment
+ * notifications — the one class of request this platform can least afford to
+ * drop — and a limit loose enough not to would stop nothing. Worse, a 429 to
+ * Stripe is a retry signal, so throttling a flood would convert it into a
+ * sustained retry storm rather than ending it.
+ *
+ * What actually bounds an attacker here is the signature check, which runs
+ * before any database work: an unsigned flood costs one HMAC each and touches
+ * nothing. A SIGNED flood is Stripe itself, and the event ledger makes each
+ * event idempotent no matter how often it arrives. If volume ever needs
+ * shaping, it belongs at the edge (WAF rate rules on this path), not in a
+ * D1-backed counter that would add a write to every payment notification.
+ *
+ * ── RESPONSES ────────────────────────────────────────────────────────────────
+ * 404 while unconfigured, 400 for a signature that does not verify, 500 for a
+ * database fault, and 200 for absolutely everything else — including events this
+ * worker refuses to act on. See handleStripeWebhookEvent for why a 4xx on an
+ * understood-but-unusable event is a trap rather than a correctness measure.
+ * No response body ever names Stripe, an error, an id, or a reason.
+ */
+async function handleStripeWebhookRoute(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  // The unconfigured gate runs FIRST — before the method check, before the body
+  // is read, before D1 — so an unconfigured deployment is indistinguishable from
+  // one where this endpoint was never written. Both secrets are required: the
+  // signing secret to authenticate the caller, and the API key because the
+  // verifier is built from the same SDK client, and because a worker that can
+  // record payments but could not have created them is a misconfiguration worth
+  // failing closed on.
+  if (!isStripeWebhookConfigured(env) || !isStripeConfigured(env)) {
+    return notFoundResponse("Route not found");
+  }
+
+  if (request.method !== "POST") {
+    return notFoundResponse("Route not found");
+  }
+
+  const signature = request.headers.get("stripe-signature");
+  if (signature === null) {
+    return webhookSignatureFailureResponse();
+  }
+
+  // THE RAW BODY, read as text before anything parses it. The signature is
+  // computed over the exact bytes Stripe sent, so a parse-then-reserialize round
+  // trip — different key order, different spacing — would break verification for
+  // every honest request. Nothing may read this body before this line.
+  let payload: string;
+  try {
+    payload = await request.text();
+  } catch {
+    // A body that could not be read cannot be verified.
+    return webhookSignatureFailureResponse();
+  }
+
+  let event;
+  try {
+    event = await resolveStripeWebhookVerifier(env).constructEvent(
+      payload,
+      signature,
+    );
+  } catch (error) {
+    if (error instanceof StripeSignatureError) {
+      return webhookSignatureFailureResponse();
+    }
+
+    throw error;
+  }
+
+  // Past this line the request is provably Stripe's, and every outcome is a 200.
+  // The result is deliberately not inspected: there is no outcome this route
+  // answers differently for, because every one of them is a fact recorded in
+  // `payment_events` rather than a message to the caller. A D1 fault throws
+  // instead of returning, which is the one case Stripe should retry.
+  await handleStripeWebhookEvent(env.DB, event, Date.now());
+
+  // `received` and nothing else. Not the outcome, not the reason code, not the
+  // order id: Stripe does not read the body, and a webhook endpoint is a public
+  // URL whose responses should tell an unauthenticated prober nothing — least of
+  // all whether a given event id was recognized, which would make the endpoint an
+  // oracle for whether a payment landed. The detail lives in `payment_events`,
+  // where an operator can query it.
+  return jsonResponse({ received: true }, 200);
 }
 
 function platformResultResponse(
@@ -1267,6 +1405,13 @@ export default {
       }
 
       return notFoundResponse("Product not found");
+    }
+
+    // Before the checkout routes purely for readability — the paths do not
+    // overlap. Exact match only: no prefix, no sub-paths, so a probe for
+    // /v1/webhooks/stripe/anything is an ordinary 404 from the fallthrough.
+    if (url.pathname === STRIPE_WEBHOOK_PATH) {
+      return handleStripeWebhookRoute(env, request);
     }
 
     if (url.pathname === CHECKOUT_PATH) {

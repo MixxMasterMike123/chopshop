@@ -9,6 +9,7 @@ declare global {
       // R2 binding until the buckets are provisioned.
       PRIVATE_BUCKET: R2Bucket;
       STRIPE_SECRET_KEY: string;
+      STRIPE_WEBHOOK_SECRET: string;
       TEST_MIGRATIONS: D1Migration[];
     }
   }

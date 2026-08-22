@@ -91,7 +91,184 @@ export const STRIPE_GATEWAY_OVERRIDE: unique symbol = Symbol(
   "meteorshop.test.stripeGateway",
 );
 
+/**
+ * A Stripe event this worker has PROVEN came from Stripe.
+ *
+ * Narrowed to what the webhook handler reads, for the same reason
+ * PaymentIntentView is narrow: it documents the whole surface a fake must
+ * satisfy, and it states that nothing else about an event — `livemode`,
+ * `api_version`, `request`, `account` — is consulted on this path.
+ *
+ * `data.object` is `unknown` on purpose. The SDK types it as a union across
+ * every event type, and a handler that trusted that type would be trusting a
+ * shape it received over the network; the handler narrows it structurally
+ * instead. Production's equivalent interface types `data.object` as
+ * `Stripe.PaymentIntent` for ALL events and then casts its way out for every
+ * other branch — the casts are exactly where a wrong assumption would hide.
+ */
+export interface VerifiedStripeEvent {
+  data: { object: unknown };
+  id: string;
+  type: string;
+}
+
+/**
+ * Verifying a webhook request's signature — the ONLY authentication this
+ * worker's webhook endpoint has, and sufficient because it proves possession of
+ * a secret only Stripe and this worker hold.
+ *
+ * The payload is the RAW request body as a string, never a parsed object: the
+ * signature is computed over the exact bytes Stripe sent, so any reserialization
+ * — a re-`JSON.stringify` with different key order or spacing — breaks it.
+ *
+ * Verification MUST be async on this runtime. Probed under vitest-pool-workers:
+ * the SDK's synchronous `constructEvent` throws
+ * `"SubtleCryptoProvider cannot be used in a synchronous context"`, because
+ * Web Crypto's digest is promise-returning and there is no synchronous fallback
+ * in a Worker. Production calls the synchronous form, which works only because
+ * it runs on Node with a synchronous crypto provider.
+ */
+export interface StripeWebhookVerifier {
+  /**
+   * Resolves with the verified event, or throws
+   * StripeSignatureVerificationError when the signature does not verify, is
+   * absent, or falls outside the timestamp tolerance.
+   */
+  constructEvent(
+    payload: string,
+    signatureHeader: string,
+  ): Promise<VerifiedStripeEvent>;
+}
+
+/**
+ * Raised for every signature failure, whatever its cause: a wrong secret, a
+ * mangled body, a missing header, a replayed timestamp outside tolerance.
+ *
+ * Detail-free by construction, exactly like StripeGatewayError. The SDK's own
+ * message is a paragraph of prose about forwarding tools and JSON formatting;
+ * useful in a developer's terminal, not in a response to whoever just sent an
+ * unsigned request to a public endpoint.
+ */
+export class StripeSignatureError extends Error {
+  constructor() {
+    super("stripe webhook signature verification failed");
+    this.name = "StripeSignatureError";
+  }
+}
+
+/**
+ * The webhook verifier's test seam, and the same reasoning as
+ * STRIPE_GATEWAY_OVERRIDE: a plain Symbol, unreachable except by importing this
+ * binding, so a deployed worker always builds the real verifier.
+ *
+ * It exists so a test can drive a verifier that FAILS on demand. The success
+ * path deliberately does NOT use it — the webhook suite signs its payloads with
+ * the SDK's own `generateTestHeaderStringAsync` and lets the real
+ * `constructEventAsync` verify them, so the production verification code is what
+ * runs under test. Stubbing verification out would leave the single most
+ * security-critical line in this checkpoint unexercised.
+ */
+export const STRIPE_WEBHOOK_VERIFIER_OVERRIDE: unique symbol = Symbol(
+  "meteorshop.test.stripeWebhookVerifier",
+);
+
 const MINIMUM_KEY_LENGTH = 8;
+
+/**
+ * The minimum length of a usable webhook signing secret.
+ *
+ * Stripe issues `whsec_` + 32+ characters, so this is far below any real one and
+ * is a typo/empty-string guard rather than a validity check — the same contract
+ * isStripeConfigured states for the API key.
+ */
+const MINIMUM_WEBHOOK_SECRET_LENGTH = 8;
+
+/**
+ * Whether a webhook signing secret exists at all.
+ *
+ * The ENTIRE webhook surface answers fail-closed 404 while this is false — the
+ * gate runs before the method check, before the body is read, and before D1 is
+ * touched — so an unconfigured deployment is indistinguishable from one where
+ * the endpoint was never written. Same contract as isAuthConfigured and
+ * isStripeConfigured.
+ *
+ * A present-but-WRONG secret is deliberately CONFIGURED. It then fails loudly
+ * at verification as a 400, which is what an operator needs to see; making the
+ * route vanish instead would render a live misconfiguration indistinguishable
+ * from a route that was never enabled, and the operator would be debugging the
+ * wrong thing while real payments went unrecorded.
+ */
+export function isStripeWebhookConfigured(env: Env): boolean {
+  return (
+    typeof env.STRIPE_WEBHOOK_SECRET === "string" &&
+    env.STRIPE_WEBHOOK_SECRET.length >= MINIMUM_WEBHOOK_SECRET_LENGTH
+  );
+}
+
+export function resolveStripeWebhookVerifier(env: Env): StripeWebhookVerifier {
+  const override = (env as unknown as Record<PropertyKey, unknown>)[
+    STRIPE_WEBHOOK_VERIFIER_OVERRIDE
+  ];
+
+  if (
+    typeof override === "object" &&
+    override !== null &&
+    typeof (override as StripeWebhookVerifier).constructEvent === "function"
+  ) {
+    return override as StripeWebhookVerifier;
+  }
+
+  return createStripeWebhookVerifier(env);
+}
+
+export function createStripeWebhookVerifier(env: Env): StripeWebhookVerifier {
+  if (!isStripeWebhookConfigured(env)) {
+    // Unreachable through the route, which gates on isStripeWebhookConfigured
+    // first. Kept strict for the same reason createStripeGateway is: a future
+    // caller that forgets the gate must fail loudly rather than verify against
+    // `undefined`, which would accept nothing and look like a signature bug.
+    throw new Error("STRIPE_WEBHOOK_SECRET is not configured");
+  }
+
+  const secret = env.STRIPE_WEBHOOK_SECRET as string;
+
+  // A client is needed only for its `webhooks` namespace; no request is ever
+  // dispatched from it. The API key is not required for verification — it is
+  // pure HMAC over the body — but the constructor demands one, and the webhook
+  // endpoint is only reachable when both secrets exist, so passing the real one
+  // costs nothing and avoids a placeholder that could confuse a stack trace.
+  const stripe = new Stripe(env.STRIPE_SECRET_KEY ?? "", {
+    apiVersion: STRIPE_API_VERSION,
+    httpClient: Stripe.createFetchHttpClient(),
+    maxNetworkRetries: 0,
+  });
+
+  return {
+    async constructEvent(
+      payload: string,
+      signatureHeader: string,
+    ): Promise<VerifiedStripeEvent> {
+      try {
+        // ASYNC, and it must be. See StripeWebhookVerifier: the synchronous
+        // form throws under workerd because Web Crypto has no synchronous
+        // digest. This also enforces Stripe's default 300-second timestamp
+        // tolerance, probed and confirmed enforced — an old signature is
+        // rejected with "Timestamp outside the tolerance zone", which is the
+        // replay protection the scheme provides beyond the HMAC itself.
+        const event = await stripe.webhooks.constructEventAsync(
+          payload,
+          signatureHeader,
+          secret,
+        );
+
+        return event as unknown as VerifiedStripeEvent;
+      } catch {
+        // Catch-all and detail-free. See StripeSignatureError.
+        throw new StripeSignatureError();
+      }
+    },
+  };
+}
 
 /**
  * Whether a Stripe key exists at all. Mirrors isAuthConfigured: the ENTIRE
