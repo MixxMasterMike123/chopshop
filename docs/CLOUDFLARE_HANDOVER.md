@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-22, checkpoint 24.1 deployed + live-smoked — Fable orchestrating, Opus building, Fable reviewing
+**Last updated:** 2026-08-22, checkpoint 25 deployed dark (webhook awaits owner's Stripe endpoint + STRIPE_WEBHOOK_SECRET) — Fable orchestrating, Opus building, Fable reviewing
 **Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,11 +8,11 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest implementation checkpoint: checkpoint 24.1 — payment route live and idempotency proven (see below)
+- Latest implementation checkpoint: checkpoint 25 — Stripe webhook → orders → discount burn, deployed dark (see below)
 - Staging bootstrap has RUN: one platform admin exists (owner's identity); the bootstrap route is permanently dead (verified 404 on replay; D1 readback: 1 user / 1 active platform_admin / 1 audit row).
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
-- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0010), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
+- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0011), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
 - No **production** resources, DNS records, custom routes, Containers, Stripe endpoints, or email integrations have been created.
 - The user's personal Cloudflare account is designated for staging/non-production.
 - A separate Cloudflare production account is required before cutover, but does not need to exist yet.
@@ -369,6 +369,120 @@ No public producer route, Email Sending binding, domain/DNS change, or real mess
 - Full gate green: types current, TypeScript clean, **749/749** tests. Deployed as version `ac1a0f05-9bea-454f-a57f-a1f612f434ce`.
 - **Live smoke 9/9 (anonymous, no credentials needed):** published product → fresh pickup checkout → bodyless POST minted the **first real test-mode PaymentIntent** (`pi_3U7JGuKAaBMOW5AC0UQYvjiI`, client secret matching), repeat call answered 200 with the **same** intent id (same-PI idempotency proven live), non-empty body still 404, unknown checkout still opaque 404. Smoke script shape preserved in this checkpoint's session; it reuses the stg-e2e catalogue, so it needs no sign-in.
 - **Next: checkpoint 25 — Stripe webhook → orders → discount `used_count` increment** (the frozen `discount_code_id` on the checkout row is the seam; the webhook reads the checkout from D1, never from PI metadata).
+
+## Checkpoint 25 — Stripe webhook → durable orders → discount burn (DEPLOYED DARK 2026-08-22; awaiting owner Stripe endpoint + secret)
+
+- Built by an Opus subagent, Fable-reviewed line-by-line, committed `b27481a`. Migration `0011_orders.sql` **applied to staging D1** (28 statements) and the worker **deployed as version `5d9cdeec-92ea-4625-bcdb-091740bfccf8`**. Dark smoke green: `/ready` reports `0011_orders.sql`, the webhook surface answers fail-closed 404 in every shape (unsigned, signed-looking, GET, sub-path), and the checkpoint-24 payment smoke re-ran 9/9 (fresh PI + same-PI idempotency).
+- New route `POST /v1/webhooks/stripe` — **platform-level, not tenant-bound**. Stripe is configured with ONE endpoint URL per account and calls it for every event regardless of storefront, so there is no hostname to resolve a tenant from. The tenant comes from the `checkouts` row the PaymentIntent id finds. Grouped under `/v1/webhooks` rather than `/v1/platform` deliberately: every other `/v1/platform` route requires a live platform session, and this one has no session at all. Exact-match path only — no prefix, so `/v1/webhooks/stripe/anything` is an ordinary 404.
+- **New secret `STRIPE_WEBHOOK_SECRET`** follows the exact BETTER_AUTH_SECRET / STRIPE_SECRET_KEY pattern: `string | undefined` in `src/env.d.ts`, `isStripeWebhookConfigured(env)`, and the ENTIRE surface answers fail-closed 404 while unconfigured — the gate runs before the method check, before the body is read, before D1. **Both** secrets are required (signing secret AND API key): a worker that could record payments but could not have created them is a misconfiguration worth failing closed on. A present-but-garbage secret is deliberately CONFIGURED so it fails loudly as a 400 rather than making the route vanish and hiding a live misconfiguration.
+- **Signature verification is the only authentication, and it is sufficient**: it proves the caller holds a secret only Stripe and this worker have. No session, no same-origin check, no tenant hostname — each absence is a consequence of who the caller is, not a gap. Raw body read with `request.text()` **before** anything parses it; the signature covers the exact bytes sent.
+
+### Probed, not assumed (stripe 22.5.0 under vitest-pool-workers)
+
+- **`constructEventAsync` is mandatory on workerd.** The synchronous `constructEvent` throws `"SubtleCryptoProvider cannot be used in a synchronous context"` — Web Crypto's digest is promise-returning and the SDK has no synchronous fallback in a Worker. **Production calls the synchronous form**, which works only because it runs on Node.
+- `generateTestHeaderStringAsync` works under workerd and emits `t={unix},v1={hex}`. The webhook suite signs with it and lets the **real** `constructEventAsync` verify — verification is never stubbed out.
+- A bad signature throws `StripeSignatureVerificationError`, but its `.name` is plain `"Error"` — discriminate by constructor/`instanceof`, **not** by name.
+- `DEFAULT_TOLERANCE` is 300 s and **is enforced**: an old timestamp is rejected with `"Timestamp outside the tolerance zone"`. That is real replay protection ahead of the event ledger.
+
+### Migration 0011 — `orders`, `order_items`, `order_status_history`, `payment_events`
+
+- `orders`: `UNIQUE checkout_id` and `UNIQUE payment_intent_id` are the structural half of idempotency — one checkout, one order, forever, even if the application logic were wrong. `UNIQUE (tenant_id, order_number)` is real, unlike prod which generates `PREFIX-{last 6 epoch digits}-{4 random base36}` with **no uniqueness check** against a wrapping (~16.7 min) timestamp.
+- Every 0009/0010 money CHECK is **restated** on `orders` (v2 totals `total = subtotal + shipping − discount`, VAT contained, pickup ⇒ no carriage, discount ≤ subtotal, discount>0 ⇒ code id) so an order can never hold arithmetic a checkout could not. `orders_money_immutable` freezes the entire financial identity; `status`, `refunded_total_minor` and `updated_at` are deliberately excluded as the fields the lifecycle moves.
+- `orders_tenant_matches_checkout_insert/update` closes the same gap `checkout_items` closes against `products`: the FK points at a global PK and is satisfied by ANY tenant's checkout.
+- **Refunds are not built, but the shape does not preclude them**: `status` already admits `partially_refunded`/`refunded`, `captured_minor` is stored separately from `total_minor` (a later partial capture must not need a migration), and `refunded_total_minor` is a CUMULATIVE ABSOLUTE column capped at `captured_minor` — matching prod's `refundedTotalSek`, which is absolute precisely so a replayed refund converges instead of double-counting. Neither column is writable by this checkpoint.
+- `payment_events` (event ledger, append-only, `event_id` PRIMARY KEY, nullable `tenant_id`): records **every** delivery including ones that produced no order, with an enumerated `outcome` (`processed`/`ignored`/`rejected`) and `reason_code`. Never provider text, never a payload excerpt. **Production has no such table** — its idempotency is entirely "order doc id IS the PaymentIntent id", so deliveries that produce no order are invisible and "Stripe says it delivered, we have nothing" is unanswerable.
+
+### Deliberate divergences from production (all documented in code)
+
+1. **The checkout row is authoritative; PI metadata is NOT.** Prod reconstructs the whole order from metadata (`customerEmail`, `itemDetails` chunked across keys because Stripe caps each value at 500 chars, `subtotal`, `vat`, ...). Checkpoint 24 put only `{checkout_id, tenant_id}` in metadata precisely so this handler has nothing to be tempted by. Metadata is compared as a **consistency assertion** and a mismatch is a refusal — never a lookup.
+2. **Amount mismatch REFUSES; prod overwrites.** Prod compares with a 0.1 SEK tolerance and on mismatch **stamps the charged amount as the order total**, leaving subtotal/vat/shipping untouched so the breakdown no longer sums — an order whose own arithmetic is inconsistent, which this schema could not store anyway. Here: no order, no burn, a `rejected` ledger row. Compared as integers, same minor units, **no tolerance** (the amount was sent to Stripe FROM this row; neither side rounds). The charge still exists at Stripe and is refundable from the dashboard, which is the right place to resolve a payment nobody can explain.
+3. **Never 4xx a validly-signed event.** Prod returns **400** for missing/unparseable metadata — Stripe treats 4xx as failure and retries for days, then gives up silently, leaving a **charged buyer with no order and no alert**. Past verification this handler answers 200 to everything it understands. The only non-2xx are 400 (signature) and 500 (D1 fault, genuinely retryable).
+4. **One `db.batch`, or nothing.** Order + lines + status history + checkout transition + `used_count` burn + audit row + ledger row commit together. Prod does `orderRef.create()` then four independent best-effort writes; a crash between the create and the increment loses the burn **permanently**, because the retry short-circuits at the existing-order check and nothing reconciles the counter.
+5. **`used_count` burns against the frozen `discount_code_id` only** — checkpoint 22's rule kept: a resolved-but-worthless code stored NO id, so no use is burned. Prod would freeze an id beside a 0 discount and burn a use on nothing.
+6. **`max_uses` is deliberately NOT re-checked at burn time** (prod parity, and correct): eligibility was decided at quote time, and refusing to count now would leave a paid order whose discount is unaccounted for. Over-redemption when several buyers hold client secrets is a merchant problem; an unrecorded redemption is an accounting one.
+7. **Order status is `paid`, not prod's `confirmed`** — the data model's vocabulary, so a later fulfilment checkpoint can add `processing`/`printed` without the first transition being ambiguous.
+8. **Order numbers** are `YYYYMMDD-{8 Crockford chars}` from `crypto.getRandomValues` behind a real UNIQUE constraint (no I/L/O/U — these get read aloud). Prod's has ~1.7M effective space and no collision check.
+9. **Expiry is NOT checked on this path.** An intent can succeed after the quote lapsed (the buyer held a client secret; Stripe never heard about the expiry). The money is real, so the order is created at the frozen total. Refusing would leave a paid buyer with nothing.
+10. **`payment_intent.payment_failed` is a documented no-op seam.** Prod marks the checkout doc `failed`, and the purpose is the *opposite* of what the name suggests — it stops the abandoned-cart sweep from mailing a buyer whose card was declined. There is no sweep and no abandoned-cart email here yet, so writing a status nothing reads would be noise. One-line addition when the sweep lands.
+
+### Rate limiting — considered, deliberately omitted (documented in the route)
+
+The checkpoint-19 limiter keys on `CF-Connecting-IP`, and Stripe delivers from a small pool of its own addresses: every legitimate event for every tenant arrives from those few IPs. Any limit tight enough to matter would throttle real payment notifications — the class of request this platform can least afford to drop — and a loose one stops nothing. Worse, **a 429 to Stripe is a retry signal**, so throttling a flood converts it into a sustained retry storm. What actually bounds an attacker is the signature check, which runs before any D1 work: an unsigned flood costs one HMAC each and touches nothing; a *signed* flood is Stripe itself, and the ledger makes every event idempotent. If volume ever needs shaping it belongs at the edge (WAF rate rules on this path), not in a D1 write added to every payment notification.
+
+### Mutation log — 11 run, 9 killed, 1 equivalent, 3 real suite gaps found and closed
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | Drop signature verification entirely (bare `JSON.parse`) | **KILLED** — 5 tests |
+| 2 | Drop the ledger replay READ | **EQUIVALENT MUTANT** — see below |
+| 3 | Drop event-ledger idempotency entirely (read + insert + `recordOnly` write) | **KILLED** — 19 tests |
+| 4 | Drop the amount/currency check | **KILLED** — 3 tests |
+| 5 | Replace `db.batch` with a sequential loop (original order) | **SURVIVED**, then analysed — see below |
+| 5b | Sequential loop with side effects BEFORE the order insert (prod's shape) | **KILLED** — 25 tests, incl. the new atomicity test |
+| 6 | Drop the `discount_code_id !== null` guard | Survived, but **benign**: `WHERE col = NULL` matches nothing in SQL |
+| 6b | Drop frozen-id scoping on the burn (`WHERE tenant_id = ?` only) | **SURVIVED → gap found → new test → KILLED** |
+| 7 | File the order under the METADATA's tenant instead of the checkout's | **KILLED** — 1 test (schema trigger would also have caught it) |
+| 8 | Drop the metadata consistency assertion | **KILLED** — 3 tests |
+| 9 | Drop the checkout-status guard | **KILLED** — 1 test |
+| 10 | Drop the unconfigured fail-closed gate | **KILLED** — 3 tests |
+| 11 | Parse-then-reserialize the body before verifying (raw-body bug) | **SURVIVED → gap found → new test → KILLED** |
+
+**Three findings worth recording:**
+
+- **#2 is an honest equivalent mutant.** Removing the ledger read left all 63 tests green because every write path is *also* protected by a UNIQUE constraint, so a duplicate simply fails the batch atomically and the answer is identical. The read is therefore a genuine fast path, not the correctness mechanism — correctness is carried by the constraints. A test was added anyway pinning that a replay reports the ORIGINAL outcome from the ledger rather than re-deciding on current state; it does not kill #2 (the constraints make the mutant behaviourally identical) and that is stated plainly rather than papered over. #3 is the mutation that tests the real mechanism, and it dies loudly.
+- **#5 → #5b.** Plain sequentialisation survived only because the order INSERT happens to be the FIRST statement, so it fails before any side effect runs. The moment the ordering changes to production's shape (side effects first), 25 tests fail. A new atomicity test was added (two distinct event ids racing one intent, asserting exactly one order AND exactly one burn AND no orphaned lines/history).
+- **#6b and #11 were real gaps.** The existing bystander test used a checkout with *no* discount, so the increment statement was never queued and the missing tenant/id scope was invisible — now covered by a case with a real burn beside two untouched campaigns. And every fixture payload was `JSON.stringify` output, so a reserialize round-trip was byte-identical — now covered by a pretty-printed payload with a trailing newline that no reserializer could reproduce.
+
+### Gate
+
+- `npm run check`: types current, TypeScript clean, **816/816 tests green** (67 new in `test/webhook.test.ts`; 749 → 816).
+- `npm run deploy:dry-run`: **2516.51 KiB / gzip 400.61 KiB** (from 24's 2502.73 / 397.88 — only +13.78 KiB, since the Stripe SDK was already in the entry graph). **Bindings list unchanged** — secrets are bindings-invisible.
+- `npm run startup`: profile window 94.6 ms, active **59.1 ms** (24 was 64.3 ms), no startup blocker.
+- Control-byte scan (python, not grep) over all 10 touched files: **clean**.
+- Two pre-existing `/ready` assertions bumped `0010_discount_codes.sql` → `0011_orders.sql` (`test/health.test.ts`, `test/public-catalog.test.ts`).
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `cloudflare/migrations/0011_orders.sql` | **new** — `orders`, `order_items`, `order_status_history`, `payment_events` + triggers/indexes |
+| `cloudflare/src/commerce/webhook.ts` | **new** — event handling, order creation, atomic batch, discount burn, order numbers |
+| `cloudflare/test/webhook.test.ts` | **new** — 67 tests, real signature verification via the SDK's own signer |
+| `cloudflare/src/commerce/stripe-client.ts` | + `VerifiedStripeEvent`, `StripeWebhookVerifier`, `StripeSignatureError`, `isStripeWebhookConfigured`, verifier + symbol override |
+| `cloudflare/src/index.ts` | + `/v1/webhooks/stripe` route, `webhookSignatureFailureResponse`, `/ready` → 0011 |
+| `cloudflare/src/env.d.ts` | + `STRIPE_WEBHOOK_SECRET: string \| undefined` |
+| `cloudflare/vitest.config.ts` | + test-only `STRIPE_WEBHOOK_SECRET` binding |
+| `cloudflare/test/env.d.ts` | + `STRIPE_WEBHOOK_SECRET: string` |
+| `cloudflare/test/health.test.ts`, `cloudflare/test/public-catalog.test.ts` | `/ready` migration pin → 0011 |
+
+### To light this up in staging (owner actions — migration and deploy are DONE)
+
+1. **Create the Stripe webhook endpoint** in the **TEST-mode** dashboard, URL:
+   `https://meteorshop-stg-api.micke-ohlen.workers.dev/v1/webhooks/stripe`
+   Subscribe to **`payment_intent.succeeded`** only. (`payment_intent.payment_failed` may be added when the abandoned-cart sweep lands; anything else is acknowledged as a recorded no-op today.)
+   ⚠️ Set the endpoint's **API version to match `STRIPE_API_VERSION` (`2026-07-29.dahlia`)** — see the cutover item below.
+2. **Set the signing secret**: copy the endpoint's `whsec_...` and run
+   `npx wrangler secret put STRIPE_WEBHOOK_SECRET` from `cloudflare/`.
+   The surface lights up on the secret alone — no code change, no redeploy.
+
+### Smoke plan (staging, once the secret exists)
+
+1. ✅ done dark: `/ready` reports `0011_orders.sql`; all webhook shapes 404 while unconfigured.
+2. Unsigned `POST /v1/webhooks/stripe` → **400** with the constant opaque body (flips from 404 once configured); response contains no `stripe`/`whsec`/`sk_test`/`req_`.
+3. `GET /v1/webhooks/stripe` and `POST /v1/webhooks/stripe/extra` → still **404**.
+4. Full money loop with the existing `stg-e2e.sh` catalogue: create an anonymous checkout **with a discount code**, mint its PaymentIntent via checkpoint 24, then confirm the intent with a test card (`4242…`) so Stripe delivers a real `payment_intent.succeeded`.
+5. Verify by D1 readback: exactly one `orders` row for the checkout with `status='paid'` and money matching the checkout exactly; `order_items` matching the frozen lines; one `order_status_history` row (`NULL → paid`); `checkouts.status='completed'`; the discount code's `used_count` incremented by exactly **1**; one `payment_events` row with `outcome='processed'`.
+6. **Resend the same event from the Stripe dashboard** → 200, and re-verify that order count and `used_count` are **unchanged**.
+7. Stripe dashboard endpoint health should show 200s throughout.
+
+### Known gaps / next checkpoints
+
+- No order **read** surface yet (admin list/detail, buyer lookup). `orders` is write-only from the webhook.
+- No **order confirmation email** — the outbox/email path is a later checkpoint. Prod deliberately sends print notifications via an outbox trigger rather than from the webhook; copy the outbox pattern, not a direct send.
+- **Refunds** unbuilt (columns and statuses exist). Prod drives refunds from a callable, never the webhook; `partially_refunded` is treated as production-ready for print notification there.
+- **Connect** still platform-direct; the `transfer_data`/`application_fee_amount` seam remains in `stripe-client.ts`.
+- No **production snapshot** (POD print graph) — prod builds one in the webhook transaction; that lands with the print domain.
+- **⚠️ CUTOVER ITEM (unchanged from 24, now sharper):** prod pins `2023-10-16` on the live account **and on its webhook endpoint**, while this worker pins `2026-07-29.dahlia`. The account version, the webhook endpoint version, and `STRIPE_API_VERSION` must be reconciled as ONE decision before cutover — an intent created under one version and read by a webhook pinned to another is exactly the drift that silently changes field shapes.
 
 ## Verification and research completed
 
