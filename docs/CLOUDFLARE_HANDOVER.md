@@ -1,6 +1,6 @@
 # Cloudflare migration handover
 
-**Last updated:** 2026-08-22, checkpoint 26 committed (hybrid keystone; render-farm endpoint dark, deploy only post-merge from main) — Fable orchestrating, Opus building, Fable reviewing
+**Last updated:** 2026-08-22, checkpoint 27 deployed dark (POD artwork domain on the Worker; farm URL + 4 secrets pending) — Fable orchestrating, Opus building, Fable reviewing
 **Owner:** Codex/SOL started; Fable continuation run
 **Continuation:** Fable or another agent should read this file, `CLOUDFLARE_MIGRATION.md`, and the three companion migration documents before changing code or infrastructure.
 
@@ -8,11 +8,11 @@
 
 - Branch: `cloudflare-migration`
 - Remote: `origin/cloudflare-migration`
-- Latest implementation checkpoint: checkpoint 26 — hybrid keystone: pure artwork pipeline core + dark render-farm job endpoint (see below)
+- Latest implementation checkpoint: checkpoint 27 — POD artwork domain: profiles, artwork library, render-farm dispatch (see below)
 - Staging bootstrap has RUN: one platform admin exists (owner's identity); the bootstrap route is permanently dead (verified 404 on replay; D1 readback: 1 user / 1 active platform_admin / 1 audit row).
 - Base application revision: `019a0b7` — `Harden checkout and print production pipeline`
 - Production Firebase remains live and untouched by this migration run.
-- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0011), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
+- Staging resources in the personal Cloudflare account: D1 `meteorshop-stg-db` (migrations 0001–0012), Worker `meteorshop-stg-api`, auth-email Queue + DLQ, R2 buckets `meteorshop-stg-public` / `meteorshop-stg-private` / `meteorshop-stg-temp`, secret `BETTER_AUTH_SECRET`.
 - No **production** resources, DNS records, custom routes, Containers, Stripe endpoints, or email integrations have been created.
 - The user's personal Cloudflare account is designated for staging/non-production.
 - A separate Cloudflare production account is required before cutover, but does not need to exist yet.
@@ -599,6 +599,154 @@ Its one flagged delta was the preview-render/UUID reordering already recorded ab
 3. Deploy only the new function: `firebase deploy --only functions:renderFarmProcessArtwork`. **Until step 2 exists the deployed function answers 404 to everything**, which is a safe intermediate state — deploying before creating the secret is fine.
 4. Set the SAME value as a Cloudflare Worker secret when the CF POD checkpoint lands, and point the Worker at the deployed function URL.
 5. Nothing is retired at that point either — the callable and the endpoint run side by side through the dual-run transition.
+
+## Checkpoint 27 — POD artwork domain: the Worker side of the render-farm seam (DEPLOYED DARK 2026-08-22)
+
+- Fable-reviewed line-by-line, committed `6c7fb77`; migration 0012 applied to staging D1; deployed as version `1878e6a8-7dd6-499f-9608-9304bae28e9f`. Dark smoke green: `/ready` reports `0012_pod_artwork.sql`, all four POD routes answer fail-closed 404 while unconfigured, existing surfaces intact (products 200). Gate independently re-run: 916/916, dry-run 2558.47 KiB / gzip 410.16, control-byte scan clean.
+
+- Built by an Opus subagent; awaiting Fable review. Migration `0012_pod_artwork.sql` written and **applied only to the local vitest/miniflare D1** — the remote staging database is untouched, `wrangler.jsonc` gained two non-secret vars (see below), and nothing was deployed. This is the CALLER side of `docs/RENDER_FARM_CONTRACT.md` v0, whose counterpart (checkpoint 26's `functions/src/render-farm/processArtworkJob.ts`) is committed but likewise undeployed.
+- Scope built: profiles + artwork library + render-farm job dispatch + verdict persistence. **Out of scope and untouched:** print queue/portal, production snapshots, POD product/order integration, mockups.
+- New dependency: **`aws4fetch` 1.0.20**, pinned exact, MIT, zero dependencies. `npm audit`: **0 vulnerabilities**.
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `cloudflare/migrations/0012_pod_artwork.sql` | **new** — `pod_profiles` (platform-level) + `pod_artwork` (tenant-scoped) with 5 triggers, the status/output CHECK discipline and the concurrency UNIQUE |
+| `cloudflare/src/pod/render-farm-client.ts` | **new** — contract-v0 envelope construction, SigV4 presigning via aws4fetch, farm dispatch with explicit handling of every response shape, both symbol test seams, `isPodConfigured` |
+| `cloudflare/src/pod/pod-profiles.ts` | **new** — platform profile store: strict parser, full-replace batch, `toJobProfile` (the five-field reduction) |
+| `cloudflare/src/pod/artwork-store.ts` | **new** — the dispatch flow (guarded insert → presign → dispatch → verify → persist), list/detail/delete, preview-key resolution |
+| `cloudflare/src/pod/artwork-routes.ts` | **new** — the dispatch body parser (strict two-key allowlist) |
+| `cloudflare/src/index.ts` | + 4 POD routes, `handleAdminPodRoute`, `handlePlatformPodProfilesRoute`, dispatch rate-limit constants, `/ready` → 0012 |
+| `cloudflare/src/env.d.ts` | + the six POD config values, all `string \| undefined` |
+| `cloudflare/wrangler.jsonc` | + `R2_ACCOUNT_ID` and `R2_PRIVATE_BUCKET_NAME` vars (non-secret; rationale below) |
+| `cloudflare/test/pod-artwork.test.ts` | **new** — 100 tests incl. the envelope validator that pins the wire format |
+| `cloudflare/vitest.config.ts`, `cloudflare/test/env.d.ts` | + the six test-only POD bindings |
+| `cloudflare/test/health.test.ts`, `cloudflare/test/public-catalog.test.ts` | `/ready` migration pin `0011_orders.sql` → `0012_pod_artwork.sql` |
+
+### Migration 0012 — two tables, deliberately different tenancy
+
+- **`pod_profiles` is PLATFORM-level (no `tenant_id`)**, matching production's single `settings/podProfiles` document written only under `isPlatform`. A profile encodes the PRINT SHOP's physical capability — the 300 DPI floor, the print areas, the formats sharp can rasterize — and the print shop is the platform's supplier, not a tenant's. A tenant able to lower its own `min_dpi` could admit files the printer refuses, and the rejection would arrive as a returned order rather than an upload error. Simple, replaceable rows: no immutability trigger, no audit trigger, because the platform PUT replaces the list wholesale and no verdict depends on a row surviving.
+- **`pod_artwork` is tenant-scoped** with the full discipline: tenant-immutability trigger, tenant-match triggers against `stored_objects` (the FK points at a global PK and is satisfied by ANY tenant's object — the same gap 0007 closed against products and 0011 against checkouts), and `updated_at >= created_at`.
+- **`profile_id` is a frozen plain string with NO FK.** A verdict is a measurement taken under a specific spec at a specific moment; the spec is platform-editable and profiles can be retired. A FK would mean retiring a profile is either impossible (RESTRICT) or silently rewrites history (SET NULL/CASCADE). Both are worse than a dangling string — the same reasoning production applies to `validation.profileId` and checkpoint 22 applied to discount scope ids.
+- **Output keys live under `pod/{tenant_id}/print|preview/`**, checked byte-exactly with `substr()`/`=` (checkpoint 15's discipline: `LIKE` treats `_` as a wildcard and is ASCII-case-insensitive, so tenant `a_b` would accept `pod/axb/…`). Deliberately OUTSIDE the `shops/` prefix that `stored_objects` enforces, and deliberately NOT `stored_objects` rows — so the checkpoint-16 admin object surface, the only client-reachable path to R2, cannot name them at all. That is the delivery teeth, made structural instead of rule-based.
+- **What SQL enforces**, all probed against SQLite before anything was built on it: `status='ready'` requires all six output fields AND all six verdict facts (a half-written ready row is unstorable); `status='rejected'` requires a non-empty reasons array; `status='processing'` forbids output keys; a terminal status can never change; output keys are write-once; `UNIQUE (tenant_id, original_object_id, profile_id)`.
+- **What SQL cannot enforce, stated plainly:** that the bytes at `print_object_key` are the ones the farm produced (only the size verification and the persisted sha256 speak to that), that `profile_id` names a live profile, and that the reported sha256 matches the stored object. Those are application invariants.
+
+### The render-farm client
+
+- **Presigned S3 URLs, not worker-proxied ones, and the farm's allowlist is why.** The farm only touches hosts ending `.r2.cloudflarestorage.com` (applied to the input GET and BOTH output PUTs), so a URL pointing back at this worker would be refused. **R2 bindings cannot presign** — `R2Bucket` has no signing capability, since signing needs a key pair a binding deliberately does not carry. So the same bytes are reachable two ways this checkpoint, for different jobs: the binding for HEAD verification and delete (no credentials needed), SigV4 for the two capability URLs handed to the farm.
+- **`aws4fetch` over `@aws-sdk/client-s3`**: Cloudflare documents it as the way to presign R2 from a Worker, it is zero-dependency and signs with `fetch` + `SubtleCrypto`. Bundle impact **+41.96 KiB raw / +9.55 KiB gzip** (2516.51 → 2558.47; gzip 400.61 → 410.16).
+- **⚠️ REAL FINDING — the content-type pin needs `allHeaders: true`, and Cloudflare's own example is misleading.** aws4fetch keeps an `UNSIGNABLE_HEADERS` set containing `content-type` (with authorization, content-length, user-agent, range…) and FILTERS IT OUT of the signature by default. Signing a PUT with a Content-Type header and default options produces `X-Amz-SignedHeaders=host` — the header travels, but nothing binds the uploader to it and any media type would be accepted. Verified both ways under 1.0.20: default → `host`, `allHeaders: true` → `content-type;host`. **This was caught by a test asserting on `X-Amz-SignedHeaders`, not by reading the docs** — Cloudflare's documented example passes a Content-Type without `allHeaders` and describes the result as pinning the type, which against this version it does not. The code now passes `allHeaders: true` and a test pins it.
+- **Timeout: `AbortSignal.timeout(330_000)`.** Researched against the current Workers limits page rather than assumed: there is **no per-subrequest time limit** and **no wall-clock limit** for HTTP-triggered Workers, and waiting on a `fetch()` **does not consume CPU time** (so the 30 s default CPU limit is never approached by an await). What actually bounds this call, in order: (1) this timeout, the only bound the worker controls; (2) the client connection — everything is conditioned on "as long as the client remains connected", and `ctx.waitUntil` would buy only 30 s past a disconnect, so it is no rescue for a 300 s job; (3) the farm's own 300 s function timeout, which fires first in every normal failure. 330 s is deliberately ABOVE the farm's ceiling so a merely-slow farm answers with its own 502 rather than being cut off here and reported as a timeout of unknown origin. Cloudflare's 524 / 125 s Proxy Read Timeout governs the reverse-proxy→origin path and does **not** apply to Worker subrequests.
+- **Presign TTL 900 s** for job URLs (farm ceiling 300 s, input fetched at job start and outputs PUT at job end, so a 3× margin over the whole job), **300 s** for preview downloads. R2 permits up to 604 800 s; nothing about that ceiling makes a long TTL appropriate.
+- **Every farm response shape handled explicitly**: 200 ok:true (re-validated field by field, then verified), 200 ok:false (verdict), non-2xx and network/timeout/redirect failures (one opaque `failed`). **Nothing from the farm's response body is read, logged, or propagated** — its error bodies are constant by design, its detail lives in its own logs keyed by jobId, and propagating any of it would put upstream text in a tenant admin's browser.
+- **Test seams**: two plain `Symbol`s (not `Symbol.for`, whose global registry would let any in-process code mint an equal key from the string alone). Unreachable except by importing the binding, unexpressible in `wrangler.jsonc`, so the deployed path always builds the real client. **No test performs HTTP to a farm.**
+
+### Verify-before-ready, and the sha256 asymmetry
+
+Both outputs are HEAD'd **through the R2 binding** and their sizes compared to the farm's double-report before `status='ready'` is written. **Size is compared; sha256 is deliberately NOT re-hashed**, and the asymmetry is reasoned rather than lazy:
+
+- The size check is free — `head()` returns the size without moving a byte — and it catches the entire class of failure this verification exists for: a truncated or partial upload, which is what a network fault during a PUT actually produces.
+- Re-hashing would mean streaming both outputs back through the isolate (a print PNG is routinely tens of megabytes) on every upload, to defend against an adversary who holds the shared secret and controls the farm. Such an adversary already holds a presigned PUT URL for that exact key and could report the hash of whatever they uploaded; the hash would verify and prove nothing. **A check that cannot detect the threat it appears to address is worse than an honest absence of one.** The farm is a trusted platform component; this verification is against FAULTS.
+- The reported sha256 is still persisted — for a future integrity sweep that can afford to stream (a cron job, not a request path) and for the print portal to pin the bytes it delivered.
+
+### Decisions the spec left open, and how they were resolved
+
+1. **Farm failure → DELETE the row, not a `'failed'` status.** A `'failed'` row would occupy the UNIQUE triple, so the obvious retry (re-post the same body) would 409 forever; making retry work would need a retry verb or a rule that failed rows may be overwritten — and the second reopens the mutable-verdict hole the terminal-status trigger closes. Deleting makes **replay the retry**: the identical request simply works, matching the contract's own principle that jobs are pure and replays are safe by construction. The delete is guarded on `status='processing'` so it can only remove the row this call created. A test proves no stuck row remains and the retry succeeds.
+2. **Concurrency → UNIQUE `(tenant_id, original_object_id, profile_id)`, with the insert BEFORE the dispatch.** The constraint arbitrates the race before any outbound compute is spent: the loser never reaches the farm. Tested with two genuinely concurrent posts asserting one row, one farm call, and statuses `[201, 409]`. Re-running the same original under a *different* profile is deliberately allowed — that is a different measurement, and prod's reprocess mode exists for exactly it.
+3. **Preview delivery → presigned GET, NOT the cp16 signed-URL machinery.** Those outputs are not `stored_objects` rows, so cp16's delivery path — which resolves that table as its sole authority — has nothing to resolve. Reusing it would mean either inventing ownership rows for server-owned objects (handing the client-facing object surface a grip on print outputs, i.e. exactly what the delivery teeth protect) or bypassing its authorization check. A short-TTL presign keeps authorization here, where session and tenant were already proven.
+4. **Print files are NOT deliverable from this surface at all.** Only the preview gets a URL. Delivering print files belongs to the print-portal checkpoint, and inventing a path here would create a second delivery route with no queue behind it.
+5. **Dispatch rate limit: 5/min per IP** — half the anonymous checkout allowance, despite sitting behind a live admin session, because of what one request costs: a synchronous call that may hold a 2 GiB Firebase instance for 300 s running sharp, on a farm that runs at **concurrency 1**. A few parallel dispatches is not "load on D1", it is the platform's entire render capacity. Generous against the honest flow (an admin waits on a spinner), hostile to a compromised session becoming a denial of service against every other tenant's uploads.
+6. **`R2_ACCOUNT_ID` is a var, not a secret.** Researched: **Cloudflare exposes no account id to a Worker at runtime** — no binding, no global, and `wrangler.jsonc`'s top-level `account_id` is a deploy-time targeting field never injected into `env`. So it must be supplied as configuration. A secret would be ceremony implying a confidentiality it does not have: it appears in plaintext inside every presigned URL. It is already recorded as a non-secret configuration identifier in this handover (checkpoint 3). `R2_PRIVATE_BUCKET_NAME` joins it for the same reason — and it is genuinely distinct from the `PRIVATE_BUCKET` binding, since a binding carries no way to recover the name it points at. **These two are the only `wrangler.jsonc` change**; the four genuine secrets stay bindings-invisible, so the surface still lights up on `wrangler secret put` alone.
+7. **`RENDER_FARM_URL` is secret-shaped config** so no wrangler change is needed for it and the address of a compute endpoint stays out of the repository.
+
+### Deliberate divergences from production
+
+1. **A rejected upload KEEPS its original.** Prod's new-upload mode deletes it ("failed files never enter the library"). Here the original is a checkpoint-16 `stored_objects` row this module borrowed, with a lifecycle — freezing, soft-delete, its own audit trail — that this module does not own; deleting it would be reaching across a boundary. The owner deletes it through `DELETE /v1/admin/objects/{id}`, the surface that created it. Practically the uploader benefits too: a rejection is usually a resolution problem, and keeping the file allows a re-run under a different profile without re-uploading. Pinned by a test.
+2. **Verdicts are IMMUTABLE; prod's reprocess mutates the doc in place.** Prod flips `status` ready↔rejected on an existing artwork doc. Here a trigger forbids it: prod's artwork docs are client-writable and it had no constraint layer to lean on, whereas here a mutable verdict would mean a print file's key could change under an order that already referenced it. Re-measuring is a delete plus a fresh dispatch.
+3. **Only ACTIVE, `artwork_original`-kind, private objects may be dispatched.** Prod prefix-validates a client-writable path string. Here the object store row is the authority, and admitting an arbitrary private object would make this route a general-purpose "run sharp on anything I own" primitive.
+4. **Profiles are validated against a format allowlist** (`png/jpg/tiff/webp`). Prod's seed script can write anything. PDF/SVG are refused because sharp cannot rasterize them in v1 — admitting them would produce uploads that always fail with a confusing message.
+5. **`max_file_mb` is NOT NULL and positive.** The pipeline core treats 0/absent as "no size gate"; making it mandatory means the tightest bound is always the profile's, rather than leaving the farm's 200 MB hard ceiling as the only defence.
+
+### Mutation log — 14 run, 13 killed, 1 honest equivalent, **2 real gaps found and closed**
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | Drop tenant scoping on the original ownership lookup | **KILLED** — 1 |
+| 2 | Drop the POD config gate on the admin surface | **KILLED** — 19 |
+| 3 | Drop the verify-before-ready check | **KILLED** — 3 |
+| 4 | Drop `AND status = 'processing'` on the ready UPDATE | **SURVIVED → gap → new test → KILLED** |
+| 5 | Widen the fake farm's URL allowlist | **Control mutation, survived by design** — see below |
+| 5b | Make the worker emit a non-R2 presigned host | **KILLED** — 14 |
+| 6 | Drop the UNIQUE-conflict branch on the guarded insert | **KILLED** — 1 |
+| 7 | Drop the active+kind restriction on the original | **KILLED** — 2 |
+| 8 | Drop tenant scoping from the artwork SELECT | **KILLED** — 2 |
+| 9 | Drop tenant scoping on the DELETE statement alone | **EQUIVALENT MUTANT** — see below |
+| 9b | Drop it from BOTH the delete's read and its statement | **KILLED** — 2 |
+| 10 | Move the rate limiter after the body parse | **KILLED** — 1 |
+| 11 | Leak the farm URL into the 502 body | **KILLED** — 2 |
+| 12 | Leak presentation fields into the job profile | **KILLED** — 1 |
+| 13 | Weaken the config gate to a single value | **KILLED** — 16 |
+| 14 | Drop the per-object `maxBytes` bound | **KILLED** — 1 |
+
+**Three findings worth recording:**
+
+- **#4 was a real gap.** Every test reached the ready UPDATE with the row genuinely in `processing`, so the guard was never the defence under test and dropping it changed nothing. Closed with a test whose fake farm flips the row to a terminal state *while the dispatch is in flight* — the actual race — asserting the mid-flight verdict stands, no output key is attached to a rejection, and the route still answers.
+- **#5 vs #5b — the difference between a control and a pin.** Widening the *fake's* allowlist cannot fail while the worker produces correct URLs; that mutation tests the test, not the product. The mutation that matters is #5b, making the **worker** emit `https://evil.example.com/?x=.r2.cloudflarestorage.com` — the classic suffix-match bypass — and it dies against 14 tests. The wire-format pin genuinely bites when the caller drifts, which is the whole reason the fake re-implements the farm's validator.
+- **#9 is an honest equivalent mutant, stated rather than papered over.** The delete's row read already scopes by tenant, so stripping the binding from the DELETE statement changes no observable behaviour — the two are layers over one hole. A test was added that calls `deleteArtwork` directly with a foreign principal, and it does not kill #9 either, because the read shields the statement there too. #9b, which removes *both* layers, dies against 2 tests: the mechanism is tested, the redundancy is not, and the statement's binding remains as defence against a TOCTOU re-home between read and write.
+
+### Test-fixture traps recorded (the gate caught the tests, not the product)
+
+- **The miniflare R2 bucket PERSISTS across tests while D1 is truncated.** Four tests failed on accumulating object counts and none was a product defect. Anything asserting on bucket *contents* must start from a known-empty bucket; the suite now sweeps both tenants' `pod/` prefixes in `beforeEach`. Same class as checkpoint 24's per-instance counter and checkpoint 22's frozen-`NOW` window.
+- **`audit_events` is append-only by trigger**, so a bare `LIMIT 1` reads an earlier test's row. Audit assertions must order newest-first.
+- The frozen `SEED_NOW` constant is deliberately in the **past** and is written only into seed rows, never into rows a live route created with the real clock — the checkpoint-24.1 rule.
+
+### What the tests cover, and what only a live smoke can
+
+**Covered for real:** the wire format field by field against the deployed validator; every response shape; and — because the fake farm writes real bytes into the miniflare R2 binding at the keys the presigned URLs name — **the verify-before-ready path runs against genuine R2 state**, so a missing or wrong-sized object is a real HEAD answer rather than a stub. The real aws4fetch signing path is exercised by four dedicated tests asserting host, path, `X-Amz-Expires`, the `/auto/s3/` credential scope, and `X-Amz-SignedHeaders`.
+
+**NOT covered, and only staging can prove it:** whether R2's S3 endpoint **accepts** the signature. The fake parses the key out of the URL path rather than dereferencing it, so a malformed signature, a wrong region or service name, or a mis-set expiry would pass every test here and fail on the first real dispatch. This is the single most important thing the staging smoke must establish.
+
+### Gate
+
+- `npm run check`: types current, TypeScript clean, **916/916 tests green** (100 new; 816 → 916).
+- `npm run deploy:dry-run`: **2558.47 KiB / gzip 410.16 KiB** (from 25's 2516.51 / 400.61 — **+41.96 / +9.55**, entirely aws4fetch). Bindings gained only the two non-secret vars; the four secrets stay bindings-invisible.
+- `npm run startup`: profile window 87.4 ms, active **55.8 ms** (25 was 59.1 ms), no startup blocker.
+- `npm audit` on `aws4fetch@1.0.20`: **0 vulnerabilities**.
+- Control-byte scan (python, not grep) over all 14 touched files: **CLEAN** — valid UTF-8, no control bytes, no BOM, no CRLF.
+- Migration 0012 applied to a scratch SQLite database alongside 0001–0011 and probed with 15 adversarial statements before any code was written on top of it; every CHECK, trigger and UNIQUE behaved as designed.
+
+### Owner steps to light this up (do NOT do these yet — nothing here is deployed)
+
+1. **Merge and deploy the Firebase side first.** The farm's URL does not exist until `functions/` deploys from `main` post-merge. Checkpoint 26's deployment caveat still stands verbatim: this branch's `functions/` tree **lags main**, and deploying it as-is would regress production. Merge first, then `firebase deploy --only functions:renderFarmProcessArtwork`, then read the deployed function's URL.
+2. **Create an R2 API token** (dashboard: R2 → Account Details → Manage next to API Tokens → **Account** API token, not a User token — a User token dies with the user). Permission **Object Read & Write**, scoped to `meteorshop-stg-private` if bucket scoping is offered. The Access Key ID is the token's id; the Secret Access Key is shown **once** and is unrecoverable. There is no wrangler command for this.
+3. **Apply migration 0012** to staging D1: `npx wrangler d1 migrations apply meteorshop-stg-db --remote`.
+4. **Set the four secrets** from `cloudflare/`, using the SAME `RENDER_FARM_TOKEN` value as Firebase Secret Manager:
+   - `npx wrangler secret put RENDER_FARM_URL` (the deployed function URL from step 1)
+   - `npx wrangler secret put RENDER_FARM_TOKEN`
+   - `npx wrangler secret put R2_ACCESS_KEY_ID`
+   - `npx wrangler secret put R2_SECRET_ACCESS_KEY`
+   The two vars are already in `wrangler.jsonc` and land with the deploy. **Until all six exist the whole POD surface answers 404**, which is a safe intermediate state — deploying before the secrets is fine.
+5. **Seed the profiles** with a platform-session `PUT /v1/platform/pod/profiles`, using the real print-shop specs from `docs/POD_PRINT_SPEC.md` (`apparel_dtg` = 300×400 mm at 300 DPI, 50 MB, png/jpg/tiff/webp — mirroring `scripts/seed-pod-profiles.cjs`).
+
+### Smoke plan (staging, once configured)
+
+1. Dark checks first: `/ready` reports `0012_pod_artwork.sql`; every POD route 404s while the secrets are absent.
+2. **The one thing local tests cannot prove — that R2 accepts the signature.** Upload an original through the cp16 object flow, dispatch it, and confirm a `ready` verdict. A `502` here with the farm healthy means the presign is wrong; check `X-Amz-Credential` names `/auto/s3/` and that the farm's logs show the input fetch succeeding.
+3. A real undersized file (e.g. 900×900) must come back **200 `rejected`** with the Swedish `resolution_too_low` message intact, and its original must survive.
+4. Verify by D1 readback: `pod_artwork` row `status='ready'` with `effective_dpi`, both keys under `pod/{tenant}/`, both sha256/bytes populated; and by R2 readback that both objects exist at the reported sizes.
+5. Delete the artwork; confirm the row and both objects are gone and the **original still exists**.
+6. Confirm the dispatch limiter: a sixth POST within a minute is a 429.
+
+### Known gaps / next checkpoints
+
+- **No print-file delivery** — only the preview is reachable. The print portal owns that.
+- **No reference check on delete.** Nothing can reference an artwork yet (POD products, order lines, print jobs are all later); the delete is a single guarded statement whose WHERE clause is where a `NOT EXISTS (…)` term lands, and the `changes === 0` branch already answers correctly when a guard refuses.
+- **No integrity sweep.** The persisted sha256 is the input to one; a cron job can afford to stream what a request path cannot.
+- **No reprocess verb.** Verdicts are immutable by design; re-measuring is delete + re-dispatch. A dedicated verb may be worth it when the spec next tightens (prod needed one after 2026-07-27).
+- **The synchronous v0 contract still ties a 300 s job to a held client connection.** The contract's own answer — a queue + polling revision for async job types — is the fix when that stops being acceptable, not a `waitUntil` bolt-on (which buys only 30 s past a disconnect).
+- **Token rotation is still single-token** on both sides, as checkpoint 26 documented.
 
 ## Verification and research completed
 
