@@ -23,6 +23,7 @@
     "wrangler": "4.123.0"
   },
   "dependencies": {
+    "aws4fetch": "1.0.20",
     "better-auth": "1.6.29",
     "stripe": "22.5.0"
   }

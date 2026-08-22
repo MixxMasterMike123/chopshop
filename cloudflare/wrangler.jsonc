@@ -11,6 +11,20 @@
     "APP_ENV": "staging",
     "AUTH_BASE_URL": "https://meteorshop-stg-api.micke-ohlen.workers.dev",
     "AUTH_TRUSTED_ORIGINS": "https://meteorshop-stg-api.micke-ohlen.workers.dev",
+    // The R2 S3 endpoint's account id. A VAR, not a secret, and deliberately:
+    // it appears in plaintext inside every presigned URL the POD surface mints,
+    // and it is already recorded as a non-secret configuration identifier
+    // elsewhere in this repo (it is the `account_id` above). It must live here
+    // because CLOUDFLARE EXPOSES NO ACCOUNT ID TO A WORKER AT RUNTIME — there is
+    // no binding and no global, and the top-level `account_id` is a deploy-time
+    // targeting field that is never injected into `env`.
+    "R2_ACCOUNT_ID": "0d392e5c79e386966a98a214ac91a133",
+    // The private bucket's NAME, as distinct from the PRIVATE_BUCKET binding
+    // below. Both are needed and they are not interchangeable: the binding moves
+    // bytes without credentials, while a presigned S3 URL must address the
+    // bucket by name — and a binding carries no way to recover the name it
+    // points at.
+    "R2_PRIVATE_BUCKET_NAME": "meteorshop-stg-private",
     "SERVICE_NAME": "meteorshop-stg-api"
   },
   "r2_buckets": [

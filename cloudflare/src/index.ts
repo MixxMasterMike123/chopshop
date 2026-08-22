@@ -64,6 +64,24 @@ import {
   createPlatformUser,
   parseCreateUserInput,
 } from "./platform/provision-users";
+import {
+  createArtwork,
+  deleteArtwork,
+  getArtwork,
+  getPreviewKey,
+  listArtwork,
+} from "./pod/artwork-store";
+import { parseCreateArtworkInput } from "./pod/artwork-routes";
+import {
+  listActiveProfiles,
+  parseReplaceProfilesInput,
+  replaceProfiles,
+} from "./pod/pod-profiles";
+import {
+  isPodConfigured,
+  resolveR2Presigner,
+  resolveRenderFarmClient,
+} from "./pod/render-farm-client";
 import { jsonResponse } from "./lib/http";
 import { clientIp, enforceRateLimit } from "./lib/rate-limit";
 import {
@@ -101,7 +119,11 @@ const PLATFORM_USERS_PATH = "/v1/platform/users";
 // rather than /v1/platform keeps it out of the namespace whose other routes all
 // require a live platform session; nothing here has a session at all.
 const STRIPE_WEBHOOK_PATH = "/v1/webhooks/stripe";
-const REQUIRED_MIGRATION = "0011_orders.sql";
+const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
+const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
+const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
+const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
+const REQUIRED_MIGRATION = "0012_pod_artwork.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -136,6 +158,43 @@ export const PAYMENT_IP_WINDOW_MS = MINUTE_MS;
 export const BOOTSTRAP_IP_SCOPE = "bootstrap-ip";
 export const BOOTSTRAP_IP_LIMIT = 5;
 export const BOOTSTRAP_IP_WINDOW_MS = 10 * MINUTE_MS;
+
+/**
+ * The artwork dispatch route's per-IP shield.
+ *
+ * TIGHT — 5 per minute, half the anonymous checkout allowance — even though
+ * this surface sits behind a live tenant-admin session, because of what one
+ * request costs. Past this gate is a synchronous call to the render farm that
+ * may hold a 2 GiB Firebase instance for up to 300 seconds running sharp over a
+ * file up to the profile's cap, and the farm runs at concurrency 1. A handful
+ * of parallel dispatches is therefore not "some load on D1"; it is the whole
+ * render capacity of the platform, occupied.
+ *
+ * Five per minute is generous against the honest flow: an admin uploads a motif
+ * and waits for a spinner, and even a bulk uploader working through a folder
+ * cannot start a sixth job in a minute while the first five are still running.
+ * It is hostile to the case that matters — a compromised or careless admin
+ * session turning into a denial of service against every other tenant's
+ * uploads, which is the shape a shared, serialized compute resource takes when
+ * nothing bounds it.
+ *
+ * The limiter runs BEFORE the profile lookup, the ownership check, the insert
+ * and the farm call, so a flood is refused without spending any of the work it
+ * is trying to provoke.
+ */
+export const POD_DISPATCH_IP_SCOPE = "pod-dispatch-ip";
+export const POD_DISPATCH_IP_LIMIT = 5;
+export const POD_DISPATCH_IP_WINDOW_MS = MINUTE_MS;
+
+/**
+ * How long a preview download URL stays valid.
+ *
+ * Short by design: it is minted per detail-read, handed to a browser that is
+ * about to render it, and a rendered preview does not need an hour of validity.
+ * A leaked URL is a capability on one tenant's preview image, and 300 seconds
+ * bounds that without making the admin UI re-fetch mid-session.
+ */
+const PREVIEW_URL_TTL_SECONDS = 300;
 
 type AdminProductAction = "publish" | "unpublish";
 
@@ -1144,6 +1203,258 @@ async function handleStripeWebhookRoute(
   return jsonResponse({ received: true }, 200);
 }
 
+/**
+ * Parses `/v1/admin/pod/artwork/{artworkId}` and nothing else.
+ *
+ * Strict single-segment shape with the same safe percent-decoding every other
+ * id route uses. A sub-path, an extra segment or a malformed encoding is not a
+ * route here and answers the same 404 an unknown artwork gets.
+ */
+function podArtworkIdFromPath(pathname: string): string | null {
+  if (!pathname.startsWith(ADMIN_POD_ARTWORK_PATH_PREFIX)) {
+    return null;
+  }
+
+  const segments = pathname
+    .slice(ADMIN_POD_ARTWORK_PATH_PREFIX.length)
+    .split("/");
+  const [rawId, ...rest] = segments;
+  if (rawId === undefined || rest.length > 0) {
+    return null;
+  }
+
+  return decodeSegment(rawId);
+}
+
+/**
+ * The POD artwork surface — profiles, the library, and the render-farm dispatch.
+ *
+ * ── THE SURFACE IS DARK UNTIL FULLY CONFIGURED ──────────────────────────────
+ * Every route below answers a fail-closed 404 while any of the six POD
+ * configuration values is missing, and the gate runs FIRST — before the method
+ * check, before the path parse, before the session guard, before D1 and before
+ * the rate limiter — so an unconfigured deployment is indistinguishable from
+ * one where none of this was ever written. Same contract as the payment and
+ * webhook surfaces, and for a sharper reason here: a partially configured POD
+ * worker cannot do anything useful, so admitting callers to a broken surface
+ * would only produce confusing failures on a path that ends at a print shop.
+ *
+ * ── WHY THE FARM'S ANSWER NEVER REACHES THE CLIENT ──────────────────────────
+ * A dispatch failure is one opaque 502 that names neither the farm, its URL,
+ * its status code, nor its body. The farm's own error bodies are constant by
+ * design and its detail lives in its logs keyed by jobId; propagating any of it
+ * would put upstream text in a tenant admin's browser and, worse, would let a
+ * caller distinguish "the farm is down" from "the farm rejected the envelope"
+ * — the second of which is a fact about this worker's own correctness that no
+ * client needs.
+ */
+async function handleAdminPodRoute(
+  env: Env,
+  request: Request,
+  url: URL,
+): Promise<Response> {
+  // The unconfigured gate, first and before everything.
+  if (!isPodConfigured(env)) {
+    return adminNotFoundResponse();
+  }
+
+  const principal = await authorizeTenantAdminRequest(env, request);
+  if (principal === null) {
+    return adminNotFoundResponse();
+  }
+
+  // Same split the objects and discount-code surfaces use: CSRF on state
+  // changes only, because browsers send no Origin on a same-origin GET and a
+  // check that fails closed on a missing one would make the reads unusable from
+  // the admin UI they exist for. The GETs remain fully privileged behind the
+  // live session and membership guard.
+  if (request.method !== "GET" && !isSameOriginRequest(request)) {
+    return adminNotFoundResponse();
+  }
+
+  const now = Date.now();
+
+  if (url.pathname === ADMIN_POD_PROFILES_PATH) {
+    if (request.method !== "GET") {
+      return adminNotFoundResponse();
+    }
+
+    return jsonResponse({ profiles: await listActiveProfiles(env.DB, principal) });
+  }
+
+  if (url.pathname === ADMIN_POD_ARTWORK_PATH) {
+    if (request.method === "GET") {
+      return jsonResponse({ artwork: await listArtwork(env.DB, principal) });
+    }
+
+    if (request.method !== "POST") {
+      return adminNotFoundResponse();
+    }
+
+    // BEFORE the body is parsed, before the profile lookup, before the
+    // ownership check, and — the point of putting it here — before the farm is
+    // touched. See POD_DISPATCH_IP_SCOPE for why this limit is tight.
+    const byIp = await enforceRateLimit(env.DB, {
+      key: clientIp(request),
+      limit: POD_DISPATCH_IP_LIMIT,
+      now,
+      scope: POD_DISPATCH_IP_SCOPE,
+      windowMs: POD_DISPATCH_IP_WINDOW_MS,
+    });
+    if (!byIp.allowed) {
+      return rateLimitedResponse(byIp.retryAfterSeconds);
+    }
+
+    const input = parseCreateArtworkInput(await readJsonBody(request));
+    if (input === null) {
+      return invalidRequestResponse();
+    }
+
+    const result = await createArtwork(
+      env,
+      env.DB,
+      resolveRenderFarmClient(env),
+      resolveR2Presigner(env),
+      principal,
+      input,
+      now,
+    );
+
+    if (result.status === "not_found") {
+      // Unknown/foreign/pending original, or an unknown or retired profile.
+      // One answer for all of them: naming which would turn this route into an
+      // oracle for another tenant's object ids.
+      return adminNotFoundResponse();
+    }
+
+    if (result.status === "conflict") {
+      return jsonResponse(
+        {
+          error: {
+            code: "conflict",
+            message: "Artwork already exists for this original and profile",
+          },
+        },
+        409,
+      );
+    }
+
+    // 201 for a ready verdict, 200 for a rejection. A rejection is a
+    // SUCCESSFUL request whose artwork failed the gate — the same distinction
+    // the farm itself draws by answering 200 `{ ok:false }` — and answering
+    // 4xx would tell the client its request was wrong when it was not.
+    if (result.status === "created" || result.status === "rejected") {
+      return jsonResponse(
+        { artwork: result.artwork },
+        result.status === "created" ? 201 : 200,
+      );
+    }
+
+    // 502 rather than 500: the failure is upstream. No stuck row remains — the
+    // dispatch path deleted it — so an honest client retry with the same body
+    // simply works, which is the retry story the contract's purity principle
+    // makes possible.
+    return jsonResponse(
+      {
+        error: {
+          code: "artwork_unavailable",
+          message: "Artwork could not be processed",
+        },
+      },
+      502,
+    );
+  }
+
+  const artworkId = podArtworkIdFromPath(url.pathname);
+  if (artworkId === null) {
+    return adminNotFoundResponse();
+  }
+
+  if (request.method === "GET") {
+    const artwork = await getArtwork(env.DB, principal, artworkId);
+    if (artwork === null) {
+      return adminNotFoundResponse();
+    }
+
+    // The preview download URL, minted per read.
+    //
+    // PRESIGNED rather than routed through this worker's own delivery
+    // machinery, deliberately and consistently with how the outputs are
+    // written: these objects are NOT `stored_objects` rows, so the checkpoint-16
+    // signed-delivery path — which resolves that table as its sole authority —
+    // has nothing to resolve for them. Reusing it would mean either inventing
+    // ownership rows for server-owned objects (giving the client-facing object
+    // surface a handle on print outputs, which is exactly the delivery teeth
+    // this checkpoint is protecting) or bypassing its authorization check. A
+    // short-TTL presigned GET keeps the authorization here, where the session
+    // and tenant were already proven, and hands out a capability that expires.
+    //
+    // Only READY artwork has a preview; anything else gets null rather than a
+    // URL to nothing.
+    const previewKey = await getPreviewKey(env.DB, principal, artworkId);
+    const previewUrl =
+      previewKey === null
+        ? null
+        : await resolveR2Presigner(env).presignGet(previewKey, PREVIEW_URL_TTL_SECONDS);
+
+    return jsonResponse({ artwork, previewUrl });
+  }
+
+  if (request.method !== "DELETE") {
+    return adminNotFoundResponse();
+  }
+
+  const deleted = await deleteArtwork(env, env.DB, principal, artworkId, now);
+
+  return deleted.status === "ok"
+    ? new Response(null, { status: 204 })
+    : adminNotFoundResponse();
+}
+
+/**
+ * Platform replacement of the print profile list.
+ *
+ * PLATFORM-guarded, not tenant-guarded, because a profile encodes the print
+ * shop's physical capability rather than any tenant's preference — see
+ * src/pod/pod-profiles.ts. A tenant able to lower its own `min_dpi` could admit
+ * files the printer will refuse, and the rejection would arrive as a returned
+ * order rather than as an upload error.
+ *
+ * Full replace rather than per-profile PATCH: the list IS a specification
+ * document that arrives from the printer as a unit, and production edits it
+ * exactly that way. A partial-update surface would invite a state where two
+ * profiles disagree about the same physical product.
+ */
+async function handlePlatformPodProfilesRoute(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  if (!isPodConfigured(env)) {
+    return adminNotFoundResponse();
+  }
+
+  const principal = await authorizePlatformRequest(env, request);
+  if (principal === null || !isSameOriginRequest(request)) {
+    return adminNotFoundResponse();
+  }
+
+  if (request.method !== "PUT") {
+    return adminNotFoundResponse();
+  }
+
+  const profiles = parseReplaceProfilesInput(await readJsonBody(request));
+  if (profiles === null) {
+    return invalidRequestResponse();
+  }
+
+  const result = await replaceProfiles(env.DB, principal, profiles, Date.now());
+  if (result.status !== "ok") {
+    return invalidRequestResponse();
+  }
+
+  return jsonResponse({ profiles: result.profiles }, 200);
+}
+
 function platformResultResponse(
   result: DomainResult | MembershipResult | TenantResult,
   successStatus: number,
@@ -1441,6 +1752,20 @@ export default {
       url.pathname.startsWith(ADMIN_DISCOUNT_CODE_PATH_PREFIX)
     ) {
       return handleAdminDiscountCodeRoute(env, request, url);
+    }
+
+    // Before the generic admin-object and platform prefixes purely for
+    // readability — none of these paths overlap.
+    if (
+      url.pathname === ADMIN_POD_PROFILES_PATH ||
+      url.pathname === ADMIN_POD_ARTWORK_PATH ||
+      url.pathname.startsWith(ADMIN_POD_ARTWORK_PATH_PREFIX)
+    ) {
+      return handleAdminPodRoute(env, request, url);
+    }
+
+    if (url.pathname === PLATFORM_POD_PROFILES_PATH) {
+      return handlePlatformPodProfilesRoute(env, request);
     }
 
     if (url.pathname === PLATFORM_BOOTSTRAP_PATH) {
