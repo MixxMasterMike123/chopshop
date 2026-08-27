@@ -1383,11 +1383,17 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
               </div>
             </CardSection>
 
-            {/* Inventory — POD: stock is not tracked. Mirrors Shopify's
-                "Inventory not tracked" card visually; no field is persisted. */}
+            {/* Inventory — stock is not tracked in either shop type. Mirrors
+                Shopify's "Inventory not tracked" card visually; no field is
+                persisted. Only the REASON is POD-specific, so a things shop
+                gets the neutral wording (no "print-on-demand" leak). */}
             <CardSection title="Lager" bodyClassName="space-y-1">
               <p className="text-[13px] text-admin-text-muted">Lager spåras inte</p>
-              <p className={helpCls}>Försäljningen är obegränsad (print-on-demand) — inget lagersaldo dras.</p>
+              <p className={helpCls}>
+                {podEnabled
+                  ? 'Försäljningen är obegränsad (print-on-demand) — inget lagersaldo dras.'
+                  : 'Försäljningen är obegränsad — inget lagersaldo dras.'}
+              </p>
             </CardSection>
 
             {/* Shipping + Weight — Shopify orders Shipping before Variants */}
