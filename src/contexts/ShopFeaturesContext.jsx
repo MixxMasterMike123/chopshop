@@ -15,8 +15,10 @@ const ShopFeaturesContext = createContext({ features: {}, loading: true });
 
 /**
  * useShopFeatures() → { features, isEnabled(key), loading }
- * isEnabled(key) is the canonical add-on gate. Callers that render BEFORE the
- * read resolves should also check `loading` for opt-in keys — see AddonGate.
+ * isEnabled(key) is the canonical add-on gate. For an OPT-IN key, a false
+ * result while `loading` is true means "not loaded yet", not "off" — callers
+ * that bake the value into something persistent (e.g. DynamicPage rendering a
+ * legal page) should wait on `loading` rather than read twice.
  */
 export function useShopFeatures() {
   const ctx = useContext(ShopFeaturesContext);

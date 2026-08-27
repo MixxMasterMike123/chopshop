@@ -64,6 +64,11 @@ reklamationsnämnden, arn.se) and, for cross-border, the EU list of national ADR
 
 - `[[IF company]] … [[ELSE]] … [[END]]` — seller is a company vs an individual.
 - `[[IF vat_registered]] … [[ELSE]] … [[END]]` — seller charges VAT vs not.
+- `[[IF pod]] … [[ELSE]] … [[END]]` — shop has the print-on-demand add-on (`shops/{id}.features.pod`)
+  vs a things shop. Keeps print vocabulary ("Print on Demand", "sprucket tryck", the tryckeri as a
+  GDPR data recipient) out of a non-POD shop's pages. Both branches are legally EQUIVALENT — same
+  rights, deadlines and contact routes; neutral wording only. `scripts/check-legal-pod-gating.mjs`
+  enforces this.
 
 ## Decisions to confirm (marked ► in the templates)
 

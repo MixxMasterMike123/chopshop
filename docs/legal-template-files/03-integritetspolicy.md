@@ -53,7 +53,7 @@ Vi behandlar de uppgifter du lämnar och som uppstår när du handlar, till exem
 Vi delar uppgifter endast när det behövs, med:
 - plattformsleverantören {{platform_legal_name}} (personuppgiftsbiträde som driver webbshoppen),
 - vår betaltjänstleverantör (hanterar betalningen enligt sina egna villkor),
-- tryckeri/produktionspartner och fraktbolag (för att tillverka och leverera din order),
+[[IF pod]]- tryckeri/produktionspartner och fraktbolag (för att tillverka och leverera din order),[[ELSE]]- fraktbolag (för att leverera din order),[[END]]
 - bokförings- och redovisningstjänster samt, vid behov, myndigheter när lag kräver det.
 
 Dessa parter får endast behandla uppgifterna för angivna ändamål.

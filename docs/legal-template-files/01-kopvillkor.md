@@ -55,9 +55,10 @@ lagrar inte dina fullständiga kortuppgifter.
 
 ## 5. Leverans
 
-Leveranssätt, leveranstid och fraktkostnad visas i kassan. Om en vara tillverkas eller trycks
+Leveranssätt, leveranstid och fraktkostnad visas i kassan. [[IF pod]]Om en vara tillverkas eller trycks
 efter beställning (Print on Demand) tillkommer produktionstid utöver leveranstiden; den beräknade
-tiden anges för produkten eller i kassan.
+tiden anges för produkten eller i kassan.[[ELSE]]Om en vara tillverkas efter beställning tillkommer
+produktionstid utöver leveranstiden; den beräknade tiden anges för produkten eller i kassan.[[END]]
 
 När din order har skickats får du, när det är möjligt, leveransinformation och eventuellt
 spårningsnummer. Om en leverans blir väsentligt försenad kontaktar vi dig.
@@ -97,8 +98,8 @@ Reklamation gäller alltid och är skild från ångerrätten. Som konsument har 
 konsumentköplagen rätt att reklamera fel på en vara i upp till tre år. Reklamera inom skälig tid
 efter att du upptäckt felet; reklamation inom två månader anses alltid ha skett i tid.
 
-Är det fel på varan – till exempel trasig produkt, missfärgning, felaktigt eller sprucket tryck,
-fel storlek mot angiven måttguide, eller fel produkt – kontakta oss på {{contact_email}} med
+Är det fel på varan – till exempel trasig produkt, missfärgning, [[IF pod]]felaktigt eller sprucket tryck,
+fel storlek mot angiven måttguide, [[ELSE]]fel storlek mot angiven produktbeskrivning, [[END]]eller fel produkt – kontakta oss på {{contact_email}} med
 ordernummer och gärna en bild. Vid godkänd reklamation åtgärdar vi felet utan kostnad för dig,
 genom ny vara, rättelse eller återbetalning.
 

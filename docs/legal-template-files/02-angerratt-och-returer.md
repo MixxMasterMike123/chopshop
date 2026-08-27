@@ -21,7 +21,7 @@ På sådana produkter står det tydligt redan på produktsidan och i kassan att 
 och du får bekräfta det innan du betalar.
 
 Har du i stället bara valt bland färdiga alternativ i shoppen (till exempel storlek eller färg på
-en befintlig design) har du full ångerrätt – även om varan trycks eller tillverkas efter din
+en befintlig [[IF pod]]design[[ELSE]]produkt[[END]]) har du full ångerrätt – även om varan [[IF pod]]trycks eller [[END]]tillverkas efter din
 beställning.
 
 ### Så ångrar du
@@ -46,8 +46,8 @@ Reklamation är något annat än ångerrätt och gäller alltid. Du har rätt at
 vara i upp till tre år enligt konsumentköplagen. Reklamera inom skälig tid efter att du upptäckt
 felet – inom två månader räknas alltid som i tid.
 
-Exempel på fel du kan reklamera: trasig produkt, missfärgning, snett eller sprucket tryck, tryck
-som lossnar, fel produkt, eller mått som avviker från vår storleksguide.
+Exempel på fel du kan reklamera: trasig produkt, missfärgning, [[IF pod]]snett eller sprucket tryck, tryck
+som lossnar, [[END]]fel produkt, eller mått som avviker från [[IF pod]]vår storleksguide[[ELSE]]vår produktbeskrivning[[END]].
 
 Så reklamerar du: kontakta oss på {{contact_email}} med ditt ordernummer och gärna en bild på
 felet. Vid godkänd reklamation åtgärdar vi det utan kostnad för dig – med ny vara, rättelse eller
