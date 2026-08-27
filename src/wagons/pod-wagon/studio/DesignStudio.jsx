@@ -836,23 +836,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       if (missingOverrideLabels.size > 0) {
         throw new Error(`Motivet för ${[...missingOverrideLabels].join(', ')} kan inte kopplas eftersom färgnamnet saknas på produkten. Uppdatera produktens färger eller skapa en ny produkt.`);
       }
-      // PRISGOLV: becoming a POD product stamps this template's cost — the
-      // product's EXISTING prices must clear the floor that cost implies, or the
-      // seller would lose money on every sale from the moment this connects.
-      const floorU = Number.isFinite(selectedTemplate?.costSek) ? priceFloor(selectedTemplate.costSek) : null;
-      if (floorU != null) {
-        const prodPrice = prod.b2cPrice || prod.basePrice || 0;
-        if (!(prodPrice >= floorU)) {
-          throw new Error(`Produktens pris ${prodPrice} kr ligger under prisgolvet ${floorU} kr för den här produkttypen. Höj priset under Produkter och försök igen.`);
-        }
-        const lowGroups = (Array.isArray(prod.variantGroups) ? prod.variantGroups : [])
-          .filter((g) => Number.isFinite(parseFloat(g?.price)) && parseFloat(g.price) > 0 && parseFloat(g.price) < floorU)
-          .map((g) => g.label || g.sku);
-        if (lowGroups.length > 0) {
-          throw new Error(`Priset för ${lowGroups.join(', ')} ligger under prisgolvet ${floorU} kr. Justera under Produkter först.`);
-        }
-      }
-
+      // No PRISGOLV gate here: updating an existing product only refreshes
+      // mockup images/artwork. Pricing is owned by the Products page —
+      // ProductForm blocks any save below the floor (podPricing.js).
       const publicPath = `products/${shopId}/${productId}`;
       const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
       // 'studio_' prefix + deterministic (colorway, slot) names: re-running the
