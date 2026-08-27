@@ -380,14 +380,18 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     if (!next.has(colorwayId)) setColorwayId(next.values().next().value || null);
   };
 
-  // Override choices for the ACTIVE slot: selectable (non-FAIL) artwork that can
-  // actually be COMPOSED (raster with known dims — a PASS-tier PDF can't
-  // preview/mockup), excluding the slot's own base motif.
-  const activeBaseArtworkId = printBySlot[slot]?.artworkId || null;
-  const overrideOptions = useMemo(
-    () => artwork.filter((a) => isSelectableArtwork(a) && a.id !== activeBaseArtworkId),
-    [artwork, activeBaseArtworkId]
+  // Override choices for a slot: selectable (non-FAIL) artwork that can actually
+  // be COMPOSED (raster with known dims — a PASS-tier PDF can't preview/mockup),
+  // excluding that slot's own base motif. Per-slot because step 6 now reviews
+  // every print area at once rather than one "active" surface at a time.
+  const selectableArtwork = useMemo(
+    () => artwork.filter(isSelectableArtwork),
+    [artwork]
   );
+  const overrideOptionsFor = (forSlot) => {
+    const baseId = printBySlot[forSlot]?.artworkId || null;
+    return selectableArtwork.filter((a) => a.id !== baseId);
+  };
 
   // Slots that end up on mockups + mappings: exactly the trycklista's rows that
   // have a motif AND exist on the template (list order preserved). No implicit
@@ -1557,6 +1561,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             artwork={canvasArtwork}
             profile={profile}
             locked={false}
+            // FLAT here on purpose: while POSITIONING, the fabric morph fights
+            // the eye — a straight edge the wrinkles bend reads as a placement
+            // error. Step 6 (Godkänn), the preview and the exported mockups
+            // still show the warped truth.
+            flat
             placement={placements[slot] || null}
             ghostAreas={ghostAreas}
             onGhostClick={(s) => {
@@ -1582,7 +1591,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       )}
 
       {/* ── 5 · FÄRGER — choose the sellable colour range before artwork
-          variants and mockups. Every template colour starts selected. */}
+          variants and mockups. Colours start UNSELECTED — the seller opts in. */}
       {step === 5 && (
       <CardSection title="5 · Färger" className="pod-step-enter" bodyClassName="p-4">
         <ColorSelectionPanel
@@ -1599,34 +1608,34 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {step === 6 && (
       <CardSection title="6 · Godkänn" className="pod-step-enter" bodyClassName="p-4">
         <p className="mb-3 text-[13px] text-admin-text-muted">
-          Granska varje färg innan mockuperna skapas. Byt motiv för en viss färg om kontrasten inte fungerar.
+          {designedSlots(selectedTemplate).length > 1
+            ? 'Granska varje färg — alla tryckytor visas tillsammans, och ett godkännande gäller hela färgen. Byt motiv för en viss yta om kontrasten inte fungerar.'
+            : 'Granska varje färg innan mockuperna skapas. Byt motiv för en viss färg om kontrasten inte fungerar.'}
         </p>
-        <SurfaceSwitcher
-          ariaLabel="Förhandsvisa yta"
-          items={designedSlots(selectedTemplate).map((s) => ({ key: s, label: labelForSlot(s) }))}
-          activeIndex={Math.max(0, designedSlots(selectedTemplate).indexOf(slot))}
-          onSelect={(i) => setSlot(designedSlots(selectedTemplate)[i])}
-        />
+        {/* No surface tabs here (2026-08-27): the review gate is keyed by
+            COLOURWAY, so hiding half the print areas behind a tab meant one
+            click approved surfaces the seller never saw. Every designed area
+            now sits in the card, side by side. */}
         {selectedTemplate && (
           <ColorwayStrip
             template={effTemplate}
             slot={slot}
+            slots={designedSlots(selectedTemplate)}
             minDpi={profile?.min_dpi ?? null}
             activeColorwayId={colorwayId}
             onSelect={setColorwayId}
-            placement={placements[slot] || null}
-            locked={slot === 'pocket'}
-            resolveArtwork={(cwId) => resolveArtwork(slot, cwId)}
-            overrides={overrides[slot] || {}}
-            onOverrideChange={printArtwork(slot) ? (cwId, artId) => setOverride(slot, cwId, artId) : null}
-            artworkOptions={overrideOptions}
-            baseArtwork={printArtwork(slot)}
-            baseArtworkLabel={printArtwork(slot)?.label || printArtwork(slot)?.fileName || 'Standardmotiv'}
+            placementFor={(s) => placements[s] || null}
+            lockedSlot={(s) => s === 'pocket'}
+            labelForSlot={labelForSlot}
+            resolveArtwork={resolveArtwork}
+            overridesFor={(s) => overrides[s] || {}}
+            onOverrideChange={(s, cwId, artId) => (printArtwork(s) ? setOverride(s, cwId, artId) : undefined)}
+            artworkOptionsFor={(s) => (printArtwork(s) ? overrideOptionsFor(s) : [])}
+            baseArtworkFor={printArtwork}
+            baseArtworkLabelFor={(s) => printArtwork(s)?.label || printArtwork(s)?.fileName || 'Standardmotiv'}
             reviewedColorwayIds={reviewedColorways}
             colorwayIds={[...selectedColorwayIds]}
-            onApplyOverrideToColorways={printArtwork(slot)
-              ? (cwIds, artId) => setOverrideForColorways(slot, cwIds, artId)
-              : null}
+            onApplyOverrideToColorways={(s, cwIds, artId) => (printArtwork(s) ? setOverrideForColorways(s, cwIds, artId) : undefined)}
             onApproveAll={() => setReviewedColorways(new Set(selectedColorwayIds))}
             // Removing a colour from the review = step 5's deselect. Reviews are
             // not pruned on purpose: s6done only inspects SELECTED colourways,

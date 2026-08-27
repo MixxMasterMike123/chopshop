@@ -26,6 +26,13 @@
 //   • profile    — the template's print profile (podProfiles) for DPI thresholds.
 //   • placement  — { xMm, yMm, wMm } for THIS slot, or null (→ default used).
 //   • onPlacementChange — (placement) => void on every move/resize/nudge.
+//   • flat       — render the artwork UNWARPED (no displacement/wrinkle morph).
+//                  The Placering step sets this: while you are positioning, the
+//                  fabric warp fights the eye — a straight edge that the morph
+//                  bends reads as a misplacement, so the placement canvas shows
+//                  the artwork flat and truthful to its rect. The morph still
+//                  runs everywhere it means "this is what prints": the Godkänn
+//                  review card, the preview and the exported mockups.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TemplateBackground, { templateViewBox, viewForSlot } from './TemplateBackground';
 import HelpPopover from './HelpPopover';
@@ -146,6 +153,10 @@ const CompositorCanvas = ({
   // clicking one calls onGhostClick(slot) to activate it.
   ghostAreas = [],
   onGhostClick = null,
+  // flat: skip the displacement (wrinkle morph) layer entirely — see the props
+  // contract above. Nothing else changes; the DOM artwork that normally hides
+  // behind the warped canvas simply stays visible.
+  flat = false,
 }) => {
   const wrapRef = useRef(null);
   // Full drag data in a ref (no re-render churn mid-gesture); visual flags in state.
@@ -301,7 +312,7 @@ const CompositorCanvas = ({
 
   // Artwork rect in viewBox px (placement mm → px via the template's px↔mm map).
   const artVb = effective ? placementToViewBoxRect(effective, template, slot, artwork) : null;
-  const useDisplacement = Boolean(artVb && displacementUrl && !displacementFailed);
+  const useDisplacement = Boolean(!flat && artVb && displacementUrl && !displacementFailed);
 
   const dragging = Boolean(dragUi);
 
