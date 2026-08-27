@@ -343,7 +343,15 @@ const formFromProduct = (p) => ({
 const ProductForm = ({ product, shopId, availableCategories = [], availableTags = [], onSaved, onCancel, formId, onSavingChange }) => {
   const [formData, setFormData] = useState(() => (product ? formFromProduct(product) : emptyForm()));
   const [saving, setSaving] = useState(false);
-  useEffect(() => { onSavingChange?.(saving); }, [saving, onSavingChange]);
+  // Mirror `saving` to the host (header Spara). The cleanup matters: on a
+  // SUCCESSFUL save the form unmounts via onSaved() without ever setting
+  // saving=false (only the catch does), so without this the host's flag stayed
+  // true and the next product opened with a disabled "Sparar…" header button.
+  // Cancel/unmount takes the same path.
+  useEffect(() => {
+    onSavingChange?.(saving);
+    return () => onSavingChange?.(false);
+  }, [saving, onSavingChange]);
 
   // B2B Wholesale add-on: gates the wholesale-price field. Default-ON for shops
   // without a `features` map, but nothing else in this form depends on it, so a
@@ -406,7 +414,6 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   );
   const [galleryFiles, setGalleryFiles] = useState([]);
   const [galleryPreviews, setGalleryPreviews] = useState([]);
-  const [imagesToDelete, setImagesToDelete] = useState([]);
 
   // Category autocomplete (the browse taxonomy / URL driver; was `group`).
   const [categoryInput, setCategoryInput] = useState(product?.category || product?.group || '');
@@ -647,12 +654,12 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
     setGalleryPreviews((prev) => prev.filter((_, i) => i !== index));
     setGalleryFiles((prev) => prev.filter((_, i) => i !== index));
   };
+  // Removing from the gallery is a VIEW edit only. Which files actually get
+  // deleted from Storage is resolved at SUBMIT time (see handleSubmit): a
+  // click-time queue cannot know the final state — the studio's hero is both
+  // huvudbild and a gallery member, and a later "Använd som huvudbild" pick can
+  // orphan or rescue a file after the click.
   const removeExistingGalleryImage = (index) => {
-    const url = existingGallery[index];
-    // Never queue the CURRENT main image for storage deletion — the studio's
-    // hero is both huvudbild and a gallery member, so removing it from the
-    // gallery would delete the file the product still points at.
-    if (url && url !== formData.b2cImageUrl) setImagesToDelete((prev) => [...prev, url]);
     setExistingGallery((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -745,7 +752,20 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
         const u = await uploadImageToStorage(galleryFiles[i], `products/${shopId}/${productId}`, `b2c_gallery_${Date.now()}_${i}`);
         gallery.push(u);
       }
-      for (const url of imagesToDelete) await deleteImageFromStorage(url);
+      // Orphan sweep: delete every image the product ARRIVED with that survives
+      // in neither the final gallery nor the final main image. Resolving here
+      // (instead of queueing on each remove click) is what makes re-picking the
+      // huvudbild safe in both directions — promoting a gallery image rescues
+      // it, and replacing the old huvudbild collects it.
+      const keptUrls = new Set([...gallery, mainImageUrl, formData.imageUrl].filter(Boolean));
+      const originalUrls = [
+        product?.b2cImageUrl,
+        product?.imageUrl,
+        ...(Array.isArray(product?.b2cImageGallery) ? product.b2cImageGallery : []),
+      ].filter(Boolean);
+      for (const url of new Set(originalUrls)) {
+        if (!keptUrls.has(url)) await deleteImageFromStorage(url);
+      }
 
       const price = parseFloat(formData.price) || 0;
       // Was-price for a REA. Only persist a genuine sale (> the selling price);

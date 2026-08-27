@@ -65,6 +65,11 @@ import { orderedVariantMockupUrls } from './mockupVariantImages';
 // are unselectable, because the compositor literally has nothing to draw.
 const isSelectableArtwork = (art) => isComposable(art);
 
+// The wizard page where colours are REVIEWED (6 · Godkänn). Seeing a colourway
+// only counts as a review while this page is on screen — that is where the big
+// composite and the contrast verdict live.
+const REVIEW_STEP = 6;
+
 // Thumbnail of a template in its first colourway (for the picker cards): SVG flat
 // or the colourway's garment photo, via the shared background layer.
 const GarmentThumb = ({ template, colorway }) => (
@@ -132,10 +137,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   };
   useEffect(() => () => replaceObjectUrls([]), []);
 
-  // Reviews are valid for the CURRENT design only — reset the seen-set to JUST the
-  // active colourway. The colorwayId effect re-seeds anyway; seeding here keeps the
-  // gate honest between that effect firing (and covers a null active colourway).
-  const resetReviews = () => setReviewedColorways(colorwayId ? new Set([colorwayId]) : new Set());
+  // Reviews are valid for the CURRENT design only — clear the seen-set outright.
+  // It used to seed the ACTIVE colourway, which pre-approved a colour the seller
+  // had never actually looked at in step 6 (see the seen-on-view effect below).
+  const resetReviews = () => setReviewedColorways(new Set());
 
   const resetDesignState = () => {
     setPlacements({});
@@ -219,13 +224,17 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // (No global artwork-change reset anymore: changing a print row's motif
   // resets only THAT row's placement — see setPrintArtwork below.)
 
-  // The ACTIVE colourway is always considered SEEN — selecting one composites it
-  // live in the strip. Covers the initial default colourway too. Switching slots
-  // does NOT reset reviews (same colourways; the strip re-previews the active slot).
+  // Seen-on-view: the active colourway counts as REVIEWED only while the seller
+  // is actually ON step 6, where the big review card and the contrast verdict
+  // are on screen. It used to fire on ANY colorwayId change — including the
+  // automatic `colorwayId = cwIds[0]` when a template is picked in step 1 — so
+  // with colours now starting unselected, a seller who chose only that first
+  // colour reached s6done without ever seeing the verdict. Switching slots does
+  // NOT reset reviews (same colourways; the strip re-previews the active slot).
   useEffect(() => {
-    if (!colorwayId) return;
+    if (!colorwayId || step !== REVIEW_STEP) return;
     setReviewedColorways((prev) => (prev.has(colorwayId) ? prev : new Set(prev).add(colorwayId)));
-  }, [colorwayId]);
+  }, [colorwayId, step]);
 
   const selectedColorway = useMemo(
     () => (selectedTemplate?.colorways || []).find((c) => c.id === colorwayId) || selectedTemplate?.colorways?.[0] || null,
@@ -271,11 +280,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const invalidateComposite = () => {
     setMockups((prev) => (prev.length ? [] : prev));
     setHeroKey((prev) => (prev === null ? prev : null));
-    setReviewedColorways((prev) => {
-      if (colorwayId && prev.size === 1 && prev.has(colorwayId)) return prev;
-      if (!colorwayId && prev.size === 0) return prev;
-      return colorwayId ? new Set([colorwayId]) : new Set();
-    });
+    // Clear outright (not "keep the active colourway"): a changed composite is
+    // a composite nobody has reviewed yet, including the one on screen. The
+    // seen-on-view effect re-adds the active colour the moment the seller is
+    // looking at it on step 6.
+    setReviewedColorways((prev) => (prev.size === 0 ? prev : new Set()));
   };
 
   const addPrint = (s) => {
