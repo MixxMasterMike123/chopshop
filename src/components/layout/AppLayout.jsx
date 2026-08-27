@@ -43,7 +43,7 @@ const AppLayout = ({ children }) => {
   const { currentUser, userProfile, logout, isPlatform } = useAuth();
   const { t } = useTranslation();
   const store = useStoreSettings();
-  const { features, isEnabled: isAddonEnabled } = useShopFeatures();
+  const { isEnabled: isAddonEnabled } = useShopFeatures();
   // The shop this admin session is managing (impersonation > deep-link > own
   // shop > last picked). Surfaced in the top bar so "which shop am I editing?"
   // is always explicit — every admin shares the /admin URL, so the name alone
@@ -249,11 +249,16 @@ const AppLayout = ({ children }) => {
     icon: StarIcon,
     description: t('nav.admin_reviews_desc', 'Moderera produktomdömen'),
   };
-  // The "Innehållsstudio" add-on link (AI social-media studio). UNLIKE the
-  // default-ON add-ons above, this one is EXPLICIT OPT-IN: it only shows when
-  // features.contentStudio === true (NOT via isAddonEnabled, which defaults
-  // missing flags to on). Platform users always see it.
-  const contentStudioEnabled = features?.contentStudio === true || isPlatform;
+  // The "Innehållsstudio" add-on link (AI social-media studio). EXPLICIT
+  // OPT-IN — but `contentStudio` is an OPT_IN_KEY in config/addons.js, so
+  // isAddonEnabled already resolves it as `=== true`; the same one gate as
+  // every other add-on above.
+  //
+  // The old `|| isPlatform` bypass is GONE (2026-08-27): a platform operator
+  // is an admin of whichever shop they manage/impersonate, so the bypass made
+  // the link show in EVERY shop for them — including shops with the feature
+  // unchecked. Entitlement is a property of the shop, never of the viewer.
+  const contentStudioEnabled = isAddonEnabled('contentStudio');
   const contentStudioNavItem = {
     name: t('nav.admin_content_studio', 'Innehållsstudio'),
     path: '/admin/content-studio',

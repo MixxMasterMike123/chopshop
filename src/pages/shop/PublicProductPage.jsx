@@ -811,11 +811,8 @@ const PublicProductPage = () => {
                   </button>
                 </div>
 
-                {/* Social Share - Streamlined with working platforms only */}
-                <ProductSocialShare 
-                  product={product}
-                  compact={true}
-                />
+                {/* Share row — native share sheet (mobile) + share-intent links. */}
+                <ProductSocialShare product={product} />
 
                 {/* Payment + delivery options. The delivery line is product-aware
                     (per-product delivery modes + whether the shop offers pickup),
