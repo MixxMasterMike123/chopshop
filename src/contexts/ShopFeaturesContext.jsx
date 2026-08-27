@@ -1,9 +1,11 @@
 // ShopFeaturesContext — provides the active shop's add-on entitlement map
 // (shops/{shopId}.features) to the whole app, loaded once per shopId. The single
-// gate everyone calls is isEnabled(key); it is DEFAULT-ON (a feature is enabled
-// unless explicitly set to false), so shops predating the field and any shop
-// missing the field keep all add-ons until an operator disables one from the
-// platform console. See docs/ADDONS_PLATFORM_CONTROL_PLAN.md + config/addons.js.
+// gate everyone calls is isEnabled(key). Polarity is PER KEY (config/addons.js):
+// legacy keys are DEFAULT-ON (enabled unless explicitly false) so shops predating
+// the field keep their add-ons; the OPT-IN keys (`pod`, `contentStudio`) are the
+// inverse — enabled only on a literal true, so a missing flag means a things shop
+// rather than a silently POD-entitled one.
+// See docs/ADDONS_PLATFORM_CONTROL_PLAN.md + config/addons.js.
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { loadShopFeatures } from '../config/shopConfig';
 import { isFeatureEnabled } from '../config/addons';
@@ -13,7 +15,8 @@ const ShopFeaturesContext = createContext({ features: {}, loading: true });
 
 /**
  * useShopFeatures() → { features, isEnabled(key), loading }
- * isEnabled(key) is the canonical add-on gate (default-ON for missing flags).
+ * isEnabled(key) is the canonical add-on gate. Callers that render BEFORE the
+ * read resolves should also check `loading` for opt-in keys — see AddonGate.
  */
 export function useShopFeatures() {
   const ctx = useContext(ShopFeaturesContext);
@@ -26,8 +29,9 @@ export function useShopFeatures() {
 
 export function ShopFeaturesProvider({ children }) {
   const shopId = useShopId();
-  // Start with {} → default-ON for every key while the read is in flight, so
-  // add-on menus/routes never flash-hide on first paint.
+  // Start with {} → each key resolves to its own default while the read is in
+  // flight: legacy keys stay ON (no flash-hide of an entitled add-on), opt-in
+  // keys stay OFF (no flash of POD/Studio surfaces in a things shop).
   const [features, setFeatures] = useState({});
   const [loading, setLoading] = useState(true);
 
@@ -41,8 +45,9 @@ export function ShopFeaturesProvider({ children }) {
         setFeatures(f && typeof f === 'object' ? f : {});
       })
       .catch((err) => {
-        // Degrade to {} (default-ON) — never hide add-ons on a read error.
-        console.warn('ShopFeatures: using default-on (could not load features):', err?.message);
+        // Degrade to {} — legacy keys stay ON (never hide a paid add-on on a
+        // transient read error); opt-in keys stay OFF (fail closed).
+        console.warn('ShopFeatures: using per-key defaults (could not load features):', err?.message);
         if (!cancelled) setFeatures({});
       })
       .finally(() => {

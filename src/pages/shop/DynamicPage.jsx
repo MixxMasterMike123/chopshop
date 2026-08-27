@@ -17,6 +17,7 @@ import { isLegalSlug, LEGAL_PAGES } from '../../config/legalTemplates';
 import { renderLegalPage } from '../../utils/legalPageRenderer';
 import { getLegalReadiness } from '../../utils/legalPageReadiness';
 import { loadShopConfig } from '../../config/shopConfig';
+import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 
 const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => {
   const { slug: paramSlug } = useParams();
@@ -70,8 +71,28 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
   const isLegal = isLegalSlug(slug);
   const [legal, setLegal] = useState(null); // { title, html, ready }
 
+  // POD entitlement drives the print-vocabulary branches in the legal templates
+  // ([[IF pod]]). Same source as every other add-on gate — shops/{id}.features.pod
+  // via useShopFeatures(); a things shop must never publish "Print on Demand",
+  // "sprucket tryck" or a "tryckeri/produktionspartner" recipient to its customers.
+  const { isEnabled: isAddonEnabled, loading: featuresLoading } = useShopFeatures();
+  const podEnabled = isAddonEnabled('pod');
+
   useEffect(() => {
     if (!isLegal) { setLegal(null); return; }
+    // Wait for the entitlement read before rendering: `podEnabled` picks the
+    // print-vocabulary branch of the templates, and features start as {} (=OFF,
+    // pod being opt-in). Rendering early would flash the neutral wording on a
+    // POD shop and then swap the legal text under the reader's eyes.
+    //
+    // This cannot hang the page: ShopFeaturesProvider clears `loading` in a
+    // .finally(), so a rules denial / offline read still settles (to {} = pod
+    // OFF, the safe wording). Nor does it add a round-trip in practice — the
+    // provider's read starts at app mount against the SAME shops/{shopId} doc
+    // this effect's loadShopConfig() reads, so it is normally already resolved
+    // by the time a legal page mounts. Until then line ~167's existing spinner
+    // (with nav + footer) shows, never a blank or "not found" page.
+    if (featuresLoading) return;
     let cancelled = false;
     (async () => {
       let identity = {};
@@ -81,12 +102,12 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
         console.warn('DynamicPage: could not load shop config for legal page:', e?.message);
       }
       if (cancelled) return;
-      const rendered = renderLegalPage(slug, identity);
+      const rendered = renderLegalPage(slug, identity, { pod: podEnabled });
       const readiness = getLegalReadiness(identity);
       setLegal(rendered ? { ...rendered, ready: readiness.ready, blockers: readiness.blockers } : null);
     })();
     return () => { cancelled = true; };
-  }, [isLegal, slug, shopId]);
+  }, [isLegal, slug, shopId, featuresLoading, podEnabled]);
 
   useEffect(() => {
     const fetchPage = async () => {

@@ -27,9 +27,21 @@ const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
 //  • company:        sellerType === 'company'
 //  • vat_registered: explicit vatRegistered flag (NOT inferred from sellerType —
 //    a company can be under threshold, an individual over it; see the spec).
-const resolveFlags = (identity = {}) => ({
+//  • pod:            the shop has the print-on-demand add-on ON. Passed in by the
+//    caller from shops/{id}.features.pod (the SAME entitlement useShopFeatures()
+//    reads — never a second source of truth), because it lives on the shop doc's
+//    `features` map, not in storeIdentity. Drives the [[IF pod]] branches that
+//    keep print vocabulary ("Print on Demand", "sprucket tryck",
+//    "tryckeri/produktionspartner") out of a things-shop's public legal pages.
+//    Defaults FALSE — an unknown/unloaded shop gets the neutral wording, matching
+//    `pod`'s opt-in polarity in config/addons.js.
+// `options || {}` (not just a default param) — a default only covers `undefined`,
+// and a caller threading a possibly-null features object would otherwise throw
+// while rendering a mandatory legal page.
+const resolveFlags = (identity = {}, options) => ({
   company: identity.sellerType === 'company',
   vat_registered: identity.vatRegistered === true,
+  pod: (options || {}).pod === true,
 });
 
 // Build the merge-field value map. Missing optional fields render as ''. Required
@@ -119,10 +131,13 @@ function tidyBlankLines(text) {
  * Render a legal template (markdown string) for one shop → sanitized HTML.
  * @param {string} template - one of the *_TEMPLATE strings.
  * @param {object} identity - the shop's storeIdentity object.
+ * @param {{ pod?: boolean }} [options] - entitlement flags that don't live on
+ *   storeIdentity. `pod` = shops/{id}.features.pod (default false = neutral,
+ *   non-print wording).
  * @returns {string} sanitized HTML.
  */
-export function renderLegalTemplate(template, identity = {}) {
-  const flags = resolveFlags(identity);
+export function renderLegalTemplate(template, identity = {}, options = {}) {
+  const flags = resolveFlags(identity, options);
   const values = buildValues(identity);
   let text = evaluateConditionals(template, flags);
   text = fillMergeFields(text, values);
@@ -134,14 +149,17 @@ export function renderLegalTemplate(template, identity = {}) {
 /**
  * Render a legal page by slug for one shop. Returns null if the slug isn't a
  * known legal page.
+ * @param {string} slug
+ * @param {object} identity - the shop's storeIdentity object.
+ * @param {{ pod?: boolean }} [options] - see renderLegalTemplate.
  * @returns {{ title: string, pageType: string, html: string } | null}
  */
-export function renderLegalPage(slug, identity = {}) {
+export function renderLegalPage(slug, identity = {}, options = {}) {
   const page = LEGAL_PAGES[slug];
   if (!page) return null;
   return {
     title: page.title,
     pageType: page.pageType,
-    html: renderLegalTemplate(page.template, identity),
+    html: renderLegalTemplate(page.template, identity, options),
   };
 }
