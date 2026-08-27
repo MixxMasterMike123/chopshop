@@ -21,6 +21,12 @@
  * Conditionals (evaluated by the renderer):
  *   [[IF company]] … [[ELSE]] … [[END]]            — seller is a company vs individual
  *   [[IF vat_registered]] … [[ELSE]] … [[END]]     — seller charges VAT vs not
+ *   [[IF pod]] … [[ELSE]] … [[END]]                — shop has the print-on-demand
+ *     add-on (shops/{id}.features.pod) vs a things shop. Keeps print vocabulary
+ *     ("Print on Demand", "sprucket tryck", and the tryckeri as a GDPR data
+ *     recipient) out of a non-POD shop's public pages. The [[ELSE]] branches are
+ *     legally EQUIVALENT — same rights, deadlines and contact routes, neutral
+ *     wording only. Never let the two branches differ in substance.
  *
  * Merge fields (filled by the renderer): see MERGE_FIELDS below.
  */
@@ -112,9 +118,10 @@ lagrar inte dina fullständiga kortuppgifter.
 
 ## 5. Leverans
 
-Leveranssätt, leveranstid och fraktkostnad visas i kassan. Om en vara tillverkas eller trycks
+Leveranssätt, leveranstid och fraktkostnad visas i kassan. [[IF pod]]Om en vara tillverkas eller trycks
 efter beställning (Print on Demand) tillkommer produktionstid utöver leveranstiden; den beräknade
-tiden anges för produkten eller i kassan.
+tiden anges för produkten eller i kassan.[[ELSE]]Om en vara tillverkas efter beställning tillkommer
+produktionstid utöver leveranstiden; den beräknade tiden anges för produkten eller i kassan.[[END]]
 
 När din order har skickats får du, när det är möjligt, leveransinformation och eventuellt
 spårningsnummer. Om en leverans blir väsentligt försenad kontaktar vi dig.
@@ -155,8 +162,8 @@ Reklamation gäller alltid och är skild från ångerrätten. Som konsument har 
 konsumentköplagen rätt att reklamera fel på en vara i upp till tre år. Reklamera inom skälig tid
 efter att du upptäckt felet; reklamation inom två månader anses alltid ha skett i tid.
 
-Är det fel på varan – till exempel trasig produkt, missfärgning, felaktigt eller sprucket tryck,
-fel storlek mot angiven måttguide, eller fel produkt – kontakta oss på {{contact_email}} med
+Är det fel på varan – till exempel trasig produkt, missfärgning, [[IF pod]]felaktigt eller sprucket tryck,
+fel storlek mot angiven måttguide, [[ELSE]]fel storlek mot angiven produktbeskrivning, [[END]]eller fel produkt – kontakta oss på {{contact_email}} med
 ordernummer och gärna en bild. Vid godkänd reklamation åtgärdar vi felet utan kostnad för dig,
 genom ny vara, rättelse eller återbetalning.
 
@@ -219,7 +226,7 @@ På sådana produkter står det tydligt redan på produktsidan och i kassan att 
 och du får bekräfta det innan du betalar.
 
 Har du i stället bara valt bland färdiga alternativ i shoppen (till exempel storlek eller färg på
-en befintlig design) har du full ångerrätt – även om varan trycks eller tillverkas efter din
+en befintlig [[IF pod]]design[[ELSE]]produkt[[END]]) har du full ångerrätt – även om varan [[IF pod]]trycks eller [[END]]tillverkas efter din
 beställning.
 
 ### Så ångrar du
@@ -246,8 +253,8 @@ Reklamation är något annat än ångerrätt och gäller alltid. Du har rätt at
 vara i upp till tre år enligt konsumentköplagen. Reklamera inom skälig tid efter att du upptäckt
 felet – inom två månader räknas alltid som i tid.
 
-Exempel på fel du kan reklamera: trasig produkt, missfärgning, snett eller sprucket tryck, tryck
-som lossnar, fel produkt, eller mått som avviker från vår storleksguide.
+Exempel på fel du kan reklamera: trasig produkt, missfärgning, [[IF pod]]snett eller sprucket tryck, tryck
+som lossnar, [[END]]fel produkt, eller mått som avviker från [[IF pod]]vår storleksguide[[ELSE]]vår produktbeskrivning[[END]].
 
 Så reklamerar du: kontakta oss på {{contact_email}} med ditt ordernummer och gärna en bild på
 felet. Vid godkänd reklamation åtgärdar vi det utan kostnad för dig – med ny vara, rättelse eller
@@ -326,7 +333,7 @@ Vi behandlar de uppgifter du lämnar och som uppstår när du handlar, till exem
 Vi delar uppgifter endast när det behövs, med:
 - plattformsleverantören {{platform_legal_name}} (personuppgiftsbiträde som driver webbshoppen),
 - vår betaltjänstleverantör (hanterar betalningen enligt sina egna villkor),
-- tryckeri/produktionspartner och fraktbolag (för att tillverka och leverera din order),
+[[IF pod]]- tryckeri/produktionspartner och fraktbolag (för att tillverka och leverera din order),[[ELSE]]- fraktbolag (för att leverera din order),[[END]]
 - bokförings- och redovisningstjänster samt, vid behov, myndigheter när lag kräver det.
 
 Dessa parter får endast behandla uppgifterna för angivna ändamål.
