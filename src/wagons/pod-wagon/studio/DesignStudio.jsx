@@ -888,6 +888,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // No PRISGOLV gate here: updating an existing product only refreshes
       // mockup images/artwork. Pricing is owned by the Products page —
       // ProductForm blocks any save below the floor (podPricing.js).
+      // costU is still needed to stamp podCostSek on the product below.
+      const costU = podCostForSlots(selectedTemplate, publishSlots);
       const publicPath = `products/${shopId}/${productId}`;
       const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
       // 'studio_' prefix + deterministic (colorway, slot) names: re-running the
