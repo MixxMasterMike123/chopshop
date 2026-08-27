@@ -60,9 +60,11 @@ import { QRCodeSVG } from 'qrcode.react';
  *                  schedule editing, per-channel copy buttons, delete.
  *
  * IMPORTANT: unlike the legacy default-ON add-ons, contentStudio is EXPLICIT
- * OPT-IN — the page gates on features.contentStudio === true (platform users
- * always pass). No AddonGate on the route; deep links get a friendly
- * "not activated" card instead.
+ * OPT-IN — the page gates on features.contentStudio === true, resolved through
+ * the canonical isEnabled() (contentStudio is an OPT_IN_KEY in
+ * config/addons.js). NO viewer-based bypass: a platform operator sees exactly
+ * what the managed shop is entitled to. No AddonGate on the route; deep links
+ * get a friendly "not activated" card instead.
  */
 
 const MAX_FILE_MB = 80;
@@ -366,11 +368,17 @@ const MediaGroup = ({ title, items, selected, onToggle, onDelete }) => (
 
 const AdminContentStudio = () => {
   const shopId = useShopId();
-  const { currentUser, isPlatform } = useAuth();
-  const { features, loading: featuresLoading } = useShopFeatures();
+  const { currentUser } = useAuth();
+  const { isEnabled: isAddonEnabled, loading: featuresLoading } = useShopFeatures();
 
-  // EXPLICIT opt-in gate (NOT the default-ON isFeatureEnabled helper).
-  const featureOn = features?.contentStudio === true || isPlatform;
+  // EXPLICIT opt-in gate. `contentStudio` is an OPT_IN_KEY in config/addons.js,
+  // so isEnabled already resolves it as `=== true`.
+  //
+  // The old `|| isPlatform` bypass is GONE (2026-08-27) — it let a platform
+  // operator open the studio in any shop, including ones with the feature
+  // unchecked, and paired with the same bypass in AppLayout's nav it made the
+  // add-on look permanently enabled. Entitlement belongs to the shop.
+  const featureOn = isAddonEnabled('contentStudio');
 
   // ── Section 1: Material ──
   const [assets, setAssets] = useState([]); // [{ path, name, type, url|null }]
@@ -856,7 +864,7 @@ const AdminContentStudio = () => {
 
   // While the feature flags are still loading, show nothing rather than
   // flashing the "not activated" card at admins of enabled shops.
-  if (featuresLoading && !isPlatform) {
+  if (featuresLoading) {
     return (
       <AppLayout>
         <Page title="Innehållsstudio" subtitle="AI-studio för sociala medier.">
