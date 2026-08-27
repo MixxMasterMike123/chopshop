@@ -1,4 +1,21 @@
-# POD Print Spec — tryckeriets krav + gate-regler (LÅST 2026-07-27)
+# POD Print Spec — tryckeriets krav + gate-regler (LÅST 2026-07-27, front-bredd VIDGAD 2026-08-27)
+
+⚠️ **AVVIKELSE FRÅN DEN LÅSTA SPECEN (2026-08-27):** ägarbeslut — framsidans
+tryckyta får samma MAXBREDD som ryggens (250 → **300 mm**). Höjden är oförändrad
+(350 mm plagg, 320 mm hoodie där kängurufickan sätter taket). Detta VIDGAR en
+tidigare låst tryckerispec och ska stämmas av med tryckeriet innan produktion.
+Gaten (§2) påverkas INTE: ryggen 300×400 mm är fortfarande den största ytan och
+därmed contain-referensen.
+
+⏳ **KRÄVER OMSEEDNING (ej kört):** tryckytorna bor i Firestore
+(`settings/podMockupTemplates`), inte i koden — de nya måtten träder i kraft
+först när Mikael kör
+`node scripts/seed-pod-mockup-templates.cjs --commit --force`.
+Berörda mallar: `tee_bc_e150`, `hoodie_hanging`, `longsleeve_hanging`,
+`sweatshirt_flat` (både `printAreaMm.front` och px-rektangeln `printAreas.front`,
+som centrerats om på sin gamla mittpunkt vid oförändrad px/mm-skala).
+`settings/podProfiles` behöver INTE seedas om — dess `print_area_mm` är
+gate-referensen (ryggen), oförändrad.
 
 Källa: Mikaels möte med tryckeriet + designbeslut i session 2026-07-27.
 Detta dokument är SSOT för tryckytor, artwork-gates och leveransformat.
@@ -9,7 +26,7 @@ Koden (podProfiles, podValidation, templates, print-pipeline) ska följa detta.
 ### Plagg (t-shirt, hoodie, sweatshirt — samma ytor på alla tre)
 | Slot | Storlek (mm) | Position |
 |---|---|---|
-| front | 250 × max 350 | startar 60–70 mm under nacksömmen (BEKRÄFTAT 2026-07-27) |
+| front | 300 × max 350 | startar 60–70 mm under nacksömmen (BEKRÄFTAT 2026-07-27; bredden 250 → 300 mm ÄGARBESLUT 2026-08-27, ej bekräftad av tryckeriet). Hoodie: 300 × 320 mm — kängurufickan kapar höjden, inte bredden |
 | back | 300 × 400 | startar 80–90 mm under nacksömmen (BEKRÄFTAT 2026-07-27) |
 | pocket | 100 × 100 | diskret position: left / right / center (INTE fri placering). BEKRÄFTAT: "pocket" är bara ett positionsnamn — ingen sydd ficka; klassisk left-chest-logga (3–4 tum bred) |
 | sleeve (left/right) | 80 × 80 | vänster / höger ärm |
@@ -174,7 +191,8 @@ placeringen låst för alla kommande tryck av samma motiv. Ingen canvas-PNG.
 ## 9. Byggordning (status 2026-07-27: steg 1–2 BYGGDA på feat/pod-print-gates)
 
 1. ✅ **Config:** podProfiles v2 (300 DPI-golv, PDF/SVG borttagna, provisional
-   false), templates v2 (front 250×350 + hoodie back). Sweatshirt-template
+   false), templates v2 (front 250×350 → **300×350 2026-08-27** + hoodie back).
+   Sweatshirt-template
    flyttad till steg 3 (kräver sin SVG-flat). ⏳ seeds körs med --commit --force.
 2. ✅ **Gated upload + PNG-pipeline:** processPodArtwork (sharp: content-sniff,
    EXIF-rotate, alpha-trim, ICC→sRGB, 8-bit PNG, contain-gate, opaque/semi/

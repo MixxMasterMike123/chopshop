@@ -16,11 +16,13 @@
  * garment catalog). The Design Studio surfaces a "preliminära" banner.
  *
  * printAreaMm = the PRINT SHOP'S REAL print areas (docs/POD_PRINT_SPEC.md,
- * 2026-07-27): front 250×350 mm (starts ~a hand's width below the neck seam),
- * back 300×400 mm (a generous hand's width below the seam). The printAreas (px)
- * rects are hand-tuned to sit on the front chest of
+ * 2026-07-27, front WIDTH revised 2026-08-27): front 300×350 mm (starts ~a
+ * hand's width below the neck seam; the width now matches the back's — owner
+ * decision, WIDENS the previously locked spec), back 300×400 mm (a generous
+ * hand's width below the seam). The printAreas (px) rects are hand-tuned to sit
+ * on the front chest of
  * src/wagons/pod-wagon/studio/garments/TeeFlat.jsx / HoodieFlat.jsx (viewBox
- * 800×900) and MUST share the same aspect ratio as their mm size (front 5:7,
+ * 800×900) and MUST share the same aspect ratio as their mm size (front 6:7,
  * back 3:4) — a px/mm aspect mismatch silently skews every preview.
  *
  * Mirrors scripts/seed-pod-profiles.cjs:
@@ -257,7 +259,10 @@ const TEMPLATES = [
     printAreas: {
       // front y 365→411 (2026-08-17): Mikael's calibration — the zone sat too
       // close under the collar; +46 px = +5 cm at this template's 0.92 px/mm.
-      front: { x: 365, y: 411, w: 230, h: 322 },  // 250×350 mm (5:7)
+      // front w 230→276 (2026-08-27): owner widened the front print area to the
+      // back's 300 mm (spec §1). Same 0.92 px/mm, same y/height, re-centred on
+      // the old rect's centre (x 365→342) — the span now matches the back's.
+      front: { x: 342, y: 411, w: 276, h: 322 },  // 300×350 mm (6:7)
       back: { x: 340, y: 340, w: 280, h: 373 },   // 300×400 mm (3:4), back photo
       pocket: { x: 535, y: 365, w: 92, h: 92 },   // 100×100 mm
       left_sleeve: { x: 725, y: 365, w: 74, h: 74 },  // wearer LEFT = viewer right
@@ -266,7 +271,7 @@ const TEMPLATES = [
     // Discrete pocket positions (wearer's perspective): x offsets only, same y/w/h.
     pocketPositions: { left: { x: 535 }, center: { x: 434 }, right: { x: 333 } },
     printAreaMm: {
-      front: { w: 250, h: 350 },
+      front: { w: 300, h: 350 },
       back: { w: 300, h: 400 },
       pocket: { w: 100, h: 100 },
       left_sleeve: { w: 80, h: 80 },
@@ -280,8 +285,9 @@ const TEMPLATES = [
   // ≈ 58 cm → ~1.96 px/mm; back ≈897 px → ~1.55 px/mm) — each view's printArea
   // rect is calibrated to ITS OWN photo, so the mm math stays honest per view.
   // FRONT print band is squeezed between the hood drape and the kangaroo
-  // pocket → 250×320 mm (the apparel 350 mm height physically does not fit
-  // above the pocket on this garment). Back takes the full 300×400 mm.
+  // pocket → 300×320 mm (the apparel 350 mm height physically does not fit
+  // above the pocket on this garment; the WIDTH matches the back's 300 mm
+  // since 2026-08-27). Back takes the full 300×400 mm.
   {
     id: 'hoodie_hanging',
     label: 'Hoodie',
@@ -326,7 +332,10 @@ const TEMPLATES = [
     // CALIBRATION (960×1104 half-res coords; overlay-verified on the white
     // photos): front centred between hood drape and kangaroo pocket.
     printAreas: {
-      front: { x: 361, y: 387, w: 245, h: 313 },      // 250×320 mm
+      // front w 245→294 (2026-08-27): widened to the back's 300 mm (spec §1);
+      // same 0.98 px/mm and y/height, re-centred (x 361→337). Height stays
+      // 320 mm — the kangaroo pocket, not the width, caps this garment.
+      front: { x: 337, y: 387, w: 294, h: 313 },      // 300×320 mm
       back: { x: 366, y: 350, w: 228, h: 304 },       // 300×400 mm
       pocket: { x: 542, y: 387, w: 98, h: 98 },       // 100×100 mm
       left_sleeve: { x: 735, y: 410, w: 78, h: 78 },  // wearer LEFT = viewer right
@@ -334,7 +343,7 @@ const TEMPLATES = [
     },
     pocketPositions: { left: { x: 542 }, center: { x: 434 }, right: { x: 327 } },
     printAreaMm: {
-      front: { w: 250, h: 320 },
+      front: { w: 300, h: 320 },
       back: { w: 300, h: 400 },
       pocket: { w: 100, h: 100 },
       left_sleeve: { w: 80, h: 80 },
@@ -416,7 +425,9 @@ const TEMPLATES = [
     // tee's back proportion). Pocket tracks ~45px above the front top like
     // the tee (365 vs 411).
     printAreas: {
-      front: { x: 360, y: 400, w: 230, h: 322 },      // 250×350 mm
+      // front w 230→276 (2026-08-27): widened to the back's 300 mm (spec §1);
+      // same 0.92 px/mm and y/height, re-centred (x 360→337).
+      front: { x: 337, y: 400, w: 276, h: 322 },      // 300×350 mm
       back: { x: 342, y: 340, w: 276, h: 368 },       // 300×400 mm
       pocket: { x: 530, y: 355, w: 92, h: 92 },       // 100×100 mm
       left_sleeve: { x: 700, y: 415, w: 74, h: 74 },  // wearer LEFT = viewer right
@@ -424,7 +435,7 @@ const TEMPLATES = [
     },
     pocketPositions: { left: { x: 530 }, center: { x: 429 }, right: { x: 328 } },
     printAreaMm: {
-      front: { w: 250, h: 350 },
+      front: { w: 300, h: 350 },
       back: { w: 300, h: 400 },
       pocket: { w: 100, h: 100 },
       left_sleeve: { w: 80, h: 80 },
@@ -454,7 +465,9 @@ const TEMPLATES = [
     // areas). Front sits slightly lower (heavier collar), sleeves on the long
     // sleeves' upper arm. Renders on SweatshirtFlat / SweatshirtBackFlat.
     printAreas: {
-      front: { x: 280, y: 230, w: 240, h: 336 },
+      // front w 240→288 (2026-08-27): widened to the back's 300 mm (spec §1);
+      // same 0.96 px/mm and y/height, re-centred (x 280→256).
+      front: { x: 256, y: 230, w: 288, h: 336 },      // 300×350 mm
       back: { x: 280, y: 206, w: 240, h: 320 },
       pocket: { x: 440, y: 225, w: 80, h: 80 },
       left_sleeve: { x: 644, y: 290, w: 56, h: 56 },
@@ -462,7 +475,7 @@ const TEMPLATES = [
     },
     pocketPositions: { left: { x: 440 }, center: { x: 360 }, right: { x: 280 } },
     printAreaMm: {
-      front: { w: 250, h: 350 },
+      front: { w: 300, h: 350 },
       back: { w: 300, h: 400 },
       pocket: { w: 100, h: 100 },
       left_sleeve: { w: 80, h: 80 },

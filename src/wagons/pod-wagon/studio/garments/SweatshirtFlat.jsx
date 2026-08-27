@@ -20,9 +20,10 @@
 //     x≈78 / x≈722, cuff blocks span y≈688..744, and the sleeve body fills the
 //     x78..196 / x604..722 bands from y≈260 down
 // Print areas that must land on fabric:
-//   • chest  {x:280,y:230,w:240,h:336} → x280..520, y230..566. Clears the collar
-//     rib (y162) by 68; sits 84 inside each torso side seam (188/612); bottom y566
-//     is 220 above the hem band (y786).
+//   • chest  {x:256,y:230,w:288,h:336} → x256..544, y230..566. Clears the collar
+//     rib (y162) by 68; sits 68 inside each torso side seam (188/612); bottom y566
+//     is 220 above the hem band (y786). (Widened 2026-08-27 from w:240 when the
+//     front print area went 250→300 mm, matching the back — spec §1.)
 //   • pocket row 80×80 rects at y225..305 across x280..520 — same torso band as the
 //     chest rect, all inside x188..612.
 //   • sleeve areas x96..160 and x640..704, y280..360 — inside the sleeve bodies,

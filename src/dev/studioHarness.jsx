@@ -749,7 +749,7 @@ const WIZARD_TEE = {
   },
   colorways: WIZARD_TEE_COLORWAYS,
   printAreas: {
-    front: { x: 365, y: 411, w: 230, h: 322 },
+    front: { x: 342, y: 411, w: 276, h: 322 }, // 300×350 mm (widened 2026-08-27)
     back: { x: 340, y: 340, w: 280, h: 373 },
     pocket: { x: 535, y: 365, w: 92, h: 92 },
     left_sleeve: { x: 725, y: 365, w: 74, h: 74 },
@@ -757,7 +757,7 @@ const WIZARD_TEE = {
   },
   pocketPositions: { left: { x: 535 }, center: { x: 434 }, right: { x: 333 } },
   printAreaMm: {
-    front: { w: 250, h: 350 },
+    front: { w: 300, h: 350 },
     back: { w: 300, h: 400 },
     pocket: { w: 100, h: 100 },
     left_sleeve: { w: 80, h: 80 },
