@@ -1157,7 +1157,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                                 }
                               }}
                               onBlur={() => addSizes(idx)}
-                              placeholder={g.sizes.length ? '' : 't.ex. S, M, L, XL'}
+                              placeholder={g.sizes.length ? '' : 't.ex. XS, S, M, L, XL'}
                               className="min-w-[8rem] flex-1 bg-transparent text-[13px] text-admin-text placeholder:text-admin-text-faint focus:outline-none"
                             />
                           </div>

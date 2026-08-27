@@ -15,7 +15,9 @@ import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
 import { sellerProfitExVat, sellerMargin, priceFloor, priceForMargin, roundUpTo9, podCostForSlots, FEE_RATE, FEE_FIXED } from '../podPricing';
 
-const DEFAULT_SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
+// XS first (2026-08-27) — the printer's runs start at XS, and a size the seller
+// never sees is a size they never sell. Per-colourway opt-outs subtract from here.
+const DEFAULT_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
 
 // Swedish number formatting: comma decimals, no trailing ,0.
 const fmtSek = (n) => {
