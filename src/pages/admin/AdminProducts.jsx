@@ -361,7 +361,7 @@ const AdminProducts = () => {
   if (editing?.choosing) {
     return (
       <AppLayout>
-        <Page title="Ny produkt" back={{ to: '/admin/products', label: 'Produkter' }}>
+        <Page title="Ny produkt" back={{ to: '/admin/products', label: 'Produkter', onClick: () => setEditing(null) }}>
           <p className="mb-4 text-[13px] text-admin-text-muted">Vad vill du skapa?</p>
           <div className="grid gap-4 sm:grid-cols-2">
             <button
@@ -396,7 +396,11 @@ const AdminProducts = () => {
   if (editing) {
     return (
       <AppLayout>
-        <Page title={editing.product ? 'Redigera produkt' : 'Ny produkt'} back={{ to: '/admin/products', label: 'Produkter' }}>
+        {/* The "detail view" is local `editing` state on the LIST route, so the
+            back link's /admin/products target is the URL we're already on — the
+            navigation alone is a no-op and left the form mounted. Clear the
+            state too (item 1, 2026-08-27). */}
+        <Page title={editing.product ? 'Redigera produkt' : 'Ny produkt'} back={{ to: '/admin/products', label: 'Produkter', onClick: () => setEditing(null) }}>
           <ProductForm
             product={editing.product}
             shopId={shopId}

@@ -15,7 +15,11 @@ import { Link } from 'react-router-dom';
  * @param {React.ReactNode} [props.subtitle]
  * @param {React.ReactNode} [props.titleAdornment]  e.g. status pills next to title
  * @param {React.ReactNode} [props.actions]  right-aligned header actions
- * @param {{to:string,label:string}} [props.back]  back link
+ * @param {{to:string,label:string,onClick?:function}} [props.back]  back link.
+ *   `onClick` is for hosts whose "detail view" is LOCAL STATE on the list route
+ *   (AdminProducts) rather than a route of its own: navigating to the list URL
+ *   is then a same-URL no-op that leaves the form mounted, so the host must
+ *   also clear that state. Handler runs first, then the Link navigates.
  */
 export default function Page({
   title,
@@ -33,6 +37,7 @@ export default function Page({
           {back && (
             <Link
               to={back.to}
+              onClick={back.onClick}
               className="inline-flex items-center gap-1 text-[13px] text-admin-text-muted hover:text-admin-text mb-2"
             >
               <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
