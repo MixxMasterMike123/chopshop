@@ -80,12 +80,15 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
  *   onApplyOverrideToColorways(ids, artworkId) — optional bulk light/dark action
  *   onApproveAll()          — optional: mark every colour reviewed at once (the
  *                             guided per-colour path stays primary)
+ *   onRemoveColorway(id)    — optional: drop a colour from the design (step 5's
+ *                             deselect, reachable from the verdict) so a bad
+ *                             contrast can be resolved WITHOUT leaving step 6
  */
 const ColorwayStrip = ({
   template, slot, activeColorwayId, onSelect, placement,
   resolveArtwork, overrides = {}, onOverrideChange, artworkOptions = [], baseArtwork = null, baseArtworkLabel = 'Standardmotiv',
   reviewedColorwayIds = [], minDpi = null, locked = false, colorwayIds = null,
-  onApplyOverrideToColorways = null, onApproveAll = null,
+  onApplyOverrideToColorways = null, onApproveAll = null, onRemoveColorway = null,
 }) => {
   const selectedSet = colorwayIds ? new Set(colorwayIds) : null;
   const colorways = (template?.colorways || []).filter((cw) => !selectedSet || selectedSet.has(cw.id));
@@ -239,19 +242,36 @@ const ColorwayStrip = ({
                 <span className="text-[12px] text-admin-text-muted">Färg {activeIndex + 1} av {colorways.length}</span>
               </div>
 
-              {/* Verdict — only once the analysis has an answer. */}
+              {/* Verdict — only once the analysis has an answer. The BACKGROUND
+                  carries the verdict (soft red = low contrast, soft green = OK)
+                  so the answer reads at a glance instead of needing the prose.
+                  The admin status tokens are deliberately mode-agnostic pastels
+                  (see StatusPill) — they stay legible on the dark canvas too. */}
               {activeContrast?.warning === true && (
-                <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2">
-                  <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-admin-caution-dot" aria-hidden="true" />
-                  <p className="text-[12px] leading-relaxed text-admin-caution-text">
-                    <span className="font-semibold">Motivet syns dåligt på {active.label.toLowerCase()}.</span>{' '}
-                    {showSwap ? 'Välj ett motiv som syns bättre nedan, eller godkänn ändå.' : 'Kontrollera kombinationen extra noga i mockupen, eller godkänn ändå.'}
-                  </p>
+                <div className="mt-2 rounded-[var(--radius-admin-el)] border border-admin-critical-dot/30 bg-admin-critical-bg px-3 py-2">
+                  <div className="flex items-start gap-2">
+                    <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-admin-critical-dot" aria-hidden="true" />
+                    <p className="text-[12px] leading-relaxed text-admin-critical-text">
+                      <span className="font-semibold">Motivet syns dåligt på {active.label.toLowerCase()}.</span>{' '}
+                      {showSwap ? 'Välj ett motiv som syns bättre nedan, ta bort färgen, eller godkänn ändå.' : 'Ta bort färgen, kontrollera kombinationen extra noga i mockupen, eller godkänn ändå.'}
+                    </p>
+                  </div>
+                  {/* The fix that needed a trip back to step 5 until now: drop
+                      the colour from the design without leaving the review. */}
+                  {onRemoveColorway && (
+                    <button
+                      type="button"
+                      onClick={() => onRemoveColorway(active.id)}
+                      className="mt-2 rounded-[var(--radius-admin-el)] border border-admin-critical-dot/40 bg-admin-surface px-2.5 py-1.5 text-[12px] font-medium text-admin-critical-text hover:bg-admin-critical-bg"
+                    >
+                      Ta bort {active.label.toLowerCase()} ur designen
+                    </button>
+                  )}
                 </div>
               )}
               {activeContrast && activeContrast.warning !== true && (
-                <p className="mt-2 flex items-center gap-1.5 text-[12px] text-admin-success-text">
-                  <CheckIcon className="h-4 w-4" aria-hidden="true" />
+                <p className="mt-2 flex items-center gap-1.5 rounded-[var(--radius-admin-el)] border border-admin-success-dot/30 bg-admin-success-bg px-3 py-2 text-[12px] text-admin-success-text">
+                  <CheckIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
                   Kontrasten ser bra ut på den här färgen
                 </p>
               )}

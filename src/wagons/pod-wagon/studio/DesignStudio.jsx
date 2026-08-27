@@ -1619,8 +1619,16 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
               ? (cwIds, artId) => setOverrideForColorways(slot, cwIds, artId)
               : null}
             onApproveAll={() => setReviewedColorways(new Set(selectedColorwayIds))}
+            // Removing a colour from the review = step 5's deselect. Reviews are
+            // not pruned on purpose: s6done only inspects SELECTED colourways,
+            // so a leftover flag can never gate publish — and it survives the
+            // seller re-adding the colour in step 5.
+            onRemoveColorway={(cwId) => { if (selectedColorwayIds.has(cwId)) toggleSelectedColorway(cwId); }}
           />
         )}
+        {/* Removing the LAST colour here drops s5done, and the step-fallback
+            effect lands the seller back on step 5 — where the "Välj minst en
+            färg" blocker already lives. No extra empty state needed. */}
         <StepNav nextLabel="Nästa: Mockuper" nextEnabled={s6done} onNext={() => goStep(7)} hint="Granska varje vald färg" />
       </CardSection>
       )}
