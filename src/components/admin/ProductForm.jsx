@@ -333,10 +333,25 @@ const formFromProduct = (p) => ({
  * @param {string[]} availableTags    existing tag names across the shop (autocomplete)
  * @param {() => void} onSaved     called after a successful save (parent reloads + closes)
  * @param {() => void} onCancel    close without saving
+ * @param {string} [formId]        id put on the <form>. Lets the HOST render a
+ *   Spara button in the Page header — outside this form's DOM — via the native
+ *   `form="<id>"` attribute, so the header CTA submits this exact form with no
+ *   ref plumbing or duplicated submit logic.
+ * @param {(saving:boolean) => void} [onSavingChange]  mirrors `saving` to the
+ *   host so a header button can disable/relabel in step with the bottom one.
  */
-const ProductForm = ({ product, shopId, availableCategories = [], availableTags = [], onSaved, onCancel }) => {
+const ProductForm = ({ product, shopId, availableCategories = [], availableTags = [], onSaved, onCancel, formId, onSavingChange }) => {
   const [formData, setFormData] = useState(() => (product ? formFromProduct(product) : emptyForm()));
   const [saving, setSaving] = useState(false);
+  // Mirror `saving` to the host (header Spara). The cleanup matters: on a
+  // SUCCESSFUL save the form unmounts via onSaved() without ever setting
+  // saving=false (only the catch does), so without this the host's flag stayed
+  // true and the next product opened with a disabled "Sparar…" header button.
+  // Cancel/unmount takes the same path.
+  useEffect(() => {
+    onSavingChange?.(saving);
+    return () => onSavingChange?.(false);
+  }, [saving, onSavingChange]);
 
   // B2B Wholesale add-on: gates the wholesale-price field. Default-ON for shops
   // without a `features` map, but nothing else in this form depends on it, so a
@@ -399,7 +414,6 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   );
   const [galleryFiles, setGalleryFiles] = useState([]);
   const [galleryPreviews, setGalleryPreviews] = useState([]);
-  const [imagesToDelete, setImagesToDelete] = useState([]);
 
   // Category autocomplete (the browse taxonomy / URL driver; was `group`).
   const [categoryInput, setCategoryInput] = useState(product?.category || product?.group || '');
@@ -626,12 +640,26 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
     setGalleryFiles((prev) => [...prev, ...files]);
   };
 
+  // Promote an ALREADY-UPLOADED gallery image (studio mockups land here) to
+  // Huvudbild. Save reads `formData.b2cImageUrl` unless a NEW file was picked,
+  // so clearing mainImageFile is what makes this stick.
+  const useAsMainImage = (url) => {
+    setMainImageFile(null);
+    setMainImagePreview(url);
+    setFormData((prev) => ({ ...prev, b2cImageUrl: url, imageUrl: url }));
+    toast.success('Huvudbild vald — spara för att bekräfta.');
+  };
+
   const removeNewGalleryImage = (index) => {
     setGalleryPreviews((prev) => prev.filter((_, i) => i !== index));
     setGalleryFiles((prev) => prev.filter((_, i) => i !== index));
   };
+  // Removing from the gallery is a VIEW edit only. Which files actually get
+  // deleted from Storage is resolved at SUBMIT time (see handleSubmit): a
+  // click-time queue cannot know the final state — the studio's hero is both
+  // huvudbild and a gallery member, and a later "Använd som huvudbild" pick can
+  // orphan or rescue a file after the click.
   const removeExistingGalleryImage = (index) => {
-    setImagesToDelete((prev) => [...prev, existingGallery[index]]);
     setExistingGallery((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -724,7 +752,20 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
         const u = await uploadImageToStorage(galleryFiles[i], `products/${shopId}/${productId}`, `b2c_gallery_${Date.now()}_${i}`);
         gallery.push(u);
       }
-      for (const url of imagesToDelete) await deleteImageFromStorage(url);
+      // Orphan sweep: delete every image the product ARRIVED with that survives
+      // in neither the final gallery nor the final main image. Resolving here
+      // (instead of queueing on each remove click) is what makes re-picking the
+      // huvudbild safe in both directions — promoting a gallery image rescues
+      // it, and replacing the old huvudbild collects it.
+      const keptUrls = new Set([...gallery, mainImageUrl, formData.imageUrl].filter(Boolean));
+      const originalUrls = [
+        product?.b2cImageUrl,
+        product?.imageUrl,
+        ...(Array.isArray(product?.b2cImageGallery) ? product.b2cImageGallery : []),
+      ].filter(Boolean);
+      for (const url of new Set(originalUrls)) {
+        if (!keptUrls.has(url)) await deleteImageFromStorage(url);
+      }
 
       const price = parseFloat(formData.price) || 0;
       // Was-price for a REA. Only persist a genuine sale (> the selling price);
@@ -900,7 +941,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   const helpCls = 'mt-1 text-[12px] text-admin-text-muted';
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form id={formId} onSubmit={handleSubmit}>
       <RightRail
         main={
           <>
@@ -989,6 +1030,39 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                       itemLabel="Befintlig"
                       className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4"
                     />
+                  )}
+                  {/* Promote a gallery image to Huvudbild. Studio mockups arrive
+                      in this gallery, so without this the only way to change the
+                      main image was re-uploading a file by hand. Existing
+                      (uploaded) images only — new picks have no URL yet. */}
+                  {existingGallery.length > 0 && (
+                    <div className="mb-4">
+                      <span className={labelCls}>Välj huvudbild ur galleriet</span>
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        {existingGallery.map((url) => {
+                          const isMain = url === formData.b2cImageUrl && !mainImageFile;
+                          return (
+                            <button
+                              key={url}
+                              type="button"
+                              onClick={() => useAsMainImage(url)}
+                              aria-pressed={isMain}
+                              title={isMain ? 'Detta är huvudbilden' : 'Använd som huvudbild'}
+                              className={`w-20 rounded-[var(--radius-admin-el)] border p-1 transition ${
+                                isMain
+                                  ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
+                                  : 'border-admin-border hover:bg-admin-surface-2'
+                              }`}
+                            >
+                              <img src={url} alt="" loading="lazy" decoding="async" className="aspect-square w-full rounded-[4px] bg-white object-contain" />
+                              <span className="mt-0.5 block truncate text-center text-[10px] text-admin-text-muted">
+                                {isMain ? 'Huvudbild' : 'Använd'}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   )}
                   {galleryPreviews.length > 0 && (
                     <SortableImageGallery
@@ -1157,7 +1231,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                                 }
                               }}
                               onBlur={() => addSizes(idx)}
-                              placeholder={g.sizes.length ? '' : 't.ex. S, M, L, XL'}
+                              placeholder={g.sizes.length ? '' : 't.ex. XS, S, M, L, XL'}
                               className="min-w-[8rem] flex-1 bg-transparent text-[13px] text-admin-text placeholder:text-admin-text-faint focus:outline-none"
                             />
                           </div>

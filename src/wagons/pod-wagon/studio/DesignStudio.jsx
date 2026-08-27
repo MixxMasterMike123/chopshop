@@ -65,6 +65,11 @@ import { orderedVariantMockupUrls } from './mockupVariantImages';
 // are unselectable, because the compositor literally has nothing to draw.
 const isSelectableArtwork = (art) => isComposable(art);
 
+// The wizard page where colours are REVIEWED (6 · Godkänn). Seeing a colourway
+// only counts as a review while this page is on screen — that is where the big
+// composite and the contrast verdict live.
+const REVIEW_STEP = 6;
+
 // Thumbnail of a template in its first colourway (for the picker cards): SVG flat
 // or the colourway's garment photo, via the shared background layer.
 const GarmentThumb = ({ template, colorway }) => (
@@ -87,9 +92,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const [prints, setPrints] = useState([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [colorwayId, setColorwayId] = useState(null);
-  // Colours offered by this design. A template starts with every colour on;
-  // step 5 only opts colours out. This state is shared by artwork review,
-  // mockup generation and publishing so the steps cannot drift apart.
+  // Colours offered by this design. Starts EMPTY — step 5 opts colours IN.
+  // This state is shared by artwork review, mockup generation and publishing
+  // so the steps cannot drift apart.
   const [selectedColorwayIds, setSelectedColorwayIds] = useState(() => new Set());
   // The ACTIVE print row's slot (drives canvas/strip). Reconciled against
   // `prints` — when the list is empty it idles on 'front' with no artwork.
@@ -132,10 +137,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   };
   useEffect(() => () => replaceObjectUrls([]), []);
 
-  // Reviews are valid for the CURRENT design only — reset the seen-set to JUST the
-  // active colourway. The colorwayId effect re-seeds anyway; seeding here keeps the
-  // gate honest between that effect firing (and covers a null active colourway).
-  const resetReviews = () => setReviewedColorways(colorwayId ? new Set([colorwayId]) : new Set());
+  // Reviews are valid for the CURRENT design only — clear the seen-set outright.
+  // It used to seed the ACTIVE colourway, which pre-approved a colour the seller
+  // had never actually looked at in step 6 (see the seen-on-view effect below).
+  const resetReviews = () => setReviewedColorways(new Set());
 
   const resetDesignState = () => {
     setPlacements({});
@@ -198,7 +203,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     if (!selectedTemplate) return;
     const cwIds = (selectedTemplate.colorways || []).map((c) => c.id);
     if (!cwIds.includes(colorwayId)) setColorwayId(cwIds[0] || null);
-    setSelectedColorwayIds(new Set(cwIds));
+    // Colours start UNSELECTED (2026-08-27): the seller opts colours IN in step 5.
+    // Selecting all by default shipped colourways nobody asked for; the
+    // "välj minst en färg" gate (s5done) makes the empty start safe.
+    setSelectedColorwayIds(new Set());
     const slots = templateSlots(selectedTemplate);
     // Keep print rows whose slot exists on the new garment (the seller's motif
     // picks survive a garment switch); their placements reset below — they were
@@ -216,13 +224,17 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // (No global artwork-change reset anymore: changing a print row's motif
   // resets only THAT row's placement — see setPrintArtwork below.)
 
-  // The ACTIVE colourway is always considered SEEN — selecting one composites it
-  // live in the strip. Covers the initial default colourway too. Switching slots
-  // does NOT reset reviews (same colourways; the strip re-previews the active slot).
+  // Seen-on-view: the active colourway counts as REVIEWED only while the seller
+  // is actually ON step 6, where the big review card and the contrast verdict
+  // are on screen. It used to fire on ANY colorwayId change — including the
+  // automatic `colorwayId = cwIds[0]` when a template is picked in step 1 — so
+  // with colours now starting unselected, a seller who chose only that first
+  // colour reached s6done without ever seeing the verdict. Switching slots does
+  // NOT reset reviews (same colourways; the strip re-previews the active slot).
   useEffect(() => {
-    if (!colorwayId) return;
+    if (!colorwayId || step !== REVIEW_STEP) return;
     setReviewedColorways((prev) => (prev.has(colorwayId) ? prev : new Set(prev).add(colorwayId)));
-  }, [colorwayId]);
+  }, [colorwayId, step]);
 
   const selectedColorway = useMemo(
     () => (selectedTemplate?.colorways || []).find((c) => c.id === colorwayId) || selectedTemplate?.colorways?.[0] || null,
@@ -268,11 +280,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const invalidateComposite = () => {
     setMockups((prev) => (prev.length ? [] : prev));
     setHeroKey((prev) => (prev === null ? prev : null));
-    setReviewedColorways((prev) => {
-      if (colorwayId && prev.size === 1 && prev.has(colorwayId)) return prev;
-      if (!colorwayId && prev.size === 0) return prev;
-      return colorwayId ? new Set([colorwayId]) : new Set();
-    });
+    // Clear outright (not "keep the active colourway"): a changed composite is
+    // a composite nobody has reviewed yet, including the one on screen. The
+    // seen-on-view effect re-adds the active colour the moment the seller is
+    // looking at it on step 6.
+    setReviewedColorways((prev) => (prev.size === 0 ? prev : new Set()));
   };
 
   const addPrint = (s) => {
@@ -368,14 +380,18 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     if (!next.has(colorwayId)) setColorwayId(next.values().next().value || null);
   };
 
-  // Override choices for the ACTIVE slot: selectable (non-FAIL) artwork that can
-  // actually be COMPOSED (raster with known dims — a PASS-tier PDF can't
-  // preview/mockup), excluding the slot's own base motif.
-  const activeBaseArtworkId = printBySlot[slot]?.artworkId || null;
-  const overrideOptions = useMemo(
-    () => artwork.filter((a) => isSelectableArtwork(a) && a.id !== activeBaseArtworkId),
-    [artwork, activeBaseArtworkId]
+  // Override choices for a slot: selectable (non-FAIL) artwork that can actually
+  // be COMPOSED (raster with known dims — a PASS-tier PDF can't preview/mockup),
+  // excluding that slot's own base motif. Per-slot because step 6 now reviews
+  // every print area at once rather than one "active" surface at a time.
+  const selectableArtwork = useMemo(
+    () => artwork.filter(isSelectableArtwork),
+    [artwork]
   );
+  const overrideOptionsFor = (forSlot) => {
+    const baseId = printBySlot[forSlot]?.artworkId || null;
+    return selectableArtwork.filter((a) => a.id !== baseId);
+  };
 
   // Slots that end up on mockups + mappings: exactly the trycklista's rows that
   // have a motif AND exist on the template (list order preserved). No implicit
@@ -1545,6 +1561,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             artwork={canvasArtwork}
             profile={profile}
             locked={false}
+            // FLAT here on purpose: while POSITIONING, the fabric morph fights
+            // the eye — a straight edge the wrinkles bend reads as a placement
+            // error. Step 6 (Godkänn), the preview and the exported mockups
+            // still show the warped truth.
+            flat
             placement={placements[slot] || null}
             ghostAreas={ghostAreas}
             onGhostClick={(s) => {
@@ -1570,7 +1591,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       )}
 
       {/* ── 5 · FÄRGER — choose the sellable colour range before artwork
-          variants and mockups. Every template colour starts selected. */}
+          variants and mockups. Colours start UNSELECTED — the seller opts in. */}
       {step === 5 && (
       <CardSection title="5 · Färger" className="pod-step-enter" bodyClassName="p-4">
         <ColorSelectionPanel
@@ -1587,37 +1608,45 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {step === 6 && (
       <CardSection title="6 · Godkänn" className="pod-step-enter" bodyClassName="p-4">
         <p className="mb-3 text-[13px] text-admin-text-muted">
-          Granska varje färg innan mockuperna skapas. Byt motiv för en viss färg om kontrasten inte fungerar.
+          {designedSlots(selectedTemplate).length > 1
+            ? 'Granska varje färg — alla tryckytor visas tillsammans, och ett godkännande gäller hela färgen. Byt motiv för en viss yta om kontrasten inte fungerar.'
+            : 'Granska varje färg innan mockuperna skapas. Byt motiv för en viss färg om kontrasten inte fungerar.'}
         </p>
-        <SurfaceSwitcher
-          ariaLabel="Förhandsvisa yta"
-          items={designedSlots(selectedTemplate).map((s) => ({ key: s, label: labelForSlot(s) }))}
-          activeIndex={Math.max(0, designedSlots(selectedTemplate).indexOf(slot))}
-          onSelect={(i) => setSlot(designedSlots(selectedTemplate)[i])}
-        />
+        {/* No surface tabs here (2026-08-27): the review gate is keyed by
+            COLOURWAY, so hiding half the print areas behind a tab meant one
+            click approved surfaces the seller never saw. Every designed area
+            now sits in the card, side by side. */}
         {selectedTemplate && (
           <ColorwayStrip
             template={effTemplate}
             slot={slot}
+            slots={designedSlots(selectedTemplate)}
             minDpi={profile?.min_dpi ?? null}
             activeColorwayId={colorwayId}
             onSelect={setColorwayId}
-            placement={placements[slot] || null}
-            locked={slot === 'pocket'}
-            resolveArtwork={(cwId) => resolveArtwork(slot, cwId)}
-            overrides={overrides[slot] || {}}
-            onOverrideChange={printArtwork(slot) ? (cwId, artId) => setOverride(slot, cwId, artId) : null}
-            artworkOptions={overrideOptions}
-            baseArtwork={printArtwork(slot)}
-            baseArtworkLabel={printArtwork(slot)?.label || printArtwork(slot)?.fileName || 'Standardmotiv'}
+            placementFor={(s) => placements[s] || null}
+            lockedSlot={(s) => s === 'pocket'}
+            labelForSlot={labelForSlot}
+            resolveArtwork={resolveArtwork}
+            overridesFor={(s) => overrides[s] || {}}
+            onOverrideChange={(s, cwId, artId) => (printArtwork(s) ? setOverride(s, cwId, artId) : undefined)}
+            artworkOptionsFor={(s) => (printArtwork(s) ? overrideOptionsFor(s) : [])}
+            baseArtworkFor={printArtwork}
+            baseArtworkLabelFor={(s) => printArtwork(s)?.label || printArtwork(s)?.fileName || 'Standardmotiv'}
             reviewedColorwayIds={reviewedColorways}
             colorwayIds={[...selectedColorwayIds]}
-            onApplyOverrideToColorways={printArtwork(slot)
-              ? (cwIds, artId) => setOverrideForColorways(slot, cwIds, artId)
-              : null}
+            onApplyOverrideToColorways={(s, cwIds, artId) => (printArtwork(s) ? setOverrideForColorways(s, cwIds, artId) : undefined)}
             onApproveAll={() => setReviewedColorways(new Set(selectedColorwayIds))}
+            // Removing a colour from the review = step 5's deselect. Reviews are
+            // not pruned on purpose: s6done only inspects SELECTED colourways,
+            // so a leftover flag can never gate publish — and it survives the
+            // seller re-adding the colour in step 5.
+            onRemoveColorway={(cwId) => { if (selectedColorwayIds.has(cwId)) toggleSelectedColorway(cwId); }}
           />
         )}
+        {/* Removing the LAST colour here drops s5done, and the step-fallback
+            effect lands the seller back on step 5 — where the "Välj minst en
+            färg" blocker already lives. No extra empty state needed. */}
         <StepNav nextLabel="Nästa: Mockuper" nextEnabled={s6done} onNext={() => goStep(7)} hint="Granska varje vald färg" />
       </CardSection>
       )}

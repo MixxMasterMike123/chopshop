@@ -13,7 +13,7 @@ const ColorSelectionPanel = ({ template, selectedColorwayIds = [], onToggle }) =
     <div>
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-[13px] text-admin-text-muted">
-          Alla färger är valda från början. Ta bort de färger som inte ska säljas.
+          Välj de färger produkten ska säljas i. Inga färger är valda från början.
         </p>
         <span className="text-[12px] font-medium text-admin-text">
           {selected.size} av {colorways.length} valda
