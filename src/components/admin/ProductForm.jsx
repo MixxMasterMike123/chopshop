@@ -333,10 +333,17 @@ const formFromProduct = (p) => ({
  * @param {string[]} availableTags    existing tag names across the shop (autocomplete)
  * @param {() => void} onSaved     called after a successful save (parent reloads + closes)
  * @param {() => void} onCancel    close without saving
+ * @param {string} [formId]        id put on the <form>. Lets the HOST render a
+ *   Spara button in the Page header — outside this form's DOM — via the native
+ *   `form="<id>"` attribute, so the header CTA submits this exact form with no
+ *   ref plumbing or duplicated submit logic.
+ * @param {(saving:boolean) => void} [onSavingChange]  mirrors `saving` to the
+ *   host so a header button can disable/relabel in step with the bottom one.
  */
-const ProductForm = ({ product, shopId, availableCategories = [], availableTags = [], onSaved, onCancel }) => {
+const ProductForm = ({ product, shopId, availableCategories = [], availableTags = [], onSaved, onCancel, formId, onSavingChange }) => {
   const [formData, setFormData] = useState(() => (product ? formFromProduct(product) : emptyForm()));
   const [saving, setSaving] = useState(false);
+  useEffect(() => { onSavingChange?.(saving); }, [saving, onSavingChange]);
 
   // B2B Wholesale add-on: gates the wholesale-price field. Default-ON for shops
   // without a `features` map, but nothing else in this form depends on it, so a
@@ -914,7 +921,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   const helpCls = 'mt-1 text-[12px] text-admin-text-muted';
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form id={formId} onSubmit={handleSubmit}>
       <RightRail
         main={
           <>

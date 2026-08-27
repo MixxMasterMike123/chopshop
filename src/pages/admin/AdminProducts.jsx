@@ -23,6 +23,10 @@ import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } 
 import { CSS } from '@dnd-kit/utilities';
 import { isProductFeatured, sortProductsForDisplay } from '../../utils/productSorting';
 
+// Ties the header Spara button to ProductForm's <form> across the DOM boundary
+// (Page's actions render outside the form) via the native form="…" attribute.
+const PRODUCT_FORM_ID = 'admin-product-form';
+
 // Read a product name that may be a legacy per-locale object or a plain string.
 const productName = (name) => {
   if (typeof name === 'string') return name;
@@ -96,6 +100,10 @@ const AdminProducts = () => {
   // chooser (POD shops only); { product: null } = create plain product;
   // { product } = edit an existing product.
   const [editing, setEditing] = useState(null);
+
+  // Mirrors ProductForm's own `saving` so the HEADER Spara button can disable
+  // and relabel in step with the bottom one (the form owns the state).
+  const [formSaving, setFormSaving] = useState(false);
 
   // List filter (ProductMenu).
   const [filteredProduct, setFilteredProduct] = useState(null);
@@ -396,16 +404,34 @@ const AdminProducts = () => {
   if (editing) {
     return (
       <AppLayout>
-        {/* The "detail view" is local `editing` state on the LIST route, so the
-            back link's /admin/products target is the URL we're already on — the
-            navigation alone is a no-op and left the form mounted. Clear the
-            state too (item 1, 2026-08-27). */}
-        <Page title={editing.product ? 'Redigera produkt' : 'Ny produkt'} back={{ to: '/admin/products', label: 'Produkter', onClick: () => setEditing(null) }}>
+        {/* back: the "detail view" is local `editing` state on the LIST route,
+            so /admin/products is the URL we're already on — navigating alone is
+            a no-op that left the form mounted, hence the onClick.
+            actions: Spara lives in the header, matching collections / pages /
+            menu / storefront. It sits OUTSIDE the form's DOM, so it submits via
+            the native form="…" attribute rather than a duplicated handler; the
+            bottom save bar stays — long form, both ends reachable. */}
+        <Page
+          title={editing.product ? 'Redigera produkt' : 'Ny produkt'}
+          back={{ to: '/admin/products', label: 'Produkter', onClick: () => setEditing(null) }}
+          actions={
+            <>
+              <Button type="button" variant="secondary" onClick={() => setEditing(null)} disabled={formSaving}>
+                Avbryt
+              </Button>
+              <Button type="submit" form={PRODUCT_FORM_ID} variant="primary" disabled={formSaving}>
+                {formSaving ? 'Sparar…' : editing.product ? 'Spara ändringar' : 'Skapa produkt'}
+              </Button>
+            </>
+          }
+        >
           <ProductForm
             product={editing.product}
             shopId={shopId}
             availableCategories={availableCategories}
             availableTags={availableTags}
+            formId={PRODUCT_FORM_ID}
+            onSavingChange={setFormSaving}
             onSaved={onSaved}
             onCancel={() => setEditing(null)}
           />
