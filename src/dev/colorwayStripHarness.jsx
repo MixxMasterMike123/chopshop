@@ -72,16 +72,17 @@ const Strip = ({ initialReviewed, initialActive = 'white' }) => {
         slot="front"
         activeColorwayId={activeId}
         onSelect={select}
-        placement={null}
-        resolveArtwork={resolveArtwork}
-        overrides={overrides}
-        onOverrideChange={setOverride}
-        artworkOptions={[lightArt]}
-        baseArtwork={darkArt}
-        baseArtworkLabel="Mörkt motiv"
+        placementFor={() => null}
+        resolveArtwork={(_s, cwId) => resolveArtwork(cwId)}
+        overridesFor={() => overrides}
+        onOverrideChange={(_s, cwId, artId) => setOverride(cwId, artId)}
+        artworkOptionsFor={() => [lightArt]}
+        baseArtworkFor={() => darkArt}
+        baseArtworkLabelFor={() => 'Mörkt motiv'}
+        labelForSlot={() => 'Bröst'}
         reviewedColorwayIds={reviewed}
         colorwayIds={COLORWAYS.map((c) => c.id)}
-        onApplyOverrideToColorways={(ids, artId) => ids.forEach((id) => setOverride(id, artId))}
+        onApplyOverrideToColorways={(_s, ids, artId) => ids.forEach((id) => setOverride(id, artId))}
         onApproveAll={() => setReviewed(new Set(COLORWAYS.map((c) => c.id)))}
       />
     </div>

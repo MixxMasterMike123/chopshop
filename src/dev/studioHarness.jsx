@@ -314,12 +314,13 @@ const Harness = () => {
           slot={slot}
           activeColorwayId={colorwayId}
           onSelect={setColorwayId}
-          placement={placements[slot] || null}
-          resolveArtwork={(cwId) => resolveArtwork(slot, cwId)}
-          overrides={overrides[slot] || {}}
-          onOverrideChange={selectedArtwork ? (cwId, artId) => setOverride(slot, cwId, artId) : null}
-          artworkOptions={selectedArtwork ? [lightArt] : []}
-          baseArtworkLabel={selectedArtwork?.label || 'Standardmotiv'}
+          placementFor={(s) => placements[s] || null}
+          resolveArtwork={resolveArtwork}
+          overridesFor={(s) => overrides[s] || {}}
+          onOverrideChange={(s, cwId, artId) => (selectedArtwork ? setOverride(s, cwId, artId) : undefined)}
+          artworkOptionsFor={() => (selectedArtwork ? [lightArt] : [])}
+          baseArtworkLabelFor={() => selectedArtwork?.label || 'Standardmotiv'}
+          labelForSlot={(s) => s}
           reviewedColorwayIds={reviewedColorways}
         />
 
