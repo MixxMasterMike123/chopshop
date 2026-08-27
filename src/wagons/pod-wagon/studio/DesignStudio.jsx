@@ -1545,6 +1545,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             artwork={canvasArtwork}
             profile={profile}
             locked={false}
+            // FLAT here on purpose: while POSITIONING, the fabric morph fights
+            // the eye — a straight edge the wrinkles bend reads as a placement
+            // error. Step 6 (Godkänn), the preview and the exported mockups
+            // still show the warped truth.
+            flat
             placement={placements[slot] || null}
             ghostAreas={ghostAreas}
             onGhostClick={(s) => {
