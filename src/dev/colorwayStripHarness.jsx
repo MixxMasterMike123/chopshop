@@ -21,8 +21,8 @@ const COLORWAYS = [
 const TEMPLATE = {
   id: 'tee_flat', label: 'T-shirt', garment: 'tee', profileId: 'apparel_dtg',
   colorways: COLORWAYS,
-  printAreas: { front: { x: 280, y: 210, w: 240, h: 320 } },
-  printAreaMm: { front: { w: 300, h: 400 } },
+  printAreas: { front: { x: 280, y: 210, w: 240, h: 320 }, back: { x: 280, y: 210, w: 240, h: 320 } },
+  printAreaMm: { front: { w: 300, h: 400 }, back: { w: 300, h: 400 } },
 };
 
 // Two motifs: a DARK one (base) that vanishes on dark garments, and a LIGHT
@@ -46,12 +46,15 @@ const makeArtwork = (id, label, circleColor, boxColor, textColor) => {
   };
 };
 
-const Strip = ({ initialReviewed, initialActive = 'white' }) => {
+const SLOT_LABELS = { front: 'Bröst', back: 'Rygg' };
+
+const Strip = ({ initialReviewed, initialActive = 'white', slots = ['front'] }) => {
   const darkArt = useMemo(() => makeArtwork('art-dark', 'Mörkt motiv', '#1f2430', '#2c4b6e', '#111111'), []);
   const lightArt = useMemo(() => makeArtwork('art-light', 'Ljust motiv', '#f5d76e', '#eeeeee', '#ffffff'), []);
   const [activeId, setActiveId] = useState(initialActive);
   const [reviewed, setReviewed] = useState(() => new Set(initialReviewed));
   const [overrides, setOverrides] = useState({});
+  const [liveIds, setLiveIds] = useState(() => COLORWAYS.map((c) => c.id));
   // Seen-on-view, like DesignStudio: selecting marks reviewed.
   const select = (id) => {
     setActiveId(id);
@@ -69,7 +72,8 @@ const Strip = ({ initialReviewed, initialActive = 'white' }) => {
     <div className="p-4">
       <ColorwayStrip
         template={TEMPLATE}
-        slot="front"
+        slot={slots[0]}
+        slots={slots}
         activeColorwayId={activeId}
         onSelect={select}
         placementFor={() => null}
@@ -79,11 +83,16 @@ const Strip = ({ initialReviewed, initialActive = 'white' }) => {
         artworkOptionsFor={() => [lightArt]}
         baseArtworkFor={() => darkArt}
         baseArtworkLabelFor={() => 'Mörkt motiv'}
-        labelForSlot={() => 'Bröst'}
+        labelForSlot={(s) => SLOT_LABELS[s] || s}
         reviewedColorwayIds={reviewed}
-        colorwayIds={COLORWAYS.map((c) => c.id)}
+        colorwayIds={liveIds}
         onApplyOverrideToColorways={(_s, ids, artId) => ids.forEach((id) => setOverride(id, artId))}
-        onApproveAll={() => setReviewed(new Set(COLORWAYS.map((c) => c.id)))}
+        onApproveAll={() => setReviewed(new Set(liveIds))}
+        onRemoveColorway={(cwId) => setLiveIds((prev) => {
+          const next = prev.filter((id) => id !== cwId);
+          if (cwId === activeId) setActiveId(next[0] || null);
+          return next;
+        })}
       />
     </div>
   );
@@ -102,6 +111,15 @@ createRoot(document.getElementById('root')).render(
     <Pane label="DARK — VARNING (svart tröja, mörkt motiv)" dark><Strip initialReviewed={['white', 'black']} initialActive="black" /></Pane>
     <Pane label="LIGHT — VARNING (svart tröja)"><Strip initialReviewed={['white', 'black']} initialActive="black" /></Pane>
     <Pane label="DARK — alla granskade" dark><Strip initialReviewed={['white', 'black', 'navy', 'heather', 'red']} initialActive="navy" /></Pane>
+    <Pane label="LIGHT — FRAM+BAK, varning (svart tröja)">
+      <Strip initialReviewed={['white', 'black']} initialActive="black" slots={['front', 'back']} />
+    </Pane>
+    <Pane label="DARK — FRAM+BAK, varning (svart tröja)" dark>
+      <Strip initialReviewed={['white', 'black']} initialActive="black" slots={['front', 'back']} />
+    </Pane>
+    <Pane label="LIGHT — FRAM+BAK, OK (vit tröja)">
+      <Strip initialReviewed={['white']} initialActive="white" slots={['front', 'back']} />
+    </Pane>
     <Pane label="LIGHT — SMAL KOLUMN 360px (varning)">
       <div style={{ width: 360 }}>
         <Strip initialReviewed={['white', 'black']} initialActive="black" />
