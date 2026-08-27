@@ -87,9 +87,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const [prints, setPrints] = useState([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [colorwayId, setColorwayId] = useState(null);
-  // Colours offered by this design. A template starts with every colour on;
-  // step 5 only opts colours out. This state is shared by artwork review,
-  // mockup generation and publishing so the steps cannot drift apart.
+  // Colours offered by this design. Starts EMPTY — step 5 opts colours IN.
+  // This state is shared by artwork review, mockup generation and publishing
+  // so the steps cannot drift apart.
   const [selectedColorwayIds, setSelectedColorwayIds] = useState(() => new Set());
   // The ACTIVE print row's slot (drives canvas/strip). Reconciled against
   // `prints` — when the list is empty it idles on 'front' with no artwork.
@@ -198,7 +198,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     if (!selectedTemplate) return;
     const cwIds = (selectedTemplate.colorways || []).map((c) => c.id);
     if (!cwIds.includes(colorwayId)) setColorwayId(cwIds[0] || null);
-    setSelectedColorwayIds(new Set(cwIds));
+    // Colours start UNSELECTED (2026-08-27): the seller opts colours IN in step 5.
+    // Selecting all by default shipped colourways nobody asked for; the
+    // "välj minst en färg" gate (s5done) makes the empty start safe.
+    setSelectedColorwayIds(new Set());
     const slots = templateSlots(selectedTemplate);
     // Keep print rows whose slot exists on the new garment (the seller's motif
     // picks survive a garment switch); their placements reset below — they were
