@@ -626,12 +626,26 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
     setGalleryFiles((prev) => [...prev, ...files]);
   };
 
+  // Promote an ALREADY-UPLOADED gallery image (studio mockups land here) to
+  // Huvudbild. Save reads `formData.b2cImageUrl` unless a NEW file was picked,
+  // so clearing mainImageFile is what makes this stick.
+  const useAsMainImage = (url) => {
+    setMainImageFile(null);
+    setMainImagePreview(url);
+    setFormData((prev) => ({ ...prev, b2cImageUrl: url, imageUrl: url }));
+    toast.success('Huvudbild vald — spara för att bekräfta.');
+  };
+
   const removeNewGalleryImage = (index) => {
     setGalleryPreviews((prev) => prev.filter((_, i) => i !== index));
     setGalleryFiles((prev) => prev.filter((_, i) => i !== index));
   };
   const removeExistingGalleryImage = (index) => {
-    setImagesToDelete((prev) => [...prev, existingGallery[index]]);
+    const url = existingGallery[index];
+    // Never queue the CURRENT main image for storage deletion — the studio's
+    // hero is both huvudbild and a gallery member, so removing it from the
+    // gallery would delete the file the product still points at.
+    if (url && url !== formData.b2cImageUrl) setImagesToDelete((prev) => [...prev, url]);
     setExistingGallery((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -989,6 +1003,39 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                       itemLabel="Befintlig"
                       className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4"
                     />
+                  )}
+                  {/* Promote a gallery image to Huvudbild. Studio mockups arrive
+                      in this gallery, so without this the only way to change the
+                      main image was re-uploading a file by hand. Existing
+                      (uploaded) images only — new picks have no URL yet. */}
+                  {existingGallery.length > 0 && (
+                    <div className="mb-4">
+                      <span className={labelCls}>Välj huvudbild ur galleriet</span>
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        {existingGallery.map((url) => {
+                          const isMain = url === formData.b2cImageUrl && !mainImageFile;
+                          return (
+                            <button
+                              key={url}
+                              type="button"
+                              onClick={() => useAsMainImage(url)}
+                              aria-pressed={isMain}
+                              title={isMain ? 'Detta är huvudbilden' : 'Använd som huvudbild'}
+                              className={`w-20 rounded-[var(--radius-admin-el)] border p-1 transition ${
+                                isMain
+                                  ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
+                                  : 'border-admin-border hover:bg-admin-surface-2'
+                              }`}
+                            >
+                              <img src={url} alt="" loading="lazy" decoding="async" className="aspect-square w-full rounded-[4px] bg-white object-contain" />
+                              <span className="mt-0.5 block truncate text-center text-[10px] text-admin-text-muted">
+                                {isMain ? 'Huvudbild' : 'Använd'}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   )}
                   {galleryPreviews.length > 0 && (
                     <SortableImageGallery
