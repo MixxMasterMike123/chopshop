@@ -88,6 +88,11 @@ const PublicProductPage = () => {
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(true);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+  // Desktop thumbnail rail: how many show before the "+N" tile (Kent, 2026-08-28 —
+  // a many-colourway product produced one endless column). Expanding is per
+  // page visit; the rail also auto-expands when the active image is past the limit.
+  const THUMB_LIMIT = 4;
+  const [showAllThumbs, setShowAllThumbs] = useState(false);
   const [reviewCount, setReviewCount] = useState(16);
   
   // Nike mobile UX: Fixed button visibility state
@@ -662,28 +667,50 @@ const PublicProductPage = () => {
               {/* Desktop Product Images */}
               <div className="lg:w-1/2">
                 <div className="flex gap-4 sticky top-24">
-                  {/* Thumbnail Images - Left Side */}
-                  {productImages.length > 1 && (
-                    <div className="flex flex-col gap-2 w-20">
-                      {productImages.map((image, index) => (
-                        <button
-                          key={index}
-                          onMouseEnter={() => setActiveImageIndex(index)}
-                          className={`aspect-square bg-white rounded-el overflow-hidden border-2 transition-all ${
-                            activeImageIndex === index 
-                              ? 'border-ink' 
-                              : 'border-transparent hover:border-ink/30'
-                          }`}
-                        >
-                          <img
-                            src={image}
-                            alt={`${getContentValue(product.name)} ${index + 1}`}
-                            className="w-full h-full object-cover"
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  {/* Thumbnail Images - Left Side.
+                      A product with every colourway (tee × 10 colours × front/back)
+                      used to render one thumbnail per image in a single column that
+                      ran far below the fold. Now: the first THUMB_LIMIT show, the
+                      slot after them is a "+N" tile that expands the rail, and the
+                      expanded rail is capped to the main image's height and scrolls.
+                      Selecting a variant whose image sits past the limit expands
+                      automatically so the active thumbnail is never hidden. */}
+                  {productImages.length > 1 && (() => {
+                    const expanded = showAllThumbs || activeImageIndex >= THUMB_LIMIT;
+                    const visible = expanded ? productImages : productImages.slice(0, THUMB_LIMIT);
+                    const hidden = productImages.length - visible.length;
+                    return (
+                      <div className={`flex flex-col gap-2 w-20 shrink-0 ${expanded ? 'max-h-[32rem] overflow-y-auto overscroll-contain pr-1' : ''}`}>
+                        {visible.map((image, index) => (
+                          <button
+                            key={index}
+                            onMouseEnter={() => setActiveImageIndex(index)}
+                            className={`aspect-square shrink-0 bg-white rounded-el overflow-hidden border-2 transition-all ${
+                              activeImageIndex === index
+                                ? 'border-ink'
+                                : 'border-transparent hover:border-ink/30'
+                            }`}
+                          >
+                            <img
+                              src={image}
+                              alt={`${getContentValue(product.name)} ${index + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                          </button>
+                        ))}
+                        {hidden > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllThumbs(true)}
+                            aria-label={t('product_show_all_images', 'Visa alla bilder')}
+                            className="aspect-square shrink-0 bg-white rounded-el border-2 border-transparent hover:border-ink/30 transition-all flex items-center justify-center text-sm font-semibold text-ink"
+                          >
+                            +{hidden}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                   
                   {/* Main Image */}
                   <div className="flex-1">
