@@ -47,7 +47,7 @@ const Tile = ({ id, url, isMain, pending, onRemove }) => {
         {...attributes}
         {...listeners}
         title="Dra för att ändra ordning"
-        className={`block aspect-square w-full cursor-grab touch-none overflow-hidden rounded-[var(--radius-admin-el)] border bg-white active:cursor-grabbing ${
+        className={`block aspect-square w-full cursor-grab touch-none overflow-hidden rounded-[var(--radius-admin-el)] border bg-white outline-none focus-visible:ring-2 focus-visible:ring-admin-text/40 active:cursor-grabbing ${
           isMain ? 'border-admin-text' : 'border-admin-border'
         }`}
       >
@@ -133,7 +133,7 @@ export const ProductImageRail = ({ images, onReorder, onRemove, onAdd, maxBytes,
       <p className={helpCls}>
         {empty
           ? 'Lägg till bilder. Den första blir huvudbilden som visas i butiken.'
-          : 'Dra för att ändra ordning. Den första bilden är huvudbilden som visas i butiken.'}
+          : 'Dra för att ändra ordning. Den första bilden är huvudbilden. Utan varianter visas alla bilderna i butiken.'}
       </p>
     </div>
   );
@@ -149,7 +149,7 @@ const ChosenTile = ({ id, index, src, pending, onRemove }) => {
         {...attributes}
         {...listeners}
         title="Dra för att ändra ordning"
-        className="relative block h-16 w-16 shrink-0 cursor-grab touch-none overflow-hidden rounded-[var(--radius-admin-el)] border-2 border-admin-text bg-white active:cursor-grabbing"
+        className="relative block h-16 w-16 shrink-0 cursor-grab touch-none overflow-hidden rounded-[var(--radius-admin-el)] border-2 border-admin-text bg-white outline-none focus-visible:ring-2 focus-visible:ring-admin-text/40 active:cursor-grabbing"
       >
         <img src={src} alt="" draggable={false} className="h-full w-full object-contain" />
         <span className="pointer-events-none absolute left-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-admin-text px-1 text-[11px] font-semibold text-admin-surface">
@@ -218,7 +218,7 @@ export const VariantImagePicker = ({ choices, selected, onPick, onReorder, onRem
                 type="button"
                 onClick={() => onPick(url)}
                 title="Lägg till på varianten"
-                className="h-16 w-16 shrink-0 overflow-hidden rounded-[var(--radius-admin-el)] border-2 border-admin-border bg-white opacity-50 transition hover:opacity-100"
+                className="h-16 w-16 shrink-0 overflow-hidden rounded-[var(--radius-admin-el)] border-2 border-admin-border bg-white opacity-50 outline-none transition focus-visible:ring-2 focus-visible:ring-admin-text/40 hover:opacity-100"
               >
                 <img src={url} alt="" loading="lazy" decoding="async" className="h-full w-full object-contain" />
               </button>
