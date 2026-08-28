@@ -65,7 +65,7 @@ import { db, storage } from '../../firebase/config';
 import toast from 'react-hot-toast';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
-import SortableImageGallery from './SortableImageGallery';
+import { ProductImageRail, VariantImagePicker } from './ProductImages';
 import { withShopId } from '../../config/withShopId';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { listMappings } from '../../utils/podMappings';
@@ -617,37 +617,90 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   };
 
   // ----- images -----
-  const onMainImageChange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (file.size > MAX_IMAGE_SIZE) {
-      toast.error(`Bilden är för stor. Max ${MAX_IMAGE_SIZE / (1024 * 1024)}MB`);
+  // ── ONE list of images (Media card). The FIRST is the huvudbild. ──
+  // The state underneath (main file/preview, saved gallery URLs, new gallery
+  // files/previews) and the save path are UNCHANGED; this view model presents
+  // them as one ordered list and translates drag / remove / add back into the
+  // pieces. Not-yet-saved files always sit after the saved ones; the one
+  // cross-group move that persists is "to the front" (= becomes huvudbild).
+  const unifiedImages = [
+    ...(mainImagePreview
+      ? [{ id: 'main', url: mainImagePreview, kind: mainImageFile ? 'newmain' : 'main', file: mainImageFile, pending: Boolean(mainImageFile) }]
+      : []),
+    // A studio hero is both huvudbild and a gallery member — show it once.
+    ...[...new Set(existingGallery)].filter((u) => u !== mainImagePreview).map((url) => ({ id: `e:${url}`, url, kind: 'existing' })),
+    ...galleryPreviews.map((preview, i) => ({ id: `n:${i}`, url: preview, kind: 'new', file: galleryFiles[i], pending: true })),
+  ];
+  // Save reads formData.b2cImageUrl unless mainImageFile is set, so promoting
+  // a SAVED image means clearing the file; promoting a NEW one means setting it.
+  const promoteToMain = (img) => {
+    if (img.kind === 'existing' || img.kind === 'main') {
+      setMainImageFile(null);
+      setMainImagePreview(img.url);
+      setFormData((prev) => ({ ...prev, b2cImageUrl: img.url, imageUrl: img.url }));
+    } else {
+      setMainImageFile(img.file);
+      setMainImagePreview(img.url);
+    }
+  };
+  const reorderUnifiedImages = (list) => {
+    if (list.length === 0) return;
+    const oldMain = unifiedImages[0];
+    const [first, ...rest] = list;
+    const mainChanged = !oldMain || first.id !== oldMain.id;
+    // The displaced huvudbild rejoins its natural group (saved → gallery URLs,
+    // unsaved → pending files) at the position it was dropped.
+    const asExisting = (i) => i.kind === 'existing' || (i.id === 'main' && i.kind === 'main');
+    const asNew = (i) => i.kind === 'new' || (i.id === 'main' && i.kind === 'newmain');
+    if (mainChanged) promoteToMain(first);
+    const nextNew = rest.filter(asNew);
+    setExistingGallery(rest.filter(asExisting).map((i) => i.url));
+    setGalleryFiles(nextNew.map((i) => i.file));
+    setGalleryPreviews(nextNew.map((i) => i.url));
+  };
+  const removeUnifiedImage = (id) => {
+    const idx = unifiedImages.findIndex((i) => i.id === id);
+    if (idx < 0) return;
+    const img = unifiedImages[idx];
+    if (idx === 0) {
+      // Removing the huvudbild: the next image takes over (or none is left).
+      // The old URL leaves state here; the orphan sweep at save deletes the file.
+      const oldUrl = mainImagePreview;
+      const next = unifiedImages[1];
+      if (!next) {
+        setMainImageFile(null);
+        setMainImagePreview(null);
+        setFormData((prev) => ({ ...prev, b2cImageUrl: '', imageUrl: '' }));
+        return;
+      }
+      if (next.kind === 'existing') {
+        setExistingGallery(existingGallery.filter((u) => u !== next.url && u !== oldUrl));
+      } else {
+        setExistingGallery(existingGallery.filter((u) => u !== oldUrl));
+        const n = Number(next.id.slice(2));
+        setGalleryFiles(galleryFiles.filter((_, i) => i !== n));
+        setGalleryPreviews(galleryPreviews.filter((_, i) => i !== n));
+      }
+      promoteToMain(next);
       return;
     }
-    setMainImagePreview(URL.createObjectURL(file));
-    setMainImageFile(file);
+    if (img.kind === 'existing') setExistingGallery(existingGallery.filter((u) => u !== img.url));
+    else removeNewGalleryImage(Number(img.id.slice(2)));
   };
-
-  const onGalleryChange = (e) => {
-    const files = Array.from(e.target.files);
-    if (!files.length) return;
-    const tooBig = files.filter((f) => f.size > MAX_IMAGE_SIZE);
-    if (tooBig.length) {
-      toast.error(`${tooBig.length} filer är för stora. Max ${MAX_IMAGE_SIZE / (1024 * 1024)}MB`);
-      return;
+  // Files are already size-checked by the rail. With no huvudbild yet, the
+  // first file becomes it — the seller never has to think about that step.
+  const addUnifiedImages = (files) => {
+    let rest = files;
+    if (!mainImagePreview) {
+      const [first, ...others] = files;
+      setMainImagePreview(URL.createObjectURL(first));
+      setMainImageFile(first);
+      rest = others;
     }
-    setGalleryPreviews((prev) => [...prev, ...files.map((f) => URL.createObjectURL(f))]);
-    setGalleryFiles((prev) => [...prev, ...files]);
-  };
-
-  // Promote an ALREADY-UPLOADED gallery image (studio mockups land here) to
-  // Huvudbild. Save reads `formData.b2cImageUrl` unless a NEW file was picked,
-  // so clearing mainImageFile is what makes this stick.
-  const useAsMainImage = (url) => {
-    setMainImageFile(null);
-    setMainImagePreview(url);
-    setFormData((prev) => ({ ...prev, b2cImageUrl: url, imageUrl: url }));
-    toast.success('Huvudbild vald — spara för att bekräfta.');
+    if (rest.length) {
+      setGalleryPreviews((prev) => [...prev, ...rest.map((f) => URL.createObjectURL(f))]);
+      setGalleryFiles((prev) => [...prev, ...rest]);
+    }
   };
 
   const removeNewGalleryImage = (index) => {
@@ -1008,77 +1061,14 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                   </Link>
                 </div>
               )}
-              <div>
-                <label className={labelCls}>Huvudbild (max 5MB)</label>
-                <div className="flex flex-col items-start gap-4 lg:flex-row lg:items-center">
-                  <input type="file" accept="image/*" onChange={onMainImageChange} className="block w-full text-[13px] text-admin-text-muted file:mr-4 file:rounded-[var(--radius-admin-el)] file:border-0 file:bg-admin-surface-2 file:px-4 file:py-2 file:text-[13px] file:font-medium file:text-admin-text" />
-                  {mainImagePreview && (
-                    <img src={mainImagePreview} alt="Förhandsvisning" className="h-32 w-32 shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border object-cover" />
-                  )}
-                </div>
-              </div>
-              <div>
-                <label className={labelCls}>Bildgalleri (flera bilder, max 5MB/bild)</label>
-                <div className="space-y-4">
-                  <input type="file" accept="image/*" multiple onChange={onGalleryChange} className="block w-full text-[13px] text-admin-text-muted file:mr-4 file:rounded-[var(--radius-admin-el)] file:border-0 file:bg-admin-surface-2 file:px-4 file:py-2 file:text-[13px] file:font-medium file:text-admin-text" />
-                  {existingGallery.length > 0 && (
-                    <SortableImageGallery
-                      images={existingGallery.map((url, index) => ({ id: `existing-${index}`, url }))}
-                      onReorder={(reordered) => setExistingGallery(reordered.map((img) => img.url))}
-                      onRemove={(id) => removeExistingGalleryImage(parseInt(id.split('-')[1], 10))}
-                      label="Befintliga bilder:"
-                      itemLabel="Befintlig"
-                      className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4"
-                    />
-                  )}
-                  {/* Promote a gallery image to Huvudbild. Studio mockups arrive
-                      in this gallery, so without this the only way to change the
-                      main image was re-uploading a file by hand. Existing
-                      (uploaded) images only — new picks have no URL yet. */}
-                  {existingGallery.length > 0 && (
-                    <div className="mb-4">
-                      <span className={labelCls}>Välj huvudbild ur galleriet</span>
-                      <div className="mt-1.5 flex flex-wrap gap-2">
-                        {existingGallery.map((url) => {
-                          const isMain = url === formData.b2cImageUrl && !mainImageFile;
-                          return (
-                            <button
-                              key={url}
-                              type="button"
-                              onClick={() => useAsMainImage(url)}
-                              aria-pressed={isMain}
-                              title={isMain ? 'Detta är huvudbilden' : 'Använd som huvudbild'}
-                              className={`w-20 rounded-[var(--radius-admin-el)] border p-1 transition ${
-                                isMain
-                                  ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
-                                  : 'border-admin-border hover:bg-admin-surface-2'
-                              }`}
-                            >
-                              <img src={url} alt="" loading="lazy" decoding="async" className="aspect-square w-full rounded-[4px] bg-white object-contain" />
-                              <span className="mt-0.5 block truncate text-center text-[10px] text-admin-text-muted">
-                                {isMain ? 'Huvudbild' : 'Använd'}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {galleryPreviews.length > 0 && (
-                    <SortableImageGallery
-                      images={galleryPreviews.map((preview, index) => ({ id: `new-${index}`, url: preview, file: galleryFiles[index] }))}
-                      onReorder={(reordered) => {
-                        setGalleryPreviews(reordered.map((img) => img.url));
-                        setGalleryFiles(reordered.map((img) => img.file));
-                      }}
-                      onRemove={(id) => removeNewGalleryImage(parseInt(id.split('-')[1], 10))}
-                      label="Nya bilder att ladda upp:"
-                      itemLabel="Ny"
-                      className="grid grid-cols-2 gap-4 md:grid-cols-4"
-                    />
-                  )}
-                </div>
-              </div>
+              <ProductImageRail
+                images={unifiedImages}
+                onReorder={reorderUnifiedImages}
+                onRemove={removeUnifiedImage}
+                onAdd={addUnifiedImages}
+                maxBytes={MAX_IMAGE_SIZE}
+                onError={(msg) => toast.error(msg)}
+              />
             </CardSection>
 
             {/* Variants — the rail (v2.2): left = vertical list of the
@@ -1122,7 +1112,6 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                   {formData.variantGroups[selectedGroupIdx] && (() => {
                     const idx = selectedGroupIdx;
                     const g = formData.variantGroups[idx];
-                    const galleryChoices = [formData.b2cImageUrl, ...existingGallery].filter(Boolean);
                     const autoSku = `${formData.sku || skuFromName(formData.name)}-${skuFromName(g.label || `variant-${idx + 1}`)}`;
                     return (
                       <div className="min-w-0 flex-1 space-y-4 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface-2 p-4">
@@ -1138,52 +1127,19 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
 
                         <div>
                           <label className={labelCls}>Bilder</label>
-                          <div className="space-y-2">
-                            {g.images.length > 0 && (
-                              /* Same sortable gallery as the product media —
-                                 drag to reorder; position 0 is the huvudbild. */
-                              <SortableImageGallery
-                                images={g.images.map((im, imgIdx) => ({ id: String(imgIdx), url: im.preview || im.url }))}
-                                onReorder={(reordered) => updateGroup(idx, { images: reordered.map((it) => g.images[Number(it.id)]) })}
-                                onRemove={(id) => removeGroupImage(idx, Number(id))}
-                                label="Dra för att ändra ordning — första bilden är huvudbilden:"
-                                itemLabel=""
-                                className="grid grid-cols-3 gap-3 md:grid-cols-4"
-                              />
-                            )}
-                            <input
-                              type="file"
-                              accept="image/*"
-                              multiple
-                              onChange={(e) => {
-                                addGroupImageFiles(idx, Array.from(e.target.files || []));
-                                e.target.value = '';
-                              }}
-                              className="block w-full text-[13px] text-admin-text-muted file:mr-4 file:rounded-[var(--radius-admin-el)] file:border-0 file:bg-admin-surface file:px-4 file:py-2 file:text-[13px] file:font-medium file:text-admin-text"
-                            />
-                            {galleryChoices.filter((url) => !g.images.some((im) => im.url === url)).length > 0 && (
-                              <div>
-                                <p className="mb-1 text-[12px] text-admin-text-muted">Eller välj från produktens bilder:</p>
-                                <div className="flex flex-wrap gap-2">
-                                  {galleryChoices.filter((url) => !g.images.some((im) => im.url === url)).map((url) => (
-                                    <button
-                                      key={url}
-                                      type="button"
-                                      onClick={() => addGroupImageUrl(idx, url)}
-                                      className="h-12 w-12 overflow-hidden rounded-[var(--radius-admin-el)] border-2 border-admin-border bg-white hover:border-[var(--color-admin-primary)]"
-                                      title="Lägg till på varianten"
-                                    >
-                                      <img src={url} alt="" className="h-full w-full object-cover" />
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          <p className={helpCls}>
-                            Flera bilder per variant. Den första är huvudbilden — den visas i butiken när kunden
-                            väljer varianten; övriga läggs till i produktens bildgalleri.
-                          </p>
+                          <VariantImagePicker
+                            choices={unifiedImages.filter((im) => im.kind === 'main' || im.kind === 'existing').map((im) => im.url)}
+                            selected={g.images}
+                            onToggleUrl={(url) => {
+                              const at = g.images.findIndex((im) => im.url === url);
+                              if (at >= 0) removeGroupImage(idx, at);
+                              else addGroupImageUrl(idx, url);
+                            }}
+                            onRemoveAt={(i) => removeGroupImage(idx, i)}
+                            onAddFiles={(files) => addGroupImageFiles(idx, files)}
+                            maxBytes={MAX_IMAGE_SIZE}
+                            onError={(msg) => toast.error(msg)}
+                          />
                         </div>
 
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
