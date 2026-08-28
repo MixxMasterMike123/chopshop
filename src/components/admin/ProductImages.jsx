@@ -73,7 +73,7 @@ const Tile = ({ id, url, isMain, pending, onRemove }) => {
 // The single "+" tile: click to pick files, or drop files on it. When the
 // product has no images yet it takes the huvudbild's 2×2 slot so the empty
 // state already shows where the picture goes.
-const AddTile = ({ onAdd, big, maxBytes, onError, multiple = true, label = 'Lägg till bilder' }) => {
+const AddTile = ({ onAdd, big, compact, maxBytes, onError, multiple = true, label = 'Lägg till bilder' }) => {
   const [over, setOver] = React.useState(false);
   const take = (list) => {
     const ok = validateFiles(Array.from(list || []), maxBytes, onError);
@@ -84,12 +84,12 @@ const AddTile = ({ onAdd, big, maxBytes, onError, multiple = true, label = 'Läg
       onDragOver={(e) => { e.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); take(e.dataTransfer.files); }}
-      className={`flex aspect-square cursor-pointer flex-col items-center justify-center gap-1 rounded-[var(--radius-admin-el)] border-2 border-dashed text-admin-text-muted transition hover:bg-admin-surface-2 hover:text-admin-text ${
-        big ? 'col-span-2 row-span-2' : ''
-      } ${over ? 'border-admin-text bg-admin-surface-2 text-admin-text' : 'border-admin-border'}`}
+      className={`flex cursor-pointer flex-col items-center justify-center gap-1 rounded-[var(--radius-admin-el)] border-2 border-dashed text-admin-text-muted transition hover:bg-admin-surface-2 hover:text-admin-text ${
+        compact ? 'h-16 w-16 shrink-0' : 'aspect-square'
+      } ${big ? 'col-span-2 row-span-2' : ''} ${over ? 'border-admin-text bg-admin-surface-2 text-admin-text' : 'border-admin-border'}`}
     >
-      <span className={big ? 'text-[32px] leading-none' : 'text-[22px] leading-none'} aria-hidden="true">+</span>
-      <span className="px-1 text-center text-[11px] font-medium leading-tight">{label}</span>
+      <span className={big ? 'text-[32px] leading-none' : compact ? 'text-[18px] leading-none' : 'text-[22px] leading-none'} aria-hidden="true">+</span>
+      <span className={`px-1 text-center font-medium leading-tight ${compact ? 'text-[10px]' : 'text-[11px]'}`}>{label}</span>
       <input
         type="file"
         accept="image/*"
@@ -146,10 +146,19 @@ export const ProductImageRail = ({ images, onReorder, onRemove, onAdd, maxBytes,
  * @param choices   product image URLs (saved ones only — new files have no URL yet)
  * @param selected  the variant's images: [{ url } | { file, preview }]
  */
-export const VariantImagePicker = ({ choices, selected, onToggleUrl, onRemoveAt, onAddFiles, maxBytes, onError }) => {
+export const VariantImagePicker = ({ choices, selected, onPick, onMakeFirst, onRemoveAt, onAddFiles, maxBytes, onError }) => {
   const orderOf = (url) => selected.findIndex((im) => im.url === url);
   const numCls =
     'pointer-events-none absolute left-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-admin-text px-1 text-[11px] font-semibold text-admin-surface';
+  const tileCls = (on) =>
+    `relative h-16 w-16 shrink-0 overflow-hidden rounded-[var(--radius-admin-el)] border-2 bg-white transition ${
+      on ? 'border-admin-text' : 'border-admin-border opacity-50 hover:opacity-100'
+    }`;
+  // Everything the variant HAS but the product list doesn't show (an older
+  // per-variant upload, an unsaved file) must still be visible and removable.
+  const extras = selected
+    .map((im, i) => ({ im, i }))
+    .filter(({ im }) => im.file || (im.url && !choices.includes(im.url)));
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
@@ -157,38 +166,48 @@ export const VariantImagePicker = ({ choices, selected, onToggleUrl, onRemoveAt,
           const n = orderOf(url);
           const on = n >= 0;
           return (
-            <button
-              key={url}
-              type="button"
-              onClick={() => onToggleUrl(url)}
-              aria-pressed={on}
-              title={on ? 'Klicka för att ta bort från varianten' : 'Klicka för att använda på varianten'}
-              className={`relative h-16 w-16 overflow-hidden rounded-[var(--radius-admin-el)] border-2 bg-white transition ${
-                on ? 'border-admin-text' : 'border-admin-border opacity-50 hover:opacity-100'
-              }`}
-            >
-              <img src={url} alt="" loading="lazy" decoding="async" className="h-full w-full object-contain" />
-              {on && <span className={numCls}>{n + 1}</span>}
-            </button>
+            <div key={url} className="relative">
+              <button
+                type="button"
+                onClick={() => (on ? onMakeFirst(n) : onPick(url))}
+                aria-pressed={on}
+                title={on ? (n === 0 ? 'Nr 1 — visas i butiken' : 'Klicka för att göra till nr 1') : 'Klicka för att använda på varianten'}
+                className={tileCls(on)}
+              >
+                <img src={url} alt="" loading="lazy" decoding="async" className="h-full w-full object-contain" />
+                {on && <span className={numCls}>{n + 1}</span>}
+              </button>
+              {on && (
+                <button type="button" onClick={() => onRemoveAt(n)} aria-label="Ta bort från varianten" title="Ta bort från varianten" className={removeBtnCls}>
+                  ×
+                </button>
+              )}
+            </div>
           );
         })}
-        {selected.map((im, i) =>
-          im.file ? (
-            <div key={`pending-${i}`} className="relative h-16 w-16 overflow-hidden rounded-[var(--radius-admin-el)] border-2 border-admin-text bg-white">
-              <img src={im.preview} alt="" className="h-full w-full object-contain" />
+        {extras.map(({ im, i }) => (
+          <div key={`x-${i}`} className="relative">
+            <button
+              type="button"
+              onClick={() => onMakeFirst(i)}
+              title={i === 0 ? 'Nr 1 — visas i butiken' : 'Klicka för att göra till nr 1'}
+              className={tileCls(true)}
+            >
+              <img src={im.preview || im.url} alt="" className="h-full w-full object-contain" />
               <span className={numCls}>{i + 1}</span>
-              <button type="button" onClick={() => onRemoveAt(i)} aria-label="Ta bort bild" className={removeBtnCls}>
-                ×
-              </button>
-            </div>
-          ) : null
-        )}
-        <div className="h-16 w-16">
-          <AddTile onAdd={onAddFiles} maxBytes={maxBytes} onError={onError} label="Ny bild" />
-        </div>
+              {im.file && (
+                <span className="pointer-events-none absolute bottom-1 left-1 rounded-[var(--radius-admin-el)] bg-admin-info-bg px-1 py-0.5 text-[9px] font-medium text-admin-info-text">Ny</span>
+              )}
+            </button>
+            <button type="button" onClick={() => onRemoveAt(i)} aria-label="Ta bort från varianten" title="Ta bort från varianten" className={removeBtnCls}>
+              ×
+            </button>
+          </div>
+        ))}
+        <AddTile compact onAdd={onAddFiles} maxBytes={maxBytes} onError={onError} label="Ny bild" />
       </div>
       <p className={helpCls}>
-        Klicka på bilderna som hör till varianten. Nr 1 visas i butiken när kunden väljer den.
+        Klicka på en bild för att använda den. Klicka igen för att göra den till nr 1 — den visas i butiken. × tar bort.
       </p>
     </div>
   );
