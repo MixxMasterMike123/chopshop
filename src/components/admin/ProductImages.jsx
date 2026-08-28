@@ -139,76 +139,93 @@ export const ProductImageRail = ({ images, onReorder, onRemove, onAdd, maxBytes,
   );
 };
 
-/**
- * VariantImagePicker — inside a variant: the product's images as tap-to-select
- * toggles (numbered in the order picked; nr 1 is what the shop shows for the
- * variant), plus the variant's own not-yet-saved uploads, plus one "+" tile.
- * @param choices   product image URLs (saved ones only — new files have no URL yet)
- * @param selected  the variant's images: [{ url } | { file, preview }]
- */
-export const VariantImagePicker = ({ choices, selected, onPick, onMakeFirst, onRemoveAt, onAddFiles, maxBytes, onError }) => {
-  const orderOf = (url) => selected.findIndex((im) => im.url === url);
-  const numCls =
-    'pointer-events-none absolute left-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-admin-text px-1 text-[11px] font-semibold text-admin-surface';
-  const tileCls = (on) =>
-    `relative h-16 w-16 shrink-0 overflow-hidden rounded-[var(--radius-admin-el)] border-2 bg-white transition ${
-      on ? 'border-admin-text' : 'border-admin-border opacity-50 hover:opacity-100'
-    }`;
-  // Everything the variant HAS but the product list doesn't show (an older
-  // per-variant upload, an unsaved file) must still be visible and removable.
-  const extras = selected
-    .map((im, i) => ({ im, i }))
-    .filter(({ im }) => im.file || (im.url && !choices.includes(im.url)));
+// One of the variant's chosen images: draggable, numbered, removable.
+const ChosenTile = ({ id, index, src, pending, onRemove }) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {choices.map((url) => {
-          const n = orderOf(url);
-          const on = n >= 0;
-          return (
-            <div key={url} className="relative">
+    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`relative ${isDragging ? 'z-10 opacity-70' : ''}`}>
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        title="Dra för att ändra ordning"
+        className="relative block h-16 w-16 shrink-0 cursor-grab touch-none overflow-hidden rounded-[var(--radius-admin-el)] border-2 border-admin-text bg-white active:cursor-grabbing"
+      >
+        <img src={src} alt="" draggable={false} className="h-full w-full object-contain" />
+        <span className="pointer-events-none absolute left-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-admin-text px-1 text-[11px] font-semibold text-admin-surface">
+          {index + 1}
+        </span>
+        {pending && (
+          <span className="pointer-events-none absolute bottom-1 left-1 rounded-[var(--radius-admin-el)] bg-admin-info-bg px-1 py-0.5 text-[9px] font-medium text-admin-info-text">Ny</span>
+        )}
+      </button>
+      <button type="button" onClick={onRemove} aria-label="Ta bort från varianten" title="Ta bort från varianten" className={removeBtnCls}>
+        ×
+      </button>
+    </div>
+  );
+};
+
+/**
+ * VariantImagePicker — inside a variant. Two rows, same gesture as the Media
+ * card: the variant's CHOSEN images (draggable to reorder, nr 1 is what the
+ * shop shows, × removes) above a dimmed pool of the product's other images
+ * (tap to add). Plus one "+" tile for a brand-new upload.
+ * @param choices   product image URLs (saved ones only — new files have no URL yet)
+ * @param selected  the variant's images in order: [{ url } | { file, preview }]
+ * @param onReorder(nextSelected)  full array in new order
+ */
+export const VariantImagePicker = ({ choices, selected, onPick, onReorder, onRemoveAt, onAddFiles, maxBytes, onError }) => {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const ids = selected.map((im, i) => im.url || `pending-${i}`);
+  const onDragEnd = ({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    const from = ids.indexOf(active.id);
+    const to = ids.indexOf(over.id);
+    if (from < 0 || to < 0) return;
+    onReorder(arrayMove(selected, from, to));
+  };
+  const pool = choices.filter((url) => !selected.some((im) => im.url === url));
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="mb-1.5 text-[12px] font-medium text-admin-text">
+          Valda bilder {selected.length > 0 && <span className="font-normal text-admin-text-muted">— dra för att ändra ordning, nr 1 visas i butiken</span>}
+        </p>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <SortableContext items={ids} strategy={rectSortingStrategy}>
+            <div className="flex flex-wrap gap-2">
+              {selected.map((im, i) => (
+                <ChosenTile key={ids[i]} id={ids[i]} index={i} src={im.preview || im.url} pending={Boolean(im.file)} onRemove={() => onRemoveAt(i)} />
+              ))}
+              <AddTile compact onAdd={onAddFiles} maxBytes={maxBytes} onError={onError} label="Ny bild" />
+            </div>
+          </SortableContext>
+        </DndContext>
+        {selected.length === 0 && (
+          <p className={`mt-1.5 ${helpCls}`}>Inga bilder valda — varianten visar produktens huvudbild.</p>
+        )}
+      </div>
+      {pool.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-[12px] font-medium text-admin-text">
+            Fler bilder från produkten <span className="font-normal text-admin-text-muted">— klicka för att lägga till</span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {pool.map((url) => (
               <button
+                key={url}
                 type="button"
-                onClick={() => (on ? onMakeFirst(n) : onPick(url))}
-                aria-pressed={on}
-                title={on ? (n === 0 ? 'Nr 1 — visas i butiken' : 'Klicka för att göra till nr 1') : 'Klicka för att använda på varianten'}
-                className={tileCls(on)}
+                onClick={() => onPick(url)}
+                title="Lägg till på varianten"
+                className="h-16 w-16 shrink-0 overflow-hidden rounded-[var(--radius-admin-el)] border-2 border-admin-border bg-white opacity-50 transition hover:opacity-100"
               >
                 <img src={url} alt="" loading="lazy" decoding="async" className="h-full w-full object-contain" />
-                {on && <span className={numCls}>{n + 1}</span>}
               </button>
-              {on && (
-                <button type="button" onClick={() => onRemoveAt(n)} aria-label="Ta bort från varianten" title="Ta bort från varianten" className={removeBtnCls}>
-                  ×
-                </button>
-              )}
-            </div>
-          );
-        })}
-        {extras.map(({ im, i }) => (
-          <div key={`x-${i}`} className="relative">
-            <button
-              type="button"
-              onClick={() => onMakeFirst(i)}
-              title={i === 0 ? 'Nr 1 — visas i butiken' : 'Klicka för att göra till nr 1'}
-              className={tileCls(true)}
-            >
-              <img src={im.preview || im.url} alt="" className="h-full w-full object-contain" />
-              <span className={numCls}>{i + 1}</span>
-              {im.file && (
-                <span className="pointer-events-none absolute bottom-1 left-1 rounded-[var(--radius-admin-el)] bg-admin-info-bg px-1 py-0.5 text-[9px] font-medium text-admin-info-text">Ny</span>
-              )}
-            </button>
-            <button type="button" onClick={() => onRemoveAt(i)} aria-label="Ta bort från varianten" title="Ta bort från varianten" className={removeBtnCls}>
-              ×
-            </button>
+            ))}
           </div>
-        ))}
-        <AddTile compact onAdd={onAddFiles} maxBytes={maxBytes} onError={onError} label="Ny bild" />
-      </div>
-      <p className={helpCls}>
-        Klicka på en bild för att använda den. Klicka igen för att göra den till nr 1 — den visas i butiken. × tar bort.
-      </p>
+        </div>
+      )}
     </div>
   );
 };

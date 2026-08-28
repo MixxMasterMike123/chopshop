@@ -564,15 +564,6 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
     if (!g || g.images.some((im) => im.url === url)) return;
     updateGroup(idx, { images: [...g.images, { url }] });
   };
-  // Variant picker: "click again" on a chosen image moves it to nr 1 (what
-  // the shop shows for the variant) — no reorder UI to learn.
-  const moveGroupImageToFront = (idx, imgIdx) => {
-    const g = formData.variantGroups[idx];
-    if (!g || imgIdx <= 0 || imgIdx >= g.images.length) return;
-    const arr = [...g.images];
-    const [it] = arr.splice(imgIdx, 1);
-    updateGroup(idx, { images: [it, ...arr] });
-  };
   const removeGroupImage = (idx, imgIdx) => {
     const g = formData.variantGroups[idx];
     if (g) updateGroup(idx, { images: g.images.filter((_, i) => i !== imgIdx) });
@@ -1140,7 +1131,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                             choices={unifiedImages.filter((im) => im.kind === 'main' || im.kind === 'existing').map((im) => im.url)}
                             selected={g.images}
                             onPick={(url) => addGroupImageUrl(idx, url)}
-                            onMakeFirst={(i) => moveGroupImageToFront(idx, i)}
+                            onReorder={(images) => updateGroup(idx, { images })}
                             onRemoveAt={(i) => removeGroupImage(idx, i)}
                             onAddFiles={(files) => addGroupImageFiles(idx, files)}
                             maxBytes={MAX_IMAGE_SIZE}
