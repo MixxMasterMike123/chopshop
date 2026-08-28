@@ -37,6 +37,10 @@ export const ADDON_CATALOG = [
   // flag (not isFeatureEnabled), so it stays hidden until the platform turns
   // it on per shop.
   { key: 'contentStudio', label: 'Innehållsstudio', description: 'AI-studio för sociala medier: ladda upp råmaterial, få färdiga inlägg (hook, caption, hashtags) för TikTok/Reels/Shorts och automatiskt ihopklippt vertikal video i takt med musiken.' },
+  // EXPLICIT OPT-IN (2026-08-28). Was an always-on main-menu item from the
+  // reseller era (upload files for partners to download); most shops never use
+  // it, so it moved below the divider as an add-on the platform switches on.
+  { key: 'marketingMaterials', label: 'Marknadsföringsmaterial', description: 'Ladda upp bilder, filer och material som partners och återförsäljare kan hämta från admin.' },
 ];
 
 // Explicit OPT-IN keys: enabled only when the flag is the literal true. `pod`
@@ -45,7 +49,7 @@ export const ADDON_CATALOG = [
 // things shop, never a silently POD-entitled one. `contentStudio` was always
 // opt-in (its gates check === true directly); listing it here also makes the
 // /addons toggle grid display its true state.
-const OPT_IN_KEYS = new Set(['pod', 'contentStudio']);
+const OPT_IN_KEYS = new Set(['pod', 'contentStudio', 'marketingMaterials']);
 
 // Legacy keys are default-ON: enabled unless EXPLICITLY set to false. This keeps
 // shops that predate the `features` field fully working — nothing disappears

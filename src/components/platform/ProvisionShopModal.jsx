@@ -35,6 +35,7 @@ const BASE_FEATURES = {
   ambassador: false,
   writers: false,
   contentStudio: false,
+  marketingMaterials: false,
   discountCodes: true,
   abandonedCheckout: true,
   productReviews: true,

@@ -165,12 +165,9 @@ const AppLayout = ({ children }) => {
       icon: BuildingStorefrontIcon,
       description: t('nav.admin_storefront_desc', 'Utseende och innehåll för din webbutik'),
     },
-    {
-      name: t('nav.admin_marketing', 'Marknadsföring'),
-      path: '/admin/marketing',
-      icon: MegaphoneIcon,
-      description: t('nav.admin_marketing_desc', 'Hantera marknadsföringsmaterial'),
-    },
+    // NOTE: "Marknadsföring" (marketing-materials uploads) moved OUT of the main
+    // menu 2026-08-28 — it's an opt-in add-on now, rendered below the divider
+    // and gated on `marketingMaterials` (see marketingNavItem).
     // 🛒 Google Shopping admin removed — Google Merchant feature cut (POD shops don't need it).
     {
       name: t('nav.admin_pages', 'Sidor'),
@@ -211,6 +208,16 @@ const AppLayout = ({ children }) => {
     }
   ];
 
+  // The native "Marknadsföringsmaterial" add-on link. OPT-IN key (only a
+  // literal true enables it) — no platform-user bypass, entitlement is a
+  // property of the shop. Same render pattern as affiliate below.
+  const marketingEnabled = isAddonEnabled('marketingMaterials');
+  const marketingNavItem = {
+    name: t('nav.admin_marketing', 'Marknadsföring'),
+    path: '/admin/marketing',
+    icon: MegaphoneIcon,
+    description: t('nav.admin_marketing_desc', 'Hantera marknadsföringsmaterial'),
+  };
   // The native (non-wagon) "Affiliate" add-on link. Gated on the affiliate
   // feature flag at render time (menu gating only — storefront/checkout/function
   // enforcement is deferred to P4.5b). Rendered in the add-on section below the
@@ -266,7 +273,7 @@ const AppLayout = ({ children }) => {
     description: t('nav.admin_content_studio_desc', 'AI-inlägg och video för sociala medier'),
   };
   // Whether the add-on section (divider + items) has anything to show.
-  const hasAddonItems = affiliateEnabled || b2bEnabled || discountCodesEnabled || reviewsEnabled || contentStudioEnabled || wagonMenuItems.length > 0;
+  const hasAddonItems = affiliateEnabled || b2bEnabled || discountCodesEnabled || reviewsEnabled || contentStudioEnabled || marketingEnabled || wagonMenuItems.length > 0;
   
   const navItemClass = (active) =>
     `group flex h-8 items-center gap-2 rounded-[var(--radius-admin-el)] pl-2 pr-1.5 text-[13px] transition-colors ${
@@ -439,6 +446,16 @@ const AppLayout = ({ children }) => {
                   <span className="flex-1">{affiliateNavItem.name}</span>
                 </Link>
               )}
+              {marketingEnabled && (
+                <Link
+                  to={marketingNavItem.path}
+                  title={marketingNavItem.description}
+                  className={navItemClass(isActive(marketingNavItem.path))}
+                >
+                  <marketingNavItem.icon className={navIconClass(isActive(marketingNavItem.path))} aria-hidden="true" />
+                  <span className="flex-1">{marketingNavItem.name}</span>
+                </Link>
+              )}
               {b2bEnabled && (
                 <Link
                   to={b2bNavItem.path}
@@ -549,6 +566,18 @@ const AppLayout = ({ children }) => {
                       >
                         <affiliateNavItem.icon className={navIconClass(isActive(affiliateNavItem.path))} aria-hidden="true" />
                         <span className="flex-1">{affiliateNavItem.name}</span>
+                      </Link>
+                    )}
+                    {marketingEnabled && (
+                      <Link
+                        to={marketingNavItem.path}
+                        onClick={() => setIsMobileMenuOpen(false)}
+                        className={`group flex h-10 items-center gap-2 rounded-[var(--radius-admin-el)] pl-2 pr-1.5 text-[13px] ${
+                          isActive(marketingNavItem.path) ? 'bg-black/[0.08] font-semibold text-admin-text' : 'font-medium text-admin-text hover:bg-black/[0.06]'
+                        }`}
+                      >
+                        <marketingNavItem.icon className={navIconClass(isActive(marketingNavItem.path))} aria-hidden="true" />
+                        <span className="flex-1">{marketingNavItem.name}</span>
                       </Link>
                     )}
                     {b2bEnabled && (

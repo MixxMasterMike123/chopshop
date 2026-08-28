@@ -503,16 +503,19 @@ function App() {
                 </AdminRoute>
               } />
 
+              {/* Marknadsföringsmaterial — opt-in add-on (2026-08-28). AddonGate
+                  blocks deep links when the shop isn't entitled; the menu item
+                  is hidden by the same flag in AppLayout. */}
               <Route path="/admin/marketing" element={
-                <AdminRoute>
+                <AddonGate feature="marketingMaterials"><AdminRoute>
                   <AdminMarketingMaterials />
-                </AdminRoute>
+                </AdminRoute></AddonGate>
               } />
-              
+
               <Route path="/admin/marketing/:materialId/edit" element={
-                <AdminRoute>
+                <AddonGate feature="marketingMaterials"><AdminRoute>
                   <AdminMarketingMaterialEdit />
-                </AdminRoute>
+                </AdminRoute></AddonGate>
               } />
 
               <Route path="/admin/customers/:customerId/marketing" element={
