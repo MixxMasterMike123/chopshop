@@ -11,6 +11,7 @@ const {
   productionSnapshotLines,
   productionSnapshotPending,
   toPrintNotificationLines,
+  toPrintJob,
   toQueueRow,
 } = require('../functions/lib/print/printProjection.js');
 
@@ -24,9 +25,9 @@ const fakeDb = (artworks) => ({
   },
 });
 
-const mappingMap = (artworkId = 'art-old') => new Map([['TEE', [{
+const mappingMap = (artworkId = 'art-old', extra = {}) => new Map([['TEE', [{
   id: 'map-front', sku: 'TEE', placementSlot: 'front', slotLabel: 'Framsida',
-  placement: 'Centrerad', profileId: 'apparel_dtg', artworkId,
+  placement: 'Centrerad', profileId: 'apparel_dtg', artworkId, ...extra,
 }]]]);
 
 const readyArt = (path = 'pod-artwork/shopA/print/old.png') => ({
@@ -102,6 +103,37 @@ const readyArt = (path = 'pod-artwork/shopA/print/old.png') => ({
   ok(productionSnapshotLines(legacyOrder) === null && productionSnapshotPending(legacyOrder) === false,
     'pre-migration order is recognized as legacy');
   ok(orderHasPodLine(legacyOrder, mappingMap()) === true, 'legacy order retains live-mapping fallback');
+
+  console.log('\n=== garment routing key is frozen per line (multi-printer Slice 1) ===');
+  const teeOrder = { shopId: 'shopA', items: [{ sku: 'TEE-BLACK-L', name: 'T-shirt', quantity: 1, isPodProduct: true }] };
+  const hoodieSnap = await buildProductionSnapshot(
+    teeOrder, mappingMap('art-old', { garment: 'hoodie' }), fakeDb({ 'art-old': readyArt() }));
+  ok(hoodieSnap.lines[0].garment === 'hoodie', 'mapping garment is frozen onto the snapshot line');
+  const legacySnap = await buildProductionSnapshot(
+    teeOrder, mappingMap(), fakeDb({ 'art-old': readyArt() }));
+  ok(legacySnap.lines[0].garment === null,
+    'mapping written before the field existed freezes an explicit null, never undefined');
+  ok(Object.values(legacySnap.lines[0]).every((v) => v !== undefined),
+    'snapshot line stays Firestore-safe (no undefined values)');
+  const unresolvedGarment = await buildProductionSnapshot(
+    teeOrder, mappingMap('art-old', { garment: 'cap' }), fakeDb({}));
+  ok(unresolvedGarment.lines[0].garment === 'cap' && !!unresolvedGarment.lines[0].unresolvedReason,
+    'an unresolved-artwork line still carries its garment (it is still routable)');
+  const noMappingGarment = await buildProductionSnapshot(teeOrder, new Map(), fakeDb({}));
+  ok(noMappingGarment.lines[0].garment === null,
+    'POD line with no mapping at all reports garment null (default printer)');
+
+  console.log('\n=== toPrintJob exposes garment on both the frozen and legacy paths ===');
+  const frozenJob = await toPrintJob(
+    'o2',
+    { ...teeOrder, productionSnapshotRequired: true, productionSnapshot: unresolvedGarment },
+    'Shop A', new Map());
+  ok(frozenJob.lines[0].garment === 'cap', 'frozen snapshot path exposes the line garment');
+  const legacyJob = await toPrintJob(
+    'o3',
+    { shopId: 'shopA', items: [{ sku: 'TEE-BLACK-L', name: 'T-shirt', quantity: 1 }] },
+    'Shop A', mappingMap(null, { garment: 'beanie' }));
+  ok(legacyJob.lines[0].garment === 'beanie', 'legacy live-mapping path exposes the mapping garment');
 
   console.log(`\n=== production-snapshot: ${pass} passed, ${fail} failed ===`);
   process.exit(fail === 0 ? 0 : 1);

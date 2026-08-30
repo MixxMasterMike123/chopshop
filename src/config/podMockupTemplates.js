@@ -170,3 +170,28 @@ export const seedPodMockupTemplatesCacheForDev = (templates, meta = {}) => {
   _cache = Array.isArray(templates) ? templates : [];
   _meta = { version: meta.version ?? 999, provisional: meta.provisional !== false };
 };
+
+// ── GARMENT TYPE (the print-routing key) ─────────────────────────────────────
+// The garment a template depicts ('tee' | 'longsleeve' | 'hoodie' | 'sweatshirt'
+// | 'bag' | 'cap' | 'beanie' | 'flatcap'). It is persisted on every podMappings
+// row so the print pipeline can later route a production line to the printer
+// that actually makes THAT garment (multi-printer routing).
+//
+// WHY A RESOLVER AND NOT PLAIN `template.garment`: only FLAT templates carry a
+// `garment` field — there it names the SVG flat in studio/garments/index.js.
+// The three PHOTO templates (tee_bc_e150, hoodie_hanging, longsleeve_hanging)
+// render from photographs and were seeded WITHOUT one, so reading the field
+// alone would persist null for the three most-used garments. The template id is
+// the fallback: every id in seed-pod-mockup-templates.cjs is `<garment>_<...>`.
+// An explicit `garment` always wins, so seeding one on a photo template (as the
+// seed script now does) is a no-op for behaviour.
+const GARMENT_ID_PREFIXES = ['longsleeve', 'sweatshirt', 'flatcap', 'hoodie', 'beanie', 'tee', 'bag', 'cap'];
+
+/** The garment type a template depicts, or null when it can't be determined
+ *  (null = "unknown garment" → the default printer). */
+export const garmentOfTemplate = (template) => {
+  const explicit = String(template?.garment || '').trim();
+  if (explicit) return explicit;
+  const id = String(template?.id || '').trim().toLowerCase();
+  return GARMENT_ID_PREFIXES.find((g) => id === g || id.startsWith(`${g}_`)) || null;
+};

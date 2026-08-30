@@ -20,7 +20,7 @@ const tenancy_1 = require("./tenancy");
 // Explicit OPT-IN keys — MUST stay in lockstep with the client's OPT_IN_KEYS in
 // src/config/addons.js. `pod` flipped to opt-in 2026-08-18 (pod-shop-type-
 // selector plan D3) AFTER every existing shop got an explicit backfilled value.
-const OPT_IN_KEYS = new Set(['pod', 'contentStudio']);
+const OPT_IN_KEYS = new Set(['pod', 'contentStudio', 'marketingMaterials']);
 /**
  * Is `key` enabled for `shopId`? Legacy keys are default-ON: true unless the
  * flag is the literal boolean false. OPT_IN_KEYS are the inverse: false unless

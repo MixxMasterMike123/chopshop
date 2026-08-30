@@ -30,6 +30,7 @@ import {
   clearPodMockupTemplatesCache,
   getPodMockupTemplatesMeta,
   templateSlots,
+  garmentOfTemplate,
 } from '../../../config/podMockupTemplates';
 import { loadPodProfiles, clearPodProfilesCache, getProfileById } from '../../../config/podProfiles';
 import { loadPod3dModels, clearPod3dModelsCache } from '../../../config/pod3dModels';
@@ -700,6 +701,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // override rows a group sku — so the read-then-write upserts can't race
       // each other. Was a serial O(slots × colorways) round-trip chain.
       const mappingWrites = [];
+      // The garment this design is printed on — persisted per mapping row so
+      // the print pipeline can route the production line to the printer that
+      // makes this garment. null (unknown template) → the default printer.
+      const publishGarment = garmentOfTemplate(selectedTemplate);
       for (const s of publishSlots) {
         const baseArt = printArtwork(s);
         const effective = effectivePlacementFor(s, baseArt);
@@ -711,6 +716,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           sku: resolvedSku,
           artworkId: baseArt.id,
           profileId: selectedTemplate.profileId,
+          garment: publishGarment,
           slotLabel: labelForSlot(s),
           // Pocket rows carry the discrete position FIRST — that's the printer's
           // primary instruction for this slot ("Ficka — Vänster · 2 cm uppifrån…").
@@ -734,6 +740,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             sku: groupSku,
             artworkId: overrideArtworkId,
             profileId: selectedTemplate.profileId,
+            garment: publishGarment,
             slotLabel: labelForSlot(s),
             placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
             placementSlot: s,
@@ -971,6 +978,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // EXACTLY matches the overridden colourway's label (decision 2026-08-09:
       // exact matches only, nothing fuzzy).
       const writes = [];
+      // Same routing key as the create path — the garment this design prints on.
+      const updateGarment = garmentOfTemplate(selectedTemplate);
       for (const s of publishSlots) {
         const baseArt = printArtwork(s);
         const effective = effectivePlacementFor(s, baseArt);
@@ -982,6 +991,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           sku: prod.sku,
           artworkId: baseArt.id,
           profileId: selectedTemplate.profileId,
+          garment: updateGarment,
           slotLabel: labelForSlot(s),
           placement: isPocket ? `${posLabel} · ${readout}` : readout,
           placementSlot: s,
@@ -1000,6 +1010,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             sku: gSku,
             artworkId: overrideArtworkId,
             profileId: selectedTemplate.profileId,
+            garment: updateGarment,
             slotLabel: labelForSlot(s),
             placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
             placementSlot: s,

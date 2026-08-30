@@ -72,6 +72,9 @@ const ProductMapping = ({
       const art = artworkById(artworkId);
       const { replaced } = await setMapping({
         shopId, sku: cleanSku, artworkId, profileId: art?.purpose || null, placement, placementSlot,
+        // A hand-made mapping has no studio template, so the garment type is
+        // unknown. Explicit null (not "absent") = route to the default printer.
+        garment: null,
       });
       // Same product+slot replaces that slot's artwork — say so explicitly.
       toast.success(replaced ? `Ersatte tidigare koppling för ${slotLabel(placementSlot)}` : 'Koppling sparad');

@@ -189,6 +189,11 @@ const TEMPLATES = [
   {
     id: 'tee_bc_e150',
     label: 'T-shirt',
+    // Garment type = the PRINT-ROUTING key persisted on every podMappings row.
+    // Photo templates have no SVG flat, but they still depict a garment — so
+    // they carry `garment` too (src/config/podMockupTemplates.js
+    // garmentOfTemplate falls back to the id prefix for un-reseeded docs).
+    garment: 'tee',
     profileId: 'apparel_dtg',
     // Kim's price list 2026-08-10: blank tee 60:-, stort tryck (fram/bak) 40:-,
     // pocket 20:-. The seller's cost is summed per DESIGNED slot in podPricing's
@@ -291,6 +296,7 @@ const TEMPLATES = [
   {
     id: 'hoodie_hanging',
     label: 'Hoodie',
+    garment: 'hoodie',
     profileId: 'apparel_dtg',
     // Kim's price list 2026-08-10: blank hoodie 380:-, stort tryck 40:-, pocket 20:-.
     blankCostSek: sek(380),
@@ -363,6 +369,7 @@ const TEMPLATES = [
   {
     id: 'longsleeve_hanging',
     label: 'Långärmad',
+    garment: 'longsleeve',
     profileId: 'apparel_dtg',
     // Kim's price list 2026-08-10: stort tryck (fram/bak) 40:-, pocket 20:-.
     // PROVISORISKT: blank longsleeve saknas i Systemas prislista — 72:- är en
