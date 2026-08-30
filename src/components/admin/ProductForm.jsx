@@ -69,7 +69,7 @@ import { ProductImageRail, VariantImagePicker } from './ProductImages';
 import { withShopId } from '../../config/withShopId';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { listMappings } from '../../utils/podMappings';
-import { priceFloor, sellerProfitExVat, sellerMargin, priceForMargin, roundUpTo9, FEE_RATE, FEE_FIXED } from '../../wagons/pod-wagon/podPricing';
+import { priceFloor, sellerProfitInkl, sellerMargin, priceForMargin, roundUpTo9, inklMoms, FEE_RATE, FEE_FIXED } from '../../wagons/pod-wagon/podPricing';
 import { CardSection, RightRail, Button } from './ui';
 import { skuFromName, uniqueSku } from '../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../utils/variantDerivation';
@@ -1250,8 +1250,10 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                     {/* Inköpspriset FÖRST och som ETT tal — säljaren vill veta vad
                         plagget kostar honom, inte se en uträkning. Golvraden under
                         upprepar därför inte längre kostnadsposterna. */}
+                    {/* podCostSek lagras EX moms (tryckeriets pris); säljaren ser
+                        alltid inkl. moms (Mikael 2026-08-30). */}
                     <p className="mt-2 text-[13px] text-admin-text-muted">
-                      Inköp: <span className="font-medium text-admin-text">{product.podCostSek} kr</span>
+                      Inköp: <span className="font-medium text-admin-text">{Math.round(inklMoms(product.podCostSek))} kr</span> inkl. moms
                     </p>
                     <p className={`mt-1 text-[12px] ${parseFloat(formData.price) < podFloor ? 'text-admin-critical-text' : 'text-admin-text-muted'}`}>
                       Prisgolv: <span className="font-medium">{podFloor} kr</span> — vid det priset tjänar du 0 kr
@@ -1259,12 +1261,12 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                     </p>
                     {(() => {
                       const pNow = parseFloat(formData.price);
-                      const profitNow = sellerProfitExVat(pNow, product.podCostSek);
+                      const profitNow = sellerProfitInkl(pNow, product.podCostSek);
                       const marginNow = sellerMargin(pNow, product.podCostSek);
                       return profitNow != null && pNow >= podFloor ? (
                         <p className="mt-0.5 text-[12px] text-admin-text-muted">
                           Vid {pNow} kr tjänar du ca <span className="font-medium text-admin-text">{Math.round(profitNow)} kr</span> per försäljning
-                          {marginNow != null && ` (${Math.round(marginNow * 100)} % marginal, exkl. moms)`}.
+                          {marginNow != null && ` (${Math.round(marginNow * 100)} % marginal)`}.
                         </p>
                       ) : null;
                     })()}

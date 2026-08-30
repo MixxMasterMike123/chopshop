@@ -13,7 +13,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
-import { sellerProfitExVat, sellerMargin, priceFloor, priceForMargin, roundUpTo9, podCostForSlots, FEE_RATE, FEE_FIXED } from '../podPricing';
+import { sellerProfitInkl, sellerMargin, priceFloor, priceForMargin, roundUpTo9, podCostForSlots, inklMoms, FEE_RATE, FEE_FIXED } from '../podPricing';
 
 // XS first (2026-08-27) — the printer's runs start at XS, and a size the seller
 // never sees is a size they never sell. Per-colourway opt-outs subtract from here.
@@ -150,11 +150,14 @@ const PublishPanel = ({
     setPrice(String(Math.max(roundUpTo9(target), floor ?? 0)));
   };
 
-  // Seller profit/margin (fee-aware, exkl. moms) + the break-even PRICE FLOOR —
-  // the single podPricing source, so Studio, product edit and Kent's brief agree.
-  const profitFor = (inklMoms) => sellerProfitExVat(inklMoms, cost ?? NaN, vatRate);
-  const marginFor = (inklMoms) => sellerMargin(inklMoms, cost ?? NaN, vatRate);
+  // Seller profit/margin (fee-aware) + the break-even PRICE FLOOR — the single
+  // podPricing source, so Studio, product edit and Kent's brief agree. `cost`
+  // stays EX moms (what gets stamped as podCostSek); everything SHOWN to the
+  // seller is inkl. moms (Mikael 2026-08-30), converted here at the edge.
+  const profitFor = (priceInkl) => sellerProfitInkl(priceInkl, cost ?? NaN, vatRate);
+  const marginFor = (priceInkl) => sellerMargin(priceInkl, cost ?? NaN, vatRate);
   const floor = cost == null ? null : priceFloor(cost, vatRate);
+  const costInkl = inklMoms(cost, vatRate);
 
   const validName = name.trim().length > 0;
   const validPrice = priceNum > 0 && (floor == null || priceNum >= floor);
@@ -466,7 +469,7 @@ const PublishPanel = ({
               <span className="flex items-center gap-0.5 text-[12px] text-admin-text-muted">
                 Marginal
                 <HelpPopover label="Så beräknas marginalen">
-                  Vinsten är priset exklusive moms minus produktionskostnaden och transaktionsavgiften ({Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr på slutpriset). Marginalen är vinsten delad med priset exklusive moms. Prisgolvet är där vinsten blir 0 kr.
+                  Alla belopp visas inklusive moms. Vinsten är priset minus produktionskostnaden och transaktionsavgiften ({Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr på slutpriset). Marginalen är vinsten delad med priset. Prisgolvet är där vinsten blir 0 kr.
                 </HelpPopover>
               </span>
               <input
@@ -494,7 +497,7 @@ const PublishPanel = ({
             {floor != null && (
               <p className="mt-1 text-[12px] text-admin-text-muted">
                 Prisgolv: <span className="font-medium text-admin-text">{floor} kr</span> — vid det priset tjänar du 0 kr
-                (produktionskostnad {fmtSek(cost)} kr + avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr är inräknade).
+                (produktionskostnad {fmtSek(costInkl)} kr inkl. moms + avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr är inräknade).
               </p>
             )}
             {!validPrice && (
@@ -511,7 +514,7 @@ const PublishPanel = ({
                 <thead>
                   <tr className="text-left text-admin-text-muted">
                     <th className="px-2 py-1 font-medium">Färg</th>
-                    <th className="px-2 py-1 font-medium">Produktionskostnad</th>
+                    <th className="px-2 py-1 font-medium">Produktionskostnad (inkl. moms)</th>
                     <th className="px-2 py-1 font-medium">Pris</th>
                     <th className="px-2 py-1 font-medium">Vinst</th>
                     <th className="px-2 py-1 font-medium">Marginal</th>
@@ -525,7 +528,7 @@ const PublishPanel = ({
                     return (
                       <tr key={c.id} className="border-t border-admin-border-soft text-admin-text">
                         <td className="px-2 py-1.5">{c.label}</td>
-                        <td className="px-2 py-1.5 text-admin-text-muted">{cost == null ? '—' : `${fmtSek(cost)} kr`}</td>
+                        <td className="px-2 py-1.5 text-admin-text-muted">{costInkl == null ? '—' : `${fmtSek(costInkl)} kr`}</td>
                         <td className="px-2 py-1.5">
                           <input
                             type="number"

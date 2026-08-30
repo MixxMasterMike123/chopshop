@@ -30,12 +30,19 @@
 export const FEE_RATE = 0.08;
 export const FEE_FIXED = 5;
 
-// Flat platform cut per garment (Mikael 2026-08-18) — plattformens del av varje
-// tryckt plagg, en post i costSek vid sidan av plagget och trycken. Detta är den
+// Flat platform cut per garment — plattformens del av varje tryckt plagg, en
+// post i costSek vid sidan av plagget och trycken. Detta är den
 // "plattformsmarginal" modellen ovan alltid beskrivit men som seed-datan aldrig
 // innehöll. Kollektions-rälsen (3-vägsdelningen) är en SEPARAT sak; den här
 // konstanten driver bara säljarens ekonomi (golv, vinst, marginal).
-export const PLATFORM_CUT_SEK = 50;
+//
+// EX MOMS, like every other cost term it is added to (blankCostSek/printCostSek
+// are the printer's ex-moms quotes; priceFloor multiplies the SUM by 1+moms).
+// Mikael 2026-08-30: 40 kr ex moms = 50 kr inkl. The earlier 50 was the
+// inkl-moms figure written into an ex-moms formula (floors ~12,5 kr too high).
+// The cut is the SAME whichever printshop makes the garment — only the
+// printer's blank + print prices vary with routing.
+export const PLATFORM_CUT_SEK = 40;
 
 /** Transaction fee (kr) on a final price INKL. moms. */
 export const transactionFee = (priceInkl) =>
@@ -47,7 +54,22 @@ export const sellerProfitExVat = (priceInkl, costSek, vatRate = 0.25) => {
   return (priceInkl - transactionFee(priceInkl)) / (1 + vatRate) - costSek;
 };
 
-/** Seller margin (0..1) = profit / price exkl. moms. Null when unknowable. */
+/**
+ * DISPLAY helpers — Mikael 2026-08-30: everything the SELLER sees (inköp,
+ * vinst, golv) is INKL. moms; storage (podCostSek, printer tiers) stays EX moms
+ * because that is how printers quote and how payouts are reckoned. Convert at
+ * the edge, never in the stored number.
+ */
+export const inklMoms = (exVat, vatRate = 0.25) =>
+  Number.isFinite(exVat) ? exVat * (1 + vatRate) : null;
+
+/** Seller profit (kr, INKL. moms) at a price INKL. moms — the display twin of sellerProfitExVat. */
+export const sellerProfitInkl = (priceInkl, costSek, vatRate = 0.25) => {
+  const ex = sellerProfitExVat(priceInkl, costSek, vatRate);
+  return ex == null ? null : ex * (1 + vatRate);
+};
+
+/** Seller margin (0..1) = profit / price exkl. moms (identical ratio inkl/inkl). Null when unknowable. */
 export const sellerMargin = (priceInkl, costSek, vatRate = 0.25) => {
   const profit = sellerProfitExVat(priceInkl, costSek, vatRate);
   const exVat = priceInkl > 0 ? priceInkl / (1 + vatRate) : 0;
