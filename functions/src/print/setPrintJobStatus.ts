@@ -16,6 +16,20 @@
 // invokes the order-status email server-side via the EmailOrchestrator (the client
 // admin path normally does this; a bare status write sends NOTHING to the
 // customer). Email failure is swallowed — it must never fail the status write.
+//
+// ⚠️ V1 LIMITATION — STATUS IS ORDER-LEVEL, ROUTING IS LINE-LEVEL (Slice 4).
+// Since Slice 4 each production line freezes a `printerUid`, and getPrintQueue/
+// getPrintJob show each printer only ITS lines. Status did NOT follow: an order
+// still has ONE status, so on a MIXED-GARMENT order routed to two printers,
+// EITHER printer can move the whole order to 'printed'/'shipped' — including
+// while the other printer's lines are still on the press. The scope check below
+// is deliberately the shop-level one (orderHasPodLine, not the per-printer
+// variant): a printer that can see part of an order may act on it.
+// findUnresolvedPodLines likewise checks EVERY frozen line, not just the
+// caller's — an order must not ship with anyone's print missing.
+// Per-line status (each printer marks its own lines, the order advances when all
+// lines are done) is the follow-up; do not paper over it with a per-printer
+// filter here, which would let each printer flip the shared status half-blind.
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { FieldValue } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions';

@@ -7,6 +7,13 @@
 // shop) → podArtwork → a short-lived SIGNED download URL for the original.
 import { getStorage } from 'firebase-admin/storage';
 import { db } from '../config/database';
+import {
+  PLATFORM_CUT_SEK,
+  resolvePrinterUid,
+  tierCostForSlots,
+  type PrintRouting,
+  type PrinterTier,
+} from './printRouting';
 
 const SIGNED_URL_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -119,6 +126,47 @@ export async function loadShopMappings(shopId: string): Promise<Map<string, any[
   return groupMappings(snap.docs);
 }
 
+// The PLATFORM routing inputs the snapshot freezes against: settings/printRouting
+// (which printer makes which garment) + the printers collection (each printer's
+// price tier). SERVER TWIN of the client loader src/config/printRouting.js — same
+// two documents, same degrade-to-empty contract, no decision logic (that lives in
+// printRouting.ts). Loaded ONCE per snapshot build and injected, so the builder
+// stays pure/testable exactly like mappingsBySku is.
+//
+// Empty routing (the platform has configured nothing) → resolvePrinterUid returns
+// null → the line freezes printerUid null + null costs. That is the pre-routing
+// behaviour, and per-line visibility treats a null printerUid as "any assigned
+// printer may see it", so an unconfigured platform keeps working unchanged.
+export type RoutingInputs = { routing: PrintRouting; printersById: Record<string, PrinterTier> };
+const EMPTY_ROUTING = (): RoutingInputs => ({ routing: { byGarment: {}, defaultPrinterUid: null }, printersById: {} });
+
+export async function loadPrintRoutingInputs(
+  reader: Pick<FirebaseFirestore.Firestore, 'collection'> = db
+): Promise<RoutingInputs> {
+  try {
+    const [routingSnap, printerSnap] = await Promise.all([
+      reader.collection('settings').doc('printRouting').get(),
+      reader.collection('printers').get(),
+    ]);
+    const data: any = routingSnap.exists ? routingSnap.data() || {} : {};
+    const printersById: Record<string, PrinterTier> = {};
+    printerSnap.docs.forEach((d: any) => { printersById[d.id] = { ...(d.data() || {}) }; });
+    return {
+      routing: {
+        byGarment: data.byGarment && typeof data.byGarment === 'object' ? data.byGarment : {},
+        defaultPrinterUid: data.defaultPrinterUid || null,
+      },
+      printersById,
+    };
+  } catch (e: any) {
+    // Never let a routing read failure block a PAID order from being frozen —
+    // an unrouted line is recoverable (visible to every assigned printer), a
+    // missing snapshot is not.
+    console.warn('print: could not load routing/printers, freezing lines unrouted:', e?.message);
+    return EMPTY_ROUTING();
+  }
+}
+
 function groupMappings(docs: Array<{ id: string; data: () => any }>): Map<string, any[]> {
   const bySku = new Map<string, any[]>();
   docs.forEach((d) => {
@@ -222,6 +270,36 @@ export type ProductionSnapshotLine = {
   // existed) → the default printer. Frozen here so rerouting never rewrites an
   // order that is already paid.
   garment: string | null;
+  // ── FROZEN ROUTING + COST (Slice 4) ───────────────────────────────────────
+  // Decided ONCE, at payment time, from settings/printRouting + printers/{uid}.
+  // Rerouting or re-pricing later never rewrites an order that is already paid.
+  //
+  // printerUid — WHO prints this line. resolvePrinterUid(garment, …): the
+  //   garment's route if that printer is active and lists the garment, else the
+  //   default printer, else null. null = the platform had no routing (or none
+  //   resolved); such a line stays visible to EVERY printer assigned to the
+  //   shop, which is also how every pre-Slice-4 snapshot behaves.
+  //
+  // The two costs are EX MOMS and split by what they measure — a front+back
+  // t-shirt is ONE blank with TWO prints, so the blank and the platform cut may
+  // be counted only once:
+  //
+  // printCostSek — this SLOT's print price from the routed printer's tier
+  //   (printCostSek[placementSlot]). Per LINE. null when nothing resolved.
+  //
+  // itemCostSek — the whole ITEM's production cost, stamped on the FIRST line
+  //   of each itemIndex and null on that item's other lines (so summing the
+  //   column over an order is correct, never double-counting the blank):
+  //     blankCostSek[garment] + Σ printCostSek[slot over the item's lines]
+  //       + PLATFORM_CUT_SEK (40 ex moms)
+  //   null when the routed tier has no blank price for the garment, when no
+  //   printer resolved — or simply because this is not the item's first line.
+  //   The legacy mockup-template price is deliberately NOT a server fallback:
+  //   templates are a CLIENT pricing concern (the studio), and no printer
+  //   stands behind that number.
+  printerUid: string | null;
+  printCostSek: number | null;
+  itemCostSek: number | null;
   mappingId: string | null;
   artworkId: string | null;
   purpose: string | null;
@@ -250,15 +328,143 @@ export function productionSnapshotPending(order: any): boolean {
   return order?.productionSnapshotRequired === true && productionSnapshotLines(order) === null;
 }
 
+// ── PER-LINE VISIBILITY (Slice 4) ───────────────────────────────────────────
+//
+// getPrintShopContext + printShopShops stay the OUTER boundary: the order's shop
+// must be assigned to the caller AND have the pod add-on. This is the INNER one,
+// inside an order the caller may already see, so that a mixed-garment order shows
+// each printer only the lines it actually makes.
+//
+// THE RULE — a frozen line is visible to caller `uid` when:
+//   line.printerUid === uid                 → routed here, obviously
+//   line.printerUid == null                 → routed NOWHERE: every printer
+//       assigned to the shop sees it. This is the backward-compatibility hinge
+//       and it is deliberately PERMISSIVE. It covers (a) every snapshot written
+//       before this slice, (b) a platform that has not configured routing at all,
+//       and (c) a line whose garment resolved to no active printer. Hiding those
+//       would silently drop real production work out of every queue — an order
+//       nobody can see is worse than an order two printers can see.
+//
+// Legacy orders with NO snapshot at all (the live-mapping path) have no per-line
+// routing to filter on and stay fully visible to every assigned printer.
+export function isLineVisibleTo(line: { printerUid?: string | null }, uid: string): boolean {
+  const routed = line?.printerUid;
+  return routed == null || routed === uid;
+}
+
+/**
+ * The frozen lines of `order` this printer may see, or null when the order has
+ * no snapshot (caller keeps its legacy live-mapping behaviour). An EMPTY array
+ * means the order is frozen but entirely someone else's work.
+ */
+export function visibleSnapshotLines(order: any, uid: string): ProductionSnapshotLine[] | null {
+  const frozen = productionSnapshotLines(order);
+  return frozen === null ? null : frozen.filter((line) => isLineVisibleTo(line, uid));
+}
+
+/**
+ * Split a shop's ordered artworks into "someone else prints this" and the rest,
+ * for narrowing the printer's ARTWORK LIBRARY.
+ *
+ * The library is a REFERENCE view — re-download and printability-check uploads
+ * OUTSIDE the order flow — so it is narrowed by EXCLUSION, not by inclusion:
+ *
+ *   excluded = artworks that appear ONLY on lines routed to another printer.
+ *
+ * Anything else stays: an artwork on a line routed to me, an artwork on an
+ * unrouted line (visible to everyone, per isLineVisibleTo), and — the reason
+ * this is an exclusion list — an artwork that has NOT BEEN ORDERED YET. A file
+ * uploaded this morning appears on no production line at all; an inclusion list
+ * would hide it from the very printer who is meant to vet it.
+ *
+ * `null` when nothing can be excluded, so callers can skip the filter entirely.
+ *
+ * This is about relevance and data minimisation, not a security boundary — the
+ * shop assignment + pod gate in getPrintShopContext is what keeps foreign shops
+ * out, and it is unchanged.
+ */
+export function excludedArtworkIds(orders: any[], uid: string): Set<string> | null {
+  const mine = new Set<string>();
+  const theirs = new Set<string>();
+  for (const order of orders) {
+    const frozen = productionSnapshotLines(order);
+    if (frozen === null) continue;
+    for (const line of frozen) {
+      if (!line.artworkId) continue;
+      (isLineVisibleTo(line, uid) ? mine : theirs).add(line.artworkId);
+    }
+  }
+  // An artwork ordered by BOTH printers stays — one visible line is enough.
+  for (const id of mine) theirs.delete(id);
+  return theirs.size > 0 ? theirs : null;
+}
+
+/**
+ * Does this printer have any work in this order? Mirrors orderHasPodLine but
+ * per printer — the queue/export predicate. Legacy (unfrozen) orders fall
+ * through to orderHasPodLine's shop-level answer.
+ */
+export function orderHasVisiblePodLine(order: any, mappingsBySku: Map<string, any[]>, uid: string): boolean {
+  const visible = visibleSnapshotLines(order, uid);
+  if (visible !== null) return visible.length > 0;
+  return orderHasPodLine(order, mappingsBySku);
+}
+
+/**
+ * Stamp the frozen routing + cost fields onto already-built lines.
+ *
+ * Runs as a POST-PASS because itemCostSek needs every slot of an item, which is
+ * only known once that item's lines exist. Per item: resolve the printer from
+ * the item's garment (all of an item's lines share one garment — one physical
+ * blank), take its tier, and charge blank + Σ prints + cut ONCE, on the first
+ * line. Mutates in place and returns the same array.
+ */
+function stampRouting(lines: ProductionSnapshotLine[], inputs: RoutingInputs): ProductionSnapshotLine[] {
+  const { routing, printersById } = inputs;
+  const byItem = new Map<number, ProductionSnapshotLine[]>();
+  for (const line of lines) {
+    const arr = byItem.get(line.itemIndex) || [];
+    arr.push(line);
+    byItem.set(line.itemIndex, arr);
+  }
+  for (const itemLines of byItem.values()) {
+    const garment = itemLines[0].garment;
+    const printerUid = resolvePrinterUid(garment, routing, printersById);
+    const tier = printerUid ? printersById[printerUid] : null;
+    const printPrices = tier?.pricing?.printCostSek || {};
+    itemLines.forEach((line) => {
+      line.printerUid = printerUid;
+      const p = printPrices[line.placementSlot];
+      line.printCostSek = tier && typeof p === 'number' && Number.isFinite(p) ? p : null;
+      line.itemCostSek = null; // the first line overwrites this below
+    });
+    // blank + Σ prints, ex moms, WITHOUT the cut (tierCostForSlots' contract).
+    // A slot the tier does not price counts as 0 there — the same lenience the
+    // studio's floor uses, so the seller's number and the frozen one agree.
+    const base = tier
+      ? tierCostForSlots(tier, garment, itemLines.map((l) => l.placementSlot))
+      : null;
+    itemLines[0].itemCostSek = base === null ? null : base + PLATFORM_CUT_SEK;
+  }
+  return lines;
+}
+
 /**
  * Resolve and freeze every POD item×slot from the live mapping/artwork graph.
  * Invalid mapped lines are preserved as explicit unresolved rows, never erased.
  * The returned object contains no undefined values and is safe for Firestore.
+ *
+ * `routingInputs` freezes WHO prints each line and what it costs (Slice 4).
+ * Injected like mappingsBySku so the builder stays pure; callers load it once
+ * per snapshot with loadPrintRoutingInputs(). Omitting it (tests, and any
+ * pre-Slice-4 caller) freezes every line unrouted — printerUid/costs null —
+ * which is exactly how a platform with no routing configured behaves.
  */
 export async function buildProductionSnapshot(
   order: any,
   mappingsBySku: Map<string, any[]>,
-  dbRef: FirebaseFirestore.Firestore
+  dbRef: FirebaseFirestore.Firestore,
+  routingInputs: RoutingInputs = EMPTY_ROUTING()
 ): Promise<ProductionSnapshot> {
   const items = Array.isArray(order?.items) ? order.items : [];
   const lines: ProductionSnapshotLine[] = [];
@@ -282,8 +488,13 @@ export async function buildProductionSnapshot(
         slotLabel: slotLabel(DEFAULT_SLOT),
         placement: slotLabel(DEFAULT_SLOT),
         profileId: null,
-        // No mapping resolved → no garment to route on.
+        // No mapping resolved → no garment to route on, so this line routes to
+        // the DEFAULT printer (stampRouting below) rather than to nobody: a
+        // production defect must still land in someone's queue to be fixed.
         garment: null,
+        printerUid: null, // ← stampRouting fills these three in
+        printCostSek: null,
+        itemCostSek: null,
         mappingId: null,
         artworkId: null,
         purpose: null,
@@ -311,6 +522,9 @@ export async function buildProductionSnapshot(
         // field at all — normalise the absence to an explicit null so the
         // snapshot object stays Firestore-safe (no undefined values).
         garment: mapping.garment ? String(mapping.garment) : null,
+        printerUid: null, // ← stampRouting fills these three in (post-pass:
+        printCostSek: null, //   itemCostSek needs every slot of the item)
+        itemCostSek: null,
         mappingId: mapping.id || null,
         artworkId: mapping.artworkId || null,
         purpose: mapping.profileId || null,
@@ -360,7 +574,17 @@ export async function buildProductionSnapshot(
     }
   }
 
-  return { version: PRODUCTION_SNAPSHOT_VERSION, createdAt: new Date(), lines };
+  // version stays 1: the new fields are ADDITIVE and every reader tolerates
+  // their absence (a v1 snapshot written before this slice reads as
+  // printerUid/costs null — see the visibility rule in visibleSnapshotLines).
+  // stripeWebhook pins `candidate?.version !== PRODUCTION_SNAPSHOT_VERSION` when
+  // it adopts a checkout-doc snapshot, so a bump would reject in-flight
+  // checkouts frozen minutes earlier for no gain.
+  return {
+    version: PRODUCTION_SNAPSHOT_VERSION,
+    createdAt: new Date(),
+    lines: stampRouting(lines, routingInputs),
+  };
 }
 
 /** Read mappings + artwork through an existing transaction for a consistent graph. */
@@ -374,9 +598,14 @@ export async function buildProductionSnapshotInTransaction(
   const transactionReader = {
     collection: (name: string) => ({
       doc: (id: string) => ({ get: () => tx.get(db.collection(name).doc(id)) }),
+      // The routing loader reads settings/printRouting AND the whole printers
+      // collection; both go through the transaction so the frozen routing is
+      // consistent with the mappings read above.
+      get: () => tx.get(db.collection(name)),
     }),
   } as unknown as FirebaseFirestore.Firestore;
-  return buildProductionSnapshot(order, mappings, transactionReader);
+  const routingInputs = await loadPrintRoutingInputs(transactionReader);
+  return buildProductionSnapshot(order, mappings, transactionReader, routingInputs);
 }
 
 /** Read mappings + artwork in one Firestore transaction for a consistent graph. */
@@ -503,11 +732,22 @@ export function toPrintNotificationLines(
 }
 
 // Minimal LIST row — no address, no contact, no money.
-export function toQueueRow(orderId: string, order: any, shopName: string, mappingsBySku: Map<string, any[]>) {
+//
+// `viewerUid` (when given) narrows podLineCount to the lines THIS printer makes
+// (isLineVisibleTo), so a mixed-garment order does not advertise a line count
+// the printer cannot open. Omitted → every frozen line counts (the shop-level
+// view; used where no printer identity is in play).
+export function toQueueRow(
+  orderId: string,
+  order: any,
+  shopName: string,
+  mappingsBySku: Map<string, any[]>,
+  viewerUid?: string
+) {
   const items = Array.isArray(order.items) ? order.items : [];
   // MULTI-PLACEMENT: one production line per (item × resolved slot) — a shirt with a
   // front + back print counts as 2 lines. Sum resolved slots across items.
-  const frozen = productionSnapshotLines(order);
+  const frozen = viewerUid ? visibleSnapshotLines(order, viewerUid) : productionSnapshotLines(order);
   let podLineCount = frozen?.length || 0;
   if (frozen === null && !productionSnapshotPending(order)) {
     for (const it of items) {
@@ -534,7 +774,17 @@ export function toQueueRow(orderId: string, order: any, shopName: string, mappin
 // Full per-order PRODUCTION view: ship-to + per POD line (resolved artwork +
 // signed URL). Lines whose mapping/artwork can't resolve come back with
 // artwork:{unresolved:true,reason} (visible problem, never a silently-missing line).
-export async function toPrintJob(orderId: string, order: any, shopName: string, mappingsBySku: Map<string, any[]>) {
+//
+// `viewerUid` (when given) filters the frozen lines to the ones routed to THIS
+// printer (see isLineVisibleTo). The legacy live-mapping path has no per-line
+// routing and is unaffected.
+export async function toPrintJob(
+  orderId: string,
+  order: any,
+  shopName: string,
+  mappingsBySku: Map<string, any[]>,
+  viewerUid?: string
+) {
   const items = Array.isArray(order.items) ? order.items : [];
   const ship = order.shippingInfo || {};
 
@@ -545,7 +795,7 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
   const lines = [];
   // Per-order cache for the product-image fallback (one read per productId max).
   const productImageCache = new Map<string, string | null>();
-  const frozen = productionSnapshotLines(order);
+  const frozen = viewerUid ? visibleSnapshotLines(order, viewerUid) : productionSnapshotLines(order);
   if (frozen !== null) {
     const shopPrintPrefix = `pod-artwork/${String(order.shopId || '')}/print/`;
     for (const snapLine of frozen) {
@@ -562,6 +812,9 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
         // Frozen routing key (see ProductionSnapshotLine.garment). Snapshots
         // written before this field existed have none → null.
         garment: snapLine.garment ?? null,
+        // The frozen routing decision, echoed so the portal/export can show who
+        // owns the line. Pre-Slice-4 snapshots carry none → null.
+        printerUid: snapLine.printerUid ?? null,
         mockupUrl: safeImageUrl(it.image),
       };
       if (snapLine.unresolvedReason || !snapLine.printStoragePath?.startsWith(shopPrintPrefix)) {

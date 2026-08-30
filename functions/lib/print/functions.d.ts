@@ -24,6 +24,52 @@ export declare const getPrintJob: import("firebase-functions/v2/https").Callable
         country: any;
     } | null;
     lines: ({
+        purpose: string | null;
+        artwork: {
+            unresolved: boolean;
+            reason: string;
+            tier?: undefined;
+            fileName?: undefined;
+            ext?: undefined;
+            isPrintFile?: undefined;
+            downloadUrl?: undefined;
+            previewUrl?: undefined;
+        };
+        productName: string;
+        sku: string;
+        variantLabel: string | null;
+        quantity: number;
+        placementSlot: import("./printProjection").PlacementSlot;
+        slotLabel: string;
+        placement: string;
+        profileId: string | null;
+        garment: string | null;
+        printerUid: string | null;
+        mockupUrl: string | null;
+    } | {
+        purpose: string | null;
+        artwork: {
+            tier: string | null;
+            fileName: string;
+            ext: string;
+            isPrintFile: boolean;
+            downloadUrl: string;
+            previewUrl: null;
+            unresolved?: undefined;
+            reason?: undefined;
+        };
+        productName: string;
+        sku: string;
+        variantLabel: string | null;
+        quantity: number;
+        placementSlot: import("./printProjection").PlacementSlot;
+        slotLabel: string;
+        placement: string;
+        profileId: string | null;
+        garment: string | null;
+        printerUid: string | null;
+        mockupUrl: string | null;
+    } | {
         purpose: any;
         artwork: {
             unresolved: boolean;

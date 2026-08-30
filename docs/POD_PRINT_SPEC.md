@@ -207,3 +207,52 @@ placeringen låst för alla kommande tryck av samma motiv. Ingen canvas-PNG.
 4. **Mockup-till-portalen:** bifoga mockupbild (motivet på plagget) per
    orderrad i tryckeriportalen så första trycket kan ögonmåttas (§6).
    Persisterad placeringsgeometri = nice-to-have.
+
+## 10. Flera tryckerier — routing, fryst kostnad och synlighet (2026-08-30)
+
+Plattformen kan anlita FLERA tryckerier. Vem som trycker vad avgörs **per
+plaggtyp** (garment: tee, hoodie, keps, tygkasse …), aldrig per butik — butiken
+märker ingenting.
+
+**Routing (Plattform → Tryckerier).** `settings/printRouting` håller
+`{ byGarment: { [garment]: printerUid }, defaultPrinterUid }`. Varje tryckeri har
+ett eget dokument `printers/{uid}` med sina plaggtyper och sin prislista
+(`pricing.blankCostSek` per plagg, `pricing.printCostSek` per slot) — allt **ex
+moms**. En rutt gäller bara om tryckeriet är aktivt OCH listar plagget; annars
+faller raden till `defaultPrinterUid`, och saknas även den blir raden orutad.
+
+**Fryst vid betalning.** Produktionssnapshoten (`productionSnapshot` på ordern,
+version 1 — de nya fälten är additiva) stämplar per rad:
+
+- `printerUid` — VEM som trycker raden.
+- `printCostSek` — den radens tryckpris (slotens pris ur det routade tryckeriets
+  prislista).
+- `itemCostSek` — HELA varans produktionskostnad, satt på varans FÖRSTA rad och
+  `null` på dess övriga: `blank + Σ tryck + 40 kr plattformsuttag` (ex moms). En
+  t-shirt med tryck fram och bak är ETT plagg med TVÅ tryck — blanken och uttaget
+  räknas därför en gång, inte per tryck (tee fram+bak hos Kim = 60 + 40 + 40 + 40
+  = 180 kr ex moms).
+
+Frysningen är slutgiltig: en omdirigering eller prisändring i Plattform rör
+**aldrig** en redan betald order. Mockupmallens gamla `blankCostSek/printCostSek`
+används inte på servern — de är kvar som klientens legacy-fallback i studion.
+
+**Synlighet per rad.** `getPrintShopContext` (tilldelad butik + `pod`-tillägget
+påslaget) är fortfarande den yttre gränsen. Innanför den filtreras raderna: ett
+tryckeri ser en rad när `printerUid` är dess eget **eller** är `null`. En orutad
+rad syns alltså för alla tilldelade tryckerier — det gäller varje snapshot som
+skrevs före den här funktionen, en plattform som inte konfigurerat någon routing
+alls, och rader vars plagg inte kunde routas. Regeln är medvetet generös: en
+order som ingen ser är värre än en order som två ser. Gamla ordrar helt utan
+snapshot fungerar som förut. Filtret gäller kön, orderns produktionsvy och
+CSV-exporten; en order där ingen rad är din ger permission-denied, inte en tom
+vy. Motivbiblioteket bantas genom UNDANTAG i stället: bara motiv som enbart
+ligger på någon annans rader försvinner. Ett motiv som ännu inte beställts ligger
+på ingen rad alls och ska synas — att granska nyuppladdade filer är just vad
+biblioteket är till för.
+
+**Begränsning i v1: statusen är per ORDER, inte per rad.** På en blandad order
+som gått till två tryckerier kan vilketdera som helst flytta hela ordern till
+`printed`/`shipped` — även medan den andres rader ligger kvar i pressen. Att
+markera *sina* rader klara, och låta ordern gå framåt först när alla rader är
+klara, är nästa steg.

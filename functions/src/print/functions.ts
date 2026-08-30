@@ -14,7 +14,16 @@ import { db } from '../config/database';
 import { appUrls } from '../config/app-urls';
 import { requirePlatform } from '../email-orchestrator/functions/authGuard';
 import { getPrintShopContext, assertShopAllowed } from './printGuard';
-import { loadShopMappings, orderHasPodLine, productionSnapshotPending, toQueueRow, toPrintJob, signedUrlFor } from './printProjection';
+import {
+  loadShopMappings,
+  orderHasVisiblePodLine,
+  productionSnapshotPending,
+  toQueueRow,
+  toPrintJob,
+  signedUrlFor,
+  visibleSnapshotLines,
+  excludedArtworkIds,
+} from './printProjection';
 
 const auth = getAuth();
 
@@ -63,8 +72,11 @@ export const getPrintQueue = onCall(COMMON, async (request) => {
       if (createdMs && createdMs < sinceMs) return;
       if (!includeAll && HIDDEN_STATUSES.has(String(order.status || ''))) return;
       if (productionSnapshotPending(order)) return; // paid transition still freezing production inputs
-      if (!orderHasPodLine(order, mappings)) return;
-      jobs.push(toQueueRow(d.id, order, names[shopId], mappings));
+      // PER-LINE ROUTING (Slice 4): the order shows up only if at least one of
+      // its frozen lines is routed to THIS printer (or to nobody — see
+      // isLineVisibleTo), and its line count counts only those lines.
+      if (!orderHasVisiblePodLine(order, mappings, ctx.uid)) return;
+      jobs.push(toQueueRow(d.id, order, names[shopId], mappings, ctx.uid));
     });
   }
   jobs.sort((a, b) => String(b.orderDate || '').localeCompare(String(a.orderDate || '')));
@@ -95,9 +107,18 @@ export const getPrintJob = onCall(COMMON, async (request) => {
     throw new HttpsError('unavailable', 'Produktionsunderlaget låses just nu — försök igen om en liten stund.');
   }
 
+  // PER-LINE ROUTING (Slice 4): a frozen order whose lines are ALL routed to
+  // another printer is not this printer's job at all — deny it rather than hand
+  // back an empty production view. A legacy (unfrozen) order returns null here
+  // and stays visible, as before.
+  const visible = visibleSnapshotLines(order, ctx.uid);
+  if (visible !== null && visible.length === 0) {
+    throw new HttpsError('permission-denied', 'Inga rader i den här ordern är dirigerade till ditt tryckeri');
+  }
+
   const mappings = await loadShopMappings(order.shopId);
   const names = await shopNames([order.shopId]);
-  return toPrintJob(orderId, order, names[order.shopId], mappings);
+  return toPrintJob(orderId, order, names[order.shopId], mappings, ctx.uid);
 });
 
 // ---- getPrintQueueExport: production rows for a CSV (built client-side) ----
@@ -121,8 +142,10 @@ export const getPrintQueueExport = onCall(COMMON, async (request) => {
       if (createdMs && createdMs < sinceMs) continue;
       if (!includeAll && HIDDEN_STATUSES.has(String(order.status || ''))) continue;
       if (productionSnapshotPending(order)) continue;
-      if (!orderHasPodLine(order, mappings)) continue;
-      const job = await toPrintJob(d.id, order, names[shopId], mappings);
+      // Same per-line routing filter as the queue — the CSV must not leak the
+      // other printer's lines just because the order is shared.
+      if (!orderHasVisiblePodLine(order, mappings, ctx.uid)) continue;
+      const job = await toPrintJob(d.id, order, names[shopId], mappings, ctx.uid);
       job.lines.forEach((ln: any) => {
         rows.push({
           orderNumber: job.order.orderNumber,
@@ -238,8 +261,15 @@ export const getPrintArtworkLibrary = onCall(COMMON, async (request) => {
   const names = await shopNames(ctx.printShopShops);
   const rows: any[] = [];
   for (const shopId of ctx.printShopShops) {
+    // PER-LINE ROUTING (Slice 4): drop the artworks that appear ONLY on lines
+    // routed to ANOTHER printer. Narrowing by exclusion is deliberate — a file
+    // uploaded but not yet ordered is on no line at all and must stay visible,
+    // since vetting those is what this library is for.
+    const orderSnap = await db.collection('orders').where('shopId', '==', shopId).get();
+    const excluded = excludedArtworkIds(orderSnap.docs.map((d) => d.data()), ctx.uid);
     const snap = await db.collection('podArtwork').where('shopId', '==', shopId).get();
     snap.docs.forEach((d) => {
+      if (excluded?.has(d.id)) return;
       const a: any = d.data();
       const shopPrintPrefix = `pod-artwork/${shopId}/print/`;
       const hasPrintFile =
@@ -279,6 +309,13 @@ export const getPrintArtworkDownload = onCall(COMMON, async (request) => {
   if (!snap.exists) throw new HttpsError('not-found', 'Originalet finns inte längre');
   const a: any = snap.data();
   assertShopAllowed(ctx, String(a.shopId || ''));
+  // PER-LINE ROUTING (Slice 4): mirror the library's exclusion so an artwork the
+  // library no longer lists cannot still be fetched by id.
+  const orderSnap = await db.collection('orders').where('shopId', '==', String(a.shopId)).get();
+  const excluded = excludedArtworkIds(orderSnap.docs.map((d) => d.data()), ctx.uid);
+  if (excluded?.has(artworkId)) {
+    throw new HttpsError('permission-denied', 'Det här originalet är inte dirigerat till ditt tryckeri');
+  }
   const shopPrefix = `pod-artwork/${a.shopId}/`;
   const allowedPrefix = kind === 'print' ? `${shopPrefix}print/` : `${shopPrefix}originals/`;
   const path = kind === 'print' ? a.printStoragePath : a.originalStoragePath;

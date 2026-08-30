@@ -23,6 +23,11 @@
 #                                        resolver (src/…/printRouting.js) and its
 #                                        server twin (functions/…/printRouting.ts)
 #                                        must agree on every fixture.
+#   - print-line-visibility.test.cjs  } multi-printer routing Slice 4: payment-time
+#                                        stamping of printerUid/printCostSek/
+#                                        itemCostSek onto each production line, and
+#                                        the per-printer line filter (printer A
+#                                        never sees printer B's lines).
 #   - pod-shop-gating.test.cjs        → FIRESTORE emulator (getPrintShopContext D6 gate).
 #
 # Local run:
@@ -76,6 +81,8 @@ echo "==> [1/3] pod-shop-gating-pure (pure unit test — Slice C pod-gating deci
 node rules-tests/pod-shop-gating-pure.test.cjs
 echo "==> [1/3] print-routing-parity (pure unit test — client/server routing twins agree)"
 node rules-tests/print-routing-parity.test.cjs
+echo "==> [1/3] print-line-visibility (pure unit test — frozen printerUid/cost + per-printer lines)"
+node rules-tests/print-line-visibility.test.cjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"
