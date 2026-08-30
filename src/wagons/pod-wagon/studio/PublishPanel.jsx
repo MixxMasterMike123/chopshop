@@ -13,7 +13,8 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
-import { sellerProfitInkl, sellerMargin, priceFloor, priceForMargin, roundUpTo9, podCostForSlots, inklMoms, FEE_RATE, FEE_FIXED } from '../podPricing';
+import { sellerProfitInkl, sellerMargin, priceFloor, priceForMargin, roundUpTo9, inklMoms, FEE_RATE, FEE_FIXED } from '../podPricing';
+import { podCostForSlotsRouted } from '../printRouting';
 
 // XS first (2026-08-27) — the printer's runs start at XS, and a size the seller
 // never sees is a size they never sell. Per-colourway opt-outs subtract from here.
@@ -34,8 +35,15 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
 /**
  * Props:
  *   mockups        — [{ key, colorwayId, colorwayLabel, slot, objectUrl, ... }]
- *   template       — selectedTemplate (reads the cost fields via podCostForSlots
- *                     + .colorways for labels)
+ *   template       — selectedTemplate (.colorways for labels; its legacy cost
+ *                     fields are the FALLBACK basis, see garment/routing below)
+ *   garment        — the template's garment type (the routing key) — string|null
+ *   routing        — settings/printRouting, loaded ONCE by DesignStudio
+ *   printersById   — printers/{uid} tiers by uid, loaded with it. This panel is
+ *                     presentational: it never reads Firestore itself (the dev
+ *                     harness mounts it standalone), so both arrive as props;
+ *                     null/omitted simply means "nothing routed" → the
+ *                     template's legacy prices, exactly as before Slice 3.
  *   vatRate        — number (e.g. 0.25)
  *   hasArtwork     — bool (the trycklista has ≥1 print AND every row has a motif —
  *                     publish needs a mapping motif per designed slot)
@@ -65,6 +73,9 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
 const PublishPanel = ({
   mockups = [],
   template = null,
+  garment = null,
+  routing = null,
+  printersById = null,
   vatRate = 0.25,
   hasArtwork = false,
   printSummary = [],
@@ -111,10 +122,14 @@ const PublishPanel = ({
   const [rowPrices, setRowPrices] = useState({});
 
   // Seller cost for THIS design: plagg + ett tryckpris per designad yta +
-  // plattformsuttaget (podPricing). printSummary är precis de ytor som trycks,
-  // så fram+bak kostar ett tryck mer än bara fram — och golvet följer med.
-  // null (okänd mall-kostnad) → "Produktionskostnad saknas" längre ner.
-  const cost = podCostForSlots(template, printSummary.map((p) => p.slot));
+  // plattformsuttaget. Priserna kommer från det TRYCKERI plattformen dirigerat
+  // plagget till (printRouting); saknas dirigering används mallens gamla priser.
+  // printSummary är precis de ytor som trycks, så fram+bak kostar ett tryck mer
+  // än bara fram — och golvet följer med. null (varken tryckeri- eller
+  // mallpris) → "Produktionskostnad saknas" längre ner.
+  const { cost } = podCostForSlotsRouted({
+    garment, slots: printSummary.map((p) => p.slot), routing, printersById, template,
+  });
 
   const selectedColorways = availableColorways;
   const selectedColorwayIds = selectedColorways.map((c) => c.id);

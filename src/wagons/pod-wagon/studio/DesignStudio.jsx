@@ -21,7 +21,7 @@
 // Artwork comes from the SHARED usePodLibrary load (passed down from PodAdminPage),
 // so no extra Firestore reads. Templates + print profiles (DPI thresholds) load
 // once via their cached loaders.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PhotoIcon } from '@heroicons/react/24/outline';
 import { CardSection } from '../../../components/admin/ui';
 import { slotLabel, POCKET_POSITIONS, DEFAULT_POCKET_POSITION, pocketPositionLabel } from '../../../config/podSlots';
@@ -34,6 +34,7 @@ import {
 } from '../../../config/podMockupTemplates';
 import { loadPodProfiles, clearPodProfilesCache, getProfileById } from '../../../config/podProfiles';
 import { loadPod3dModels, clearPod3dModelsCache } from '../../../config/pod3dModels';
+import { loadPrintRouting, clearPrintRoutingCache } from '../../../config/printRouting';
 import { tierLabel } from '../components/podTier';
 import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, templateWithPocketPosition } from './placementMath';
 import { renderMockup, createMockupSession } from './mockupRender';
@@ -55,7 +56,8 @@ import { withShopId } from '../../../config/withShopId';
 import { skuFromName, uniqueSku } from '../../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../../utils/variantDerivation';
 import { setMapping } from '../../../utils/podMappings';
-import { priceFloor, podCostForSlots } from '../podPricing';
+import { priceFloor } from '../podPricing';
+import { podCostForSlotsRouted } from '../printRouting';
 import { STORE } from '../../../config/store';
 import { orderedVariantMockupUrls } from './mockupVariantImages';
 
@@ -85,6 +87,12 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const [meta, setMeta] = useState({ version: 0, provisional: true });
   const [profiles, setProfiles] = useState([]);
   const [models3d, setModels3d] = useState([]);
+  // PLATFORM print routing (which printer makes which garment) + every printer's
+  // price tier. Loaded ONCE alongside the templates; the seller's production
+  // cost comes from the ROUTED printer's tier, falling back to the template's
+  // legacy prices when nothing is routed (see podCostForSlotsRouted).
+  const [routing, setRouting] = useState({ byGarment: {}, defaultPrinterUid: null });
+  const [printersById, setPrintersById] = useState({});
 
   // TRYCKLISTAN (slice A, 2026-08-08): the design = an ordered list of PRINTS,
   // one row per physical position: { slot, artworkId|null }. A row without a
@@ -161,11 +169,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       setTemplatesLoading(true);
       setTemplatesError(null);
       try {
-        const [t, p, m3d] = await Promise.all([loadPodMockupTemplates(), loadPodProfiles(), loadPod3dModels()]);
+        const [t, p, m3d, routed] = await Promise.all([
+          loadPodMockupTemplates(), loadPodProfiles(), loadPod3dModels(), loadPrintRouting(),
+        ]);
         if (!alive) return;
         setTemplates(t);
         setProfiles(p);
         setModels3d(m3d);
+        setRouting(routed.routing);
+        setPrintersById(routed.printersById);
         setMeta(getPodMockupTemplatesMeta());
         // Default-select the first template + its first colourway so the canvas
         // isn't empty on open.
@@ -194,8 +206,27 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     clearPodMockupTemplatesCache();
     clearPodProfilesCache();
     clearPod3dModelsCache();
+    clearPrintRoutingCache();
     setTemplateLoadAttempt((n) => n + 1);
   };
+
+  /**
+   * The seller's production cost (EX moms) for the currently selected template
+   * printed on `slots`, from the ROUTED printer's tier — with the template's
+   * legacy prices as the fallback while routing is unconfigured. Returns
+   * { cost, source, printerUid }; ONE helper so the floor gate, the stamp and
+   * PublishPanel's readout can never disagree about the basis.
+   */
+  const routedCostFor = useCallback(
+    (slots) => podCostForSlotsRouted({
+      garment: garmentOfTemplate(selectedTemplate),
+      slots,
+      routing,
+      printersById,
+      template: selectedTemplate,
+    }),
+    [selectedTemplate, routing, printersById]
+  );
 
   // Keep the colourway + slot valid whenever the template changes. Design state
   // (placements/overrides/mockups) resets too — it was built against the OLD
@@ -606,7 +637,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         // Same cost basis as the stamp below and as PublishPanel's readout: the
         // DESIGNED slots decide the print cost, so the gate can't enforce a
         // cheaper floor than the one the seller was just shown.
-        const costP = podCostForSlots(selectedTemplate, publishSlots);
+        const costP = routedCostFor(publishSlots).cost;
         const floorP = costP != null ? priceFloor(costP) : null;
         if (floorP != null) {
           if (!(parseFloat(price) >= floorP)) {
@@ -782,9 +813,13 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         // slots — plagg + ett tryckpris per tryckt yta + plattformsuttaget — så
         // fram+bak stämplar mer än bara fram.
         isPodProduct: true,
+        // podPrinterUid records WHOSE tier the frozen cost came from (null when
+        // the legacy template prices were used) so the product form and any
+        // later audit can see the basis without re-resolving today's routing —
+        // rerouting must never silently restate an existing product's economics.
         ...(() => {
-          const c = podCostForSlots(selectedTemplate, publishSlots);
-          return c != null ? { podCostSek: c } : {};
+          const { cost: c, printerUid } = routedCostFor(publishSlots);
+          return c != null ? { podCostSek: c, podPrinterUid: printerUid } : {};
         })(),
         sizeGuide: '',
         weight: { value: 0, unit: 'g' },
@@ -896,7 +931,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // mockup images/artwork. Pricing is owned by the Products page —
       // ProductForm blocks any save below the floor (podPricing.js).
       // costU is still needed to stamp podCostSek on the product below.
-      const costU = podCostForSlots(selectedTemplate, publishSlots);
+      const { cost: costU, printerUid: printerUidU } = routedCostFor(publishSlots);
       const publicPath = `products/${shopId}/${productId}`;
       const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
       // 'studio_' prefix + deterministic (colorway, slot) names: re-running the
@@ -1025,7 +1060,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // floor gate above) is the DESIGNED-slot cost: plagg + tryck per tryckt
       // yta + plattformsuttaget, så fram+bak stämplar mer än bara fram.
       updates.isPodProduct = true;
-      if (costU != null) updates.podCostSek = costU;
+      if (costU != null) { updates.podCostSek = costU; updates.podPrinterUid = printerUidU; }
       await updateDoc(prodRef, updates);
       docTouched = true;
 
@@ -1706,6 +1741,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         <PublishPanel
           mockups={mockups}
           template={selectedTemplate}
+          garment={garmentOfTemplate(selectedTemplate)}
+          routing={routing}
+          printersById={printersById}
           vatRate={STORE.vatRate}
           hasArtwork={designedSlots(selectedTemplate).length > 0 && prints.every((p) => p.artworkId)}
           printSummary={designedSlots(selectedTemplate).map((s) => ({

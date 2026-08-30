@@ -10,8 +10,15 @@
 // concern on the seller-facing surfaces only. An empty input means "not priced":
 // the key is omitted from the doc rather than stored as 0, so a missing price is
 // distinguishable from a genuinely free one downstream.
+//
+// Above the printer list sits "Styrning per plagg" (Slice 3): the routing table
+// settings/printRouting, which decides WHICH printer makes which garment. It is
+// a PLATFORM decision, never per shop. The seller's production cost — and with
+// it the price floor — then comes from the routed printer's tier instead of the
+// mockup template. Rerouting does NOT reprice existing products: podCostSek is
+// frozen on the product at publish time (see the notice after saving).
 import React, { useState, useEffect, useCallback } from 'react';
-import { collection, getDocs, query, where, doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, getDoc, getDocs, query, where, doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, auth } from '../../firebase/config';
 import PlatformLayout from '../../components/platform/PlatformLayout';
@@ -86,6 +93,16 @@ const PlatformPrinters = () => {
   const [form, setForm] = useState(null);
   const [savingTier, setSavingTier] = useState(false);
 
+  // Routing (settings/printRouting): per-garment printer + the catch-all default.
+  // `route` is the edit buffer — '' means "no explicit rule, use the default".
+  const [route, setRoute] = useState({});                 // { [garmentId]: uid|'' }
+  const [defaultUid, setDefaultUid] = useState('');
+  const [savedRoute, setSavedRoute] = useState({});       // what is in Firestore now
+  const [savedDefaultUid, setSavedDefaultUid] = useState('');
+  const [savingRoute, setSavingRoute] = useState(false);
+  // Garments whose printer changed in the LAST save — drives the frozen-cost notice.
+  const [rerouted, setRerouted] = useState([]);
+
   // create form
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -94,14 +111,25 @@ const PlatformPrinters = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [shopSnap, printerSnap, tierSnap] = await Promise.all([
+      const [shopSnap, printerSnap, tierSnap, routeSnap] = await Promise.all([
         getDocs(collection(db, 'shops')),
         getDocs(query(collection(db, 'users'), where('role', '==', 'print_shop'))),
         getDocs(collection(db, 'printers')),
+        getDoc(doc(db, 'settings', 'printRouting')),
       ]);
       setShops(shopSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
       setPrinters(printerSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
       setTiers(Object.fromEntries(tierSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }])));
+      const routing = routeSnap.exists() ? routeSnap.data() || {} : {};
+      const byGarment = routing.byGarment && typeof routing.byGarment === 'object' ? routing.byGarment : {};
+      // Every garment gets a key so the selects are controlled from the first
+      // render ('' = no explicit rule → the default printer).
+      const buffer = Object.fromEntries(POD_GARMENTS.map((g) => [g.id, byGarment[g.id] || '']));
+      setRoute(buffer);
+      setSavedRoute(buffer);
+      setDefaultUid(routing.defaultPrinterUid || '');
+      setSavedDefaultUid(routing.defaultPrinterUid || '');
+      setRerouted([]);
     } catch (e) {
       console.error('PlatformPrinters load failed:', e);
       toast.error('Kunde inte ladda tryckerier.');
@@ -140,6 +168,10 @@ const PlatformPrinters = () => {
   const toggleActive = async (printer) => {
     try {
       await updateDoc(doc(db, 'users', printer.id), { active: !printer.active });
+      // Mirror onto the tier doc so the routing resolver (client + server) can
+      // skip a deactivated printer without a users/ read — a routed line must
+      // never land on a printer printGuard would reject.
+      await setDoc(doc(db, 'printers', printer.id), { active: !printer.active }, { merge: true });
       toast.success(printer.active ? 'Konto inaktiverat' : 'Konto aktiverat');
       load();
     } catch (e) {
@@ -184,6 +216,7 @@ const PlatformPrinters = () => {
     try {
       const payload = {
         name: printer.contactPerson || printer.email || printer.id,
+        active: printer.active === true,
         garments: POD_GARMENTS.filter((g) => form.garments.has(g.id)).map((g) => g.id),
         pricing: formToPricing(form),
         updatedAt: serverTimestamp(),
@@ -199,6 +232,53 @@ const PlatformPrinters = () => {
       toast.error('Kunde inte spara plagg & priser.');
     } finally {
       setSavingTier(false);
+    }
+  };
+
+  // ── Routing ──────────────────────────────────────────────────────────────
+  // The printers that can be routed a garment: those with a printers/{uid} tier
+  // listing it. A printer without a tier doc has nothing to price with, so it
+  // is not offerable — that is exactly the eligibility rule the resolver in
+  // src/wagons/pod-wagon/printRouting.js applies, kept identical on purpose.
+  const printersFor = (garmentId) =>
+    printers.filter((p) => p.active && (tiers[p.id]?.garments || []).includes(garmentId));
+  // Any printer with a tier may be the catch-all default (it need not list
+  // every garment — an unpriced blank simply falls back to the template price).
+  const defaultCandidates = printers.filter((p) => p.active && tiers[p.id]);
+  const printerLabel = (uid) => {
+    const p = printers.find((x) => x.id === uid);
+    return p?.contactPerson || p?.email || tiers[uid]?.name || uid;
+  };
+  const routeDirty =
+    defaultUid !== savedDefaultUid ||
+    POD_GARMENTS.some((g) => (route[g.id] || '') !== (savedRoute[g.id] || ''));
+
+  const saveRouting = async () => {
+    if (savingRoute) return;
+    setSavingRoute(true);
+    try {
+      // Only real routes are stored — '' (no explicit rule) drops the key so the
+      // doc reads as the operator's intent rather than a map of empty strings.
+      const byGarment = Object.fromEntries(
+        POD_GARMENTS.map((g) => [g.id, route[g.id]]).filter(([, uid]) => !!uid)
+      );
+      // Which garments actually changed printer — the notice below names them.
+      const changed = POD_GARMENTS.filter((g) => (route[g.id] || '') !== (savedRoute[g.id] || ''));
+      await setDoc(doc(db, 'settings', 'printRouting'), {
+        byGarment,
+        defaultPrinterUid: defaultUid || null,
+        updatedAt: serverTimestamp(),
+        updatedBy: auth.currentUser?.uid || null,
+      }, { merge: true });
+      setSavedRoute({ ...route });
+      setSavedDefaultUid(defaultUid);
+      setRerouted(changed.map((g) => g.label));
+      toast.success('Styrning sparad.');
+    } catch (e) {
+      console.error('saveRouting failed:', e);
+      toast.error('Kunde inte spara styrningen.');
+    } finally {
+      setSavingRoute(false);
     }
   };
 
@@ -250,6 +330,76 @@ const PlatformPrinters = () => {
             </button>
           </div>
         </form>
+
+        {/* Routing — which printer makes which garment (settings/printRouting) */}
+        <section className="mb-8 rounded-xl border border-white/10 bg-white/5 p-4">
+          <h2 className="mb-1 text-sm font-semibold">Styrning per plagg</h2>
+          <p className="mb-4 text-xs text-gray-500">
+            Välj vilket tryckeri som tillverkar varje plaggtyp. Ett tryckeri kan väljas för ett plagg
+            först när det kryssat i plagget under “Plagg &amp; priser”. Produktens produktionskostnad —
+            och därmed prisgolvet — hämtas från det valda tryckeriets prislista.
+          </p>
+
+          <div className="mb-4 grid gap-2 sm:grid-cols-2">
+            {POD_GARMENTS.map((g) => {
+              const options = printersFor(g.id);
+              return (
+                <div key={g.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-gray-900 px-3 py-2">
+                  <span className="truncate text-sm text-gray-300">{g.label}</span>
+                  <select
+                    value={route[g.id] || ''}
+                    onChange={(e) => setRoute((r) => ({ ...r, [g.id]: e.target.value }))}
+                    className={`w-48 ${inputCls}`}
+                  >
+                    <option value="">— standard —</option>
+                    {options.map((p) => (
+                      <option key={p.id} value={p.id}>{printerLabel(p.id)}</option>
+                    ))}
+                    {/* A route saved earlier to a printer that no longer offers this
+                        garment must stay VISIBLE, or the operator sees "— standard —"
+                        while the doc still says otherwise. The resolver already
+                        ignores such a route (it falls through to the default), so the
+                        option is labelled as the dead rule it is. */}
+                    {route[g.id] && !options.some((p) => p.id === route[g.id]) && (
+                      <option value={route[g.id]}>{printerLabel(route[g.id])} (erbjuder inte plagget)</option>
+                    )}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
+            <label className="flex items-center gap-3 text-sm text-gray-300">
+              Standardtryckeri
+              <select value={defaultUid} onChange={(e) => setDefaultUid(e.target.value)} className={`w-48 ${inputCls}`}>
+                <option value="">— inget —</option>
+                {defaultCandidates.map((p) => (
+                  <option key={p.id} value={p.id}>{printerLabel(p.id)}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={saveRouting} disabled={savingRoute || !routeDirty} className={btnPrimary}>
+              {savingRoute ? 'Sparar…' : 'Spara styrning'}
+            </button>
+          </div>
+
+          <p className="mt-3 text-xs text-gray-500">
+            Plagg utan eget val går till standardtryckeriet. Saknas både val och standard — eller har
+            tryckeriet inget blankpris för plagget — används mallens gamla priser.
+          </p>
+
+          {/* Frozen-cost notice. podCostSek is stamped on the product at publish
+              time and deliberately NOT recomputed, so a reroute changes only what
+              NEW products cost. A scan listing existing products now priced below
+              their floor is a later add (it needs a cross-shop products query). */}
+          {rerouted.length > 0 && (
+            <p className="mt-3 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              Prisgolvet kan ha ändrats för produkter av typen {rerouted.join(', ')} — befintliga
+              produkter prissätts inte om automatiskt.
+            </p>
+          )}
+        </section>
 
         {/* Existing printers */}
         <h2 className="mb-2 text-sm font-semibold">Befintliga tryckerier</h2>

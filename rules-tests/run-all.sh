@@ -19,6 +19,10 @@
 #   - pod-shop-gating-pure.test.cjs   } pod-shop-type-selector Slice C: pod-gating
 #                                        decision shapes (notifyOutbox trigger/sweep,
 #                                        createPaymentIntent/stripeWebhook snapshot skip).
+#   - print-routing-parity.test.cjs   } multi-printer routing Slice 3: the client
+#                                        resolver (src/…/printRouting.js) and its
+#                                        server twin (functions/…/printRouting.ts)
+#                                        must agree on every fixture.
 #   - pod-shop-gating.test.cjs        → FIRESTORE emulator (getPrintShopContext D6 gate).
 #
 # Local run:
@@ -70,6 +74,8 @@ echo "==> [1/3] production-snapshot (pure unit test — immutable paid-order art
 node rules-tests/production-snapshot.test.cjs
 echo "==> [1/3] pod-shop-gating-pure (pure unit test — Slice C pod-gating decision shapes)"
 node rules-tests/pod-shop-gating-pure.test.cjs
+echo "==> [1/3] print-routing-parity (pure unit test — client/server routing twins agree)"
+node rules-tests/print-routing-parity.test.cjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"
