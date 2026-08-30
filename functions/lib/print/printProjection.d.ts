@@ -22,6 +22,7 @@ export type ProductionSnapshotLine = {
     slotLabel: string;
     placement: string;
     profileId: string | null;
+    garment: string | null;
     mappingId: string | null;
     artworkId: string | null;
     purpose: string | null;
@@ -111,6 +112,7 @@ export declare function toPrintJob(orderId: string, order: any, shopName: string
         slotLabel: string;
         placement: string;
         profileId: any;
+        garment: string | null;
         mockupUrl: string | null;
     } | {
         purpose: any;
@@ -132,6 +134,7 @@ export declare function toPrintJob(orderId: string, order: any, shopName: string
         slotLabel: string;
         placement: string;
         profileId: any;
+        garment: string | null;
         mockupUrl: string | null;
     })[];
 }>;

@@ -216,6 +216,12 @@ export type ProductionSnapshotLine = {
   slotLabel: string;
   placement: string;
   profileId: string | null;
+  // Garment type frozen from the mapping ('tee' | 'hoodie' | 'longsleeve' | …).
+  // The PRINT-ROUTING key: a later slice picks the printer per garment. null =
+  // unknown garment (hand-made mapping, or a row written before this field
+  // existed) → the default printer. Frozen here so rerouting never rewrites an
+  // order that is already paid.
+  garment: string | null;
   mappingId: string | null;
   artworkId: string | null;
   purpose: string | null;
@@ -276,6 +282,8 @@ export async function buildProductionSnapshot(
         slotLabel: slotLabel(DEFAULT_SLOT),
         placement: slotLabel(DEFAULT_SLOT),
         profileId: null,
+        // No mapping resolved → no garment to route on.
+        garment: null,
         mappingId: null,
         artworkId: null,
         purpose: null,
@@ -299,6 +307,10 @@ export async function buildProductionSnapshot(
         slotLabel: label,
         placement: detail ? `${label} — ${detail}` : label,
         profileId: mapping.profileId || null,
+        // Routing key frozen from the mapping. Legacy rows have no `garment`
+        // field at all — normalise the absence to an explicit null so the
+        // snapshot object stays Firestore-safe (no undefined values).
+        garment: mapping.garment ? String(mapping.garment) : null,
         mappingId: mapping.id || null,
         artworkId: mapping.artworkId || null,
         purpose: mapping.profileId || null,
@@ -547,6 +559,9 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
         slotLabel: snapLine.slotLabel,
         placement: snapLine.placement,
         profileId: snapLine.profileId,
+        // Frozen routing key (see ProductionSnapshotLine.garment). Snapshots
+        // written before this field existed have none → null.
+        garment: snapLine.garment ?? null,
         mockupUrl: safeImageUrl(it.image),
       };
       if (snapLine.unresolvedReason || !snapLine.printStoragePath?.startsWith(shopPrintPrefix)) {
@@ -638,6 +653,9 @@ export async function toPrintJob(orderId: string, order: any, shopName: string, 
         slotLabel: mappingSlotLabel(mapping, slot),
         placement,
         profileId: mapping.profileId || null,
+        // Routing key straight off the live mapping (legacy path — this order
+        // predates snapshot enforcement, so nothing is frozen).
+        garment: mapping.garment ? String(mapping.garment) : null,
         // The bought colourway's product mockup (front view) — the printer's
         // visual reference. NOTE: for back/sleeve lines this still shows the
         // front mockup; the placement text is the per-slot instruction.

@@ -50,7 +50,7 @@ export const getMappingBySku = async (shopId, sku, placementSlot = DEFAULT_SLOT)
  * tells the caller a slot's previous artwork was overwritten (for the UI toast).
  * Returns { id, replaced }.
  */
-export const setMapping = async ({ shopId, sku, artworkId, profileId, placement, placementSlot, position = null, slotLabel = null }) => {
+export const setMapping = async ({ shopId, sku, artworkId, profileId, placement, placementSlot, position = null, slotLabel = null, garment = null }) => {
   const cleanSku = String(sku || '').trim();
   if (!cleanSku) throw new Error('SKU krävs.');
   const slot = slotOf(placementSlot);
@@ -68,6 +68,14 @@ export const setMapping = async ({ shopId, sku, artworkId, profileId, placement,
     // shared vocabulary says "Bröst"). Print projection prefers it, falls back
     // to the shared label when absent (older rows).
     slotLabel: String(slotLabel || '').trim().slice(0, 40) || null,
+    // Garment type ('tee' | 'hoodie' | 'longsleeve' | …) — the PRINT-ROUTING
+    // key. Comes from the studio template (garmentOfTemplate); a mapping made
+    // by hand in the POD admin has no template, so it stays null. null =
+    // "unknown garment" and routes to the default printer — never a hard fail.
+    // A caller WITHOUT a garment (the hand-made mapping form) must not wipe the
+    // garment the studio already stamped on this row — that would silently
+    // un-route a product. Keep the existing value; only a real value replaces it.
+    garment: String(garment || '').trim().slice(0, 40) || existing?.garment || null,
     updatedAt: serverTimestamp(),
   };
   if (existing) {

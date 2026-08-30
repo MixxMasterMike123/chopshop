@@ -251,6 +251,8 @@ async function buildProductionSnapshot(order, mappingsBySku, dbRef) {
                 slotLabel: slotLabel(exports.DEFAULT_SLOT),
                 placement: slotLabel(exports.DEFAULT_SLOT),
                 profileId: null,
+                // No mapping resolved → no garment to route on.
+                garment: null,
                 mappingId: null,
                 artworkId: null,
                 purpose: null,
@@ -273,6 +275,10 @@ async function buildProductionSnapshot(order, mappingsBySku, dbRef) {
                 slotLabel: label,
                 placement: detail ? `${label} — ${detail}` : label,
                 profileId: mapping.profileId || null,
+                // Routing key frozen from the mapping. Legacy rows have no `garment`
+                // field at all — normalise the absence to an explicit null so the
+                // snapshot object stays Firestore-safe (no undefined values).
+                garment: mapping.garment ? String(mapping.garment) : null,
                 mappingId: mapping.id || null,
                 artworkId: mapping.artworkId || null,
                 purpose: mapping.profileId || null,
@@ -516,6 +522,9 @@ async function toPrintJob(orderId, order, shopName, mappingsBySku) {
                 slotLabel: snapLine.slotLabel,
                 placement: snapLine.placement,
                 profileId: snapLine.profileId,
+                // Frozen routing key (see ProductionSnapshotLine.garment). Snapshots
+                // written before this field existed have none → null.
+                garment: snapLine.garment ?? null,
                 mockupUrl: safeImageUrl(it.image),
             };
             if (snapLine.unresolvedReason || !snapLine.printStoragePath?.startsWith(shopPrintPrefix)) {
@@ -603,6 +612,9 @@ async function toPrintJob(orderId, order, shopName, mappingsBySku) {
                     slotLabel: mappingSlotLabel(mapping, slot),
                     placement,
                     profileId: mapping.profileId || null,
+                    // Routing key straight off the live mapping (legacy path — this order
+                    // predates snapshot enforcement, so nothing is frozen).
+                    garment: mapping.garment ? String(mapping.garment) : null,
                     // The bought colourway's product mockup (front view) — the printer's
                     // visual reference. NOTE: for back/sleeve lines this still shows the
                     // front mockup; the placement text is the per-slot instruction.

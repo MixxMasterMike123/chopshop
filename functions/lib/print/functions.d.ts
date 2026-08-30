@@ -43,6 +43,7 @@ export declare const getPrintJob: import("firebase-functions/v2/https").Callable
         slotLabel: string;
         placement: string;
         profileId: any;
+        garment: string | null;
         mockupUrl: string | null;
     } | {
         purpose: any;
@@ -64,6 +65,7 @@ export declare const getPrintJob: import("firebase-functions/v2/https").Callable
         slotLabel: string;
         placement: string;
         profileId: any;
+        garment: string | null;
         mockupUrl: string | null;
     })[];
 }>, unknown>;
