@@ -270,6 +270,21 @@ service cloud.firestore {
       allow write: if isPlatform();
     }
 
+    // printers/{uid} — per-print-shop capability + price tier (uid = the
+    // print_shop user's uid). Routing and tiers are PLATFORM decisions, so only
+    // platform writes.
+    //
+    // WHY read is any active user (not platform-only): a shop admin has to see
+    // the production cost of the product they are pricing, and from Slice 3 that
+    // cost comes from the ROUTED printer's tier instead of the mockup template.
+    // The doc holds no PII — just a display name, a garment list and ex-moms
+    // prices — so an active-user read leaks nothing about the printer's account
+    // (contact details stay in users/{uid}, which this does not open up).
+    match /printers/{uid} {
+      allow read: if isActiveUser();
+      allow write: if isPlatform();
+    }
+
     // ============================================================
     // shops/{shopId} — the tenant docs. Public read of identity/status (the
     // storefront reads its shop config + active/disabled). Only platform
