@@ -29,6 +29,8 @@ import { useShopId } from '../../contexts/ShopContext';
 import { withShopId } from '../../config/withShopId';
 import { formatPickupDayShort } from '../../utils/pickupDates';
 import { requiresWithdrawalGate, resolveWithdrawalNotice } from '../../utils/withdrawal';
+import { loadShopConfig } from '../../config/shopConfig';
+import { getLegalReadiness } from '../../utils/legalPageReadiness';
 
 const Checkout = () => {
   const {
@@ -107,8 +109,39 @@ const Checkout = () => {
     }
   }, [isPickup, pickupLocation?.id, onlyOption?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   const shopId = useShopId();
+
+  // Legal readiness gate (client-side friendly front). The SERVER is the real
+  // gate — createPaymentIntent.ts refuses the PaymentIntent while any hard
+  // blocker holds (legalCheckoutBlockReason) — this only spares the buyer a
+  // dead-end error card. `null` = not resolved yet: treated as ready so the
+  // payment form doesn't flash a notice on every checkout. Fail-OPEN on a read
+  // error too (the server backstop still refuses); never lock a working shop
+  // out of its own checkout because a config read hiccuped.
+  const [legalReady, setLegalReady] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const identity = (await loadShopConfig(shopId)) || {};
+        if (!cancelled) setLegalReady(getLegalReadiness(identity).ready);
+      } catch (e) {
+        console.warn('Checkout: could not load shop config for legal gate:', e?.message);
+        if (!cancelled) setLegalReady(true); // fail open — server is the backstop
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [shopId]);
+  const checkoutLegallyOpen = legalReady !== false;
+
   const { currentUser, login } = useSimpleAuth();
   const { t, currentLanguage } = useTranslation();
+  // Who the buyer actually contracts with: the seller's registered legal entity,
+  // falling back to the shop's trading name.
+  // Last resort "butiken" so the sentence never reads "avtal med  och" — the
+  // readiness gate flags a missing legalName in admin (`missing`).
+  const sellerName = String(store?.legalName || '').trim() || String(store?.shopName || '').trim()
+    || t('checkout_terms_seller_fallback', 'butiken');
+
   const { getContentValue } = useContentTranslation();
   const navigate = useNavigate();
 
@@ -519,6 +552,15 @@ const Checkout = () => {
   // Handle payment errors
   const handlePaymentError = (error) => {
     console.error('❌ Payment failed:', error);
+    // The server refuses the PaymentIntent with 403 { error: 'Shop is not
+    // accepting orders', reason: 'legal-…' } while the shop's legal pages are
+    // incomplete. Never surface that internal wording (or the blocker name) to
+    // the customer — say the same friendly thing the client gate says.
+    const msg = String(error?.message || '');
+    if (/not accepting orders/i.test(msg) || /^legal-/i.test(String(error?.reason || ''))) {
+      toast.error(t('checkout_legal_not_ready_toast', 'Butiken tar inte emot beställningar ännu. Försök igen lite senare.'));
+      return;
+    }
     toast.error(t('checkout_payment_failed_with_message', 'Betalning misslyckades: {{message}}', { message: error.message }));
   };
 
@@ -1065,6 +1107,21 @@ const Checkout = () => {
                     </div>
                   )}
 
+                  {/* Legal gate: the shop hasn't finished its köpvillkor, so the
+                      server would refuse the PaymentIntent anyway. Show the
+                      friendly front instead of the payment form — and never the
+                      internal blocker names. */}
+                  {!checkoutLegallyOpen ? (
+                    <div className="bg-white rounded-tile border border-ink/10 p-6 text-center">
+                      <h3 className="font-display text-lg font-bold text-ink mb-2">
+                        {t('checkout_legal_not_ready_title', 'Butiken tar inte emot beställningar ännu')}
+                      </h3>
+                      <p className="text-sm text-ink-muted">
+                        {t('checkout_legal_not_ready_body', 'Butiken håller på att färdigställa sina köpvillkor. Försök igen lite senare.')}
+                      </p>
+                    </div>
+                  ) : (
+                  <>
                   {/* Stripe Payment Form */}
                   <StripePaymentForm
                     withdrawalGate={{
@@ -1101,12 +1158,16 @@ const Checkout = () => {
                     onPaymentError={handlePaymentError}
                   />
 
+                  {/* The SELLER is the buyer's counterparty, not the platform —
+                      so name the shop's legal entity here, never "våra". */}
                   <p className="text-xs text-center text-ink-faint mt-4">
-                    {t('checkout_terms_agreement', 'Genom att slutföra beställningen godkänner du våra')}{' '}
-                                    <a href={getCountryAwareUrl('legal/kopvillkor')} className="text-accent hover:underline">{t('checkout_terms_link', 'villkor')}</a>{' '}
-                {t('checkout_terms_and', 'och')}{' '}
-                <a href={getCountryAwareUrl('legal/integritetspolicy')} className="text-accent hover:underline">{t('checkout_privacy_link', 'integritetspolicy')}</a>.
+                    {t('checkout_terms_agreement_seller', 'Genom att slutföra beställningen ingår du avtal med {{seller}} och godkänner butikens', { seller: sellerName })}{' '}
+                    <a href={getCountryAwareUrl('legal/kopvillkor')} className="text-accent hover:underline">{t('checkout_terms_link_kopvillkor', 'köpvillkor')}</a>{' '}
+                    {t('checkout_terms_and', 'och')}{' '}
+                    <a href={getCountryAwareUrl('legal/integritetspolicy')} className="text-accent hover:underline">{t('checkout_privacy_link', 'integritetspolicy')}</a>.
                   </p>
+                  </>
+                  )}
                 </div>
               )}
             </div>

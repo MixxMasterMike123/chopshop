@@ -11,6 +11,7 @@ import { useStoreSettings } from '../../contexts/StoreSettingsContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import DOMPurify from 'dompurify';
+import { PLATFORM_TERMS_SLUG } from '../../config/legalTemplates';
 
 // Generic platform icons (brand-neutral logos). A link renders only when the
 // matching URL is set in store.social, so the set adapts per shop.
@@ -280,6 +281,15 @@ const ShopFooter = () => {
           <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
             <div className="text-white/50 text-sm">
               <p>{`© ${currentYear} ${store.legalName}. `}{t('footer_rights_reserved', 'Alla rättigheter förbehållna.')}</p>
+              {/* Platform/seller split, visible to the buyer: the shop above is
+                  the counterparty of the purchase; the platform only provides
+                  the service it runs on. */}
+              <p className="text-white/40 mt-1">
+                {t('footer_powered_by', 'Drivs av ChopShop')}{' · '}
+                <Link to={getCountryAwareUrl(PLATFORM_TERMS_SLUG)} className="text-white/40 hover:text-white/70 transition-colors underline">
+                  {t('footer_platform_terms', 'Plattformsvillkor')}
+                </Link>
+              </p>
             </div>
             
             <div className="flex flex-col md:flex-row items-center gap-6">

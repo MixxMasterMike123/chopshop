@@ -48,6 +48,27 @@ export function shopCheckoutBlockReason(shop: any): string | null {
   return null;
 }
 
+// LEGAL READINESS GATE (2026-09-07). A shop must not take money until its
+// consumer-facing legal pages are TRUE and OWNED by the seller:
+//   • returnAddress set   — köpvillkor §8 / ångerrätt page name it
+//   • vatRegistered bool  — the VAT wording must match what checkout charges
+//   • legal.acceptance    — the SELLER explicitly accepted the pages as their
+//                            own terms (platform-liability guard: the text is a
+//                            template the seller adopted, not the platform's)
+// Mirrors src/utils/legalPageReadiness.js getLegalReadiness() HARD blockers —
+// keep the two in sync. Template-version drift (needsReacceptance) is
+// deliberately NOT a blocker here: a template bump must never close checkout.
+export function legalCheckoutBlockReason(shop: any): string | null {
+  const identity = shop?.storeIdentity || {};
+  if (!String(identity.returnAddress || '').trim()) return 'legal-return-address-missing';
+  if (typeof identity.vatRegistered !== 'boolean') return 'legal-vat-status-missing';
+  const acceptance = identity.legal?.acceptance;
+  if (!acceptance || typeof acceptance !== 'object' || !String(acceptance.acceptedAt || '').trim()) {
+    return 'legal-not-accepted';
+  }
+  return null;
+}
+
 // P1-06 (2026-08-15 audit): pickup zeroes shipping, so the SERVER must verify
 // the shop actually offers pickup and that the chosen location is one of the
 // shop's configured points — name/address are then taken from the shop config,
@@ -488,6 +509,15 @@ export const createPaymentIntentV2 = onRequest(
       if (shopBlockReason) {
         logger.warn('⛔ Checkout blocked — shop not live', { shopId: resolvedShopId, shopBlockReason });
         response.status(403).json({ error: 'Shop is not accepting orders' });
+        return;
+      }
+
+      // Legal readiness: no PaymentIntent until the seller's legal pages are
+      // complete AND accepted by the seller (see legalCheckoutBlockReason).
+      const legalBlockReason = legalCheckoutBlockReason(shopSnap.data());
+      if (legalBlockReason) {
+        logger.warn('⛔ Checkout blocked — legal pages not ready', { shopId: resolvedShopId, legalBlockReason });
+        response.status(403).json({ error: 'Shop is not accepting orders', reason: legalBlockReason });
         return;
       }
 

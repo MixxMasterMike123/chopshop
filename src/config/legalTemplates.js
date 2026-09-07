@@ -39,6 +39,13 @@ export const LEGAL_SLUGS = {
   INTEGRITETSPOLICY: 'legal/integritetspolicy',
 };
 
+// The PLATFORM's own B2B terms, published as a public storefront page so buyers
+// can see the platform/seller split (the seller is their counterparty; the
+// platform only provides the service). NOT a per-shop legal page — it is
+// deliberately kept OUT of LEGAL_SLUGS/LEGAL_PAGES so isLegalSlug() stays false
+// for it and no seller identity, readiness gate or copy-on-write applies.
+export const PLATFORM_TERMS_SLUG = 'legal/plattformsvillkor';
+
 // The merge fields each template may reference, with where they come from.
 // Used by the renderer + the readiness gate. `required` means a live shop
 // can't publish correct pages until it's set.
@@ -403,3 +410,54 @@ export const LEGAL_PAGES = {
 
 // True if the slug is one of the auto-generated legal pages.
 export const isLegalSlug = (slug) => Boolean(LEGAL_PAGES[slug]);
+
+// ── Template versioning (seller acceptance) ──────────────────────────────────
+// The seller explicitly ACCEPTS the generated pages before their checkout opens
+// (legalAcceptance.js). The acceptance records the template version it covered.
+// BUMP THIS on EVERY wording change to the three templates above — a shop whose
+// acceptance is behind the current version is flagged "needs re-acceptance" in
+// admin + platform (legalPageReadiness.js), exactly like WordPress's "suggested
+// privacy policy text has changed, please review" notice. The live page keeps
+// rendering the CURRENT template (the mandatory text is the platform's floor),
+// the seller re-reads and re-accepts. Date-stamped so the version is readable in
+// the acceptance evidence (shops/{id}/legalAcceptances).
+export const LEGAL_TEMPLATE_VERSION = '2026-09-07';
+
+// Stable Firestore-safe keys for the three pages (slugs contain '/', which can't
+// be a map key in a Firestore field path). Used for storeIdentity.legal.custom
+// and the acceptance snapshot.
+export const LEGAL_PAGE_KEYS = {
+  [LEGAL_SLUGS.KOPVILLKOR]: 'kopvillkor',
+  [LEGAL_SLUGS.ANGERRATT]: 'angerratt',
+  [LEGAL_SLUGS.INTEGRITETSPOLICY]: 'integritetspolicy',
+};
+
+// Reverse lookup: key → slug.
+export const LEGAL_SLUG_BY_KEY = Object.fromEntries(
+  Object.entries(LEGAL_PAGE_KEYS).map(([slug, key]) => [key, slug])
+);
+
+// Headings a seller-edited legal page must still contain for the page to be
+// legally complete. Used ONLY for a soft warning in the CMS editor when a shop
+// owns its text (copy-on-write) — never a hard block: the text is the seller's.
+// Matched case-insensitively against the page's plain text.
+export const LEGAL_REQUIRED_SECTIONS = {
+  kopvillkor: ['Säljare', 'Priser', 'Ångerrätt', 'Reklamation', 'Kontakt'],
+  angerratt: ['Ångerrätt', 'Reklamation', 'Returadress', 'Kontakt'],
+  integritetspolicy: ['Personuppgiftsansvarig', 'rättigheter', 'Klagomål', 'Kontakt'],
+};
+
+// In-admin disclaimer shown next to the templates + the acceptance checkbox.
+// Product copy is Swedish (sellers are Swedish); keep the substance: standard
+// wording, not legal advice, seller reviews/adapts/accepts, seller is
+// responsible. Mirrors Shopify's "you're responsible for following your
+// published policies" + WooCommerce's "consult a lawyer" notices.
+export const LEGAL_TEMPLATE_DISCLAIMER =
+  'Texterna nedan är standardformuleringar som plattformen tillhandahåller som ett förslag. ' +
+  'De utgör inte juridisk rådgivning. Du som säljare ansvarar för att granska, anpassa och ' +
+  'följa de villkor du publicerar i din butik, och för att de stämmer med din verksamhet och ' +
+  'gällande lag. Anlita egen juridisk rådgivare om du är osäker.';
+
+export const LEGAL_ACCEPTANCE_LABEL =
+  'Jag har läst, vid behov anpassat och godkänner köpvillkoren, ångerrätts- och retursidan och ' +
+  'integritetspolicyn som mina egna villkor mot mina kunder.';

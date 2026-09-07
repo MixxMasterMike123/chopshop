@@ -4,7 +4,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { useShopId } from '../../contexts/ShopContext';
 import DynamicPage from '../../pages/shop/DynamicPage';
-import { isLegalSlug } from '../../config/legalTemplates';
+import { isLegalSlug, PLATFORM_TERMS_SLUG } from '../../config/legalTemplates';
 
 /**
  * Handles dynamic routing for B2C shop
@@ -34,7 +34,9 @@ const DynamicRouteHandler = ({ children }) => {
       // because their default content is generated from shop data. A CMS page on
       // the same slug only ADDS appended content (handled in DynamicPage). So we
       // flag these as CMS pages here regardless of the Firestore lookup below.
-      if (isLegalSlug(slugPath)) {
+      // The platform's own terms page rides the same route: build-time content,
+      // no Firestore lookup, so it must never fall through to the 404 branch.
+      if (isLegalSlug(slugPath) || slugPath === PLATFORM_TERMS_SLUG) {
         setIsCmsPage(true);
         setCmsSlug(slugPath);
         setLoading(false);

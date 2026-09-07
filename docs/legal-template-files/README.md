@@ -95,3 +95,40 @@ reklamationsnämnden, arn.se) and, for cross-border, the EU list of national ADR
   not remove the mandatory legal content.
 - Stamp `{{last_updated}}` and keep a version so changes are traceable.
 - Link all three from the shop footer (the footer already renders seller identity).
+
+## Seller ownership + platform liability (2026-09-07)
+
+The platform generates the pages, but the SELLER must own them. Otherwise the platform, not the
+seller, is the author of the seller's consumer contract. This is the Shopify/WooCommerce model
+(Shopify ToS 2.3.2: material "you create using Shopify's services and tools" is the merchant's;
+WordPress: "suggested text" the owner adopts + a "text has changed, please review" notice). Built as:
+
+1. **Disclaimer at the point of use** (`LEGAL_TEMPLATE_DISCLAIMER`, AdminSettings + the CMS editor
+   on a legal slug): standard wording, not legal advice, seller reviews/adapts/accepts.
+2. **Explicit acceptance with evidence** (`src/utils/legalAcceptance.js`). The seller ticks
+   `LEGAL_ACCEPTANCE_LABEL` and clicks "Godkänn". We write an append-only evidence doc
+   `shops/{id}/legalAcceptances/{autoId}` (who, when, template version, snapshot of the exact
+   rendered HTML accepted) and a pointer `storeIdentity.legal.acceptance`.
+3. **Hard checkout gate.** No acceptance (or no return address / VAT status) → readiness blocker
+   (`legalPageReadiness.js`) → the storefront checkout shows "tar inte emot beställningar ännu" and
+   `createPaymentIntent.ts` (`legalCheckoutBlockReason`) refuses the PaymentIntent. Keep the two in
+   sync; `rules-tests/checkout-invariants.test.cjs` covers the server side.
+4. **Seller-owned text (copy-on-write).** "Redigera texten själv" seeds a CMS page at the legal slug
+   with the rendered template and sets `storeIdentity.legal.custom[key] = true`; the storefront then
+   renders the seller's page INSTEAD of the locked block. The CMS editor shows a soft warning for
+   missing `LEGAL_REQUIRED_SECTIONS` (never a block: the text is theirs).
+5. **Re-acceptance on change, never a silent swap of the live contract.** `LEGAL_TEMPLATE_VERSION`
+   is bumped on every wording change; a stale acceptance, or a custom page saved after the last
+   acceptance (`legal.customUpdatedAt`), flips `needsReacceptance` → admin notice + platform badge.
+   Deliberately NOT a checkout blocker (a template bump must not close every live checkout).
+6. **Platform terms + PUB-avtal** (`04-plattformsvillkor.md`, `05-personuppgiftsbitradesavtal.md`,
+   `src/config/platformTerms.js`, `PLATFORM_TERMS_VERSION`). A shop admin must accept the current
+   version before using admin (`PlatformTermsGate` in AppLayout; platform operators and
+   impersonation sessions are never gated and never accept on a seller's behalf). Evidence goes to
+   the same `legalAcceptances` collection (type `platformTerms`), pointer at `shops/{id}.platformTerms`.
+   Public copy at `/legal/plattformsvillkor`, linked from the storefront footer ("Drivs av ChopShop").
+
+**Bumping a version:** edit the .md, mirror the change into the JS template verbatim, bump the
+version constant. Sellers see the re-accept notice on next admin visit.
+
+**Lawyer review still pending** for all five documents; every open fact is marked `[BEKRÄFTA: …]`.

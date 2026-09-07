@@ -7,7 +7,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createPaymentIntentV2 = exports.validateCartLine = exports.withdrawalConsentBlockReason = exports.resolvePickupLocation = exports.shopCheckoutBlockReason = void 0;
+exports.createPaymentIntentV2 = exports.validateCartLine = exports.withdrawalConsentBlockReason = exports.resolvePickupLocation = exports.legalCheckoutBlockReason = exports.shopCheckoutBlockReason = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firebase_functions_1 = require("firebase-functions");
 const stripe_1 = __importDefault(require("stripe"));
@@ -52,6 +52,29 @@ function shopCheckoutBlockReason(shop) {
     return null;
 }
 exports.shopCheckoutBlockReason = shopCheckoutBlockReason;
+// LEGAL READINESS GATE (2026-09-07). A shop must not take money until its
+// consumer-facing legal pages are TRUE and OWNED by the seller:
+//   • returnAddress set   — köpvillkor §8 / ångerrätt page name it
+//   • vatRegistered bool  — the VAT wording must match what checkout charges
+//   • legal.acceptance    — the SELLER explicitly accepted the pages as their
+//                            own terms (platform-liability guard: the text is a
+//                            template the seller adopted, not the platform's)
+// Mirrors src/utils/legalPageReadiness.js getLegalReadiness() HARD blockers —
+// keep the two in sync. Template-version drift (needsReacceptance) is
+// deliberately NOT a blocker here: a template bump must never close checkout.
+function legalCheckoutBlockReason(shop) {
+    const identity = shop?.storeIdentity || {};
+    if (!String(identity.returnAddress || '').trim())
+        return 'legal-return-address-missing';
+    if (typeof identity.vatRegistered !== 'boolean')
+        return 'legal-vat-status-missing';
+    const acceptance = identity.legal?.acceptance;
+    if (!acceptance || typeof acceptance !== 'object' || !String(acceptance.acceptedAt || '').trim()) {
+        return 'legal-not-accepted';
+    }
+    return null;
+}
+exports.legalCheckoutBlockReason = legalCheckoutBlockReason;
 // P1-06 (2026-08-15 audit): pickup zeroes shipping, so the SERVER must verify
 // the shop actually offers pickup and that the chosen location is one of the
 // shop's configured points — name/address are then taken from the shop config,
@@ -363,6 +386,14 @@ exports.createPaymentIntentV2 = (0, https_1.onRequest)({
         if (shopBlockReason) {
             firebase_functions_1.logger.warn('⛔ Checkout blocked — shop not live', { shopId: resolvedShopId, shopBlockReason });
             response.status(403).json({ error: 'Shop is not accepting orders' });
+            return;
+        }
+        // Legal readiness: no PaymentIntent until the seller's legal pages are
+        // complete AND accepted by the seller (see legalCheckoutBlockReason).
+        const legalBlockReason = legalCheckoutBlockReason(shopSnap.data());
+        if (legalBlockReason) {
+            firebase_functions_1.logger.warn('⛔ Checkout blocked — legal pages not ready', { shopId: resolvedShopId, legalBlockReason });
+            response.status(403).json({ error: 'Shop is not accepting orders', reason: legalBlockReason });
             return;
         }
         // P1-06: a 'pickup' charge (zero shipping) requires a pickup location

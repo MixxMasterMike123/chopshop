@@ -13,7 +13,7 @@ import ImpersonateShopModal from '../../components/platform/ImpersonateShopModal
 import AddShopUserModal from '../../components/platform/AddShopUserModal';
 import MigrateShopifyModal from '../../components/platform/MigrateShopifyModal';
 import MigrateWooModal from '../../components/platform/MigrateWooModal';
-import { connectLabel, LegalCell, CommissionCell } from './shopCells';
+import { connectLabel, LegalCell, CommissionCell, platformTermsBadge } from './shopCells';
 import { getLegalReadiness } from '../../utils/legalPageReadiness';
 import { ADDON_CATALOG, isFeatureEnabled } from '../../config/addons';
 import toast from 'react-hot-toast';
@@ -27,6 +27,14 @@ import {
 
 // Module-scope so it isn't re-created each render — a fresh Card identity every
 // render would remount its children (e.g. CommissionCell would lose its edit state).
+// ISO timestamp → Swedish local date+time; passes anything unparseable through.
+const fmtDateTime = (iso) => {
+  const v = String(iso || '').trim();
+  if (!v) return '';
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? v : d.toLocaleString('sv-SE');
+};
+
 const Card = ({ title, children, action }) => (
   <div className="rounded-xl border border-white/10 bg-gray-900 p-5">
     <div className="flex items-center justify-between mb-4">
@@ -194,6 +202,15 @@ const PlatformShopDetail = () => {
   const storefrontUrl = `${APP_URLS.B2C_SHOP}/${shop.id}`;
   const c = connectLabel(shop);
 
+  // Legal facts for the read-only Juridik card below.
+  const legalReadiness = getLegalReadiness(shop.storeIdentity || {});
+  const legalBlockers = legalReadiness.blockers;
+  const legalNeedsReaccept = legalReadiness.needsReacceptance;
+  const rawLegalAcceptance = shop.storeIdentity?.legal?.acceptance;
+  const legalAcceptance = String(rawLegalAcceptance?.acceptedAt || '').trim() ? rawLegalAcceptance : null;
+  const ptBadge = platformTermsBadge(shop);
+  const platformTermsAccepted = Boolean(String(shop.platformTerms?.acceptedAt || '').trim());
+
   return (
     <PlatformLayout>
       <div className="px-6 lg:px-10 py-8 max-w-[1100px]">
@@ -351,12 +368,64 @@ const PlatformShopDetail = () => {
             </div>
           </Card>
 
-          {/* Juridik (legal readiness) */}
+          {/* Juridik — two independent facts, read-only:
+              (1) the shop's own consumer legal pages (readiness + who accepted
+                  them), and (2) the platform's B2B terms the seller accepted to
+                  use the admin. Neither is editable from here — the seller
+                  accepts both themselves (never the operator, not even while
+                  impersonating). */}
           <Card title="Juridik" action={<LegalCell shop={shop} />}>
             <p className="text-sm text-gray-400">
-              Butikens automatiska juridiska sidor (returadress, moms) är {' '}
-              publiceringsklara när status visar &ldquo;Klar&rdquo;.
+              Butikens automatiska juridiska sidor (returadress, moms) är{' '}
+              publiceringsklara när status visar &ldquo;Juridik OK&rdquo;.
             </p>
+            {legalBlockers.length > 0 && (
+              <ul className="mt-3 space-y-1 text-sm text-amber-300">
+                {legalBlockers.map((b) => (
+                  <li key={b.key}>• {b.label}</li>
+                ))}
+              </ul>
+            )}
+            <dl className="mt-4 space-y-3 border-t border-white/10 pt-4 text-sm">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <dt className="text-gray-500">Butikens villkor godkända</dt>
+                <dd className="text-gray-300">
+                  {!legalAcceptance ? (
+                    <span className="text-red-300">Ej godkända</span>
+                  ) : (
+                    <>
+                      {legalAcceptance.email || legalAcceptance.uid || 'okänd användare'}
+                      {' · '}
+                      {fmtDateTime(legalAcceptance.acceptedAt)}
+                      {' · v'}
+                      {legalAcceptance.templateVersion || '–'}
+                      {legalNeedsReaccept && (
+                        <span className="ml-2 text-amber-300">behöver godkännas på nytt</span>
+                      )}
+                    </>
+                  )}
+                </dd>
+              </div>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <dt className="text-gray-500">Plattformsvillkor godkända</dt>
+                <dd className="text-gray-300">
+                  {!platformTermsAccepted ? (
+                    <span className="text-red-300">Ej godkända</span>
+                  ) : (
+                    <>
+                      {shop.platformTerms.email || shop.platformTerms.uid || 'okänd användare'}
+                      {' · '}
+                      {fmtDateTime(shop.platformTerms.acceptedAt)}
+                      {' · v'}
+                      {shop.platformTerms.version || '–'}
+                      {ptBadge.tone === 'warn' && (
+                        <span className="ml-2 text-amber-300">gammal version</span>
+                      )}
+                    </>
+                  )}
+                </dd>
+              </div>
+            </dl>
           </Card>
 
           {/* Åtgärder */}

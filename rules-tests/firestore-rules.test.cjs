@@ -155,6 +155,24 @@ async function run() {
   await check('platform kills a shop (status)', assertSucceeds(updateDoc(doc(platformDb(), 'shops/shopB'), { status: 'disabled' })));
   await check('platform writes a printer tier', assertSucceeds(setDoc(doc(platformDb(), 'printers/kim'), { name: 'Kim Tryck', garments: ['tee'], pricing: { blankCostSek: { tee: 60 }, printCostSek: { front: 40 } } })));
 
+  console.log('\n=== legalAcceptances — seller acceptance EVIDENCE (append-only, own uid, own shop) ===');
+  const evidence = (uid, shopId, type = 'legalPages') => ({ type, shopId, uid, email: uid + '@x.com', acceptedAtIso: '2026-09-07T10:00:00.000Z', templateVersion: '2026-09-07', texts: { kopvillkor: '<p>x</p>' } });
+  await check('shop A admin records acceptance for shop A (own uid)', assertSucceeds(setDoc(doc(shopAAdminDb(), 'shops/shopA/legalAcceptances/acc1'), evidence('adminA', 'shopA'))));
+  await check('shop A admin records platformTerms acceptance', assertSucceeds(setDoc(doc(shopAAdminDb(), 'shops/shopA/legalAcceptances/acc2'), evidence('adminA', 'shopA', 'platformTerms'))));
+  await check('shop A admin CANNOT record acceptance under another uid', assertFails(setDoc(doc(shopAAdminDb(), 'shops/shopA/legalAcceptances/acc3'), evidence('adminB', 'shopA'))));
+  await check('shop A admin CANNOT record acceptance with a foreign shopId field', assertFails(setDoc(doc(shopAAdminDb(), 'shops/shopA/legalAcceptances/acc4'), evidence('adminA', 'shopB'))));
+  await check('shop A admin CANNOT record an unknown acceptance type', assertFails(setDoc(doc(shopAAdminDb(), 'shops/shopA/legalAcceptances/acc5'), evidence('adminA', 'shopA', 'whatever'))));
+  await check('shop B admin CANNOT write into shop A evidence', assertFails(setDoc(doc(shopBAdminDb(), 'shops/shopA/legalAcceptances/acc6'), evidence('adminB', 'shopA'))));
+  await check('shop B admin CANNOT read shop A evidence', assertFails(getDoc(doc(shopBAdminDb(), 'shops/shopA/legalAcceptances/acc1'))));
+  await check('anon CANNOT read evidence', assertFails(getDoc(doc(anonDb(), 'shops/shopA/legalAcceptances/acc1'))));
+  await check('customer CANNOT write evidence', assertFails(setDoc(doc(customerDb('cust'), 'shops/shopA/legalAcceptances/acc7'), evidence('cust', 'shopA'))));
+  await check('shop A admin reads own evidence', assertSucceeds(getDoc(doc(shopAAdminDb(), 'shops/shopA/legalAcceptances/acc1'))));
+  await check('platform reads shop A evidence', assertSucceeds(getDoc(doc(platformDb(), 'shops/shopA/legalAcceptances/acc1'))));
+  await check('evidence CANNOT be updated (append-only)', assertFails(updateDoc(doc(shopAAdminDb(), 'shops/shopA/legalAcceptances/acc1'), { templateVersion: '1999' })));
+  await check('evidence CANNOT be deleted, even by platform', assertFails(deleteDoc(doc(platformDb(), 'shops/shopA/legalAcceptances/acc1'))));
+  await check('shop A admin writes the acceptance POINTER on own shop doc (storeIdentity.legal)', assertSucceeds(setDoc(doc(shopAAdminDb(), 'shops/shopA'), { storeIdentity: { legal: { acceptance: { uid: 'adminA', acceptedAt: '2026-09-07T10:00:00.000Z' } } } }, { merge: true })));
+  await check('shop A admin writes platformTerms pointer on own shop doc', assertSucceeds(setDoc(doc(shopAAdminDb(), 'shops/shopA'), { platformTerms: { uid: 'adminA', version: '2026-09-07', acceptedAt: '2026-09-07T10:00:00.000Z' } }, { merge: true })));
+
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
   await env.cleanup();
   process.exit(failed === 0 ? 0 : 1);

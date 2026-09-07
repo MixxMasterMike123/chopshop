@@ -431,6 +431,11 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, customerL
         const msg = String(error.message || '');
         if (/unknown variant|unknown product|invalid cart/i.test(msg)) {
           setError('Något i varukorgen är inte längre tillgängligt. Gå tillbaka till varukorgen, uppdatera sidan och försök igen.');
+        } else if (/not accepting orders/i.test(msg)) {
+          // Server legal/live gate (createPaymentIntent.ts: shop not published,
+          // killed, or legal pages incomplete/unaccepted). Never the raw English
+          // or the blocker name — the same friendly line Checkout's gate shows.
+          setError('Butiken tar inte emot beställningar ännu. Försök igen lite senare.');
         } else {
           setError(error.message);
         }

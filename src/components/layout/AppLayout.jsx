@@ -13,6 +13,7 @@ import { setDeepLinkShopId, setLastPickedShopId } from '../../config/activeShop'
 import ShopPicker from '../admin/ShopPicker';
 import { WAGON_FEATURE_KEY } from '../../config/addons';
 import ImpersonationBanner from '../auth/ImpersonationBanner';
+import PlatformTermsGate from '../admin/PlatformTermsGate';
 import { getImpersonation } from '../../config/impersonation';
 
 // 🚂 WAGON SYSTEM: Import wagon registry for menu items
@@ -656,7 +657,11 @@ const AppLayout = ({ children }) => {
       {/* ── Main content: top clearance comes from the banner-wrapper spacer
           above (single pt-14); here we only offset for the fixed nav. ── */}
       <main className="md:pl-[232px]">
-        <div className="mx-auto max-w-[1200px] px-4 py-4 sm:px-6">{children}</div>
+        <div className="mx-auto max-w-[1200px] px-4 py-4 sm:px-6">
+          {/* Seller must accept the platform B2B terms before the admin is
+              usable. The gate replaces the page BODY only — nav stays. */}
+          <PlatformTermsGate shopId={shopId}>{children}</PlatformTermsGate>
+        </div>
       </main>
     </div>
   );

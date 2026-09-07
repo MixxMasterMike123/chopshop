@@ -67,6 +67,7 @@ import AdminCollections from './pages/admin/AdminCollections';
 import AdminCollectionEdit from './pages/admin/AdminCollectionEdit';
 import AdminMenu from './pages/admin/AdminMenu';
 import AdminSettings from './pages/admin/AdminSettings';
+import AdminPlatformTerms from './pages/admin/AdminPlatformTerms';
 import AdminPayments from './pages/admin/AdminPayments';
 import AdminMyTaxData from './pages/admin/AdminMyTaxData';
 // 🇸🇪 SE-ONLY LAUNCH: AdminTranslations hidden (single-language). Re-enable with its route below.
@@ -632,6 +633,14 @@ function App() {
               <Route path="/admin/settings" element={
                 <AdminRoute>
                   <AdminSettings />
+                </AdminRoute>
+              } />
+
+              {/* The seller's read-only archive of the accepted B2B agreement.
+                  Accepting happens in PlatformTermsGate (AppLayout), not here. */}
+              <Route path="/admin/plattformsvillkor" element={
+                <AdminRoute>
+                  <AdminPlatformTerms />
                 </AdminRoute>
               } />
 

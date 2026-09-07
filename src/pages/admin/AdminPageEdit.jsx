@@ -11,6 +11,14 @@ import { db } from '../../firebase/config';
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { withShopId } from '../../config/withShopId';
+import { saveShopConfig } from '../../config/shopConfig';
+import {
+  isLegalSlug,
+  LEGAL_PAGES,
+  LEGAL_PAGE_KEYS,
+  LEGAL_REQUIRED_SECTIONS,
+  LEGAL_TEMPLATE_DISCLAIMER,
+} from '../../config/legalTemplates';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import ContentLanguageIndicator from '../../components/ContentLanguageIndicator';
 import AppLayout from '../../components/layout/AppLayout';
@@ -175,10 +183,27 @@ const AdminPageEdit = () => {
         })
       };
 
+      // Editing a legal page invalidates the seller's last acceptance — stamp
+      // storeIdentity.legal.customUpdatedAt so needsLegalReacceptance() flags it
+      // in AdminSettings + on the platform. Never let this fail the page save.
+      //
+      // Only on a PUBLISHED save: a draft doesn't change what the storefront
+      // serves, and stamping on every autosave-to-draft would train the seller
+      // to click past a re-acceptance notice that means nothing.
+      const stampLegalEdit = async () => {
+        if (!isLegalSlug(formData.slug) || newStatus !== 'published') return;
+        try {
+          await saveShopConfig({ legal: { customUpdatedAt: new Date().toISOString() } }, shopId);
+        } catch (e) {
+          console.error('Could not stamp legal.customUpdatedAt:', e);
+        }
+      };
+
       if (isNewPage) {
         // For new pages, use addDoc to generate a unique ID
         const docRef = await addDoc(collection(db, 'pages'), withShopId(pageData, shopId));
         const pageId = docRef.id;
+        await stampLegalEdit();
 
         toast.success('Sidan har skapats');
         setHasBeenSaved(true); // Mark as saved after first save
@@ -188,6 +213,7 @@ const AdminPageEdit = () => {
         // overwrite (not merge), so we must re-stamp shopId or it would be
         // stripped from an already-tagged doc.
         await setDoc(doc(db, 'pages', id), withShopId(pageData, shopId));
+        await stampLegalEdit();
 
         toast.success('Sidan har uppdaterats');
         setFormData(prev => ({ ...prev, status: newStatus }));
@@ -275,6 +301,27 @@ const AdminPageEdit = () => {
     }));
   };
 
+  // ── Legal slug awareness ────────────────────────────────────────────────
+  // A page on one of the three legal slugs REPLACES the platform template on the
+  // storefront (copy-on-write, started from AdminSettings). The slug is locked
+  // (changing it would silently orphan the shop's legal page) and the required
+  // sections are checked as a SOFT warning — the text is the seller's, so we
+  // never block a save, we just say what looks missing.
+  const isLegalPage = isLegalSlug(formData.slug);
+  const legalTitle = isLegalPage ? LEGAL_PAGES[formData.slug].title : '';
+
+  const missingLegalSections = React.useMemo(() => {
+    if (!isLegalPage) return [];
+    const required = LEGAL_REQUIRED_SECTIONS[LEGAL_PAGE_KEYS[formData.slug]] || [];
+    // Plain text of the Swedish content — the legal text is Swedish, and the
+    // section names we look for are Swedish.
+    const raw = typeof formData.content === 'string'
+      ? formData.content
+      : (formData.content?.['sv-SE'] || '');
+    const plain = String(raw).replace(/<[^>]*>/g, ' ').toLowerCase();
+    return required.filter((section) => !plain.includes(section.toLowerCase()));
+  }, [isLegalPage, formData.slug, formData.content]);
+
   const tabs = [
     { id: 'content', name: 'Innehåll', icon: DocumentDuplicateIcon },
     { id: 'attachments', name: 'Bilagor', icon: PaperClipIcon },
@@ -358,6 +405,25 @@ const AdminPageEdit = () => {
           <RightRail
             main={
               <>
+                {isLegalPage && (
+                  <div className="mb-4 rounded-[var(--radius-admin-el)] border border-admin-caution-dot bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
+                    <p>{LEGAL_TEMPLATE_DISCLAIMER}</p>
+                    <p className="mt-2 font-medium">
+                      Den här sidan ersätter plattformens mall för {legalTitle}. Du ansvarar för
+                      innehållet. När du sparar måste du godkänna villkoren på nytt under Inställningar.
+                    </p>
+                    {missingLegalSections.length > 0 && (
+                      <div className="mt-2">
+                        <p className="font-medium">Följande avsnitt verkar saknas:</p>
+                        <ul className="mt-1 list-disc pl-5">
+                          {missingLegalSections.map((section) => (
+                            <li key={section}>{section}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <CardSection title="Innehåll" bodyClassName="space-y-4">
                   {/* Title */}
                   <div>
@@ -394,12 +460,15 @@ const AdminPageEdit = () => {
                         id="slug"
                         value={formData.slug}
                         onChange={(e) => setFormData(prev => ({ ...prev, slug: e.target.value }))}
-                        className="w-full flex-1 rounded-r-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-3 py-1.5 text-[13px] text-admin-text placeholder:text-admin-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
+                        readOnly={isLegalPage}
+                        className={`w-full flex-1 rounded-r-[var(--radius-admin-el)] border border-admin-border px-3 py-1.5 text-[13px] text-admin-text placeholder:text-admin-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)] ${isLegalPage ? 'bg-admin-surface-2 text-admin-text-muted' : 'bg-admin-surface'}`}
                         placeholder="sida-slug"
                       />
                     </div>
                     <p className={helpCls}>
-                      {isNewPage && !hasBeenSaved ? (
+                      {isLegalPage ? (
+                        <>Låst: juridisk sida.</>
+                      ) : isNewPage && !hasBeenSaved ? (
                         <>
                           URL-vänlig version av sidtiteln. <span className="font-medium text-admin-text">Genereras automatiskt från svenska titeln.</span> Endast små bokstäver, siffror och bindestreck.
                         </>

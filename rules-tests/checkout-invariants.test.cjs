@@ -24,7 +24,7 @@
 const admin = require('../functions/node_modules/firebase-admin');
 if (!admin.apps.length) admin.initializeApp({ projectId: 'demo-rules-test' });
 
-const { validateCartLine, shopCheckoutBlockReason, resolvePickupLocation, withdrawalConsentBlockReason } =
+const { validateCartLine, shopCheckoutBlockReason, legalCheckoutBlockReason, resolvePickupLocation, withdrawalConsentBlockReason } =
   require('../functions/lib/payment/createPaymentIntent.js');
 
 let pass = 0, fail = 0;
@@ -121,6 +121,21 @@ ok(shopCheckoutBlockReason({ status: 'disabled' }) === 'shop-disabled', 'kill-sw
 ok(shopCheckoutBlockReason({ status: 'active', published: false }) === 'shop-not-published', 'published===false (GO-LIVE gate) → blocked');
 ok(shopCheckoutBlockReason({ status: 'active' }) === null, 'active shop without published field → live (existing shops unaffected)');
 ok(shopCheckoutBlockReason({ status: 'active', published: true }) === null, 'published shop → live');
+
+console.log('\n=== legalCheckoutBlockReason — legal readiness + seller acceptance gate (2026-09-07) ===');
+{
+  const accepted = { uid: 'u1', email: 'a@b.se', acceptedAt: '2026-09-07T10:00:00.000Z', templateVersion: '2026-09-07' };
+  const ready = { storeIdentity: { returnAddress: 'Gatan 1, 111 11 Stad', vatRegistered: true, legal: { acceptance: accepted } } };
+  ok(legalCheckoutBlockReason(ready) === null, 'return address + VAT bool + acceptance → live');
+  ok(legalCheckoutBlockReason({ ...ready, storeIdentity: { ...ready.storeIdentity, vatRegistered: false } }) === null, 'vatRegistered=false is a valid (resolved) status → live');
+  ok(legalCheckoutBlockReason({}) === 'legal-return-address-missing', 'empty shop → return address missing');
+  ok(legalCheckoutBlockReason({ storeIdentity: { returnAddress: '   ' } }) === 'legal-return-address-missing', 'whitespace return address → missing');
+  ok(legalCheckoutBlockReason({ storeIdentity: { returnAddress: 'X' } }) === 'legal-vat-status-missing', 'unset vatRegistered → blocked');
+  ok(legalCheckoutBlockReason({ storeIdentity: { returnAddress: 'X', vatRegistered: 'yes' } }) === 'legal-vat-status-missing', 'string vatRegistered → blocked (must be boolean)');
+  ok(legalCheckoutBlockReason({ storeIdentity: { returnAddress: 'X', vatRegistered: true } }) === 'legal-not-accepted', 'no acceptance → blocked');
+  ok(legalCheckoutBlockReason({ storeIdentity: { returnAddress: 'X', vatRegistered: true, legal: { acceptance: { uid: 'u1' } } } }) === 'legal-not-accepted', 'acceptance without acceptedAt → blocked');
+  ok(legalCheckoutBlockReason({ storeIdentity: { returnAddress: 'X', vatRegistered: true, legal: { acceptance: { ...accepted, templateVersion: '2000-01-01' } } } }) === null, 'OLD template version still accepted → live (drift is a notice, never a checkout block)');
+}
 
 console.log('\n=== resolvePickupLocation — pickup gate (P1-06) ===');
 {

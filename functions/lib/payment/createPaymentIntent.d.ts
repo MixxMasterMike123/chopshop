@@ -3,6 +3,7 @@
  * Handles server-side payment intent creation for B2C checkout
  */
 export declare function shopCheckoutBlockReason(shop: any): string | null;
+export declare function legalCheckoutBlockReason(shop: any): string | null;
 export declare function resolvePickupLocation(shop: any, pickupLocationId: unknown, pickupLocationDate?: unknown, todayIso?: string): {
     id: string;
     name: string;

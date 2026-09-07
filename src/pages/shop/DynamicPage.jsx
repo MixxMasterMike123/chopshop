@@ -13,11 +13,13 @@ import { formatFileSize, getFileTypeInfo } from '../../utils/fileUpload';
 import { getLegalSeoTitle, getLegalSeoDescription } from '../../utils/productUrls';
 import { Helmet } from 'react-helmet-async';
 import DOMPurify from 'dompurify';
-import { isLegalSlug, LEGAL_PAGES } from '../../config/legalTemplates';
+import { isLegalSlug, LEGAL_PAGES, LEGAL_PAGE_KEYS, PLATFORM_TERMS_SLUG } from '../../config/legalTemplates';
 import { renderLegalPage } from '../../utils/legalPageRenderer';
 import { getLegalReadiness } from '../../utils/legalPageReadiness';
 import { loadShopConfig } from '../../config/shopConfig';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
+import { renderPlatformTerms } from '../../utils/platformTermsRenderer';
+import { PLATFORM } from '../../config/platform';
 
 const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => {
   const { slug: paramSlug } = useParams();
@@ -69,7 +71,12 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
   // the same slug, if any, is APPENDED below the locked legal block (seller can
   // add, not remove the mandatory text).
   const isLegal = isLegalSlug(slug);
-  const [legal, setLegal] = useState(null); // { title, html, ready }
+  const [legal, setLegal] = useState(null); // { title, html, ready, blockers, custom }
+
+  // The PLATFORM's own terms page. Public, seller-independent: no shop config,
+  // no readiness gate, no CMS page — so it is handled BEFORE every branch that
+  // depends on a Firestore read, and never falls through to the 404 branch.
+  const isPlatformTerms = slug === PLATFORM_TERMS_SLUG;
 
   // POD entitlement drives the print-vocabulary branches in the legal templates
   // ([[IF pod]]). Same source as every other add-on gate — shops/{id}.features.pod
@@ -104,14 +111,22 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
       if (cancelled) return;
       const rendered = renderLegalPage(slug, identity, { pod: podEnabled });
       const readiness = getLegalReadiness(identity);
-      setLegal(rendered ? { ...rendered, ready: readiness.ready, blockers: readiness.blockers } : null);
+      // `custom` is the copy-on-write flag per legal page: when true the SELLER
+      // owns the text (a published CMS page on the same slug replaces the
+      // generated block entirely). Kept in render state so the render branch
+      // below can decide without a second read.
+      setLegal(rendered
+        ? { ...rendered, ready: readiness.ready, blockers: readiness.blockers, custom: identity.legal?.custom || {} }
+        : null);
     })();
     return () => { cancelled = true; };
   }, [isLegal, slug, shopId, featuresLoading, podEnabled]);
 
   useEffect(() => {
     const fetchPage = async () => {
-      if (!slug || !isCmsPage) {
+      // The platform-terms slug is build-time content with no `pages` doc —
+      // skip the lookup entirely (it would only ever miss).
+      if (!slug || !isCmsPage || slug === PLATFORM_TERMS_SLUG) {
         setLoading(false);
         return;
       }
@@ -171,6 +186,58 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
     }
   }, [page, getContentValue]);
 
+  // Platform terms: fully build-time content, nothing to wait for and nothing
+  // to look up. Render before the loading / !isCmsPage / 404 branches.
+  if (isPlatformTerms) {
+    const platform = renderPlatformTerms();
+    return (
+      <>
+        <Helmet>
+          <title>Plattformsvillkor</title>
+          <meta name="description" content={`Plattformsvillkor och personuppgiftsbiträdesavtal för ${PLATFORM.legalName}.`} />
+          <meta property="og:type" content="website" />
+          <meta property="og:title" content="Plattformsvillkor" />
+          <meta property="og:url" content={window.location.href} />
+        </Helmet>
+        <div className="min-h-screen bg-canvas">
+          <ShopNavigation />
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+            <div className="max-w-4xl mx-auto space-y-6">
+              <div className="bg-white rounded-tile shadow-xs border border-ink/5 p-8">
+                <h1 className="font-display text-4xl font-bold text-ink mb-2 tracking-tight">
+                  {platform.terms.title}
+                </h1>
+                <p className="text-sm text-ink/50 mb-4">
+                  {t('platform_terms_version', 'Version')}: {platform.version}
+                </p>
+                <p className="text-sm text-ink/60 mb-6">
+                  {t(
+                    'platform_terms_intro',
+                    `Dessa villkor gäller mellan plattformsleverantören ${PLATFORM.legalName} och de säljare som driver butiker på plattformen. De är inte en del av ditt köpavtal med butiken.`
+                  )}
+                </p>
+                <div
+                  className="legal-doc text-ink/80 [&_h2]:text-ink [&_h3]:text-ink [&_strong]:text-ink [&_a]:text-accent"
+                  dangerouslySetInnerHTML={{ __html: platform.terms.html }}
+                />
+              </div>
+              <div className="bg-white rounded-tile shadow-xs border border-ink/5 p-8">
+                <h2 className="font-display text-2xl font-bold text-ink mb-4 tracking-tight">
+                  {platform.dpa.title}
+                </h2>
+                <div
+                  className="legal-doc text-ink/80 [&_h2]:text-ink [&_h3]:text-ink [&_strong]:text-ink [&_a]:text-accent"
+                  dangerouslySetInnerHTML={{ __html: platform.dpa.html }}
+                />
+              </div>
+            </div>
+          </div>
+          <ShopFooter />
+        </div>
+      </>
+    );
+  }
+
   // On legal slugs also wait for the generated content to be ready.
   if (loading || (isLegal && !legal)) {
     return (
@@ -193,9 +260,18 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
   // ALWAYS (even with no CMS page). Any published CMS page on the same slug is
   // APPENDED below as the seller's extra content — it can ADD, never REMOVE the
   // mandatory legal text above. SEO/title come from the legal template.
+  //
+  // COPY-ON-WRITE: when the seller has taken ownership of a page
+  // (storeIdentity.legal.custom[key] === true) AND a published CMS page exists
+  // on the slug, THEIR text replaces the generated block entirely — the seller
+  // is the author of their own consumer terms. If the flag is on but no
+  // published page exists we fall back to the generated block: a legal page
+  // must never render blank.
   if (isLegal && legal) {
-    // Optional seller-appended content (only if a published CMS page exists).
+    // Optional seller content (only if a published CMS page exists).
     const appended = page ? (getContentValue(page.content) || '') : '';
+    const hasSellerPage = Boolean(appended && appended.startsWith('<'));
+    const isCustom = legal.custom?.[LEGAL_PAGE_KEYS[slug]] === true && hasSellerPage;
     const pageType = LEGAL_PAGES[slug]?.pageType || 'privacy';
     return (
       <>
@@ -226,21 +302,33 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
           </div>
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
             <div className="max-w-4xl mx-auto space-y-6">
-              {/* Mandatory legal block — generated, sanitized, NOT seller-editable. */}
-              <div className="bg-white rounded-tile shadow-xs border border-ink/5 p-8">
-                <div
-                  className="prose prose-lg max-w-none prose-headings:font-display prose-headings:text-ink prose-headings:tracking-tight prose-p:text-ink/80 prose-a:text-accent prose-strong:text-ink prose-li:text-ink/80"
-                  dangerouslySetInnerHTML={{ __html: legal.html }}
-                />
-              </div>
-              {/* Seller's appended extra content, if any (added via CMS). */}
-              {appended && appended.startsWith('<') && (
+              {isCustom ? (
+                /* Seller owns this page (copy-on-write): ONLY their text. */
                 <div className="bg-white rounded-tile shadow-xs border border-ink/5 p-8">
                   <div
-                    className="prose prose-lg max-w-none prose-headings:font-display prose-headings:text-ink prose-p:text-ink/80 prose-a:text-accent"
+                    className="legal-doc text-ink/80 [&_h2]:text-ink [&_h3]:text-ink [&_strong]:text-ink [&_a]:text-accent"
                     dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(appended) }}
                   />
                 </div>
+              ) : (
+                <>
+                  {/* Mandatory legal block — generated, sanitized, NOT seller-editable. */}
+                  <div className="bg-white rounded-tile shadow-xs border border-ink/5 p-8">
+                    <div
+                      className="legal-doc text-ink/80 [&_h2]:text-ink [&_h3]:text-ink [&_strong]:text-ink [&_a]:text-accent"
+                      dangerouslySetInnerHTML={{ __html: legal.html }}
+                    />
+                  </div>
+                  {/* Seller's appended extra content, if any (added via CMS). */}
+                  {hasSellerPage && (
+                    <div className="bg-white rounded-tile shadow-xs border border-ink/5 p-8">
+                      <div
+                        className="legal-doc text-ink/80 [&_h2]:text-ink [&_h3]:text-ink [&_a]:text-accent"
+                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(appended) }}
+                      />
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

@@ -313,6 +313,24 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // shops/{shopId}/legalAcceptances — EVIDENCE that the seller accepted
+    // (a) the shop's generated consumer legal pages as their own terms and
+    // (b) the platform terms + PUB-avtal. Written by the shop admin from
+    // legalAcceptance.js with a snapshot of the exact text accepted. APPEND-ONLY:
+    // no update, no delete (evidence you can rewrite is not evidence). The doc's
+    // uid must be the caller's own — no accepting on someone else's behalf.
+    // Read: the shop's own admins + platform.
+    // ============================================================
+    match /shops/{shopId}/legalAcceptances/{acceptanceId} {
+      allow read: if isPlatform() || isAdminOfShop(shopId);
+      allow create: if isAdminOfShop(shopId) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.shopId == shopId &&
+        request.resource.data.type in ['legalPages', 'platformTerms'];
+      allow update, delete: if false;
+    }
+
+    // ============================================================
     // impersonationAudit — accountability trail for operator "Open Shop Admin"
     // (P4.3). One doc per impersonation session: who (actorUid), which shop,
     // reason, start, expiry, and an end stamp. PLATFORM ONLY — only the

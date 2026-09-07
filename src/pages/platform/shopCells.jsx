@@ -6,6 +6,7 @@ import React, { useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../../firebase/config';
 import { getLegalReadiness } from '../../utils/legalPageReadiness';
+import { PLATFORM_TERMS_VERSION } from '../../config/platformTerms';
 import toast from 'react-hot-toast';
 
 // Stripe Connect status label for a shop, derived from the payments map (which is
@@ -24,23 +25,64 @@ export const connectLabel = (shop) => {
 // stored storeIdentity, so the operator sees at a glance whether a shop's
 // auto-generated legal pages are publishable (return address + VAT status set).
 // No extra fetch: storeIdentity already rides on the loaded shop doc.
-// DARK platform design: emerald = ready, amber = incomplete (mirrors connectLabel).
-export const LegalCell = ({ shop }) => {
-  const { ready, blockers } = getLegalReadiness(shop.storeIdentity || {});
-  if (ready) {
-    return (
-      <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-500/15 text-green-300">
-        Klar
-      </span>
-    );
+//
+// Two independent facts, two pills:
+//   1. the shop's CONSUMER legal pages (readiness + acceptance drift), and
+//   2. the PLATFORM's B2B terms the seller must accept to use the admin
+//      (shops/{id}.platformTerms, written by PlatformTermsGate).
+// They are unrelated documents — a shop can be fine on one and missing the
+// other — so they never collapse into a single badge.
+// DARK platform design: emerald = ok, amber = drift/incomplete, red = missing.
+const PILL = 'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium';
+const TONE = {
+  ok: 'bg-green-500/15 text-green-300',
+  warn: 'bg-amber-500/15 text-amber-300',
+  bad: 'bg-red-500/15 text-red-300',
+};
+
+// The platform-terms fact for a shop: { tone, text, title }.
+export const platformTermsBadge = (shop) => {
+  const t = shop?.platformTerms;
+  const accepted = Boolean(t && String(t.acceptedAt || '').trim());
+  if (!accepted) {
+    return { tone: 'bad', text: 'Plattformsvillkor: ej godkända', title: 'Butiksägaren har inte godkänt plattformsvillkoren' };
   }
+  if (t.version !== PLATFORM_TERMS_VERSION) {
+    return {
+      tone: 'warn',
+      text: 'Plattformsvillkor: gammal version',
+      title: `Godkänd version ${t.version || '–'}, aktuell är ${PLATFORM_TERMS_VERSION}`,
+    };
+  }
+  return { tone: 'ok', text: `Plattformsvillkor v${t.version}`, title: `Godkända av ${t.email || t.uid || 'okänd'}` };
+};
+
+export const LegalCell = ({ shop }) => {
+  const { ready, blockers, needsReacceptance } = getLegalReadiness(shop.storeIdentity || {});
+  const pt = platformTermsBadge(shop);
+
+  let legal;
+  if (ready && !needsReacceptance) {
+    legal = { tone: 'ok', text: 'Juridik OK', title: 'Butikens juridiska sidor är publiceringsklara' };
+  } else if (ready) {
+    legal = {
+      tone: 'warn',
+      text: 'Behöver godkännas på nytt',
+      title: 'Villkorstexten har ändrats sedan butiksägarens senaste godkännande',
+    };
+  } else {
+    legal = {
+      tone: blockers.some((b) => b.key === 'acceptance') ? 'bad' : 'warn',
+      text: `Ofullständig (${blockers.length})`,
+      title: blockers.map((b) => b.label).join('\n'),
+    };
+  }
+
   return (
-    <span
-      title={blockers.map((b) => b.label).join('\n')}
-      className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-amber-500/15 text-amber-300"
-    >
-      Ofullständig ({blockers.length})
-    </span>
+    <div className="inline-flex flex-wrap items-center gap-1.5">
+      <span title={legal.title} className={`${PILL} ${TONE[legal.tone]}`}>{legal.text}</span>
+      <span title={pt.title} className={`${PILL} ${TONE[pt.tone]}`}>{pt.text}</span>
+    </div>
   );
 };
 

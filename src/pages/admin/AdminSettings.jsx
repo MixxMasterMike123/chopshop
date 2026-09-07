@@ -2,13 +2,27 @@
 // shop from the PLATFORM console (/addons); the old per-user wagon toggle was
 // removed (add-ons S4, docs/ADDONS_PLATFORM_CONTROL_PLAN.md).
 import React, { useState, useEffect, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { addDoc, collection, doc, getDocs, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import AppLayout from '../../components/layout/AppLayout';
 import toast from 'react-hot-toast';
+import { db } from '../../firebase/config';
 import { STORE } from '../../config/store';
 import { loadShopConfig, saveShopConfig, loadCartRecovery, saveCartRecovery, loadReviewSettings, saveReviewSettings } from '../../config/shopConfig';
+import { withShopId } from '../../config/withShopId';
+import { APP_URLS } from '../../config/urls';
 import { useShopId } from '../../contexts/ShopContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { getLegalReadiness } from '../../utils/legalPageReadiness';
+import {
+  LEGAL_ACCEPTANCE_LABEL,
+  LEGAL_PAGES,
+  LEGAL_PAGE_KEYS,
+  LEGAL_TEMPLATE_DISCLAIMER,
+} from '../../config/legalTemplates';
+import { renderLegalPage } from '../../utils/legalPageRenderer';
+import { recordLegalAcceptance } from '../../utils/legalAcceptance';
 import PickupLocationsEditor from '../../components/admin/PickupLocationsEditor';
 import {
   Page,
@@ -31,6 +45,8 @@ const AdminSettings = () => {
   // (e.g. 'sillmans') would save to 'b8shield' and the storefront, which reads
   // its own shopId, would never see the change (pickup locations, branding…).
   const shopId = useShopId();
+  const navigate = useNavigate();
+  const { currentUser } = useAuth();
   const { isEnabled } = useShopFeatures();
   const abandonedCheckoutEnabled = isEnabled('abandonedCheckout');
   const productReviewsEnabled = isEnabled('productReviews');
@@ -132,7 +148,15 @@ const AdminSettings = () => {
   const saveStoreIdentity = useCallback(async () => {
     try {
       setSaving(true);
-      await saveShopConfig(storeForm, shopId);
+      // `legal` is co-owned (acceptance pointer, custom flags, customUpdatedAt
+      // are written by legalAcceptance.js / AdminPageEdit as narrow leaf
+      // patches). Write only the one legal field THIS form edits, so a stale
+      // mount-time copy never reverts the others. Merge is leaf-by-leaf.
+      const { legal, ...rest } = storeForm;
+      const patch = legal && typeof legal.noWithdrawalNotice === 'string'
+        ? { ...rest, legal: { noWithdrawalNotice: legal.noWithdrawalNotice } }
+        : rest;
+      await saveShopConfig(patch, shopId);
       toast.success('Butiksinställningar sparade. Ladda om butiken för att se ändringarna.');
     } catch (error) {
       console.error('Error saving store identity:', error);
@@ -142,11 +166,250 @@ const AdminSettings = () => {
     }
   }, [storeForm, shopId]);
 
+  // ── Juridiska sidor: copy-on-write + seller acceptance ────────────────────
+  // A legal page is either the PLATFORM TEMPLATE (default) or the SELLER's own
+  // text (a CMS `pages` doc on the same legal slug, flagged in
+  // storeIdentity.legal.custom[key]). Taking over the text copies the currently
+  // rendered template into that CMS page, so the seller starts from the full
+  // legal text rather than a blank editor.
+  const [legalBusyKey, setLegalBusyKey] = useState('');   // key being switched
+  const [legalAccepted, setLegalAccepted] = useState(false); // the checkbox
+  const [acceptingLegal, setAcceptingLegal] = useState(false);
 
+  // Read the content of a multilingual-or-plain CMS field. Mirrors
+  // useContentTranslation().getContentValue / DynamicPage, but standalone: the
+  // acceptance snapshot must capture the SWEDISH consumer text regardless of
+  // which admin UI language happens to be active.
+  const readContentValue = useCallback((field) => {
+    if (!field) return '';
+    if (typeof field === 'string') return field;
+    if (typeof field === 'object') {
+      if (field['sv-SE']) return field['sv-SE'];
+      const first = Object.keys(field)[0];
+      if (first) return field[first] || '';
+    }
+    return '';
+  }, []);
+
+  // Find this shop's CMS page on a given slug, if it exists.
+  // Nothing enforces slug uniqueness on `pages`, so more than one doc can share
+  // a slug. Prefer a PUBLISHED one — that is the doc DynamicPage serves — so the
+  // editor, the acceptance snapshot and the storefront all resolve to the same
+  // document instead of an arbitrary `docs[0]`.
+  const findLegalPage = useCallback(async (slug, { publishedOnly = false } = {}) => {
+    const snap = await getDocs(query(
+      collection(db, 'pages'),
+      where('shopId', '==', shopId),
+      where('slug', '==', slug)
+    ));
+    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const published = docs.find((p) => p.status === 'published');
+    if (publishedOnly) return published || null;
+    return published || docs[0] || null;
+  }, [shopId]);
+
+  // Persist a legal patch to storeIdentity.legal AND mirror it into the local
+  // form, so the readiness banner + the rows re-render without a reload.
+  //
+  // ⚠️ The patch is passed to saveShopConfig UNMODIFIED, never merged with the
+  // local storeForm.legal first. `legal` is co-owned: AdminPageEdit stamps
+  // customUpdatedAt and legalAcceptance.js writes the acceptance pointer, both
+  // as narrow leaf patches. Firestore's setDoc(merge:true) deep-merges nested
+  // maps leaf by leaf, so a narrow patch touches only its own leaves — whereas
+  // writing a whole `legal` object rebuilt from this component's mount-time
+  // state would silently revert whatever those other writers changed (e.g. push
+  // customUpdatedAt back in time and make a real re-acceptance notice vanish).
+  const persistLegal = useCallback(async (patch) => {
+    await saveShopConfig({ legal: patch }, shopId);
+    setStoreForm(prev => ({
+      ...prev,
+      legal: {
+        ...(prev.legal || {}),
+        ...patch,
+        // `custom` is a map of per-page flags: merge it like Firestore does,
+        // or taking over page B would locally "forget" page A's flag.
+        ...(patch.custom ? { custom: { ...(prev.legal?.custom || {}), ...patch.custom } } : {}),
+      },
+    }));
+  }, [shopId]);
+
+  // "Redigera texten själv" — copy-on-write. Renders the template as it stands
+  // today, writes it into a CMS page on the legal slug (reusing an existing one
+  // rather than creating a duplicate), flags the key as custom and opens the editor.
+  const takeOverLegalPage = useCallback(async (slug) => {
+    const key = LEGAL_PAGE_KEYS[slug];
+    if (!key) return;
+    if (!window.confirm('Du tar över texten och ansvarar själv för att den är fullständig och korrekt. Fortsätt?')) return;
+    try {
+      setLegalBusyKey(key);
+      const rendered = renderLegalPage(slug, storeForm, { pod: isEnabled('pod') });
+      if (!rendered) throw new Error('Kunde inte generera texten');
+
+      const existing = await findLegalPage(slug);
+      let pageId = existing?.id;
+      if (existing) {
+        // Reuse the page already on this slug rather than creating a duplicate.
+        // Only SEED the template text when that page has no content of its own —
+        // a page the seller previously wrote (and reverted to draft, or drafted
+        // by hand) must never be overwritten; there is no undo for that.
+        const existingHtml = readContentValue(existing.content).trim();
+        await updateDoc(doc(db, 'pages', existing.id), {
+          ...(existingHtml ? {} : { content: { 'sv-SE': rendered.html } }),
+          status: 'published',
+          updatedAt: serverTimestamp(),
+          updatedBy: currentUser?.uid || '',
+        });
+      } else {
+        const created = await addDoc(collection(db, 'pages'), withShopId({
+          title: { 'sv-SE': rendered.title },
+          slug,
+          content: { 'sv-SE': rendered.html },
+          status: 'published',
+          metaTitle: '',
+          metaDescription: '',
+          attachments: [],
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          createdBy: currentUser?.uid || '',
+          updatedBy: currentUser?.uid || '',
+        }, shopId));
+        pageId = created.id;
+      }
+
+      // Narrow patch: only THIS key's flag. The merge write leaves the other
+      // two keys' flags untouched (see persistLegal).
+      await persistLegal({ custom: { [key]: true }, customUpdatedAt: new Date().toISOString() });
+
+      toast.success('Du äger nu texten. Kom ihåg att godkänna villkoren på nytt när du är klar.');
+      navigate(`/admin/pages/${pageId}`);
+    } catch (error) {
+      console.error('Error taking over legal page:', error);
+      toast.error(error?.message || 'Kunde inte ta över texten');
+    } finally {
+      setLegalBusyKey('');
+    }
+  }, [storeForm, isEnabled, findLegalPage, readContentValue, currentUser, shopId, persistLegal, navigate]);
+
+  // Open the seller's own page in the CMS editor.
+  const editLegalPage = useCallback(async (slug) => {
+    const key = LEGAL_PAGE_KEYS[slug];
+    try {
+      setLegalBusyKey(key);
+      const existing = await findLegalPage(slug);
+      if (!existing) {
+        toast.error('Sidan hittades inte. Återgå till plattformens mall och ta över texten på nytt.');
+        return;
+      }
+      navigate(`/admin/pages/${existing.id}`);
+    } catch (error) {
+      console.error('Error opening legal page:', error);
+      toast.error('Kunde inte öppna sidan');
+    } finally {
+      setLegalBusyKey('');
+    }
+  }, [findLegalPage, navigate]);
+
+  // "Återgå till plattformens mall" — clears the custom flag and unpublishes the
+  // seller's page (never deletes it, so the text is recoverable) so it stops
+  // rendering on the storefront.
+  const revertLegalPage = useCallback(async (slug) => {
+    const key = LEGAL_PAGE_KEYS[slug];
+    if (!key) return;
+    if (!window.confirm('Plattformens mall visas igen och din egen text sparas som utkast. Fortsätt?')) return;
+    try {
+      setLegalBusyKey(key);
+      const existing = await findLegalPage(slug);
+      if (existing) {
+        await updateDoc(doc(db, 'pages', existing.id), {
+          status: 'draft',
+          updatedAt: serverTimestamp(),
+          updatedBy: currentUser?.uid || '',
+        });
+      }
+      await persistLegal({ custom: { [key]: false }, customUpdatedAt: new Date().toISOString() });
+      toast.success('Plattformens mall visas igen.');
+    } catch (error) {
+      console.error('Error reverting legal page:', error);
+      toast.error('Kunde inte återgå till mallen');
+    } finally {
+      setLegalBusyKey('');
+    }
+  }, [findLegalPage, currentUser, persistLegal]);
+
+  // Record the seller's acceptance. Saves the identity FIRST so the snapshot in
+  // the evidence doc is exactly what the shop has stored, then renders + records.
+  const acceptLegalTerms = useCallback(async () => {
+    try {
+      setAcceptingLegal(true);
+      // Save the identity so the accepted snapshot is exactly what is stored —
+      // but WITHOUT the `legal` subtree. `legal` is co-owned (AdminPageEdit
+      // stamps customUpdatedAt, legalAcceptance.js writes the acceptance
+      // pointer); writing this component's mount-time copy of it would revert
+      // a customUpdatedAt bumped elsewhere and silently clear a legitimate
+      // "needs re-acceptance" state. The merge write skips what we omit.
+      const { legal: _legal, ...identityWithoutLegal } = storeForm;
+      await saveShopConfig(identityWithoutLegal, shopId);
+
+      // Pull the seller's own HTML for every key they took over, so the
+      // evidence snapshot holds the text the STOREFRONT actually serves.
+      // Only a PUBLISHED page counts: DynamicPage falls back to the platform
+      // template when the seller's page is a draft, so snapshotting draft HTML
+      // would record an acceptance of text nobody can read.
+      const custom = storeForm.legal?.custom || {};
+      const customHtml = {};
+      const unpublished = [];
+      for (const [slug, key] of Object.entries(LEGAL_PAGE_KEYS)) {
+        if (custom[key] !== true) continue;
+        const page = await findLegalPage(slug, { publishedOnly: true });
+        const html = readContentValue(page?.content);
+        if (html) customHtml[key] = html;
+        else unpublished.push(LEGAL_PAGES[slug].title);
+      }
+      // The seller owns the text but hasn't published it — the storefront is
+      // still showing the platform template. Refuse rather than record an
+      // acceptance that misrepresents what the shop publishes.
+      if (unpublished.length > 0) {
+        throw new Error(
+          `Publicera din egen text först: ${unpublished.join(', ')}. Butiken visar plattformens mall tills sidan är publicerad.`
+        );
+      }
+
+      const pointer = await recordLegalAcceptance({
+        shopId,
+        user: currentUser,
+        identity: storeForm,
+        pod: isEnabled('pod'),
+        custom,
+        customHtml,
+      });
+
+      setStoreForm(prev => ({ ...prev, legal: { ...(prev.legal || {}), acceptance: pointer } }));
+      setLegalAccepted(false);
+      toast.success('Villkoren är godkända. Kassan är nu öppen.');
+    } catch (error) {
+      console.error('Error accepting legal terms:', error);
+      toast.error(error?.message || 'Kunde inte godkänna villkoren');
+    } finally {
+      setAcceptingLegal(false);
+    }
+  }, [storeForm, shopId, findLegalPage, readContentValue, currentUser, isEnabled]);
 
   // Live legal-page readiness, recomputed from the in-progress form so the
   // banner updates as the seller fills in the return address / VAT status.
   const legalReadiness = getLegalReadiness(storeForm);
+
+  // The acceptance button only unblocks once the OTHER hard gates are clear —
+  // accepting a page that still prints "⚠️ Returadress ej angiven" would record
+  // a broken text as the seller's own terms.
+  const otherLegalBlockers = legalReadiness.blockers.filter((b) => b.key !== 'acceptance');
+  const legalAcceptance = storeForm.legal?.acceptance;
+  const canAcceptLegal = legalAccepted && otherLegalBlockers.length === 0 && Boolean(currentUser?.uid);
+
+  const formatAcceptedAt = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString('sv-SE');
+  };
 
   const labelCls = 'block text-[13px] font-medium text-admin-text mb-1';
   const inputCls =
@@ -386,12 +649,12 @@ const AdminSettings = () => {
 
                   {/* Readiness banner — clear "legal pages incomplete" state. */}
                   {legalReadiness.ready ? (
-                    <div className="mb-4 rounded-[var(--radius-admin-el)] border border-emerald-300 bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800">
+                    <div className="mb-4 rounded-[var(--radius-admin-el)] border border-admin-success-dot bg-admin-success-bg px-3 py-2 text-[12px] text-admin-success-text">
                       ✓ Juridiska sidor är kompletta och kan publiceras.
                     </div>
                   ) : (
-                    <div className="mb-4 rounded-[var(--radius-admin-el)] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
-                      <p className="font-medium">⚠️ Juridiska sidor är inte kompletta — visas inte på butiken förrän följande är åtgärdat:</p>
+                    <div className="mb-4 rounded-[var(--radius-admin-el)] border border-admin-caution-dot bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
+                      <p className="font-medium">⚠️ Juridiska sidor är inte kompletta. Kassan är stängd tills följande är åtgärdat:</p>
                       <ul className="mt-1 list-disc pl-5">
                         {legalReadiness.blockers.map((b) => (
                           <li key={b.key}>{b.label}</li>
@@ -453,6 +716,129 @@ const AdminSettings = () => {
                         "Ångerrätt &amp; returer".
                       </p>
                     </div>
+                  </div>
+
+                  {/* Juridiska sidor — copy-on-write per sida + säljarens
+                      godkännande. Godkännandet är den hårda spärr som öppnar
+                      kassan (legalPageReadiness.js gate (c)); custom-flaggan
+                      avgör om butiken visar plattformens mall eller säljarens
+                      egen CMS-sida på samma slug. */}
+                  <div className="mt-6 border-t border-admin-border pt-5">
+                    <h4 className="mb-1 text-[13px] font-semibold text-admin-text">Juridiska sidor</h4>
+                    <p className="mb-3 text-[12px] text-admin-text-muted">
+                      De tre sidor som måste finnas i butiken. Du kan behålla plattformens mall eller
+                      ta över texten och skriva din egen.
+                    </p>
+
+                    <div className="mb-4 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface-2 px-3 py-2 text-[12px] text-admin-text-muted">
+                      {LEGAL_TEMPLATE_DISCLAIMER}
+                    </div>
+
+                    <div className="divide-y divide-admin-border rounded-[var(--radius-admin-el)] border border-admin-border">
+                      {Object.keys(LEGAL_PAGES).map((slug) => {
+                        const key = LEGAL_PAGE_KEYS[slug];
+                        const isCustom = storeForm.legal?.custom?.[key] === true;
+                        const busy = legalBusyKey === key;
+                        return (
+                          <div key={slug} className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+                            <div className="min-w-0">
+                              <p className="text-[13px] font-medium text-admin-text">{LEGAL_PAGES[slug].title}</p>
+                              <p className="mt-0.5 text-[12px] text-admin-text-muted">
+                                {isCustom ? 'Egen text' : 'Plattformens mall'}
+                                {' · '}
+                                <a
+                                  href={`${APP_URLS.B2C_SHOP}/${shopId}/${slug}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline hover:text-admin-text"
+                                >
+                                  Förhandsgranska
+                                </a>
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {isCustom ? (
+                                <>
+                                  <Button variant="secondary" disabled={busy} onClick={() => editLegalPage(slug)}>
+                                    Redigera
+                                  </Button>
+                                  <Button variant="plain" disabled={busy} onClick={() => revertLegalPage(slug)}>
+                                    Återgå till plattformens mall
+                                  </Button>
+                                </>
+                              ) : (
+                                <Button variant="secondary" disabled={busy} onClick={() => takeOverLegalPage(slug)}>
+                                  {busy ? 'Förbereder…' : 'Redigera texten själv'}
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Godkännande — den hårda spärren som öppnar kassan. */}
+                    <Card className="mt-4 p-4">
+                      {legalAcceptance ? (
+                        <p className="text-[12px] text-admin-text-muted">
+                          Godkända av {legalAcceptance.email || legalAcceptance.uid}{' '}
+                          {formatAcceptedAt(legalAcceptance.acceptedAt)} · mallversion{' '}
+                          {legalAcceptance.templateVersion}
+                        </p>
+                      ) : (
+                        <p className="text-[12px] text-admin-text-muted">
+                          Villkoren är ännu inte godkända. Kassan öppnar när du godkänt dem.
+                        </p>
+                      )}
+
+                      {legalReadiness.needsReacceptance && (
+                        <div className="mt-3 rounded-[var(--radius-admin-el)] border border-admin-caution-dot bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
+                          Texterna har ändrats sedan ditt senaste godkännande (ny mallversion eller egen
+                          redigering). Läs igenom och godkänn på nytt.
+                        </div>
+                      )}
+
+                      <label className="mt-3 flex items-start gap-2 text-[13px] text-admin-text">
+                        <input
+                          type="checkbox"
+                          checked={legalAccepted}
+                          onChange={(e) => setLegalAccepted(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 shrink-0 rounded border-admin-border accent-[var(--color-admin-primary)]"
+                        />
+                        <span>{LEGAL_ACCEPTANCE_LABEL}</span>
+                      </label>
+
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[12px] text-admin-text-muted">
+                          {otherLegalBlockers.length > 0 ? (
+                            <>Kan inte godkännas ännu: {otherLegalBlockers.map((b) => b.label).join(', ')}.</>
+                          ) : !currentUser?.uid ? (
+                            'Du behöver vara inloggad för att godkänna villkoren.'
+                          ) : !legalAccepted ? (
+                            'Kryssa i rutan ovan för att godkänna.'
+                          ) : (
+                            'Ditt godkännande sparas med tidpunkt, mallversion och en kopia av texten.'
+                          )}
+                        </p>
+                        <Button
+                          variant="primary"
+                          disabled={!canAcceptLegal || acceptingLegal}
+                          onClick={acceptLegalTerms}
+                        >
+                          {acceptingLegal
+                            ? 'Sparar…'
+                            : legalAcceptance
+                              ? 'Godkänn på nytt'
+                              : 'Godkänn villkoren'}
+                        </Button>
+                      </div>
+                    </Card>
+
+                    <p className="mt-3 text-[12px] text-admin-text-muted">
+                      <Link to="/admin/plattformsvillkor" className="underline hover:text-admin-text">
+                        Plattformsvillkor och personuppgiftsbiträdesavtal
+                      </Link>
+                    </p>
                   </div>
                 </div>
 
