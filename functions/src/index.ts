@@ -230,6 +230,12 @@ export { processPodArtwork } from './pod/processArtwork';
 // writes a platform-level `leads` doc + best-effort admin notification email.
 export { submitLead } from './leads/submitLead';
 
+// Notice & takedown (SnapWear A10): the storefront "Rapportera intrång" form
+// writes a platform-level `infringementReports` doc + platform email; the
+// platform console's "Avpublicera" switches the product off (audit-logged).
+export { submitInfringementReport } from './infringement/submitInfringementReport';
+export { takedownProduct } from './infringement/takedownProduct';
+
 // Abandoned-checkout recovery ("Övergiven kassa" add-on): a scheduled sweep that
 // reminds buyers who created a PaymentIntent but never completed the order, plus
 // two public callables the storefront recovery/unsubscribe pages call.
@@ -240,6 +246,9 @@ export { resolveCheckoutRecovery, unsubscribeCheckout } from './checkout-recover
 // field-allowlisted, published-only productsPublic/{id} the storefront reads,
 // so the raw collection (b2bPrice/podCostSek/drafts) can be admin-read-only.
 export { syncProductsPublicOnWrite } from './catalog/syncProductsPublic';
+// Pre-publish brand screening (SnapWear A11): stamps products/{id}.screening
+// (blocklist hits / new-shop review) for the platform's Granskning queue.
+export { screenProductOnWrite } from './catalog/screenProductOnWrite';
 
 // Native product reviews ("Recensioner" add-on): an order trigger that schedules
 // a review request when a B2C order is fulfilled, a scheduled sweep that emails

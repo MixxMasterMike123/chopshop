@@ -30,6 +30,8 @@ import {
   renderKeyValueRows,
   renderList,
   renderPanel,
+  renderButton,
+  renderTextLink,
   setShellLogoUrl,
   esc,
 } from '../templates/emailLayout';
@@ -47,6 +49,7 @@ export type EmailType =
   | 'AFFILIATE_APPLICATION_RECEIVED'
   | 'AFFILIATE_APPLICATION_NOTIFICATION_ADMIN'
   | 'LEAD_NOTIFICATION_ADMIN'
+  | 'INFRINGEMENT_REPORT_ADMIN'
   | 'WITHDRAWAL_ACKNOWLEDGMENT'
   | 'REFUND_CONFIRMATION'
   | 'DISPUTE_ALERT_ADMIN'
@@ -88,6 +91,7 @@ interface ShopEmailIdentity {
 const PLATFORM_ONLY_ADMIN_EMAILS: ReadonlySet<EmailType> = new Set<EmailType>([
   'DISPUTE_ALERT_ADMIN',      // chargeback/shortfall — platform is merchant-of-record risk
   'LEAD_NOTIFICATION_ADMIN',  // prospective new merchant for the platform
+  'INFRINGEMENT_REPORT_ADMIN', // notice & takedown — the SHOP is the reported party
 ]);
 
 // Regex for a syntactically valid email.
@@ -685,6 +689,59 @@ export class EmailOrchestrator {
         };
       }
 
+      case 'INFRINGEMENT_REPORT_ADMIN': {
+        // Platform-admin alert: a rights holder filed "Rapportera intrång" on a
+        // storefront (SnapWear A10). Fired best-effort from
+        // infringement/submitInfringementReport.ts AFTER the report doc is
+        // written. Every value is reporter-typed → escaped; links only when
+        // they are absolute http(s) (a pasted `javascript:` URL stays text).
+        const report = data.additionalData?.report;
+        if (!report) {
+          throw new Error('Report data is required for infringement report notification');
+        }
+        const RIGHT_LABELS: Record<string, string> = {
+          trademark: 'Varumärke', copyright: 'Upphovsrätt', other: 'Annat',
+        };
+        const oneLine = (v: unknown) => String(v || '').replace(/\s+/g, ' ').trim();
+        const isHttp = (v: unknown) => typeof v === 'string' && /^https?:\/\//i.test(v.trim());
+        const productLabel = oneLine(report.productName) || oneLine(report.productUrl) || 'okänd produkt';
+        const reportsUrl = String(data.additionalData?.reportsUrl || '');
+        const infringementBody =
+          renderHeading('Ny intrångsanmälan') +
+          renderParagraph('En rättighetshavare har anmält en produkt via "Rapportera intrång". Granska inom 24 timmar.') +
+          renderKeyValueRows([
+            { label: 'Butik', value: `${oneLine(report.shopName)} (${oneLine(report.shopId)})` },
+            { label: 'Produkt', value: productLabel },
+            { label: 'Produkt-ID', value: oneLine(report.productId) || '— (ej matchad)' },
+            { label: 'Rättighet', value: RIGHT_LABELS[report.rightType] || String(report.rightType || '') },
+            { label: 'Anmälare', value: oneLine(report.reporterName) },
+            { label: 'Organisation', value: oneLine(report.reporterOrg) || '—' },
+            { label: 'E-post', value: oneLine(report.reporterEmail) },
+            { label: 'Ärende-ID', value: String(data.additionalData?.reportId || '') },
+          ]) +
+          renderPanel(renderParagraph(String(report.description || '')), 'Beskrivning') +
+          (isHttp(report.productUrl)
+            ? renderParagraph(`Produktlänk: ${renderTextLink(report.productUrl.trim(), esc(report.productUrl.trim()))}`, { html: true })
+            : '') +
+          (isHttp(reportsUrl) ? renderButton(reportsUrl, 'Öppna Anmälningar') : '') +
+          renderParagraph('Anmälan är sparad i `infringementReports` med status "new".', { muted: true });
+        return {
+          subject: `⚠️ Intrångsanmälan: ${oneLine(report.shopName) || oneLine(report.shopId)} / ${productLabel}`.slice(0, 200),
+          html: renderEmailShell({
+            brandName: data.brandName,
+            bodyHtml: infringementBody,
+            preheader: `Intrångsanmälan mot ${productLabel}`,
+          }),
+          text:
+            `Ny intrångsanmälan\n` +
+            `Butik: ${oneLine(report.shopName)} (${oneLine(report.shopId)})\n` +
+            `Produkt: ${productLabel}${report.productId ? ` [${report.productId}]` : ''}\n` +
+            `Rättighet: ${RIGHT_LABELS[report.rightType] || report.rightType}\n` +
+            `Anmälare: ${oneLine(report.reporterName)} ${report.reporterOrg ? `(${oneLine(report.reporterOrg)}) ` : ''}<${oneLine(report.reporterEmail)}>\n\n` +
+            `${report.description || ''}\n\n${report.productUrl || ''}\n${reportsUrl}`
+        };
+      }
+
       case 'WITHDRAWAL_ACKNOWLEDGMENT': {
         // Mottagningsbevis (acknowledgement of receipt) for an exercised right of
         // withdrawal — DAL 2 kap. 10 a § / CRD Art. 11a. Must include the content
@@ -831,6 +888,7 @@ export class EmailOrchestrator {
       emailType === 'ORDER_NOTIFICATION_ADMIN' ||
       emailType === 'AFFILIATE_APPLICATION_NOTIFICATION_ADMIN' ||
       emailType === 'LEAD_NOTIFICATION_ADMIN' ||
+      emailType === 'INFRINGEMENT_REPORT_ADMIN' ||
       emailType === 'DISPUTE_ALERT_ADMIN'
     ) {
       return from(`${brand} System`);

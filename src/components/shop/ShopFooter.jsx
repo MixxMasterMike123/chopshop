@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { getCountryAwareUrl } from '../../utils/productUrls';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useSimpleAuth } from '../../contexts/SimpleAuthContext';
@@ -30,6 +30,7 @@ const ShopFooter = () => {
   const { currentUser } = useSimpleAuth();
   const store = useStoreSettings();
   const shopId = useShopId();
+  const location = useLocation();
   const { isEnabled: isAddonEnabled } = useShopFeatures();
   const affiliateEnabled = isAddonEnabled('affiliate');
   const [isActiveAffiliate, setIsActiveAffiliate] = useState(false);
@@ -245,6 +246,18 @@ const ShopFooter = () => {
               </li>
               {/* Cookie info lives in the privacy policy (§9) + the Cookiebot CMP;
                   no separate auto-page yet, so no standalone link (avoids a dead link). */}
+              <li>
+                {/* Notice & takedown (SnapWear A10) — a rights holder reports a
+                    product to the PLATFORM. `from` carries the current page so a
+                    report started on a product page pre-fills that product. */}
+                <Link
+                  to={getCountryAwareUrl('rapportera-intrang')}
+                  state={{ from: location.pathname }}
+                  className="text-white/70 hover:text-white transition-colors"
+                >
+                  {t('footer_report_infringement', 'Rapportera intrång')}
+                </Link>
+              </li>
             </ul>
           </div>
         </div>

@@ -1,6 +1,7 @@
 export declare const appUrls: {
     B2B_PORTAL: string;
     B2C_SHOP: string;
+    PLATFORM_CONSOLE: string;
     B2B_LEGACY: string;
     ADMIN_BASE: string;
     LOGO_URL: string;

@@ -176,10 +176,26 @@ service cloud.firestore {
     // customers) read raw products for b2bPrice — that path is dead until the
     // add-on is rebuilt with a server-side projection/callable.
     // ============================================================
+    //
+    // SnapWear A10/A11 — `screening` (brand-screening stamp, written by the
+    // screenProductOnWrite trigger + the platform review queue) and `takedown`
+    // (notice-&-takedown stamp, written by the takedownProduct callable) are
+    // PLATFORM/SERVER-only: a shop admin can neither create a product carrying
+    // them nor change them. While a product carries a takedown stamp, a shop
+    // admin also cannot flip isActive — otherwise a takedown would be one
+    // checkbox away from undone. Reinstating is the platform's call (the
+    // product form clears the stamp when a platform user re-activates).
+    function sellerUntouchedModeration() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['screening', 'takedown'])
+        && (resource.data.get('takedown', null) == null
+            || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isActive']));
+    }
     match /products/{productId} {
       allow read: if isAdminOfShop(resource.data.shopId);
-      allow create: if isAdminOfShop(request.resource.data.shopId);
-      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged();
+      allow create: if isAdminOfShop(request.resource.data.shopId)
+                    && (isPlatform() || !request.resource.data.keys().hasAny(['screening', 'takedown']));
+      allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged()
+                    && (isPlatform() || sellerUntouchedModeration());
       allow delete: if isAdminOfShop(resource.data.shopId);
     }
 
@@ -768,6 +784,21 @@ service cloud.firestore {
       allow update: if isPlatform()
                     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
                     && request.resource.data.status in ['new', 'contacted', 'won', 'lost'];
+      allow create, delete: if false;
+    }
+
+    // infringementReports — notice & takedown (SnapWear A10). A rights holder's
+    // report about a product, filed from any storefront's "Rapportera intrång"
+    // page. Created ONLY by the submitInfringementReport Cloud Function (Admin
+    // SDK); holds the reporter's name + email, so PLATFORM-only read — neither
+    // the reported shop nor anyone anonymous may read it. The platform may move
+    // it through the handling pipeline (status/note/handledAt/handledBy only);
+    // the takedown itself runs through the takedownProduct callable.
+    match /infringementReports/{reportId} {
+      allow read: if isPlatform();
+      allow update: if isPlatform()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'note', 'handledAt', 'handledBy'])
+                    && request.resource.data.status in ['new', 'reviewing', 'taken_down', 'rejected'];
       allow create, delete: if false;
     }
 

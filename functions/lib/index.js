@@ -3,7 +3,7 @@
 // EMAIL ORCHESTRATOR SYSTEM - Unified email functions
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getPrintJob = exports.getPrintQueue = exports.scrapeWebsiteMetaV2 = exports.resolveDac7Correction = exports.requestDac7Correction = exports.correctOwnDac7Contact = exports.getOwnDac7 = exports.exportDac7Report = exports.aggregateDac7Year = exports.pullDac7FromStripe = exports.getDac7SellerProfile = exports.saveDac7SellerProfile = exports.refundOrder = exports.setConnectPayoutDelay = exports.getConnectBalance = exports.setShopCommission = exports.createConnectLoginLink = exports.refreshConnectStatus = exports.createConnectAccountLink = exports.createConnectAccount = exports.stripeWebhookV2 = exports.createPaymentIntentV2 = exports.syncAdminClaims = exports.createAdminUserV2 = exports.toggleCustomerActiveStatusV2 = exports.deleteB2CCustomerAccountV2 = exports.deleteCustomerAccountV2 = exports.getGeoDataV2 = exports.syncUserClaimsOnWrite = exports.cancelB2BOrder = exports.createB2BOrder = exports.reverseAffiliateCommissionOnCancel = exports.processB2COrderCompletionHttpV2 = exports.validateDiscountCode = exports.logAffiliateClickV2 = exports.sendAffiliateApplicationEmails = exports.verifyEmailCode = exports.sendCustomEmailVerification = exports.migrateFromWoo = exports.migrateFromShopify = exports.deletePlatformUser = exports.createPlatformSuperAdmin = exports.createShopUser = exports.approveAffiliate = exports.sendAffiliateWelcomeEmail = exports.sendLoginCredentialsEmail = exports.sendPasswordResetEmail = exports.sendOrderNotificationAdmin = exports.sendOrderStatusUpdateEmail = exports.sendOrderConfirmationEmail = void 0;
-exports.confirmPasswordReset = exports.confirmPasswordResetV2 = exports.getHandoffPackage = exports.renderSocialVideo = exports.generateSocialCopy = exports.submitWithdrawal = exports.moderateReview = exports.unsubscribeReviews = exports.submitReview = exports.resolveReviewRequest = exports.sweepReviewRequests = exports.onOrderReviewQualify = exports.syncProductsPublicOnWrite = exports.unsubscribeCheckout = exports.resolveCheckoutRecovery = exports.sweepAbandonedCheckouts = exports.submitLead = exports.processPodArtwork = exports.sweepPrintNotifyOutbox = exports.onOrderProductionReady = exports.setPrintJobStatus = exports.createPrintShopUser = exports.getPrintArtworkDownload = exports.getPrintArtworkLibrary = exports.getPrintQueueExport = void 0;
+exports.confirmPasswordReset = exports.confirmPasswordResetV2 = exports.getHandoffPackage = exports.renderSocialVideo = exports.generateSocialCopy = exports.submitWithdrawal = exports.moderateReview = exports.unsubscribeReviews = exports.submitReview = exports.resolveReviewRequest = exports.sweepReviewRequests = exports.onOrderReviewQualify = exports.screenProductOnWrite = exports.syncProductsPublicOnWrite = exports.unsubscribeCheckout = exports.resolveCheckoutRecovery = exports.sweepAbandonedCheckouts = exports.takedownProduct = exports.submitInfringementReport = exports.submitLead = exports.processPodArtwork = exports.sweepPrintNotifyOutbox = exports.onOrderProductionReady = exports.setPrintJobStatus = exports.createPrintShopUser = exports.getPrintArtworkDownload = exports.getPrintArtworkLibrary = exports.getPrintQueueExport = void 0;
 // Initialize Firebase Admin SDK
 const app_1 = require("firebase-admin/app");
 (0, app_1.initializeApp)();
@@ -149,6 +149,13 @@ Object.defineProperty(exports, "processPodArtwork", { enumerable: true, get: fun
 // writes a platform-level `leads` doc + best-effort admin notification email.
 var submitLead_1 = require("./leads/submitLead");
 Object.defineProperty(exports, "submitLead", { enumerable: true, get: function () { return submitLead_1.submitLead; } });
+// Notice & takedown (SnapWear A10): the storefront "Rapportera intrång" form
+// writes a platform-level `infringementReports` doc + platform email; the
+// platform console's "Avpublicera" switches the product off (audit-logged).
+var submitInfringementReport_1 = require("./infringement/submitInfringementReport");
+Object.defineProperty(exports, "submitInfringementReport", { enumerable: true, get: function () { return submitInfringementReport_1.submitInfringementReport; } });
+var takedownProduct_1 = require("./infringement/takedownProduct");
+Object.defineProperty(exports, "takedownProduct", { enumerable: true, get: function () { return takedownProduct_1.takedownProduct; } });
 // Abandoned-checkout recovery ("Övergiven kassa" add-on): a scheduled sweep that
 // reminds buyers who created a PaymentIntent but never completed the order, plus
 // two public callables the storefront recovery/unsubscribe pages call.
@@ -162,6 +169,10 @@ Object.defineProperty(exports, "unsubscribeCheckout", { enumerable: true, get: f
 // so the raw collection (b2bPrice/podCostSek/drafts) can be admin-read-only.
 var syncProductsPublic_1 = require("./catalog/syncProductsPublic");
 Object.defineProperty(exports, "syncProductsPublicOnWrite", { enumerable: true, get: function () { return syncProductsPublic_1.syncProductsPublicOnWrite; } });
+// Pre-publish brand screening (SnapWear A11): stamps products/{id}.screening
+// (blocklist hits / new-shop review) for the platform's Granskning queue.
+var screenProductOnWrite_1 = require("./catalog/screenProductOnWrite");
+Object.defineProperty(exports, "screenProductOnWrite", { enumerable: true, get: function () { return screenProductOnWrite_1.screenProductOnWrite; } });
 // Native product reviews ("Recensioner" add-on): an order trigger that schedules
 // a review request when a B2C order is fulfilled, a scheduled sweep that emails
 // the request, and the public/admin callables the storefront + admin pages call.

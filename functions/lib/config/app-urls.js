@@ -14,6 +14,9 @@ exports.appUrls = {
     // partner.b8shield.com default leaked a dead brand domain into emails.)
     B2B_PORTAL: process.env.APP_PORTAL_URL || 'https://meteorpr.web.app',
     B2C_SHOP: process.env.APP_SHOP_URL || 'https://shop-meteorpr.web.app',
+    // Platform operator console — deep links in platform-only admin emails
+    // (e.g. an infringement report → /reports).
+    PLATFORM_CONSOLE: process.env.PLATFORM_CONSOLE_URL || 'https://platform-meteorpr.web.app',
     // Hosting default domain for this project (works on any deploy)
     B2B_LEGACY: `https://${projectId}.web.app`,
     // Admin console base URL — used for Stripe Connect Account Link return/refresh
