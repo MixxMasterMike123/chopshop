@@ -1,5 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { collection, query, where, getCountFromServer } from 'firebase/firestore';
+import { db } from '../../firebase/config';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   BuildingStorefrontIcon,
@@ -12,6 +14,7 @@ import {
   InboxIcon,
   CubeIcon,
   UsersIcon,
+  FlagIcon,
 } from '@heroicons/react/24/outline';
 
 /**
@@ -30,15 +33,46 @@ const NAV = [
   { name: 'DAC7', path: '/dac7', icon: ShieldCheckIcon, live: true },
   { name: 'Tryckerier', path: '/printers', icon: PrinterIcon, live: true },
   { name: 'Leads', path: '/leads', icon: InboxIcon, live: true },
+  // badge: key into the counts below — unhandled infringement reports.
+  { name: 'Anmälningar', path: '/reports', icon: FlagIcon, live: true, badge: 'reports' },
   { name: 'Användare', path: '/users', icon: UsersIcon, live: true },
   { name: 'Betalningar', path: '/payments', icon: CreditCardIcon, live: false },
   { name: 'Inställningar', path: '/settings', icon: Cog6ToothIcon, live: false },
 ];
 
-const PlatformLayout = ({ children }) => {
+// Pages that change a badge's underlying data call this so the sidebar count
+// refreshes without a reload (each page mounts its own PlatformLayout).
+const BADGES_EVENT = 'platform:badges-changed';
+export const notifyPlatformBadgesChanged = () => {
+  try { window.dispatchEvent(new Event(BADGES_EVENT)); } catch { /* non-browser */ }
+};
+
+// Nav badge counts. One aggregation read per layout mount: count of
+// infringementReports still status 'new' (a report nobody has looked at).
+// A failure just hides the badge — the nav must never break over it.
+const useNavBadgeCounts = (override) => {
+  const [counts, setCounts] = useState({});
+  useEffect(() => {
+    if (override) return undefined;
+    let cancelled = false;
+    const load = () => {
+      getCountFromServer(query(collection(db, 'infringementReports'), where('status', '==', 'new')))
+        .then((agg) => { if (!cancelled) setCounts({ reports: agg.data().count }); })
+        .catch(() => {});
+    };
+    load();
+    window.addEventListener(BADGES_EVENT, load);
+    return () => { cancelled = true; window.removeEventListener(BADGES_EVENT, load); };
+  }, [override]);
+  return override || counts;
+};
+
+// `badgeCounts` is for the dev harness only (renders without Firestore).
+const PlatformLayout = ({ children, badgeCounts }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentUser, logout } = useAuth();
+  const { currentUser, logout } = useAuth() || {};
+  const counts = useNavBadgeCounts(badgeCounts);
 
   const isActive = (path) =>
     location.pathname === path || (path === '/shops' && location.pathname === '/');
@@ -84,6 +118,14 @@ const PlatformLayout = ({ children }) => {
               >
                 <item.icon className={'h-5 w-5 shrink-0 ' + (active ? 'text-indigo-300' : '')} />
                 <span>{item.name}</span>
+                {item.badge && counts[item.badge] > 0 && (
+                  <span
+                    className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-300"
+                    title="Nya, ohanterade"
+                  >
+                    {counts[item.badge]}
+                  </span>
+                )}
                 {!item.live && (
                   <span className="ml-auto text-[10px] uppercase tracking-wide text-gray-600">snart</span>
                 )}

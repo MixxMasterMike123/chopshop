@@ -58,7 +58,7 @@
 // shopId from useShopId().
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, doc, getDoc, addDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, addDoc, setDoc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { ref, deleteObject } from 'firebase/storage';
 import { uploadImageToStorage } from '../../utils/imageUpload';
 import { db, storage } from '../../firebase/config';
@@ -78,6 +78,9 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from 
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { isProductFeatured } from '../../utils/productSorting';
+import { useAuth } from '../../contexts/AuthContext';
+import { screenProduct, screeningNotice } from '../../utils/contentScreening';
+import { loadScreeningBlocklist } from '../../utils/loadContentScreening';
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 
@@ -358,6 +361,14 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   // non-B2B shop simply never sees the extra field.
   const { isEnabled } = useShopFeatures();
   const b2bEnabled = isEnabled('b2b');
+
+  // Notice & takedown (SnapWear A10): a product the platform switched off
+  // carries a `takedown` stamp. A shop admin can't re-activate it (rules deny
+  // flipping isActive while the stamp is set, so the box is locked here too);
+  // a platform user re-activating it IS the reinstatement and clears the stamp.
+  const { isPlatform } = useAuth() || {};
+  const takenDown = Boolean(product?.takedown);
+  const takedownLocked = takenDown && !isPlatform;
   const podEnabled = isEnabled('pod');
 
   // ── POD live-gate state ────────────────────────────────────────────────────
@@ -968,7 +979,17 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
         const docRef = doc(db, 'products', productId);
         const snap = await getDoc(docRef);
         if (snap.exists()) {
-          await updateDoc(docRef, data);
+          // Platform reinstatement of a taken-down product: clear the stamp
+          // (and take it out of the review queue's taken_down state) so the
+          // seller owns the isActive toggle again. Only ever for platform —
+          // the rules reject both keys from a shop admin.
+          const reinstate = isPlatform && snap.data().takedown && formData.isActive === true
+            ? {
+                takedown: deleteField(),
+                ...(snap.data().screening?.status === 'taken_down' ? { 'screening.status': 'cleared' } : {}),
+              }
+            : {};
+          await updateDoc(docRef, { ...data, ...reinstate });
         } else {
           await setDoc(docRef, withShopId({ ...data, createdAt: serverTimestamp() }, shopId));
         }
@@ -977,6 +998,14 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
 
       if (formData.availability.b2c !== false && podEnabled && formData.isPodProduct === true && !podConnectedFinal) {
         toast('Sparad som utkast — produkten visas i webbshoppen först när tryckkopplingen finns.', { icon: '🔒' });
+      }
+
+      // Brand screening notice (SnapWear A11) for a product that is going
+      // live. Advisory only — the save already happened; the server trigger
+      // stamps `screening` and the platform reviews (the client never writes it).
+      if (data.isActive === true && data.availability.b2c === true) {
+        const hits = screenProduct(data, await loadScreeningBlocklist());
+        if (hits.length > 0) toast(screeningNotice(hits), { icon: '⚠️', duration: 12000 });
       }
       onSaved?.();
     } catch (err) {
@@ -1445,10 +1474,17 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
           <>
             {/* Status */}
             <CardSection title="Status" bodyClassName="space-y-3">
-              <label className="flex items-center gap-2 text-[13px] text-admin-text">
-                <input id="isActive" type="checkbox" name="isActive" checked={formData.isActive} onChange={handleInput} className={checkboxCls} />
+              <label className={'flex items-center gap-2 text-[13px] text-admin-text' + (takedownLocked ? ' opacity-60' : '')}>
+                <input id="isActive" type="checkbox" name="isActive" checked={formData.isActive} onChange={handleInput} disabled={takedownLocked} className={checkboxCls} />
                 Aktiv (synlig i butiken)
               </label>
+              {takenDown && (
+                <p className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] leading-relaxed text-admin-caution-text">
+                  {isPlatform
+                    ? 'Avpublicerad av plattformen efter en anmälan. Markera Aktiv och spara för att återpublicera — spärren tas då bort.'
+                    : 'Produkten har stängts av av plattformen efter en anmälan om varumärkes- eller upphovsrättsintrång. Kontakta plattformen om du anser att det är fel.'}
+                </p>
+              )}
               <label className="flex items-center gap-2 text-[13px] text-admin-text">
                 <input id="featured" type="checkbox" checked={formData.featured} onChange={(e) => setField('featured', e.target.checked)} className={checkboxCls} />
                 Utvald på startsidan

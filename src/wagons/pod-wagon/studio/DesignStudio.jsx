@@ -61,6 +61,8 @@ import { priceFloor } from '../podPricing';
 import { podCostForSlotsRouted, resolvePrinterUid } from '../printRouting';
 import { STORE } from '../../../config/store';
 import { orderedVariantMockupUrls } from './mockupVariantImages';
+import { screenProduct } from '../../../utils/contentScreening';
+import { loadScreeningBlocklist } from '../../../utils/loadContentScreening';
 
 // Validation is ADVISORY (podValidation's contract: "WARN/FAIL never blocks — it
 // guides the seller; the printer decides"). The studio therefore selects ANY
@@ -363,6 +365,19 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const artworkById = (id) => (id ? artwork.find((a) => a.id === id) || null : null);
   // The base motif a slot prints (its row's artwork; null if no row/motif).
   const printArtwork = (forSlot) => artworkById(printBySlot[forSlot]?.artworkId);
+  // Brand screening (SnapWear A11): the names of every motif this publish
+  // prints — base per slot + per-colourway overrides of the published colours —
+  // so the seller notice sees the same artwork names the server trigger does.
+  const publishedArtworkNames = (slots, colorwaySet) => {
+    const arts = [];
+    for (const s of slots) {
+      arts.push(printArtwork(s));
+      for (const [cwId, artId] of Object.entries(overrides[s] || {})) {
+        if (artId && colorwaySet.has(cwId)) arts.push(artworkById(artId));
+      }
+    }
+    return arts.filter(Boolean).flatMap((a) => [a.fileName, a.label]).filter(Boolean);
+  };
 
   // Bröst + pocket collide physically (front starts 60–70 mm below the neck
   // seam; the pocket spot sits in that band — POD_PRINT_SPEC §1). BLOCKED as a
@@ -940,9 +955,16 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       await addDoc(collection(db, 'products'), withShopId(data, shopId));
       docCreated = true;
 
+      // Brand screening notice (A11). Advisory only: publishing is NOT blocked
+      // (that would just invite renaming around the list); the server trigger
+      // stamps `screening` and the platform reviews. The client never writes it.
+      const screeningHits = screenProduct(
+        data,
+        await loadScreeningBlocklist(),
+        publishedArtworkNames(publishSlots, selectedSet),
+      );
 
-
-      setPublishResult({ name: cleanName, sku: resolvedSku });
+      setPublishResult({ name: cleanName, sku: resolvedSku, screeningHits });
       onChanged?.();
     } catch (e) {
       console.error('DesignStudio: publish failed', e);
@@ -1167,10 +1189,19 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
 
 
+      // Same advisory brand-screening notice as the create path (A11): the
+      // product's existing text + the motifs this update prints.
+      const screeningHits = screenProduct(
+        prod,
+        await loadScreeningBlocklist(),
+        publishedArtworkNames(publishSlots, selectedSet),
+      );
+
       setPublishResult({
         name: prod.name || '(namnlös produkt)',
         sku: prod.sku || '',
         updated: true,
+        screeningHits,
       });
       onChanged?.();
     } catch (e) {

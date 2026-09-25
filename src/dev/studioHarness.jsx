@@ -15,6 +15,10 @@ import CompositorCanvas from '../wagons/pod-wagon/studio/CompositorCanvas';
 import ColorwayStrip from '../wagons/pod-wagon/studio/ColorwayStrip';
 import MockupPanel from '../wagons/pod-wagon/studio/MockupPanel';
 import PublishPanel from '../wagons/pod-wagon/studio/PublishPanel';
+import { screenProduct } from '../utils/contentScreening';
+
+// Brand-screening fixture (A11) — the harness has no settings/contentScreening.
+const HARNESS_BLOCKLIST = [{ term: 'kent', kind: 'band' }, { term: 'nike', kind: 'brand' }, { term: 'abba', kind: 'band' }];
 import { renderMockup } from '../wagons/pod-wagon/studio/mockupRender';
 import { isComposable } from '../wagons/pod-wagon/studio/placementMath';
 import { DEV_3D_GARMENTS } from '../wagons/pod-wagon/studio/pixi/displacement3dConfig';
@@ -160,7 +164,12 @@ const Harness = () => {
   const resetReviews = () => setReviewedColorways(colorwayId ? new Set([colorwayId]) : new Set());
   // Fake publish state — no Firebase in the harness; just prove the UI flow.
   const [publishing, setPublishing] = useState(false);
-  const [publishResult, setPublishResult] = useState(null);
+  // ?screening=1 opens on a published result WITH a brand-screening hit, so the
+  // seller notice is eyeball-testable without generating mockups first.
+  const [publishResult, setPublishResult] = useState(() =>
+    new URLSearchParams(window.location.search).get('screening')
+      ? { name: 'Kent – Tour 2026 tee', sku: 'kent-tour-2026-tee', screeningHits: ['kent'] }
+      : null);
   const [publishError, setPublishError] = useState(null);
 
   // The ACTIVE colourway is always seen (mirrors DesignStudio). Switching slots
@@ -245,7 +254,11 @@ const Harness = () => {
     setPublishError(null);
     setPublishResult(null);
     await new Promise((r) => setTimeout(r, 800));
-    setPublishResult({ name: form.name, sku: `demo-${form.name.toLowerCase().replace(/\s+/g, '-') || 'produkt'}` });
+    setPublishResult({
+      name: form.name,
+      sku: `demo-${form.name.toLowerCase().replace(/\s+/g, '-') || 'produkt'}`,
+      screeningHits: screenProduct({ name: form.name }, HARNESS_BLOCKLIST),
+    });
     setPublishing(false);
   };
 

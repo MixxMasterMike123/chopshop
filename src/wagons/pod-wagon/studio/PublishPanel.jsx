@@ -15,6 +15,7 @@ import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
 import { sellerProfitInkl, sellerMargin, priceFloor, priceForMargin, roundUpTo9, inklMoms, FEE_RATE, FEE_FIXED } from '../podPricing';
 import { podCostForSlotsRouted } from '../printRouting';
+import { screeningNotice } from '../../../utils/contentScreening';
 
 // XS first (2026-08-27) — the printer's runs start at XS, and a size the seller
 // never sees is a size they never sell. Per-colourway opt-outs subtract from here.
@@ -51,7 +52,8 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
  *                     publish, shown as the "Detta trycks" receipt (slice A)
  *   shopId         — string | null (null → publish disabled with an explanation)
  *   publishing     — bool (handler in flight)
- *   result         — { name, sku } | null (success)
+ *   result         — { name, sku, updated?, screeningHits? } | null (success);
+ *                    screeningHits = blocklist terms found (A11) → caution notice
  *   error          — string | null (honest failure message)
  *   reviewedColorwayIds — Set|array of colourway ids the seller has SEEN in the strip.
  *                     LAST publish gate: every selected colourway must be reviewed
@@ -583,6 +585,13 @@ const PublishPanel = ({
               <p className="mt-1 text-[12px] text-admin-success-text">
                 {result.sku ? `SKU: ${result.sku} · ` : ''}den är {result.updated ? 'uppdaterad' : 'nu LIVE'} i butiken.
               </p>
+              {/* Brand screening (SnapWear A11): published anyway, but the seller
+                  is told plainly that the platform reviews it and why. */}
+              {result.screeningHits?.length > 0 && (
+                <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] leading-relaxed text-admin-caution-text" role="status">
+                  {screeningNotice(result.screeningHits)}
+                </p>
+              )}
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 <Link to="/admin/products" className="text-[12px] font-medium text-admin-info-text hover:underline">
                   Öppna Produkter

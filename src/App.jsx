@@ -40,6 +40,7 @@ import PlatformModels from './pages/platform/PlatformModels';
 import PlatformDac7 from './pages/platform/PlatformDac7';
 import PlatformPrinters from './pages/platform/PlatformPrinters';
 import PlatformLeads from './pages/platform/PlatformLeads';
+import PlatformReports from './pages/platform/PlatformReports';
 import PlatformUsers from './pages/platform/PlatformUsers';
 import LoginPage from './pages/LoginPage';
 import LandingPage from './pages/LandingPage';
@@ -130,6 +131,7 @@ import HandoffPage from './pages/HandoffPage';
 import OrderConfirmation from './pages/shop/OrderConfirmation';
 import OrderReturn from './pages/shop/OrderReturn';
 import WithdrawalPage from './pages/shop/WithdrawalPage';
+import InfringementReportPage from './pages/shop/InfringementReportPage';
 import CheckoutRecoveryPage from './pages/shop/CheckoutRecoveryPage';
 import CheckoutUnsubscribePage from './pages/shop/CheckoutUnsubscribePage';
 import ReviewSubmitPage from './pages/shop/ReviewSubmitPage';
@@ -300,6 +302,9 @@ function App() {
               <Route path="/leads" element={
                 <PlatformRoute><PlatformLeads /></PlatformRoute>
               } />
+              <Route path="/reports" element={
+                <PlatformRoute><PlatformReports /></PlatformRoute>
+              } />
               <Route path="/users" element={
                 <PlatformRoute><PlatformUsers /></PlatformRoute>
               } />
@@ -357,6 +362,10 @@ function App() {
               {/* Ångerfunktionen (DAL 2 kap. 10 a §) — public, guest-capable,
                   linked from the footer on every page (continuous availability). */}
               <Route path="/:shopId/angra" element={<ShopGate><WithdrawalPage /></ShopGate>} />
+              {/* Notice & takedown (SnapWear A10) — public "Rapportera intrång"
+                  form on every storefront, linked from the footer. Declared
+                  BEFORE the /:shopId/* CMS catch-all. */}
+              <Route path="/:shopId/rapportera-intrang" element={<ShopGate><InfringementReportPage /></ShopGate>} />
               {/* Abandoned-checkout recovery ("Övergiven kassa" add-on): guest
                   pages reached from the reminder email. NO AddonGate — the
                   recovery + unsubscribe links must work even if the add-on is

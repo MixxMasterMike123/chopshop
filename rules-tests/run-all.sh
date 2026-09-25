@@ -36,7 +36,13 @@
 #                                        studio template from the ROUTED printer's
 #                                        frames (sleeves dropped, px/mm kept) and
 #                                        placementFits guards publish.
+#   - content-screening-parity.test.cjs } SnapWear A11: the brand-screening
+#                                        matcher (src/utils/contentScreening.js) and
+#                                        its server twin agree; decideScreening
+#                                        state machine (loop convergence, hard block).
 #   - pod-shop-gating.test.cjs        → FIRESTORE emulator (getPrintShopContext D6 gate).
+#   - infringement-screening.test.cjs → FIRESTORE emulator (A10 reports platform-only,
+#                                        A11 screening/takedown not seller-writable).
 #
 # Local run:
 #   JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
@@ -95,6 +101,8 @@ echo "==> [1/3] production-withholding (pure unit test — POD production cost h
 node rules-tests/production-withholding.test.cjs
 echo "==> [1/3] printer-areas (pure unit test, ESM — routed printer's frames in the studio + publish fit check)"
 node rules-tests/printer-areas.test.mjs
+echo "==> [1/3] content-screening-parity (pure unit test — brand-screening matcher twins agree)"
+node rules-tests/content-screening-parity.test.cjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"
@@ -102,7 +110,8 @@ $FIREBASE emulators:exec --only firestore --project "$PROJECT" \
   'node rules-tests/firestore-rules.test.cjs \
    && node rules-tests/firestore-isolation.test.cjs \
    && node rules-tests/functions-isolation.test.cjs \
-   && node rules-tests/pod-shop-gating.test.cjs'
+   && node rules-tests/pod-shop-gating.test.cjs \
+   && node rules-tests/infringement-screening.test.cjs'
 
 # 3) The storage-emulator suite. If a Storage emulator is ALREADY listening on
 #    9199 (a dev left one running from a prior `emulators:start`), reuse it —
