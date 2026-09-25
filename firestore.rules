@@ -286,22 +286,37 @@ service cloud.firestore {
       allow write: if isPlatform();
     }
 
-    // printers/{uid} — per-print-shop capability + price tier (uid = the
-    // print_shop user's uid). Routing and tiers are PLATFORM decisions, so only
-    // platform writes.
+    // printers/{uid} — per-print-shop capability + PRICE TIER (uid = the
+    // print_shop user's uid, or e.g. 'snapwear' for an API printer). Routing
+    // and tiers are PLATFORM decisions, so only platform writes.
     //
-    // WHY read is any active user (not platform-only): a shop admin has to see
-    // the production cost of the product they are pricing, and from Slice 3 that
-    // cost comes from the ROUTED printer's tier instead of the mockup template.
-    // The doc holds no PII — just a display name, a garment list and ex-moms
-    // prices — so an active-user read leaks nothing about the printer's account
-    // (contact details stay in users/{uid}, which this does not open up).
-    // ⚠️ For that same reason a SUPPLIER's raw price basis (EUR list price, FX
-    // rate, buffer) must NEVER be written here — it lives on printerCatalog/*,
-    // which has no client rule at all (default deny, Admin SDK only).
+    // READ IS PLATFORM-ONLY (A13, "seller sees ONE number", Mikael 2026-09-25).
+    // This used to be any active user so the Design Studio could compute the
+    // production cost client-side — which let every seller read the printer's
+    // blank/print/shipping prices and, by subtraction, the platform's cut.
+    // Rules cannot hide fields, so the doc itself is closed: the studio reads
+    // the price-free printersPublic/{uid} mirror below for capability + frames,
+    // and gets the cost as ONE number from the quotePodCost callable. The
+    // Admin SDK (payment-time snapshot, quotePodCost) is unaffected.
+    // ⚠️ A SUPPLIER's raw price basis (EUR list price, FX rate, buffer) still
+    // belongs on printerCatalog/*, which has no client rule at all (default
+    // deny, Admin SDK only) — not even the platform console reads it.
     match /printers/{uid} {
-      allow read: if isActiveUser();
+      allow read: if isPlatform();
       allow write: if isPlatform();
+    }
+
+    // printersPublic/{uid} — the SELLER-READABLE projection of printers/{uid}:
+    // name, type, active, garments[], printAreasMm, provisionalAreas —
+    // NOTHING priced (field allowlist in functions/src/print/projectPrinterPublic.ts).
+    // Maintained ONLY by the syncPrintersPublicOnWrite trigger (and the SnapWear
+    // seed, through the same compiled projection), so no client — platform
+    // included — writes it: the platform edits printers/{uid} and the mirror
+    // follows. Active-user read: the studio routes and frames every garment
+    // off it; it holds no PII and no money.
+    match /printersPublic/{uid} {
+      allow read: if isActiveUser();
+      allow write: if false;
     }
 
     // ============================================================
@@ -450,6 +465,10 @@ service cloud.firestore {
       // Single-doc reads stay open: the doc ID is an unguessable capability
       // (Stripe payment-intent ID or Firestore auto-ID) and guests must view
       // their confirmation page after paying. Listing is gated.
+      // ⚠️ Because of that open get, NOTHING on an order may reveal the
+      // platform's money breakdown (A13): production costs and the Connect fee
+      // split live on orderProduction/{orderId} (server-only, below); the order
+      // carries only connect.applicationFeeAmount, the ONE deduction.
       allow get: if true;
       // B2B users list their own; B2C customers list theirs via account
       // linkage or verified email; admins list only THEIR shop; platform all.
@@ -811,6 +830,19 @@ service cloud.firestore {
     match /checkouts/{checkoutId} {
       allow read, write: if false;
     }
+
+    // orderProduction/{orderId} — the server-only MONEY half of an order (A13,
+    // "seller sees ONE number"). orders/{id} is readable by the seller and by
+    // anyone holding the order id (allow get: if true — guest confirmation), so
+    // the frozen per-line production costs and the Connect fee breakdown
+    // (commissionBps, productionWithheldOre) moved here, written by the Stripe
+    // webhook / the B2B snapshot freeze in the SAME batch/transaction as the
+    // order. The order keeps only applicationFeeAmount — the ONE deduction the
+    // seller sees. No client access at all, platform included: the platform
+    // reads money through server code (the future production statement).
+    match /orderProduction/{orderId} {
+      allow read, write: if false;
+    }
     match /checkoutSuppressions/{suppressionId} {
       allow read, write: if false;
     }
@@ -838,7 +870,7 @@ service cloud.firestore {
 
     // Default deny for everything else (incl. server-only collections:
     // passwordResets, emailVerifications, campaignParticipants,
-    // campaignRevenueTracking, printNotifications)
+    // campaignRevenueTracking, printNotifications, printerCatalog)
     match /{document=**} {
       allow read, write: if false;
     }

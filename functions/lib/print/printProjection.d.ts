@@ -30,8 +30,8 @@ export type ProductionSnapshotLine = {
     profileId: string | null;
     garment: string | null;
     printerUid: string | null;
-    printCostSek: number | null;
-    itemCostSek: number | null;
+    printCostSek?: number | null;
+    itemCostSek?: number | null;
     printerShippingSek?: number | null;
     mappingId: string | null;
     artworkId: string | null;

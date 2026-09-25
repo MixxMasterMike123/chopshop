@@ -15,11 +15,19 @@
  * the same one the seller was shown in the studio when they priced the product,
  * so it has to come from the same rules — not a second, drifting interpretation.
  *
+ * COST IS SERVER-ONLY (A13, "seller sees ONE number", 2026-09-25): only the
+ * ROUTING + CAPABILITY rules are twinned. Pricing a design off a tier
+ * (tierCostForSlots / quoteRoutedCost) lives HERE alone — the client twin has
+ * no cost code and cannot read the tiers (printers/* is platform-only); the
+ * studio asks the quotePodCost callable for one number instead. The cost
+ * fixtures moved to rules-tests/one-number-pure.test.cjs.
+ *
  * ALL AMOUNTS EX MOMS (the storage convention across the POD money path).
  */
-/** The platform's flat cut per printed garment, EX moms.
- *  MUST equal PLATFORM_CUT_SEK in src/wagons/pod-wagon/podPricing.js (40 kr =
- *  50 inkl); the parity test asserts the routed costs agree, which pins it. */
+/** The platform's flat cut per printed garment, EX moms (40 kr = 50 inkl,
+ *  Mikael 2026-08-30). SERVER-ONLY since A13: the client never adds it — it
+ *  receives the finished number from quotePodCost — so there is no client copy
+ *  to keep in sync. */
 export declare const PLATFORM_CUT_SEK = 40;
 export interface PrinterTier {
     active?: boolean;
@@ -43,16 +51,8 @@ export interface PrintRouting {
     byGarment?: Record<string, string>;
     defaultPrinterUid?: string | null;
 }
-/** A mockup template's LEGACY cost fields (the pre-routing pricing basis). */
-export interface LegacyTemplateCost {
-    blankCostSek?: number;
-    printCostSek?: Record<string, number>;
-    costSek?: number;
-}
-export type CostSource = 'printer' | 'template' | null;
 export interface RoutedCost {
-    cost: number | null;
-    source: CostSource;
+    costSek: number | null;
     printerUid: string | null;
 }
 /**
@@ -83,32 +83,33 @@ export declare const isSlotPrintableInAreas: (areasForGarment: Record<string, Pr
 export declare const isSlotPrintable: (tier: PrinterTier | null | undefined, garment: string | null | undefined, slot: string) => boolean;
 /**
  * blankCostSek[garment] + Σ printCostSek[slot], EX moms, WITHOUT the platform
- * cut (added once by podCostForSlotsRouted).
+ * cut (added once by quoteRoutedCost / stampRouting).
  *
  * null when the blank price for this garment is missing — an unquoted blank
  * cannot be guessed. A missing SLOT price counts as 0: the same lenience as the
- * legacy podCostForSlots, so an unquoted print surface does not silence the
+ * old template pricing had, so an unquoted print surface does not silence the
  * whole floor.
  */
 export declare const tierCostForSlots: (tier: PrinterTier | null | undefined, garment: string | null | undefined, slots: string[] | null | undefined) => number | null;
 /**
- * The LEGACY template-based cost, EX moms — a verbatim twin of podCostForSlots()
- * in src/wagons/pod-wagon/podPricing.js, including its own legacy fallback to
- * the deprecated flat `costSek` on stale cached template docs.
- */
-export declare const podCostForSlots: (template: LegacyTemplateCost | null | undefined, slots: string[] | null | undefined) => number | null;
-/**
- * The routed production cost (EX moms) + which basis produced it.
+ * THE seller-facing production cost (EX moms) for `garment` printed on `slots`:
  *
- *   printer  → tierCostForSlots + PLATFORM_CUT_SEK, printerUid set.
- *   template → podCostForSlots(template, slots) (legacy prices, cut already in),
- *              printerUid null: no printer stands behind that number.
- *   null     → neither basis could price it; the caller shows "—".
+ *   tierCostForSlots(routed tier) + PLATFORM_CUT_SEK
+ *
+ * — the exact expression stampRouting (printProjection.ts) freezes as the
+ * item's itemCostSek at payment, so the "Inköp" a seller is quoted in the
+ * studio and the cost later withheld in the Connect fee are the same number.
+ * Served to the client ONLY through the quotePodCost callable (A13): the tier
+ * behind it never leaves the server.
+ *
+ * { costSek: null, printerUid: null } when no printer routes the garment or
+ * the routed tier has not priced its blank. There is no template fallback any
+ * more: the legacy per-template prices were client-readable and are gone
+ * (A13), and no printer stands behind such a number anyway.
  */
-export declare const podCostForSlotsRouted: (args: {
+export declare const quoteRoutedCost: (args: {
     garment?: string | null;
     slots?: string[] | null;
     routing?: PrintRouting | null;
     printersById?: Record<string, PrinterTier> | null;
-    template?: LegacyTemplateCost | null;
 }) => RoutedCost;

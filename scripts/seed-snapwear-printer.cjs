@@ -1,7 +1,16 @@
 /**
  * seed-snapwear-printer.cjs — seed SnapWear (Łódź) as the platform's API
- * printer: its tier doc printers/snapwear, its catalog printerCatalog/snapwear,
- * and (only with --route) the routing settings/printRouting.
+ * printer: its tier doc printers/snapwear, the seller-readable price-free
+ * mirror printersPublic/snapwear, its catalog printerCatalog/snapwear, and
+ * (only with --route) the routing settings/printRouting.
+ *
+ * ⚠️ BUILD FIRST: `cd functions && npm run build` before running this. The
+ * printersPublic mirror is produced by the COMPILED projection
+ * (functions/lib/print/projectPrinterPublic.js) — the same code the
+ * syncPrintersPublicOnWrite trigger runs, so there is ONE implementation. The
+ * seed writes the mirror itself because it runs BEFORE the deploy (B9a), when
+ * the trigger does not exist yet; once deployed, the trigger re-projects the
+ * same doc on this write and converges to the identical result.
  *
  * TWO-STEP IMPORT (plan ~/.claude/plans/snapwear-printer-areas.md §1): there is
  * no xlsx parser in node_modules and no dependency may be added, so
@@ -12,8 +21,12 @@
  *
  * WHAT GETS WRITTEN
  *   printers/snapwear — { name, type:'api', active, garments[], pricing,
- *     shippingSek, printAreasMm, provisionalAreas[], catalog }. NO pricingBasis
- *     here — printers/* is readable by every active user (sellers).
+ *     shippingSek, printAreasMm, provisionalAreas[], catalog }. PLATFORM-only
+ *     read (A13); still NO pricingBasis here — the supplier's raw basis stays
+ *     on printerCatalog/* which not even the platform console reads.
+ *   printersPublic/snapwear — projectPrinterPublic(printers/snapwear AS
+ *     STORED after the write): name, type, active, garments, printAreasMm,
+ *     provisionalAreas — NO prices. What sellers' studios read (A13).
  *     type:'api' = no users/ counterpart (no print-portal login); orders go out
  *     over SnapWear's API (A6). The routing resolver treats it like any tier.
  *   printerCatalog/snapwear — { models, skus, importedAt, source, pricingBasis }
@@ -64,8 +77,9 @@
  *   - `--route` also writes settings/printRouting.
  *
  * USAGE (run by Mikael — live data write, STOP-and-surface class):
+ *   (cd functions && npm run build)                                     # REQUIRED first (projection)
  *   node scripts/seed-snapwear-printer.cjs                              # dry run
- *   node scripts/seed-snapwear-printer.cjs --eur-sek 11.20 --commit     # write tier + catalog
+ *   node scripts/seed-snapwear-printer.cjs --eur-sek 11.20 --commit     # write tier + mirror + catalog
  *   node scripts/seed-snapwear-printer.cjs --eur-sek 11.20 --commit --force --route
  *
  * Requires Application Default Credentials (gcloud auth application-default
@@ -78,6 +92,15 @@ const { createRequire } = require('module');
 const functionsRequire = createRequire(path.join(__dirname, '..', 'functions', 'package.json'));
 const admin = functionsRequire('firebase-admin');
 const { getFirestore } = functionsRequire('firebase-admin/firestore');
+// ONE implementation of the seller-readable projection (see header): fail
+// loudly if functions/lib has not been built rather than write a stale shape.
+let projectPrinterPublic;
+try {
+  ({ projectPrinterPublic } = require(path.join(__dirname, '..', 'functions', 'lib', 'print', 'projectPrinterPublic.js')));
+} catch (e) {
+  console.error('❌ functions/lib/print/projectPrinterPublic.js not found — run `cd functions && npm run build` first.');
+  process.exit(1);
+}
 
 const args = process.argv.slice(2);
 const COMMIT = args.includes('--commit');
@@ -244,11 +267,10 @@ async function main() {
     catalog: 'printerCatalog/snapwear',
   };
   // ⚠️ pricingBasis (SnapWear's EUR list prices, the FX rate, the buffer) lives
-  // on the CATALOG doc, never on printers/{uid}: firestore.rules opens
-  // printers/* to every active user so sellers can see their production cost —
-  // the SEK tier is meant to be seen, the supplier's raw price behind it is
-  // not ("never show our hand", Mikael 2026-09-25). printerCatalog/* has no
-  // client rule at all (default deny; Admin SDK only).
+  // on the CATALOG doc, never on printers/{uid}. printers/* is platform-only
+  // since A13 (sellers read the price-free printersPublic mirror and get their
+  // cost as one quoted number); printerCatalog/* has no client rule at all
+  // (default deny; Admin SDK only) — "never show our hand", Mikael 2026-09-25.
   const catalogDoc = {
     models: catalog.models,
     skus: catalog.skus,
@@ -271,6 +293,7 @@ async function main() {
   db.settings({ ignoreUndefinedProperties: true });
 
   const printerRef = db.collection('printers').doc(PRINTER_UID);
+  const publicRef = db.collection('printersPublic').doc(PRINTER_UID);
   const catalogRef = db.collection('printerCatalog').doc(PRINTER_UID);
   const routingRef = db.collection('settings').doc('printRouting');
   const [printerNow, catalogNow, routingNow] = await Promise.all([
@@ -281,6 +304,10 @@ async function main() {
 
   console.log(`📝 printers/${PRINTER_UID} ${printerNow.exists ? '(exists)' : '(new)'}:`);
   diffFields(printerNow.data, printerDoc, Object.keys(printerDoc)).forEach((l) => console.log(l));
+  // Preview of the mirror from what the stored doc WILL be (mergeFields keeps
+  // unlisted stored fields, so project the merge, not printerDoc alone).
+  const publicPreview = projectPrinterPublic({ ...(printerNow.data || {}), ...printerDoc });
+  console.log(`📝 printersPublic/${PRINTER_UID} (price-free mirror): ${Object.keys(publicPreview).join(', ')}`);
   console.log(`📝 printerCatalog/${PRINTER_UID} ${catalogNow.exists ? '(exists)' : '(new)'}:`);
   diffFields(catalogNow.data, catalogDoc, Object.keys(catalogDoc)).forEach((l) => console.log(l));
   if (ROUTE) {
@@ -314,9 +341,13 @@ async function main() {
   // printAreasMm or byGarment alive — while unlisted fields survive.
   const printerData = { ...printerDoc, updatedAt: stamp };
   await printerRef.set(printerData, { mergeFields: Object.keys(printerData) });
+  // Project the doc AS STORED (after mergeFields + the resolved timestamp), so
+  // the mirror equals what the trigger will compute from the same source.
+  const stored = (await printerRef.get()).data();
+  await publicRef.set(projectPrinterPublic(stored));
   const catalogData = { ...catalogDoc, importedAt: stamp };
   await catalogRef.set(catalogData);
-  console.log(`🔴 Wrote printers/${PRINTER_UID} + printerCatalog/${PRINTER_UID}.`);
+  console.log(`🔴 Wrote printers/${PRINTER_UID} + printersPublic/${PRINTER_UID} + printerCatalog/${PRINTER_UID}.`);
   if (ROUTE) {
     const routingData = { ...routingDoc, updatedAt: stamp, updatedBy: 'seed-snapwear-printer' };
     await routingRef.set(routingData, { mergeFields: Object.keys(routingData) });

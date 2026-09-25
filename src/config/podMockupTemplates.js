@@ -21,19 +21,10 @@
 //     label: 'T-shirt',            // Swedish UI label
 //     garment: 'tee',              // which SVG flat renders this ('tee' | 'hoodie')
 //     profileId: 'apparel_dtg',    // ↔ settings/podProfiles profile (print specs/DPI)
-//     blankCostSek: 60,            // blank garment cost (SEK, ex moms) — no print
-//     printCostSek: {              // print price PER slot; only the DESIGNED slots
-//       front: 40, back: 40,       // are charged, so front+back costs one print more
-//       pocket: 20,                // than front alone. Missing slot = 0 kr.
-//     },
-//                                  // podPricing's podCostForSlots() sums these + the
-//                                  // flat PLATFORM_CUT_SEK into the seller's cost,
-//                                  // which drives the Publish step's floor/profit/
-//                                  // margin columns; null → those show '—'.
-//     costSek: 149,                // DEPRECATED legacy field (blank + ONE print, no
-//                                  // platform cut). Only stale cached docs still
-//                                  // carry it; podCostForSlots falls back to it
-//                                  // (+ the cut) when blankCostSek is absent.
+//     // NO PRICES (A13, "seller sees ONE number", 2026-09-25). Templates used
+//     // to carry blank/print/flat legacy prices as the pre-routing cost basis;
+//     // this doc is readable by every active user, so they are gone. The cost
+//     // comes from the quotePodCost callable (src/config/podCostQuote.js).
 //     colorways: [{ id, label, hex }, …],   // selectable garment colours
 //     printAreas: { front: {x,y,w,h}, … },  // in SVG viewBox coords (800×900)
 //     printAreaMm: { front: {w,h}, … },      // physical print size ↔ profile.print_area_mm

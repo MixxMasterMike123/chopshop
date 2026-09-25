@@ -29,6 +29,7 @@ import DesignStudio from '../wagons/pod-wagon/studio/DesignStudio';
 import { seedPodMockupTemplatesCacheForDev } from '../config/podMockupTemplates';
 import { seedPodProfilesCacheForDev } from '../config/podProfiles';
 import { seedPrintRoutingCacheForDev } from '../config/printRouting';
+import { seedPodCostQuoteForDev } from '../config/podCostQuote';
 
 // Lazy: pixi.js stays in its own chunk, loaded only when the 3D testbed opens.
 const DisplacementPreview = React.lazy(() => import('../wagons/pod-wagon/studio/pixi/DisplacementPreview'));
@@ -40,13 +41,17 @@ const COLORWAYS = [
   { id: 'heather', label: 'Gråmelerad', hex: '#b7b7b7' },
 ];
 
+// The ONE quoted production cost (ex moms) the standalone PublishPanel prices
+// against — exercises the cost/profit/margin columns (A13: the panel only ever
+// receives this single number from DesignStudio's quotePodCost).
+const HARNESS_QUOTED_COST = 140;
+
 // Mirror of the seed script's tee FLAT template (scripts/seed-pod-mockup-templates.cjs).
 const FLAT_TEMPLATE = {
   id: 'tee_flat',
   label: 'T-shirt',
   garment: 'tee',
   profileId: 'apparel_dtg',
-  costSek: 149, // exercises the Publish step's cost/profit/margin columns
   colorways: COLORWAYS,
   printAreas: {
     front: { x: 280, y: 210, w: 240, h: 320 },
@@ -358,6 +363,7 @@ const Harness = () => {
         <PublishPanel
           mockups={mockups}
           template={template}
+          cost={HARNESS_QUOTED_COST}
           vatRate={0.25}
           hasArtwork={!!selectedArtwork}
           shopId="demo-shop"
@@ -735,7 +741,6 @@ const WIZARD_TEE = {
   id: 'tee_bc_e150',
   label: 'T-shirt',
   profileId: 'apparel_dtg',
-  costSek: 100,
   photo: {
     w: 960,
     h: 1093,
@@ -925,14 +930,14 @@ const WizardBench = ({ snapwear = false }) => {
       <p className="mb-4 text-[12px] text-admin-text-muted">
         Hela komponenten med seedade mall/profil-cacher — ingen Firestore. Publicera
         misslyckas (ingen backend); allt före det steget är ögonbart.
-        {snapwear && ' ?snapwear=1: routad till en falsk SnapWear-prislista med deras tryckytor (inga ärmar, ingen flat mössa).'}
+        {snapwear && ' ?snapwear=1: routad till en falsk SnapWear (printersPublic: deras tryckytor, inga ärmar, ingen flat mössa — inga priser). Kostnaden är en stubbad quotePodCost; ?nocost=1 = ingen kostnad.'}
       </p>
       <DesignStudio artwork={arts} loading={false} shopId={null} products={[]} showUnofferedTemplates={snapwear} />
     </div>
   );
 };
 
-// ?wizard=1&snapwear=1 — the studio routed to a FAKE SnapWear tier carrying the
+// ?wizard=1&snapwear=1 — the studio routed to a FAKE SnapWear printersPublic doc carrying the
 // frames scripts/seed-snapwear-printer.cjs seeds (tee 390×490, hoodie front
 // 390×280, no sleeves, no flat cap). Eyeball: sleeve cards gone in step 2,
 // hoodie front shorter, tee front larger, "Flat mössa" dimmed in step 1.
@@ -942,10 +947,8 @@ const SNAPWEAR_FIXTURE = {
   type: 'api',
   active: true,
   garments: ['tee', 'longsleeve', 'hoodie', 'sweatshirt', 'bag', 'cap', 'beanie'],
-  pricing: {
-    blankCostSek: { tee: 31, longsleeve: 102, hoodie: 120, sweatshirt: 99, bag: 22, cap: 26, beanie: 65 },
-    printCostSek: { front: 38, back: 38, pocket: 38 },
-  },
+  // printersPublic shape (A13): capability + frames only, NO prices — the
+  // cost comes from the quote stub below, like the real studio's callable.
   printAreasMm: {
     tee: { front: { w: 390, h: 490, offsetTopMm: 30 }, back: { w: 390, h: 490, offsetTopMm: 40 }, pocket: { w: 100, h: 100 } },
     hoodie: { front: { w: 390, h: 280, offsetTopMm: 30 }, back: { w: 390, h: 490, offsetTopMm: 60 }, pocket: { w: 100, h: 100 } },
@@ -964,7 +967,6 @@ const WIZARD_HOODIE = {
   label: 'Hoodie',
   garment: 'hoodie',
   profileId: 'apparel_dtg',
-  costSek: 400,
   photo: {
     w: 960,
     h: 1104,
@@ -1016,7 +1018,6 @@ const HarnessRoot = () => {
       garment: 'cap',
       slotLabels: { front: 'Framsida' },
       profileId: 'apparel_dtg',
-      costSek: 129,
       colorways: COLORWAYS,
       printAreas: { front: { x: 330, y: 330, w: 140, h: 100 } },
       printAreaMm: { front: { w: 70, h: 50 } },
@@ -1025,7 +1026,7 @@ const HarnessRoot = () => {
     if (snapwear) {
       const WIZARD_FLATCAP = {
         id: 'flatcap_flat', label: 'Flat mössa', garment: 'flatcap', slotLabels: { front: 'Framsida' },
-        profileId: 'apparel_dtg', costSek: 99, colorways: COLORWAYS,
+        profileId: 'apparel_dtg', colorways: COLORWAYS,
         printAreas: { front: { x: 250, y: 470, w: 300, h: 120 } }, printAreaMm: { front: { w: 100, h: 40 } },
       };
       seedPodMockupTemplatesCacheForDev(
@@ -1040,6 +1041,15 @@ const HarnessRoot = () => {
       seedPodMockupTemplatesCacheForDev([WIZARD_TEE, WIZARD_CAP], { provisional: true });
     }
     seedPodProfilesCacheForDev([{ id: 'apparel_dtg', label: 'Plagg (DTG)', min_dpi: 150, target_dpi: 300 }]);
+    // quotePodCost stub (A13): the studio's cost is ONE number from the server.
+    // Fixed fake figures per garment + one flat per designed slot — enough to
+    // see Inköp/golv/vinst move when a print is added. ?nocost=1 → null quote
+    // ("Produktionskostnad saknas").
+    const noCost = new URLSearchParams(window.location.search).get('nocost') === '1';
+    const HARNESS_BASE = { tee: 100, hoodie: 190, cap: 95 };
+    seedPodCostQuoteForDev(({ garment, slots }) => (noCost || !(garment in HARNESS_BASE)
+      ? { costSek: null, printerUid: null }
+      : { costSek: HARNESS_BASE[garment] + 40 * Math.max(0, slots.length - 1), printerUid: snapwear ? 'snapwear' : 'harness' }));
     return <WizardBench snapwear={snapwear} />;
   }
   return (

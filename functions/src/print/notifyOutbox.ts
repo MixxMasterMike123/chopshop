@@ -45,6 +45,7 @@ import {
   productionSnapshotPending,
   toPrintNotificationLines,
 } from './printProjection';
+import { stripSnapshotMoney } from '../payment/orderMoney';
 
 const SWEEP_BATCH = 50;
 const PURGE_AFTER_DAYS = 60;
@@ -293,8 +294,20 @@ export const onOrderProductionReady = onDocumentWritten(
             return;
           }
           const candidate = await buildProductionSnapshotInTransaction(currentData, tx);
-          tx.update(orderRef, { productionSnapshot: candidate });
-          productionOrder = { ...currentData, productionSnapshot: candidate };
+          // A13 ("seller sees ONE number"): same split as the Stripe webhook —
+          // the order (seller-readable) gets the snapshot WITHOUT its cost
+          // fields; the full one goes to the server-only orderProduction doc,
+          // in this same transaction so the two can never disagree.
+          const stripped = stripSnapshotMoney(candidate);
+          tx.update(orderRef, { productionSnapshot: stripped });
+          tx.set(db.collection('orderProduction').doc(orderId), {
+            shopId: String(currentData.shopId || ''),
+            paymentIntentId: null, // B2B invoice order — no PaymentIntent
+            snapshot: candidate,
+            connect: {},
+            createdAt: new Date(),
+          }, { merge: true });
+          productionOrder = { ...currentData, productionSnapshot: stripped };
           // A delayed paid event may find the order already printed/shipped.
           // Freeze it for historical correctness, but do not notify production
           // after production has already advanced past the notify statuses.

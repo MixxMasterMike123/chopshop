@@ -18,6 +18,7 @@ import {
   PRODUCTION_SNAPSHOT_VERSION,
   type ProductionSnapshot,
 } from '../print/printProjection';
+import { splitConnect, stripSnapshotMoney } from './orderMoney';
 // CORS not needed for webhooks - server-to-server communication
 
 // Initialize Firestore with named database
@@ -366,6 +367,35 @@ export const stripeWebhookV2 = onRequest(
         // Generate order number
         const orderNumber = `${commerceConfig.orderNumberPrefix}-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
 
+        // 💸 Stripe Connect (destination charge) — recorded for reconciliation
+        // ONLY when this was a destination charge (metadata carries the
+        // connected account). Legacy single-account orders never get this.
+        // This is the PLATFORM cut; it is INDEPENDENT of any affiliate
+        // commission (processOrderCompletion below) — never net one vs the
+        // other. transfer/fee ids come from the expanded latest_charge.
+        //
+        // A13 ("seller sees ONE number"): the fee's BREAKDOWN — commissionBps
+        // and the production cost withheld inside applicationFeeAmount
+        // (SnapWear A1, incl. moms, 0 when nothing was withheld) — must never
+        // sit on the order, which the seller and the buyer can read. splitConnect
+        // keeps the reconciliation fields + the ONE fee on the order and moves
+        // the breakdown to orderProduction/{piId} (written in the same batch
+        // as the order, below). It is the source of the per-shop monthly
+        // production statement (B4).
+        const connectSplit = metadata.connectedAccountId
+          ? splitConnect({
+            isDestinationCharge: true,
+            connectedAccountId: metadata.connectedAccountId,
+            applicationFeeAmount: parseInt(metadata.applicationFeeAmount || '0', 10),
+            applicationFeeId: ((paymentIntent.latest_charge as any)?.application_fee) || null,
+            transferId: ((paymentIntent.latest_charge as any)?.transfer) || null,
+            commissionBps: parseInt(metadata.commissionBps || '0', 10),
+            productionWithheldOre: parseInt(metadata.productionWithheldOre || '0', 10),
+            productionVatRate: metadata.productionVatRate ? parseFloat(metadata.productionVatRate) : null,
+            transferReversed: false
+          })
+          : null;
+
         // Create order data from Stripe metadata
         // Structure MUST match frontend order creation in Checkout.jsx for consistency
         const orderData = {
@@ -489,29 +519,8 @@ export const stripeWebhookV2 = onRequest(
             hasAccount: true
           }),
 
-          // 💸 Stripe Connect (destination charge) — recorded for reconciliation
-          // ONLY when this was a destination charge (metadata carries the
-          // connected account). Legacy single-account orders never get this
-          // field. This is the PLATFORM cut; it is INDEPENDENT of any affiliate
-          // commission (processOrderCompletion below) — never net one vs the
-          // other. transfer/fee ids come from the expanded latest_charge.
-          ...(metadata.connectedAccountId && {
-            connect: {
-              isDestinationCharge: true,
-              connectedAccountId: metadata.connectedAccountId,
-              applicationFeeAmount: parseInt(metadata.applicationFeeAmount || '0', 10),
-              applicationFeeId: ((paymentIntent.latest_charge as any)?.application_fee) || null,
-              transferId: ((paymentIntent.latest_charge as any)?.transfer) || null,
-              commissionBps: parseInt(metadata.commissionBps || '0', 10),
-              // SnapWear A1: the POD production cost (incl. moms) held back
-              // INSIDE applicationFeeAmount above — not on top of it. 0 / null
-              // when nothing was withheld (non-POD cart, pre-A1 PI). Source of
-              // the per-shop monthly production statement (B4).
-              productionWithheldOre: parseInt(metadata.productionWithheldOre || '0', 10),
-              productionVatRate: metadata.productionVatRate ? parseFloat(metadata.productionVatRate) : null,
-              transferReversed: false
-            }
-          }),
+          // 💸 Stripe Connect — the on-order half of connectSplit (above).
+          ...(connectSplit && { connect: connectSplit.onOrder }),
 
           // ✅ Timestamps using FieldValue for consistency with frontend
           createdAt: new Date(),
@@ -541,6 +550,7 @@ export const stripeWebhookV2 = onRequest(
 
         // Create order in Firestore with the deterministic ID; a duplicate
         // delivery fails here atomically and is treated as success
+        let fullSnapshot: ProductionSnapshot | null = null;
         try {
           // P1-16: new checkouts freeze this graph BEFORE their client secret is
           // returned. The webhook must consume that exact server-only snapshot;
@@ -578,9 +588,36 @@ export const stripeWebhookV2 = onRequest(
               });
               productionSnapshot = await buildProductionSnapshotAtomically(orderData);
             }
-            Object.assign(orderData, { productionSnapshotRequired: true, productionSnapshot });
+            // A13: the ORDER gets the snapshot WITHOUT its cost fields (routing
+            // stays — the print portal needs printerUid); the full snapshot
+            // goes to orderProduction below.
+            fullSnapshot = productionSnapshot;
+            Object.assign(orderData, {
+              productionSnapshotRequired: true,
+              productionSnapshot: stripSnapshotMoney(productionSnapshot),
+            });
           }
-          await orderRef.create(orderData);
+          // ONE batch: the order and its server-only money doc land together or
+          // not at all. batch.create on the ORDER keeps the idempotency guard —
+          // a duplicate delivery fails the WHOLE batch with ALREADY_EXISTS
+          // (caught below; doc.create() is itself a one-write batch in the
+          // Admin SDK, so the error code is unchanged), so a replay never
+          // rewrites orderProduction. set() (not create) on orderProduction:
+          // only the order may decide "already exists" — a stray money doc
+          // without its order must not block the order from ever being made.
+          const batch = db.batch();
+          batch.create(orderRef, orderData);
+          const privateConnect = connectSplit?.private || {};
+          if (fullSnapshot || Object.keys(privateConnect).length > 0) {
+            batch.set(db.collection('orderProduction').doc(paymentIntent.id), {
+              shopId: orderData.shopId,
+              paymentIntentId: paymentIntent.id,
+              snapshot: fullSnapshot,
+              connect: privateConnect,
+              createdAt: new Date(),
+            });
+          }
+          await batch.commit();
         } catch (createError: any) {
           if (createError.code === 6 /* ALREADY_EXISTS */) {
             logger.info('✅ Order already exists for payment intent', {

@@ -28,6 +28,8 @@ export { getPrintQueue, getPrintJob, getPrintQueueExport, getPrintArtworkLibrary
 export { setPrintJobStatus } from './print/setPrintJobStatus';
 export { onOrderProductionReady, sweepPrintNotifyOutbox } from './print/notifyOutbox';
 export { processPodArtwork } from './pod/processArtwork';
+export { quotePodCost } from './pod/quotePodCost';
+export { syncPrintersPublicOnWrite } from './print/syncPrintersPublic';
 export { submitLead } from './leads/submitLead';
 export { submitInfringementReport } from './infringement/submitInfringementReport';
 export { takedownProduct } from './infringement/takedownProduct';

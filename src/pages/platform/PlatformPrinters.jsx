@@ -33,23 +33,19 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions, auth } from '../../firebase/config';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import PrinterRow, {
-  inputCls, btnPrimary, PRICED_SLOTS,
+  inputCls, btnPrimary,
   docToForm, formToPricing, formToPrintAreas, incompleteAreaCells,
 } from '../../components/platform/PrinterRow';
 import { POD_GARMENTS, garmentLabel } from '../../config/podGarments';
 import toast from 'react-hot-toast';
 
-// Kim's price list 2026-08-10 (ex moms) — the "Fyll i standardprislista" seed.
-// Still requires an explicit Save; this only fills the form. Garments Kim has
-// not quoted (sweatshirt) are absent on purpose — the operator fills those in.
-// Sleeve prints are absent too: Kim has not given a sleeve price yet.
-// `beanie` IS "Mössa" in the live seed data (beanie_flat, 50:-); Kim's separate
-// "Beanie 40:-" row and the flat cap are unquoted articles → left for the
-// operator to fill after Kim confirms models (open item in the plan).
-const DEFAULT_TIER = {
-  blankCostSek: { tee: 60, longsleeve: 90, hoodie: 380, cap: 50, beanie: 50, bag: 25 },
-  printCostSek: { front: 40, back: 40, pocket: 20 },
-};
+// NO BUILT-IN PRICE LIST (A13, "seller sees ONE number", 2026-09-25). This
+// page used to ship a supplier's list prices as a "Fyll i standardprislista"
+// prefill — but this file is part of the PUBLIC bundle every browser
+// downloads, so those numbers were readable by anyone. Tiers are seeded by
+// script (scripts/seed-snapwear-printer.cjs) or typed in here; the prices only
+// ever live in printers/{uid} (platform-only). rules-tests/one-number-pure
+// greps this file for hard-coded price literals.
 
 // Order-independent JSON for "did these frames change?" (Firestore map key
 // order is not guaranteed).
@@ -199,19 +195,6 @@ const PlatformPrinters = () => {
     setOpenUid(row.id);
     setForm(docToForm(tiers[row.id]));
   };
-
-  // Prefill Kim's standard list: check every garment it prices and fill both
-  // price maps. Nothing is written until Save.
-  const fillDefaults = () =>
-    setForm((f) => {
-      const priced = POD_GARMENTS.filter((g) => typeof DEFAULT_TIER.blankCostSek[g.id] === 'number');
-      return {
-        ...f,
-        garments: new Set([...f.garments, ...priced.map((g) => g.id)]),
-        blank: { ...f.blank, ...Object.fromEntries(priced.map((g) => [g.id, String(DEFAULT_TIER.blankCostSek[g.id])])) },
-        print: { ...f.print, ...Object.fromEntries(PRICED_SLOTS.map((s) => [s.id, DEFAULT_TIER.printCostSek[s.id] != null ? String(DEFAULT_TIER.printCostSek[s.id]) : f.print[s.id]])) },
-      };
-    });
 
   const saveTier = async (row) => {
     if (savingTier) return;
@@ -440,7 +423,6 @@ const PlatformPrinters = () => {
                 areasNotice={openUid === r.id ? areasChanged : []}
                 onToggleEditor={() => toggleEditor(r)}
                 onToggleActive={() => toggleActive(r)}
-                onFillDefaults={fillDefaults}
                 onSave={() => saveTier(r)}
               />
             ))}
