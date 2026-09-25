@@ -1,0 +1,71 @@
+# SnapWear launch — ToDo (single source of truth)
+
+Status legend: ☐ open · ◐ in progress · ☑ done · ⏸ waiting on someone
+Owner: **K** = Kent · **M** = Mikael · **C** = Claude (Mikael runs) · **N** = Natalia/SnapWear
+
+Rule: nothing goes live with a SnapWear-routed order until every ☐ under **A** and **B** is ☑.
+
+---
+
+## A. Platform build (code)
+
+| # | Item | Owner | Status | Notes |
+|---|---|---|---|---|
+| A1 | **Production-cost withholding** — Σ(itemCostSek × qty × 1.25) from the frozen checkout snapshot folded into `application_fee_amount`; order stamped with the withheld amount; checkout blocks when a routed line has no price or the fee would exceed gross | C | ◐ | **BUILT + Fable-reviewed + committed 2026-09-25** on branch `worktree-agent-ae5381663d337e2e9` (18 suites green, verified independently). Awaiting Mikael's ok on the 4 defaults in section D → then merge to main + push. ⚠️ Known PRE-EXISTING edge (not A1's): base PI metadata can already hit Stripe's 50-key cap when withdrawal+pickup+campaign+affiliate+b2c+Connect all coincide; A1 adds 2 keys on POD Connect orders — track as a separate fix. Plan: `~/.claude/plans/snapwear-production-withholding.md` |
+| A1b | Seller-facing display: order detail + order list show "Produktion (inkl moms)" withheld and net payout | C | ☐ | After A1 core |
+| A2 | **SnapWear catalog import** — script reads `PrintArea.xlsx` + `SKU 21.09.xlsx` → `printers/{snapwear}` tier (SEK, seeded from EUR at a fixed rate + buffer) + `printerCatalog/snapwear` (per model frames, per SKU colour/size/id). Map by SKU number, never by colour name. Sizes normalized. | C | ⏸ | Waiting on N: missing frames (A2 can start with the 44 models present) |
+| A3 | **Per-printer print areas** — `printers/{uid}.printAreas[garment][slot]` = {w,h,offsetTop} mm; studio + DPI gate use the ROUTED printer's area; slot change re-resolves routing (sleeve → Kim); publish validates against routed printer; reroute shows "no longer fits" warning | C | ☐ | Largest piece. Mikael decision 2026-09-23: per-printer areas are crucial |
+| A4 | **Capability gating before payment** — slots/garments a printer cannot make are HIDDEN in the studio and blocked at publish + checkout (sleeve hidden now; flatcap not in SnapWear catalog → not offerable); one order → one printer (trivially true with a single printer, keep the guard) | C | ☐ | Kim removed 2026-09-25 → single printer; close the default-printer garment-check bypass anyway |
+| A5 | **Canvas PNG per line** — SnapWear frame at print resolution with our motif at our placement offset; stored under the order in the shop's server-owned print path; signed URL | C | ⏸ | Waiting on N: offset reference (collar vs pallet), DPI, max file size |
+| A6 | **Outbound submit** — `type:'api'` printer; outbox handler POSTs `/api/order/add` with stable `job_id` (= order id + line), retry-same-id, duplicate-400 = success, 422 = rejected → flag; SKU from catalog map; artwork + mockup URLs | C | ⏸ | Waiting on N: store-vs-fetch artwork, duplicate response text, charge-status in response |
+| A7 | Out-of-stock exception status on orders (accepted+charged, then SnapWear emails) | C | ☐ | Small |
+| A8 | Shipped status: manual click from SnapWear email (v1) | — | ☑ | Exists (AdminOrderDetail tracking field) |
+| A9 | Statement descriptor suffix per shop (`METEORPR* <SHOP>`) | C | ☐ | Hours |
+| A10 | "Rapportera intrång" link in every shop footer + admin takedown action (unpublish + flag + log) | C | ☐ | ~1 day |
+| A11 | Pre-publish screening: blocklist (brands/bands/clubs) on name/description/filename + platform review queue for a new shop's first products | C | ☐ | ~1 day. The item that PREVENTS the expensive IP case |
+| A12 | *Later:* inbound-email parser (Cloudflare Email Routing + Worker) → auto "shipped" + tracking; fail-safe forwards to a human | C | ☐ | After pilot. Needs N: sample shipping email |
+
+## B. Not code — must exist before first live order
+
+| # | Item | Owner | Status |
+|---|---|---|---|
+| B1 | Pilot order through the SnapWear portal (Swedish address) | K | ☐ |
+| B2 | EUR business account + virtual card for SnapWear only, monthly limit | K | ☐ |
+| B3 | Ansvarsförsäkring for Meteor PR AB + quote for IP add-on (standard policies EXCLUDE IP) | K | ☐ |
+| B4 | Accountant: reverse-charge VAT on EU purchases + production invoiced to shops with 25% moms (monthly statement per shop) | K/M | ☐ |
+| B5 | SnapWear garment certifications (Gildan, Stanley/Stella, AWD…) on file — GPSR distributor duty | K → N | ☐ |
+| B6 | DPA (EU SCC 2021/915 incorporated by reference, sub-processing structure, annexes pre-filled) → Natalia's legal team | C → K | ◐ **DRAFTED 2026-09-25**: `docs/SnapWearDocs/DPA_Meteor_PR_AB_Snapwear.md`. Kent fills placeholders, attaches official SCC PDF, sends. Want a .docx? say so |
+| B6b | Meteor↔shop biträdesavtal (`docs/legal-template-files/05-personuppgiftsbitradesavtal.md`) must be IN FORCE (accepted via platform terms gate) — the DPA chain is shop→Meteor→Snapwear; without it Meteor has no instructions to act on | M | ☐ |
+| B7 | Liability clause in platform terms: remedy = reprint, cap = what SnapWear makes good, no consequential damages; SnapWear's 2-week/3-month window mirrored as far as köplagen allows. Terms-version bump → re-acceptance via existing gate | C → M | ☐ |
+| B8 | 24h takedown routine (who watches the inbox, what gets unpublished, when payout is held) written down | K/M | ☐ |
+| B10 | **Confirm actual Stripe loss liability before first live order** (Codex 2026-09-25): on destination charges the platform is liable to Stripe for chargebacks, refunds and negative connected-account balances (SE/EU accounts are NOT auto-debited). Read the Connect platform agreement for SE, confirm dispute-recovery code covers reversal + shortfall alerting, decide a reserve policy (e.g. hold X% or delay payouts N days on new shops). Write the answer down. | M/C | ☐ |
+| B9 | Runbook: test API with auto-pay OFF → cancel every test order → enable auto-pay → first live order. Daily dashboard glance for unpaid orders until charge-status question answered | C | ☐ |
+
+## C. Questions still open with Natalia
+
+| # | Question | Blocks |
+|---|---|---|
+| C1 | Print frames for Gildan 64400, SF500, Westford Mill W101, Beechfield B445 patch, trucker cap panel, posters | A2, A5 |
+| C2 | "Offset from top" — measured from collar seam or pallet edge? | A5 |
+| C3 | Artwork file: DPI, max file size, transparent PNG accepted? | A5 |
+| C4 | Do you store the artwork at import, or fetch from our URL at print time (reprints)? | A6 |
+| C5 | Exact response for duplicate `job_id`; meaning of `design` field; neck-label payload key | A6 |
+| C6 | With auto-pay on, does the API response show charge success? What happens on a failed charge? | B9 |
+| C7 | Sample shipping-notification email — does it carry our job_id + tracking number? | A12 |
+| C8 | Shipping rate to Sweden per weight band (for the tier's shipping basis) | A1 tier |
+| C9 | Agent/reseller-of-record model? (ask once, expect no) | — |
+
+## D. Decisions Mikael has taken / still owes
+
+| Decision | Status |
+|---|---|
+| SnapWear = primary printer; Kim/SE = sleeve-only secondary | ☑ 2026-09-23 |
+| Per-printer print areas | ☑ 2026-09-23 |
+| Current one-way status flow accepted; email automation later | ☑ 2026-09-23 |
+| Reseller model accepted with hardening (A9–A11, B3, B7) | ☑ 2026-09-25 |
+| Withhold production INKL 25% moms (platform sells production to shop) | ☐ default yes — confirm |
+| POD checkout requires Stripe Connect on the shop (no Connect → cannot withhold → block) | ☐ default yes — confirm; which shops are Connect-enabled? |
+| `refundApplicationFee` policy once POD is live (production is sunk once printed → recommend false) | ☐ |
+| SnapWear shipping: flat per-order SEK in `printers/{uid}.shippingSek`, withheld once per printer per order | ☐ default yes — confirm |
+| Kim's fate | ☑ 2026-09-25 **REMOVED** — SnapWear is the ONLY printer; reinstate if ever needed. Consequence: sleeve slot HIDDEN in studio until a printer supports it (A3/A4 collapse to single-printer + capability gating) |
+| DPA draft | ☑ GO 2026-09-25 → `docs/SnapWearDocs/DPA_Meteor_PR_AB_Snapwear.md` |
