@@ -344,7 +344,8 @@ exports.orderHasVisiblePodLine = orderHasVisiblePodLine;
  * only known once that item's lines exist. Per item: resolve the printer from
  * the item's garment (all of an item's lines share one garment — one physical
  * blank), take its tier, and charge blank + Σ prints + cut ONCE, on the first
- * line. Mutates in place and returns the same array.
+ * line. Then, per PRINTER, stamp its flat shipping once (printerShippingSek).
+ * Mutates in place and returns the same array.
  */
 function stampRouting(lines, inputs) {
     const { routing, printersById } = inputs;
@@ -372,6 +373,22 @@ function stampRouting(lines, inputs) {
             ? (0, printRouting_1.tierCostForSlots)(tier, garment, itemLines.map((l) => l.placementSlot))
             : null;
         itemLines[0].itemCostSek = base === null ? null : base + printRouting_1.PLATFORM_CUT_SEK;
+    }
+    // Shipping is per PARCEL, not per item: each printer ships one parcel per
+    // order, so its flat rate is stamped once — on the first line (array order)
+    // routed to it. Every other line gets an explicit null (the snapshot must
+    // stay free of undefined for Firestore). Unrouted lines never carry it.
+    const shippingStamped = new Set();
+    for (const line of lines) {
+        line.printerShippingSek = null;
+        const uid = line.printerUid;
+        if (!uid || shippingStamped.has(uid))
+            continue;
+        shippingStamped.add(uid);
+        const ship = printersById[uid]?.shippingSek;
+        // A negative rate is operator error, never a credit: it would SHRINK the
+        // withheld production cost, so it freezes as null (= 0) instead.
+        line.printerShippingSek = typeof ship === 'number' && Number.isFinite(ship) && ship >= 0 ? ship : null;
     }
     return lines;
 }

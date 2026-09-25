@@ -32,6 +32,7 @@ export type ProductionSnapshotLine = {
     printerUid: string | null;
     printCostSek: number | null;
     itemCostSek: number | null;
+    printerShippingSek?: number | null;
     mappingId: string | null;
     artworkId: string | null;
     purpose: string | null;

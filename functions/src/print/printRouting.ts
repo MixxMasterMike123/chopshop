@@ -32,6 +32,13 @@ export interface PrinterTier {
     blankCostSek?: Record<string, number>;
     printCostSek?: Record<string, number>;
   };
+  // Flat per-ORDER shipping the printer charges for sending one parcel (SE),
+  // EX moms. Absent = 0. Frozen onto the production snapshot at payment
+  // (stampRouting → printerShippingSek) and withheld once per printer in the
+  // Connect application fee (payment/productionWithholding.ts). Server-only:
+  // the client twin (src/wagons/pod-wagon/printRouting.js) never prices
+  // shipping, so it has nothing to mirror.
+  shippingSek?: number;
 }
 
 export interface PrintRouting {
