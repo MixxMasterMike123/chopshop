@@ -280,6 +280,9 @@ service cloud.firestore {
     // The doc holds no PII — just a display name, a garment list and ex-moms
     // prices — so an active-user read leaks nothing about the printer's account
     // (contact details stay in users/{uid}, which this does not open up).
+    // ⚠️ For that same reason a SUPPLIER's raw price basis (EUR list price, FX
+    // rate, buffer) must NEVER be written here — it lives on printerCatalog/*,
+    // which has no client rule at all (default deny, Admin SDK only).
     match /printers/{uid} {
       allow read: if isActiveUser();
       allow write: if isPlatform();

@@ -54,11 +54,14 @@ const TABLE = [
   ['route to deleted printer',       'tee',   ['front'],          { byGarment: { tee: 'gone' }, defaultPrinterUid: 'kim' }, PRINTERS, LEGACY_TEE],
   ['route to DEACTIVATED printer',   'tee',   ['front'],          R_KIM_TEE, { ...PRINTERS, kim: { ...KIM, active: false } }, LEGACY_TEE],
   ['default is DEACTIVATED',         'tee',   ['front'],          R_DEFAULT_ONLY, { ...PRINTERS, smaland: { ...SMALAND, active: false } }, LEGACY_TEE],
-  ['default lacks the blank price',  'tee',   ['front'],          R_DEFAULT_ONLY, PRINTERS, LEGACY_TEE],
+  // SnapWear A4: the default must LIST the garment too (Småland only makes caps).
+  ['default does not make the garment', 'tee', ['front'],         R_DEFAULT_ONLY, PRINTERS, LEGACY_TEE],
   ['default prices it',              'cap',   ['front'],          R_DEFAULT_ONLY, PRINTERS, LEGACY_TEE],
   ['default, unpriced slot = 0 kr',  'cap',   ['front', 'back'],  R_DEFAULT_ONLY, PRINTERS, LEGACY_TEE],
-  ['unknown garment → default',      'parasol', ['front'],        R_KIM_TEE,      PRINTERS, LEGACY_TEE],
-  ['null garment → default',         null,    ['front'],          R_KIM_TEE,      PRINTERS, LEGACY_TEE],
+  ['unknown garment → nobody',       'parasol', ['front'],        R_KIM_TEE,      PRINTERS, LEGACY_TEE],
+  ['null garment → nobody',          null,    ['front'],          R_KIM_TEE,      PRINTERS, LEGACY_TEE],
+  ['blank garment → nobody',         '   ',   ['front'],          R_KIM_TEE,      PRINTERS, LEGACY_TEE],
+  ['default makes it (no route)',    'hoodie',['front'],          { byGarment: {}, defaultPrinterUid: 'kim' }, PRINTERS, LEGACY_TEE],
   ['nothing routed → template',      'tee',   ['front'],          R_EMPTY,        {},       LEGACY_TEE],
   ['nothing routed → flat legacy',   'tee',   ['front'],          R_EMPTY,        {},       LEGACY_FLAT],
   ['nothing prices it at all',       'tee',   ['front'],          R_EMPTY,        {},       {}],
@@ -101,6 +104,52 @@ const TABLE = [
   ok(cost('tee', ['front'], R_EMPTY, {}, LEGACY_TEE).printerUid === null,
     'the template fallback stamps NO printer — nobody stands behind that price');
   ok(server.PLATFORM_CUT_SEK === 40, 'the server twin carries the same 40 kr ex-moms platform cut');
+
+  console.log('\n=== SnapWear A4: the default printer must MAKE the garment (bypass closed) ===');
+  ok(client.resolvePrinterUid('tee', R_DEFAULT_ONLY, PRINTERS) === null,
+    'a tee is NOT routed to a caps-only default — nobody makes it → null (checkout 409s)');
+  ok(client.resolvePrinterUid('parasol', R_KIM_TEE, PRINTERS) === null &&
+     client.resolvePrinterUid(null, R_KIM_TEE, PRINTERS) === null,
+    'an unknown or missing garment routes to nobody (fail closed, no guessing)');
+  ok(client.resolvePrinterUid('cap', R_DEFAULT_ONLY, PRINTERS) === 'smaland',
+    'the default still takes the garments it DOES make');
+  ok(cost('tee', ['front'], R_DEFAULT_ONLY, PRINTERS, LEGACY_TEE).source === 'template',
+    'the studio cost then falls back to the template (the picker hides the garment anyway)');
+
+  console.log('\n=== isSlotPrintable: client and server agree on print capability ===');
+  const SNAP = {
+    garments: ['tee', 'hoodie', 'cap'],
+    printAreasMm: {
+      tee: { front: { w: 390, h: 490, offsetTopMm: 30 }, back: { w: 390, h: 490 }, pocket: { w: 100, h: 100 } },
+      hoodie: { front: { w: 390, h: 280 } },            // no pocket key → rides on front
+      cap: { front: { w: 70, h: 50 } },
+      broken: { front: { w: 0, h: 50 }, back: { w: '390', h: 490 } }, // unusable frames
+    },
+  };
+  const SLOT_TABLE = [
+    // [name, tier, garment, slot, expected]
+    ['tee front has a frame',           SNAP, 'tee', 'front', true],
+    ['tee back has a frame',            SNAP, 'tee', 'back', true],
+    ['tee pocket has its own frame',    SNAP, 'tee', 'pocket', true],
+    ['tee sleeve has NO frame',         SNAP, 'tee', 'left_sleeve', false],
+    ['tee right sleeve has NO frame',   SNAP, 'tee', 'right_sleeve', false],
+    ['hoodie pocket rides on front',    SNAP, 'hoodie', 'pocket', true],
+    ['hoodie back absent → no',         SNAP, 'hoodie', 'back', false],
+    ['cap back absent → no',            SNAP, 'cap', 'back', false],
+    ["'other' is never gated",          SNAP, 'tee', 'other', true],
+    ['garment without frames → open',   SNAP, 'bag', 'left_sleeve', true],
+    ['tier without printAreasMm → open', KIM, 'tee', 'left_sleeve', true],
+    ['null tier → open',                null, 'tee', 'back', true],
+    ['null garment → open',             SNAP, null, 'left_sleeve', true],
+    ['zero-width frame is no frame',    SNAP, 'broken', 'front', false],
+    ['string mm is no frame',           SNAP, 'broken', 'back', false],
+    ['pocket via an unusable front',    SNAP, 'broken', 'pocket', false],
+  ];
+  for (const [name, tier, garment, slot, expected] of SLOT_TABLE) {
+    const c = client.isSlotPrintable(tier, garment, slot);
+    const s = server.isSlotPrintable(tier, garment, slot);
+    ok(c === s && c === expected, `${name}: ${c} (client) / ${s} (server), expected ${expected}`);
+  }
 
   console.log(`\n${fail === 0 ? '✅' : '❌'} print-routing parity: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

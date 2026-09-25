@@ -1,0 +1,3669 @@
+{
+  "generatedAt": "2026-09-25T11:37:22+00:00",
+  "generator": "scripts/snapwear-xlsx-to-json.py",
+  "source": {
+    "printArea": "docs/SnapWearDocs/PrintArea.xlsx",
+    "skus": "docs/SnapWearDocs/SKU 21.09.xlsx"
+  },
+  "models": {
+    "18000": {
+      "brand": "Gildan",
+      "name": "Unisex Heavy Blend™ Crewneck Sweatshirt",
+      "garment": "sweatshirt",
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 99,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 493,
+            "offsetTopMm": 40,
+            "w": 390
+          },
+          "front": {
+            "h": 490,
+            "offsetTopMm": 30,
+            "w": 390
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": null,
+          "sleeve": null,
+          "rows": 6
+        },
+        {
+          "back": {
+            "h": 491,
+            "offsetTopMm": 40,
+            "w": 390
+          },
+          "front": {
+            "h": 490,
+            "offsetTopMm": 30,
+            "w": 390
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": null,
+          "sleeve": null,
+          "rows": 1
+        },
+        {
+          "back": {
+            "h": 492,
+            "offsetTopMm": 40,
+            "w": 390
+          },
+          "front": {
+            "h": 490,
+            "offsetTopMm": 30,
+            "w": 390
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": null,
+          "sleeve": null,
+          "rows": 1
+        }
+      ],
+      "framesMissing": false
+    },
+    "18500": {
+      "brand": "Gildan",
+      "name": "Unisex Heavy Blend™ Hooded Sweatshirt",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 60,
+        "w": 390
+      },
+      "front": {
+        "h": 280,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 111,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "18500B": {
+      "brand": "Gildan",
+      "name": "Youth Heavy Blend Hooded Sweatshirt",
+      "garment": null,
+      "back": {
+        "h": 320,
+        "offsetTopMm": 40,
+        "w": 260
+      },
+      "front": {
+        "h": 320,
+        "offsetTopMm": 20,
+        "w": 260
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 50,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 180,
+            "offsetTopMm": 40,
+            "w": 260
+          },
+          "front": {
+            "h": 180,
+            "offsetTopMm": 20,
+            "w": 260
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": null,
+          "sleeve": null,
+          "rows": 18
+        }
+      ],
+      "framesMissing": false
+    },
+    "18600": {
+      "brand": "Gildan",
+      "name": "Unisex Heavy Blend™ Full Zip Hooded Sweatshirt",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 60,
+        "w": 390
+      },
+      "front": {
+        "h": 280,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 20,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "2000": {
+      "brand": "Gildan",
+      "name": "Unisex Ultra Cotton Tee",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 72,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "2400": {
+      "brand": "Gildan",
+      "name": "Ultra Cotton Long Sleeve Tee",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 30,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "3001": {
+      "brand": "Bella+Canvas",
+      "name": "Unisex Jersey Short Sleeve Tee",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 85,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 490,
+            "offsetTopMm": 40,
+            "w": 390
+          },
+          "front": {
+            "h": 490,
+            "offsetTopMm": null,
+            "w": 390
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": null,
+          "sleeve": null,
+          "rows": 1
+        }
+      ],
+      "framesMissing": false
+    },
+    "3005": {
+      "brand": "Bella Canvas",
+      "name": "Unisex V-Neck JERSEY T-shirt",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 41,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "3480": {
+      "brand": "Bella+Canvas",
+      "name": "Unisex Jersey Tank",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 36,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "4100L": {
+      "brand": "Gildan",
+      "name": "Women's Premium Cotton Tee",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "front": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 20,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "5000": {
+      "brand": "Gildan",
+      "name": "Unisex Heavy Cotton Tee",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 152,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 370,
+            "offsetTopMm": 20,
+            "w": 290
+          },
+          "front": {
+            "h": 370,
+            "offsetTopMm": 20,
+            "w": 290
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": null,
+          "sleeve": null,
+          "rows": 3
+        }
+      ],
+      "framesMissing": false
+    },
+    "5000B": {
+      "brand": "Gildan",
+      "name": "Kids Heavy Cotton™ Tee",
+      "garment": null,
+      "back": {
+        "h": 320,
+        "offsetTopMm": 40,
+        "w": 260
+      },
+      "front": {
+        "h": 320,
+        "offsetTopMm": 20,
+        "w": 260
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 70,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 180,
+            "offsetTopMm": 40,
+            "w": 260
+          },
+          "front": {
+            "h": 180,
+            "offsetTopMm": 20,
+            "w": 260
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": null,
+          "sleeve": null,
+          "rows": 28
+        }
+      ],
+      "framesMissing": false
+    },
+    "5000L": {
+      "brand": "Gildan",
+      "name": "Women's Heavy Cotton Tee",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "front": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 50,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "6004": {
+      "brand": "Bella+Canvas",
+      "name": "Women's Favorite Tee",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "front": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 44,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "6400": {
+      "brand": "Bella+Canvas",
+      "name": "Women's Premium Tee",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "front": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 20,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "64000": {
+      "brand": "Gildan",
+      "name": "Softstyle™ Adult T-Shirt",
+      "garment": "tee",
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 161,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 490,
+            "offsetTopMm": 40,
+            "w": 390
+          },
+          "front": {
+            "h": 490,
+            "offsetTopMm": 30,
+            "w": 390
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": {
+            "h": 500,
+            "w": 400
+          },
+          "sleeve": null,
+          "rows": 23
+        },
+        {
+          "back": null,
+          "front": {
+            "h": 490,
+            "offsetTopMm": 30,
+            "w": 390
+          },
+          "innerNeck": {
+            "h": 50,
+            "w": 50
+          },
+          "outerNeck": {
+            "h": 50,
+            "w": 50
+          },
+          "palletMm": {
+            "h": 500,
+            "w": 400
+          },
+          "sleeve": null,
+          "rows": 1
+        }
+      ],
+      "framesMissing": false
+    },
+    "64000L": {
+      "brand": "Gildan",
+      "name": "Softstyle™ Ladies' T-Shirt",
+      "garment": null,
+      "back": {
+        "h": 360,
+        "offsetTopMm": 40,
+        "w": 290
+      },
+      "front": {
+        "h": 360,
+        "offsetTopMm": 30,
+        "w": 290
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 370,
+        "w": 290
+      },
+      "sleeve": null,
+      "rowCount": 60,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "64200": {
+      "brand": "Gildan",
+      "name": "Softstyle™ Adult Tank Top",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 30,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "64200L": {
+      "brand": "Gildan",
+      "name": "Softstyle™ Ladies' Tank Top",
+      "garment": null,
+      "back": {
+        "h": 360,
+        "offsetTopMm": 40,
+        "w": 290
+      },
+      "front": {
+        "h": 360,
+        "offsetTopMm": 30,
+        "w": 290
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 370,
+        "w": 290
+      },
+      "sleeve": null,
+      "rowCount": 15,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "64400": {
+      "brand": null,
+      "name": null,
+      "garment": "longsleeve",
+      "palletMm": null,
+      "front": null,
+      "back": null,
+      "sleeve": null,
+      "innerNeck": null,
+      "outerNeck": null,
+      "rowCount": 0,
+      "frameVariants": [],
+      "framesMissing": true
+    },
+    "64V00": {
+      "brand": "Gildan",
+      "name": "Men's Fitted V-Neck Short Sleeve Tee",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 45,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "B445": {
+      "brand": null,
+      "name": null,
+      "garment": "beanie",
+      "palletMm": null,
+      "front": null,
+      "back": null,
+      "sleeve": null,
+      "innerNeck": null,
+      "outerNeck": null,
+      "rowCount": 0,
+      "frameVariants": [],
+      "framesMissing": true
+    },
+    "GI4100": {
+      "brand": "Gildan",
+      "name": "Premium Cotton™ Adult T-Shirt",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 51,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "GIL4100": {
+      "brand": "Gildan",
+      "name": "Premium Cotton™ Adult T-Shirt",
+      "garment": null,
+      "back": {
+        "h": 360,
+        "offsetTopMm": 40,
+        "w": 290
+      },
+      "front": {
+        "h": 360,
+        "offsetTopMm": 30,
+        "w": 290
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 370,
+        "w": 290
+      },
+      "sleeve": null,
+      "rowCount": 20,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "JH001": {
+      "brand": "AWDis",
+      "name": "COLLEGE HOODIE",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 60,
+        "w": 390
+      },
+      "front": {
+        "h": 280,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 109,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "JH001F": {
+      "brand": "AWDiS",
+      "name": "Girlie College Hoodie",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 60,
+        "w": 290
+      },
+      "front": {
+        "h": 260,
+        "offsetTopMm": 30,
+        "w": 290
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 95,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "JH003": {
+      "brand": "AWDis",
+      "name": "VARSITY HOODIE",
+      "garment": null,
+      "back": {
+        "h": 240,
+        "offsetTopMm": 50,
+        "w": 290
+      },
+      "front": {
+        "h": 280,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 20,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "JH01J": {
+      "brand": "AWDis",
+      "name": "AWDIS SWEAT",
+      "garment": null,
+      "back": {
+        "h": 320,
+        "offsetTopMm": 40,
+        "w": 260
+      },
+      "front": {
+        "h": 320,
+        "offsetTopMm": 20,
+        "w": 260
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 67,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 180,
+            "offsetTopMm": 40,
+            "w": 260
+          },
+          "front": {
+            "h": 180,
+            "offsetTopMm": 20,
+            "w": 260
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": {
+            "h": 500,
+            "w": 400
+          },
+          "sleeve": null,
+          "rows": 18
+        },
+        {
+          "back": {
+            "h": 180,
+            "offsetTopMm": 40,
+            "w": 260
+          },
+          "front": {
+            "h": 320,
+            "offsetTopMm": 20,
+            "w": 260
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": {
+            "h": 500,
+            "w": 400
+          },
+          "sleeve": null,
+          "rows": 3
+        }
+      ],
+      "framesMissing": false
+    },
+    "JH030": {
+      "brand": "AWDis",
+      "name": "AWDIS SWEAT",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 62,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "JH050": {
+      "brand": "AWDis",
+      "name": "ZOODIE",
+      "garment": "hoodie",
+      "back": {
+        "h": 490,
+        "offsetTopMm": 60,
+        "w": 390
+      },
+      "front": {
+        "h": 280,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 47,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 490,
+            "offsetTopMm": 60,
+            "w": 390
+          },
+          "front": {
+            "h": 280,
+            "offsetTopMm": 30,
+            "w": 390
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": {
+            "h": 500,
+            "w": 400
+          },
+          "sleeve": null,
+          "rows": 15
+        }
+      ],
+      "framesMissing": false
+    },
+    "JH055": {
+      "brand": "AWDis",
+      "name": "GIRLIE ZOODIE",
+      "garment": null,
+      "back": {
+        "h": 240,
+        "offsetTopMm": 50,
+        "w": 290
+      },
+      "front": {
+        "h": 240,
+        "offsetTopMm": 30,
+        "w": 290
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 370,
+        "w": 290
+      },
+      "sleeve": null,
+      "rowCount": 10,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "JH30J": {
+      "brand": "AWDis",
+      "name": "KIDS AWDIS SWEAT",
+      "garment": null,
+      "back": {
+        "h": 320,
+        "offsetTopMm": 40,
+        "w": 260
+      },
+      "front": {
+        "h": 180,
+        "offsetTopMm": 20,
+        "w": 260
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 320,
+        "w": 260
+      },
+      "sleeve": null,
+      "rowCount": 36,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 320,
+            "offsetTopMm": 40,
+            "w": 260
+          },
+          "front": {
+            "h": 320,
+            "offsetTopMm": 20,
+            "w": 260
+          },
+          "innerNeck": {
+            "h": 50,
+            "w": 50
+          },
+          "outerNeck": {
+            "h": 50,
+            "w": 50
+          },
+          "palletMm": {
+            "h": 320,
+            "w": 260
+          },
+          "sleeve": null,
+          "rows": 15
+        }
+      ],
+      "framesMissing": false
+    },
+    "RADDER": {
+      "brand": "Stanley/Stella",
+      "name": null,
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 21,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 370,
+            "offsetTopMm": 20,
+            "w": 290
+          },
+          "front": {
+            "h": 370,
+            "offsetTopMm": 20,
+            "w": 290
+          },
+          "innerNeck": null,
+          "outerNeck": null,
+          "palletMm": null,
+          "sleeve": null,
+          "rows": 3
+        }
+      ],
+      "framesMissing": false
+    },
+    "SF500": {
+      "brand": null,
+      "name": null,
+      "garment": "hoodie",
+      "palletMm": null,
+      "front": null,
+      "back": null,
+      "sleeve": null,
+      "innerNeck": null,
+      "outerNeck": null,
+      "rowCount": 0,
+      "frameVariants": [],
+      "framesMissing": true
+    },
+    "STAU760": {
+      "brand": "Stanley/Stella",
+      "name": "Woven Tote Bag",
+      "garment": null,
+      "back": {
+        "h": 310,
+        "offsetTopMm": 50,
+        "w": 260
+      },
+      "front": {
+        "h": 310,
+        "offsetTopMm": 50,
+        "w": 260
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 3,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STSU811": {
+      "brand": "Stanley/Stella",
+      "name": "Rise",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 25,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STSU812": {
+      "brand": "Stanley/Stella",
+      "name": "Drummer",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 60,
+        "w": 390
+      },
+      "front": {
+        "h": 280,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 45,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STTM543": {
+      "brand": "Stanley/Stella",
+      "name": "Specter",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 10,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STTM558": {
+      "brand": "Stanley/Stella",
+      "name": "STANLEY SHIFTS DRY",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 15,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STTU755": {
+      "brand": "Stanley/Stella",
+      "name": "Creator",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 500,
+        "w": 400
+      },
+      "sleeve": null,
+      "rowCount": 101,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STTU758": {
+      "brand": "Stanley/Stella",
+      "name": "Rocker",
+      "garment": null,
+      "back": {
+        "h": 490,
+        "offsetTopMm": 40,
+        "w": 390
+      },
+      "front": {
+        "h": 490,
+        "offsetTopMm": 30,
+        "w": 390
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 75,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STTW013": {
+      "brand": "Stanley/Stella",
+      "name": "Dreamer",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "front": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 10,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STTW023": {
+      "brand": "Stanley/Stella",
+      "name": "Evoker",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "front": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "innerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "outerNeck": {
+        "h": 50,
+        "w": 50
+      },
+      "palletMm": {
+        "h": 370,
+        "w": 290
+      },
+      "sleeve": null,
+      "rowCount": 35,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "STTW032": {
+      "brand": "Stanley/Stella",
+      "name": "Expresser",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "front": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 162,
+      "frameVariants": [
+        {
+          "back": {
+            "h": 370,
+            "offsetTopMm": 20,
+            "w": 290
+          },
+          "front": {
+            "h": 370,
+            "offsetTopMm": 20,
+            "w": 290
+          },
+          "innerNeck": {
+            "h": 50,
+            "w": 50
+          },
+          "outerNeck": {
+            "h": 50,
+            "w": 50
+          },
+          "palletMm": {
+            "h": 370,
+            "w": 290
+          },
+          "sleeve": null,
+          "rows": 78
+        }
+      ],
+      "framesMissing": false
+    },
+    "STTW039": {
+      "brand": "Stanley/Stella",
+      "name": "Jazzer",
+      "garment": null,
+      "back": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "front": {
+        "h": 370,
+        "offsetTopMm": 20,
+        "w": 290
+      },
+      "innerNeck": null,
+      "outerNeck": null,
+      "palletMm": null,
+      "sleeve": null,
+      "rowCount": 115,
+      "frameVariants": [],
+      "framesMissing": false
+    },
+    "TRUCKER": {
+      "brand": null,
+      "name": null,
+      "garment": "cap",
+      "palletMm": null,
+      "front": null,
+      "back": null,
+      "sleeve": null,
+      "innerNeck": null,
+      "outerNeck": null,
+      "rowCount": 0,
+      "frameVariants": [],
+      "framesMissing": true
+    },
+    "W101": {
+      "brand": null,
+      "name": null,
+      "garment": "bag",
+      "palletMm": null,
+      "front": null,
+      "back": null,
+      "sleeve": null,
+      "innerNeck": null,
+      "outerNeck": null,
+      "rowCount": 0,
+      "frameVariants": [],
+      "framesMissing": true
+    }
+  },
+  "skus": {
+    "2500170": {
+      "model": "TRUCKER",
+      "garment": "cap",
+      "colour": "Black",
+      "size": "One Size"
+    },
+    "2500270": {
+      "model": "TRUCKER",
+      "garment": "cap",
+      "colour": "Red",
+      "size": "One Size"
+    },
+    "2500370": {
+      "model": "TRUCKER",
+      "garment": "cap",
+      "colour": "Blue",
+      "size": "One Size"
+    },
+    "2500470": {
+      "model": "TRUCKER",
+      "garment": "cap",
+      "colour": "Pink",
+      "size": "One Size"
+    },
+    "2605123": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "S",
+      "printAreaColour": "White"
+    },
+    "2605124": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "M",
+      "printAreaColour": "White"
+    },
+    "2605125": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "L",
+      "printAreaColour": "White"
+    },
+    "2605126": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "XL",
+      "printAreaColour": "White"
+    },
+    "2605127": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "2XL",
+      "printAreaColour": "White"
+    },
+    "2615023": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "S",
+      "printAreaColour": "Black"
+    },
+    "2615024": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "M",
+      "printAreaColour": "Black"
+    },
+    "2615025": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "L",
+      "printAreaColour": "Black"
+    },
+    "2615026": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "XL",
+      "printAreaColour": "Black"
+    },
+    "2615027": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "2XL",
+      "printAreaColour": "Black"
+    },
+    "2615028": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "3XL"
+    },
+    "2615029": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "4XL"
+    },
+    "2615030": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "5XL"
+    },
+    "2615223": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "S",
+      "printAreaColour": "Grey"
+    },
+    "2615224": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "M",
+      "printAreaColour": "Grey"
+    },
+    "2615225": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "L",
+      "printAreaColour": "Grey"
+    },
+    "2615226": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "XL",
+      "printAreaColour": "Grey"
+    },
+    "2615227": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "2XL",
+      "printAreaColour": "Grey"
+    },
+    "2615523": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Oxford Navy",
+      "size": "S",
+      "printAreaColour": "Navy"
+    },
+    "2615524": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Oxford Navy",
+      "size": "M",
+      "printAreaColour": "Navy"
+    },
+    "2615525": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Oxford Navy",
+      "size": "L",
+      "printAreaColour": "Navy"
+    },
+    "2615526": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Oxford Navy",
+      "size": "XL",
+      "printAreaColour": "Navy"
+    },
+    "2615527": {
+      "model": "JH050",
+      "garment": "hoodie",
+      "colour": "Oxford Navy",
+      "size": "2XL",
+      "printAreaColour": "Navy"
+    },
+    "2700003": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "White",
+      "size": "S",
+      "printAreaColour": "White"
+    },
+    "2700004": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "White",
+      "size": "M",
+      "printAreaColour": "White"
+    },
+    "2700005": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "White",
+      "size": "L",
+      "printAreaColour": "White"
+    },
+    "2700006": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "White",
+      "size": "XL",
+      "printAreaColour": "White"
+    },
+    "2700007": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "White",
+      "size": "2XL",
+      "printAreaColour": "White"
+    },
+    "2700008": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "White",
+      "size": "3XL",
+      "printAreaColour": "White"
+    },
+    "2700009": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "White",
+      "size": "4XL",
+      "printAreaColour": "White"
+    },
+    "2700103": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Black",
+      "size": "S",
+      "printAreaColour": "Black"
+    },
+    "2700104": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Black",
+      "size": "M",
+      "printAreaColour": "Black"
+    },
+    "2700105": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Black",
+      "size": "L",
+      "printAreaColour": "Black"
+    },
+    "2700106": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Black",
+      "size": "XL",
+      "printAreaColour": "Black"
+    },
+    "2700107": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Black",
+      "size": "2XL",
+      "printAreaColour": "Black"
+    },
+    "2700203": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sport Grey",
+      "size": "S",
+      "printAreaColour": "Sporty Grey"
+    },
+    "2700204": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sport Grey",
+      "size": "M",
+      "printAreaColour": "Sporty Grey"
+    },
+    "2700205": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sport Grey",
+      "size": "L",
+      "printAreaColour": "Sporty Grey"
+    },
+    "2700206": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sport Grey",
+      "size": "XL",
+      "printAreaColour": "Sporty Grey"
+    },
+    "2700207": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sport Grey",
+      "size": "2XL",
+      "printAreaColour": "Sporty Grey"
+    },
+    "2700208": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sport Grey",
+      "size": "3XL",
+      "printAreaColour": "Sporty Grey"
+    },
+    "2700209": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sport Grey",
+      "size": "4XL",
+      "printAreaColour": "Sporty Grey"
+    },
+    "2700303": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Royal Blue",
+      "size": "S",
+      "printAreaColour": "Royal"
+    },
+    "2700304": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Royal Blue",
+      "size": "M",
+      "printAreaColour": "Royal"
+    },
+    "2700305": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Royal Blue",
+      "size": "L",
+      "printAreaColour": "Royal"
+    },
+    "2700306": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Royal Blue",
+      "size": "XL",
+      "printAreaColour": "Royal"
+    },
+    "2700307": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Royal Blue",
+      "size": "2XL",
+      "printAreaColour": "Royal"
+    },
+    "2700308": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Royal Blue",
+      "size": "3XL",
+      "printAreaColour": "Royal"
+    },
+    "2700309": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Royal Blue",
+      "size": "4XL",
+      "printAreaColour": "Royal"
+    },
+    "2700503": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Red",
+      "size": "S",
+      "printAreaColour": "Red"
+    },
+    "2700504": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Red",
+      "size": "M",
+      "printAreaColour": "Red"
+    },
+    "2700505": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Red",
+      "size": "L",
+      "printAreaColour": "Red"
+    },
+    "2700506": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Red",
+      "size": "XL",
+      "printAreaColour": "Red"
+    },
+    "2700507": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Red",
+      "size": "2XL",
+      "printAreaColour": "Red"
+    },
+    "2700508": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Red",
+      "size": "3XL",
+      "printAreaColour": "Red"
+    },
+    "2700509": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Red",
+      "size": "4XL",
+      "printAreaColour": "Red"
+    },
+    "2700703": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Navy",
+      "size": "S",
+      "printAreaColour": "Navy"
+    },
+    "2700704": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Navy",
+      "size": "M",
+      "printAreaColour": "Navy"
+    },
+    "2700705": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Navy",
+      "size": "L",
+      "printAreaColour": "Navy"
+    },
+    "2700706": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Navy",
+      "size": "XL",
+      "printAreaColour": "Navy"
+    },
+    "2700707": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Navy",
+      "size": "2XL",
+      "printAreaColour": "Navy"
+    },
+    "2700803": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Purple",
+      "size": "S"
+    },
+    "2700804": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Purple",
+      "size": "M"
+    },
+    "2700805": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Purple",
+      "size": "L"
+    },
+    "2700806": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Purple",
+      "size": "XL"
+    },
+    "2700807": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Purple",
+      "size": "2XL"
+    },
+    "2701203": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Forest Green",
+      "size": "S",
+      "printAreaColour": "Forest Green"
+    },
+    "2701204": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Forest Green",
+      "size": "M",
+      "printAreaColour": "Forest Green"
+    },
+    "2701205": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Forest Green",
+      "size": "L",
+      "printAreaColour": "Forest Green"
+    },
+    "2701206": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Forest Green",
+      "size": "XL",
+      "printAreaColour": "Forest Green"
+    },
+    "2701207": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Forest Green",
+      "size": "2XL",
+      "printAreaColour": "Forest Green"
+    },
+    "2701303": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Orange",
+      "size": "S"
+    },
+    "2701304": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Orange",
+      "size": "M"
+    },
+    "2701305": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Orange",
+      "size": "L"
+    },
+    "2701306": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Orange",
+      "size": "XL"
+    },
+    "2701307": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Orange",
+      "size": "2XL"
+    },
+    "2701403": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Irish Green",
+      "size": "S",
+      "printAreaColour": "Irish Green"
+    },
+    "2701404": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Irish Green",
+      "size": "M",
+      "printAreaColour": "Irish Green"
+    },
+    "2701405": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Irish Green",
+      "size": "L",
+      "printAreaColour": "Irish Green"
+    },
+    "2701406": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Irish Green",
+      "size": "XL",
+      "printAreaColour": "Irish Green"
+    },
+    "2701407": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Irish Green",
+      "size": "2XL",
+      "printAreaColour": "Irish Green"
+    },
+    "2701803": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Maroon",
+      "size": "S",
+      "printAreaColour": "Maroon"
+    },
+    "2701804": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Maroon",
+      "size": "M",
+      "printAreaColour": "Maroon"
+    },
+    "2701805": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Maroon",
+      "size": "L",
+      "printAreaColour": "Maroon"
+    },
+    "2701806": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Maroon",
+      "size": "XL",
+      "printAreaColour": "Maroon"
+    },
+    "2701807": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Maroon",
+      "size": "2XL",
+      "printAreaColour": "Maroon"
+    },
+    "2701808": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Maroon",
+      "size": "3XL",
+      "printAreaColour": "Maroon"
+    },
+    "2701903": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sand",
+      "size": "S",
+      "printAreaColour": "Sand"
+    },
+    "2701904": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sand",
+      "size": "M",
+      "printAreaColour": "Sand"
+    },
+    "2701905": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sand",
+      "size": "L",
+      "printAreaColour": "Sand"
+    },
+    "2701906": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sand",
+      "size": "XL",
+      "printAreaColour": "Sand"
+    },
+    "2701907": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Sand",
+      "size": "2XL",
+      "printAreaColour": "Sand"
+    },
+    "2702103": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Caroline Blue",
+      "size": "S"
+    },
+    "2702104": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Caroline Blue",
+      "size": "M"
+    },
+    "2702105": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Caroline Blue",
+      "size": "L"
+    },
+    "2702106": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Caroline Blue",
+      "size": "XL"
+    },
+    "2702107": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Caroline Blue",
+      "size": "2XL"
+    },
+    "2702108": {
+      "model": "18000",
+      "garment": "sweatshirt",
+      "colour": "Caroline Blue",
+      "size": "3XL"
+    },
+    "2760010": {
+      "model": "W101",
+      "garment": "bag",
+      "colour": "White",
+      "size": "One Size"
+    },
+    "2760020": {
+      "model": "W101",
+      "garment": "bag",
+      "colour": "Black",
+      "size": "One Size"
+    },
+    "2760030": {
+      "model": "W101",
+      "garment": "bag",
+      "colour": "Natural",
+      "size": "One Size"
+    },
+    "2760040": {
+      "model": "W101",
+      "garment": "bag",
+      "colour": "Red",
+      "size": "One Size"
+    },
+    "2760050": {
+      "model": "W101",
+      "garment": "bag",
+      "colour": "Navy",
+      "size": "One Size"
+    },
+    "2810013": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "S"
+    },
+    "2810014": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "M"
+    },
+    "2810015": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "L"
+    },
+    "2810016": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "XL"
+    },
+    "2810017": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "2XL"
+    },
+    "2810018": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "3XL"
+    },
+    "2810019": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "4XL"
+    },
+    "2810020": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "5XL"
+    },
+    "2810023": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "S"
+    },
+    "2810024": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "M"
+    },
+    "2810025": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "L"
+    },
+    "2810026": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "XL"
+    },
+    "2810027": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "2XL"
+    },
+    "2810028": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "3XL"
+    },
+    "2810029": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "4XL"
+    },
+    "2810030": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "5XL"
+    },
+    "2810033": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "S"
+    },
+    "2810034": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "M"
+    },
+    "2810035": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "L"
+    },
+    "2810036": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "XL"
+    },
+    "2810037": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "2XL"
+    },
+    "2810038": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "3XL"
+    },
+    "2810039": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "4XL"
+    },
+    "2810040": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "5XL"
+    },
+    "2810043": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Red",
+      "size": "S"
+    },
+    "2810044": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Red",
+      "size": "M"
+    },
+    "2810045": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Red",
+      "size": "L"
+    },
+    "2810046": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Red",
+      "size": "XL"
+    },
+    "2810047": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Red",
+      "size": "2XL"
+    },
+    "2810048": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Red",
+      "size": "3XL"
+    },
+    "2810049": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Red",
+      "size": "4XL"
+    },
+    "2810050": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Red",
+      "size": "5XL"
+    },
+    "2810053": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Navy",
+      "size": "S"
+    },
+    "2810054": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Navy",
+      "size": "M"
+    },
+    "2810055": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Navy",
+      "size": "L"
+    },
+    "2810056": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Navy",
+      "size": "XL"
+    },
+    "2810057": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Navy",
+      "size": "2XL"
+    },
+    "2810058": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Navy",
+      "size": "3XL"
+    },
+    "2810059": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Navy",
+      "size": "4XL"
+    },
+    "2810060": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Navy",
+      "size": "5XL"
+    },
+    "2810123": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Light Pink",
+      "size": "S"
+    },
+    "2810124": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Light Pink",
+      "size": "M"
+    },
+    "2810125": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Light Pink",
+      "size": "L"
+    },
+    "2810126": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Light Pink",
+      "size": "XL"
+    },
+    "2810127": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Light Pink",
+      "size": "2XL"
+    },
+    "2810128": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Light Pink",
+      "size": "3XL"
+    },
+    "2810129": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Light Pink",
+      "size": "4XL"
+    },
+    "2811923": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sand",
+      "size": "S"
+    },
+    "2811924": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sand",
+      "size": "M"
+    },
+    "2811925": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sand",
+      "size": "L"
+    },
+    "2811926": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sand",
+      "size": "XL"
+    },
+    "2811927": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sand",
+      "size": "2XL"
+    },
+    "2811928": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sand",
+      "size": "3XL"
+    },
+    "2811929": {
+      "model": "SF500",
+      "garment": "hoodie",
+      "colour": "Sand",
+      "size": "4XL"
+    },
+    "4300013": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "S",
+      "printAreaColour": "Black"
+    },
+    "4300014": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "M",
+      "printAreaColour": "Black"
+    },
+    "4300015": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "L",
+      "printAreaColour": "Black"
+    },
+    "4300016": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "XL",
+      "printAreaColour": "Black"
+    },
+    "4300017": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "2XL",
+      "printAreaColour": "Black"
+    },
+    "4300018": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "3XL",
+      "printAreaColour": "Black"
+    },
+    "4300019": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "4XL",
+      "printAreaColour": "Black"
+    },
+    "4300023": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "White",
+      "size": "S",
+      "printAreaColour": "White"
+    },
+    "4300024": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "White",
+      "size": "M",
+      "printAreaColour": "White"
+    },
+    "4300025": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "White",
+      "size": "L",
+      "printAreaColour": "White"
+    },
+    "4300026": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "White",
+      "size": "XL",
+      "printAreaColour": "White"
+    },
+    "4300027": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "White",
+      "size": "2XL",
+      "printAreaColour": "White"
+    },
+    "4300028": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "White",
+      "size": "3XL",
+      "printAreaColour": "White"
+    },
+    "4300029": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "White",
+      "size": "4XL",
+      "printAreaColour": "White"
+    },
+    "4300033": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Grey",
+      "size": "S",
+      "printAreaColour": "Sport Gray"
+    },
+    "4300034": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Grey",
+      "size": "M",
+      "printAreaColour": "Sport Gray"
+    },
+    "4300035": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Grey",
+      "size": "L",
+      "printAreaColour": "Sport Gray"
+    },
+    "4300036": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Grey",
+      "size": "XL",
+      "printAreaColour": "Sport Gray"
+    },
+    "4300037": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Grey",
+      "size": "2XL",
+      "printAreaColour": "Sport Gray"
+    },
+    "4300038": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Grey",
+      "size": "3XL",
+      "printAreaColour": "Sport Grey"
+    },
+    "4300039": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Grey",
+      "size": "4XL",
+      "printAreaColour": "Sport Grey"
+    },
+    "4300043": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Navy blue",
+      "size": "S",
+      "printAreaColour": "Navy"
+    },
+    "4300044": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Navy blue",
+      "size": "M",
+      "printAreaColour": "Navy"
+    },
+    "4300045": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Navy blue",
+      "size": "L",
+      "printAreaColour": "Navy"
+    },
+    "4300046": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Navy blue",
+      "size": "XL",
+      "printAreaColour": "Navy"
+    },
+    "4300047": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Navy blue",
+      "size": "2XL",
+      "printAreaColour": "Navy"
+    },
+    "4300048": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Navy blue",
+      "size": "3XL",
+      "printAreaColour": "Navy"
+    },
+    "4300049": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Navy blue",
+      "size": "4XL",
+      "printAreaColour": "Navy"
+    },
+    "4300053": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Blue",
+      "size": "S",
+      "printAreaColour": "Royal"
+    },
+    "4300054": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Blue",
+      "size": "M",
+      "printAreaColour": "Royal"
+    },
+    "4300055": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Blue",
+      "size": "L",
+      "printAreaColour": "Royal"
+    },
+    "4300056": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Blue",
+      "size": "XL",
+      "printAreaColour": "Royal"
+    },
+    "4300057": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Blue",
+      "size": "2XL",
+      "printAreaColour": "Royal"
+    },
+    "4300058": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Blue",
+      "size": "3XL",
+      "printAreaColour": "Royal"
+    },
+    "4300059": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Blue",
+      "size": "4XL",
+      "printAreaColour": "Royal"
+    },
+    "4300060": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Blue",
+      "size": "5XL"
+    },
+    "4300063": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sky blue",
+      "size": "S",
+      "printAreaColour": "Light blue"
+    },
+    "4300064": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sky blue",
+      "size": "M",
+      "printAreaColour": "Light blue"
+    },
+    "4300065": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sky blue",
+      "size": "L",
+      "printAreaColour": "Light blue"
+    },
+    "4300066": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sky blue",
+      "size": "XL",
+      "printAreaColour": "Light blue"
+    },
+    "4300067": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sky blue",
+      "size": "2XL",
+      "printAreaColour": "Light blue"
+    },
+    "4300068": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sky blue",
+      "size": "3XL",
+      "printAreaColour": "Light Blue"
+    },
+    "4300069": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sky blue",
+      "size": "4XL",
+      "printAreaColour": "Light Blue"
+    },
+    "4300073": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "S",
+      "printAreaColour": "Red"
+    },
+    "4300074": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "M",
+      "printAreaColour": "Red"
+    },
+    "4300075": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "L",
+      "printAreaColour": "Red"
+    },
+    "4300076": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "XL",
+      "printAreaColour": "Red"
+    },
+    "4300077": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "2XL",
+      "printAreaColour": "Red"
+    },
+    "4300078": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "3XL",
+      "printAreaColour": "Red"
+    },
+    "4300079": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "4XL",
+      "printAreaColour": "Red"
+    },
+    "4300083": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Orange",
+      "size": "S",
+      "printAreaColour": "Orange"
+    },
+    "4300084": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Orange",
+      "size": "M",
+      "printAreaColour": "Orange"
+    },
+    "4300085": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Orange",
+      "size": "L",
+      "printAreaColour": "Orange"
+    },
+    "4300086": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Orange",
+      "size": "XL",
+      "printAreaColour": "Orange"
+    },
+    "4300087": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Orange",
+      "size": "2XL",
+      "printAreaColour": "Orange"
+    },
+    "4300088": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Orange",
+      "size": "3XL",
+      "printAreaColour": "Orange"
+    },
+    "4300089": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Orange",
+      "size": "4XL",
+      "printAreaColour": "Orange"
+    },
+    "4300093": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Maroon",
+      "size": "S",
+      "printAreaColour": "Maroon"
+    },
+    "4300094": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Maroon",
+      "size": "M",
+      "printAreaColour": "Maroon"
+    },
+    "4300095": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Maroon",
+      "size": "L",
+      "printAreaColour": "Maroon"
+    },
+    "4300096": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Maroon",
+      "size": "XL",
+      "printAreaColour": "Maroon"
+    },
+    "4300097": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Maroon",
+      "size": "2XL",
+      "printAreaColour": "Maroon"
+    },
+    "4300098": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Maroon",
+      "size": "3XL",
+      "printAreaColour": "Maroon"
+    },
+    "4300099": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Maroon",
+      "size": "4XL",
+      "printAreaColour": "Maroon"
+    },
+    "4300103": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Kelly Green",
+      "size": "S",
+      "printAreaColour": "Irish Green"
+    },
+    "4300104": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Kelly Green",
+      "size": "M",
+      "printAreaColour": "Irish Green"
+    },
+    "4300105": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Kelly Green",
+      "size": "L",
+      "printAreaColour": "Irish Green"
+    },
+    "4300106": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Kelly Green",
+      "size": "XL",
+      "printAreaColour": "Irish Green"
+    },
+    "4300107": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Kelly Green",
+      "size": "2XL",
+      "printAreaColour": "Irish Green"
+    },
+    "4300108": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Kelly Green",
+      "size": "3XL",
+      "printAreaColour": "Irish Green"
+    },
+    "4300109": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Kelly Green",
+      "size": "4XL",
+      "printAreaColour": "Irish Green"
+    },
+    "4300113": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Light green",
+      "size": "S",
+      "printAreaColour": "Lime"
+    },
+    "4300114": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Light green",
+      "size": "M",
+      "printAreaColour": "Lime"
+    },
+    "4300115": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Light green",
+      "size": "L",
+      "printAreaColour": "Lime"
+    },
+    "4300116": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Light green",
+      "size": "XL",
+      "printAreaColour": "Lime"
+    },
+    "4300117": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Light green",
+      "size": "2XL",
+      "printAreaColour": "Lime"
+    },
+    "4300123": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "S",
+      "printAreaColour": "Daisy"
+    },
+    "4300124": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "M",
+      "printAreaColour": "Daisy"
+    },
+    "4300125": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "L",
+      "printAreaColour": "Daisy"
+    },
+    "4300126": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "XL",
+      "printAreaColour": "Daisy"
+    },
+    "4300127": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "2XL",
+      "printAreaColour": "Daisy"
+    },
+    "4300128": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "3XL",
+      "printAreaColour": "Daisy"
+    },
+    "4300129": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "4XL",
+      "printAreaColour": "Daisy"
+    },
+    "4300133": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sapphire",
+      "size": "S",
+      "printAreaColour": "Saphire Blue"
+    },
+    "4300134": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sapphire",
+      "size": "M",
+      "printAreaColour": "Saphire Blue"
+    },
+    "4300135": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sapphire",
+      "size": "L",
+      "printAreaColour": "Saphire Blue"
+    },
+    "4300136": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sapphire",
+      "size": "XL",
+      "printAreaColour": "Saphire Blue"
+    },
+    "4300137": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sapphire",
+      "size": "2XL",
+      "printAreaColour": "Saphire Blue"
+    },
+    "4300138": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sapphire",
+      "size": "3XL",
+      "printAreaColour": "Saphire Blue"
+    },
+    "4300139": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sapphire",
+      "size": "4XL",
+      "printAreaColour": "Saphire Blue"
+    },
+    "4300143": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "S",
+      "printAreaColour": "Charcoal"
+    },
+    "4300144": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "M",
+      "printAreaColour": "Charcoal"
+    },
+    "4300145": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "L",
+      "printAreaColour": "Charcoal"
+    },
+    "4300146": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "XL",
+      "printAreaColour": "Charcoal"
+    },
+    "4300147": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "2XL",
+      "printAreaColour": "Charcoal"
+    },
+    "4300148": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "3XL",
+      "printAreaColour": "Charcoal"
+    },
+    "4300149": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "4XL",
+      "printAreaColour": "Charcoal"
+    },
+    "4300153": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Dark Chocolate",
+      "size": "S",
+      "printAreaColour": "Dark Chocolat"
+    },
+    "4300154": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Dark Chocolate",
+      "size": "M",
+      "printAreaColour": "Dark Chocolat"
+    },
+    "4300155": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Dark Chocolate",
+      "size": "L",
+      "printAreaColour": "Dark Chocolat"
+    },
+    "4300156": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Dark Chocolate",
+      "size": "XL",
+      "printAreaColour": "Dark Chocolat"
+    },
+    "4300157": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Dark Chocolate",
+      "size": "2XL",
+      "printAreaColour": "Dark Chocolat"
+    },
+    "4300163": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Forest Green",
+      "size": "S",
+      "printAreaColour": "Forest Green"
+    },
+    "4300164": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Forest Green",
+      "size": "M",
+      "printAreaColour": "Forest Green"
+    },
+    "4300165": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Forest Green",
+      "size": "L",
+      "printAreaColour": "Forest Green"
+    },
+    "4300166": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Forest Green",
+      "size": "XL",
+      "printAreaColour": "Forest Green"
+    },
+    "4300167": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Forest Green",
+      "size": "2XL",
+      "printAreaColour": "Forest Green"
+    },
+    "4300173": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Military Green",
+      "size": "S",
+      "printAreaColour": "Military Green"
+    },
+    "4300174": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Military Green",
+      "size": "M",
+      "printAreaColour": "Military Green"
+    },
+    "4300175": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Military Green",
+      "size": "L",
+      "printAreaColour": "Military Green"
+    },
+    "4300176": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Military Green",
+      "size": "XL",
+      "printAreaColour": "Military Green"
+    },
+    "4300177": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Military Green",
+      "size": "2XL",
+      "printAreaColour": "Military Green"
+    },
+    "4300178": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Military Green",
+      "size": "3XL",
+      "printAreaColour": "Military Green"
+    },
+    "4300179": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Military Green",
+      "size": "4XL",
+      "printAreaColour": "Military Green"
+    },
+    "4300183": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "S",
+      "printAreaColour": "Purple"
+    },
+    "4300184": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "M",
+      "printAreaColour": "Purple"
+    },
+    "4300185": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "L",
+      "printAreaColour": "Purple"
+    },
+    "4300186": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "XL",
+      "printAreaColour": "Purple"
+    },
+    "4300187": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "2XL",
+      "printAreaColour": "Purple"
+    },
+    "4300188": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "3XL",
+      "printAreaColour": "Purple"
+    },
+    "4300189": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "4XL",
+      "printAreaColour": "Purple"
+    },
+    "4300193": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "S",
+      "printAreaColour": "Azalea"
+    },
+    "4300194": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "M",
+      "printAreaColour": "Azalea"
+    },
+    "4300195": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "L",
+      "printAreaColour": "Azalea"
+    },
+    "4300196": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "XL",
+      "printAreaColour": "Azalea"
+    },
+    "4300197": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "2XL",
+      "printAreaColour": "Azalea"
+    },
+    "4300198": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "3XL"
+    },
+    "4300243": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Natural",
+      "size": "S",
+      "printAreaColour": "Natural"
+    },
+    "4300244": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Natural",
+      "size": "M",
+      "printAreaColour": "Natural"
+    },
+    "4300245": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Natural",
+      "size": "L",
+      "printAreaColour": "Natural"
+    },
+    "4300246": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Natural",
+      "size": "XL",
+      "printAreaColour": "Natural"
+    },
+    "4300247": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Natural",
+      "size": "2XL",
+      "printAreaColour": "Natural"
+    },
+    "4300263": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sand",
+      "size": "S",
+      "printAreaColour": "Sand"
+    },
+    "4300264": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sand",
+      "size": "M",
+      "printAreaColour": "Sand"
+    },
+    "4300265": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sand",
+      "size": "L",
+      "printAreaColour": "Sand"
+    },
+    "4300266": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sand",
+      "size": "XL",
+      "printAreaColour": "Sand"
+    },
+    "4300267": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sand",
+      "size": "2XL",
+      "printAreaColour": "Sand"
+    },
+    "4300268": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sand",
+      "size": "3XL",
+      "printAreaColour": "Sand"
+    },
+    "4300269": {
+      "model": "64000",
+      "garment": "tee",
+      "colour": "Sand",
+      "size": "4XL",
+      "printAreaColour": "Sand"
+    },
+    "4500013": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "White",
+      "size": "S"
+    },
+    "4500014": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "White",
+      "size": "M"
+    },
+    "4500015": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "White",
+      "size": "L"
+    },
+    "4500016": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "White",
+      "size": "XL"
+    },
+    "4500017": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "White",
+      "size": "2XL"
+    },
+    "4500023": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Black",
+      "size": "S"
+    },
+    "4500024": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Black",
+      "size": "M"
+    },
+    "4500025": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Black",
+      "size": "L"
+    },
+    "4500026": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Black",
+      "size": "XL"
+    },
+    "4500027": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Black",
+      "size": "2XL"
+    },
+    "4500033": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Grey",
+      "size": "S"
+    },
+    "4500034": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Grey",
+      "size": "M"
+    },
+    "4500035": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Grey",
+      "size": "L"
+    },
+    "4500036": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Grey",
+      "size": "XL"
+    },
+    "4500037": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Grey",
+      "size": "2XL"
+    },
+    "4500053": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Royal",
+      "size": "S"
+    },
+    "4500054": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Royal",
+      "size": "M"
+    },
+    "4500055": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Royal",
+      "size": "L"
+    },
+    "4500056": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Royal",
+      "size": "XL"
+    },
+    "4500057": {
+      "model": "64400",
+      "garment": "longsleeve",
+      "colour": "Royal",
+      "size": "2XL"
+    },
+    "6590010": {
+      "model": "B445",
+      "garment": "beanie",
+      "colour": "Black",
+      "size": "One Size"
+    },
+    "6590030": {
+      "model": "B445",
+      "garment": "beanie",
+      "colour": "Navy",
+      "size": "One Size"
+    },
+    "6590040": {
+      "model": "B445",
+      "garment": "beanie",
+      "colour": "Graphite",
+      "size": "One Size"
+    }
+  },
+  "skipped": [
+    {
+      "sheet": "Posters",
+      "row": 1,
+      "reason": "poster (no garment)"
+    },
+    {
+      "sheet": "Posters",
+      "row": 2,
+      "reason": "poster (no garment)"
+    },
+    {
+      "sheet": "Posters",
+      "row": 3,
+      "reason": "poster (no garment)"
+    },
+    {
+      "sheet": "Posters",
+      "row": 4,
+      "reason": "poster (no garment)"
+    },
+    {
+      "sheet": "Posters",
+      "row": 5,
+      "reason": "poster (no garment)"
+    },
+    {
+      "sheet": "Posters",
+      "row": 6,
+      "reason": "poster (no garment)"
+    }
+  ],
+  "warnings": [
+    "model 64400: not in PrintArea.xlsx — frames missing (ask SnapWear, C1)",
+    "model B445: not in PrintArea.xlsx — frames missing (ask SnapWear, C1)",
+    "model SF500: not in PrintArea.xlsx — frames missing (ask SnapWear, C1)",
+    "model TRUCKER: not in PrintArea.xlsx — frames missing (ask SnapWear, C1)",
+    "model W101: not in PrintArea.xlsx — frames missing (ask SnapWear, C1)",
+    "76 SKU colour names differ between the sheets (harmless: mapping is by SKU number), e.g. [\"2615223: 'Heather Grey' vs PrintArea 'Grey'\", \"2615224: 'Heather Grey' vs PrintArea 'Grey'\", \"2615225: 'Heather Grey' vs PrintArea 'Grey'\"]"
+  ]
+}

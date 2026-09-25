@@ -42,7 +42,15 @@
 //                                  // (wearer's perspective; same y/w/h as
 //                                  // printAreas.pocket — see placementMath's
 //                                  // templateWithPocketPosition)
+//     printOffsetTopMm: { front: 65, back: 85 },  // OPTIONAL: where the px rect's
+//                                  // TOP sits below the collar seam, in mm. Lets
+//                                  // applyPrinterAreas (printerAreas.js) move the
+//                                  // rect to the routed PRINTER's own offset.
 //   }
+//
+// The studio never renders a raw template: it renders
+// applyPrinterAreas(template, printers/{routed}.printAreasMm[garment]) — the
+// routed printer's real frames, with slots it cannot print removed.
 //
 // PHOTO template (real blank-garment photo per colourway; photo px = coord space):
 //   {
@@ -76,6 +84,10 @@
 // loadPodProfiles).
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
+
+// Pure per-printer derivation, kept in its own firebase-free module so the
+// unit suite can import it; re-exported here next to the template loader.
+export { applyPrinterAreas } from './printerAreas';
 
 const TEMPLATES_REF = () => doc(db, 'settings', 'podMockupTemplates');
 

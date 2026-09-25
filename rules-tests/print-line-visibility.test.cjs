@@ -110,15 +110,63 @@ const frozenOrder = (snapshot, extra = {}) => ({
     fakeDb({ a1: artOk('a1') }),
     ROUTING_INPUTS
   );
-  ok(noGarmentSnap.lines[0].garment === null && noGarmentSnap.lines[0].printerUid === 'smaland',
-    'a line with no garment falls to the DEFAULT printer — never to nobody');
+  // SnapWear A4: the default printer must LIST the garment, and a missing
+  // garment is listed by nobody → unrouted. At checkout that is a 409
+  // (no-printer-for-garment); in an already-paid snapshot a null line stays
+  // visible to every assigned printer (the isLineVisibleTo hinge below).
+  ok(noGarmentSnap.lines[0].garment === null && noGarmentSnap.lines[0].printerUid === null,
+    'a line with no garment routes to NOBODY (fail closed — the default no longer catches it)');
 
   const noMappingSnap = await buildProductionSnapshot(
     { shopId: 'shopA', items: [{ sku: 'GHOST', name: 'Spöke', quantity: 1, isPodProduct: true }] },
     new Map(), fakeDb({}), ROUTING_INPUTS
   );
-  ok(noMappingSnap.lines[0].unresolvedReason && noMappingSnap.lines[0].printerUid === 'smaland',
-    'the no-mapping defect line is still routed (default) so it lands in a queue to be fixed');
+  ok(noMappingSnap.lines[0].unresolvedReason && noMappingSnap.lines[0].printerUid === null,
+    'the no-mapping defect line is unrouted — still in every assigned queue via printerUid null');
+
+  console.log('\n=== stamping: slot capability (SnapWear A4) ===');
+  const SNAP_TIER = {
+    active: true,
+    garments: ['tee', 'hoodie'],
+    pricing: { blankCostSek: { tee: 31, hoodie: 120 }, printCostSek: { front: 38, back: 38, pocket: 38 } },
+    printAreasMm: {
+      tee: { front: { w: 390, h: 490 }, back: { w: 390, h: 490 } },   // no sleeves, pocket via front
+    },
+  };
+  const SNAP_INPUTS = { routing: { byGarment: { tee: 'snapwear' }, defaultPrinterUid: 'snapwear' }, printersById: { snapwear: SNAP_TIER } };
+  const sleeveSnap = await buildProductionSnapshot(
+    teeFrontBack,
+    mappings([mapRow('TEE', 'front', 'a1', 'tee'), mapRow('TEE', 'left_sleeve', 'a2', 'tee')]),
+    fakeDb({ a1: artOk('a1'), a2: artOk('a2') }),
+    SNAP_INPUTS
+  );
+  const [sFront, sSleeve] = sleeveSnap.lines;
+  ok(!sFront.unresolvedReason && sFront.printerUid === 'snapwear', 'the front line prints normally at SnapWear');
+  ok(sSleeve.unresolvedReason === 'Tryckeriet kan inte trycka på den här ytan',
+    'a sleeve line (no frame at SnapWear) is UNRESOLVED → the existing checkout 409 fires');
+  const pocketSnap = await buildProductionSnapshot(
+    teeFrontBack,
+    mappings([mapRow('TEE', 'pocket', 'a1', 'tee')]),
+    fakeDb({ a1: artOk('a1') }),
+    SNAP_INPUTS
+  );
+  ok(!pocketSnap.lines[0].unresolvedReason, 'a pocket line is printable: it rides on the front frame');
+  const hoodieSnap = await buildProductionSnapshot(
+    { shopId: 'shopA', items: [{ sku: 'HOOD', name: 'Hoodie', quantity: 1, isPodProduct: true }] },
+    mappings([mapRow('HOOD', 'left_sleeve', 'a1', 'hoodie')]),
+    fakeDb({ a1: artOk('a1') }),
+    SNAP_INPUTS
+  );
+  ok(!hoodieSnap.lines[0].unresolvedReason && hoodieSnap.lines[0].printerUid === 'snapwear',
+    'a garment with NO frames recorded is not gated (no capability data → pre-A3 behaviour)');
+  const missingArt = await buildProductionSnapshot(
+    teeFrontBack,
+    mappings([mapRow('TEE', 'left_sleeve', 'gone', 'tee')]),
+    fakeDb({}),
+    SNAP_INPUTS
+  );
+  ok(missingArt.lines[0].unresolvedReason === 'Originalet är borttaget',
+    'an already-unresolved line keeps its original, more specific reason');
 
   console.log('\n=== stamping: cost is per ITEM, not per print ===');
   const [front, back] = teeSnap.lines;

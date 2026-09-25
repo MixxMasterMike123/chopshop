@@ -11,6 +11,16 @@
 // the key is omitted from the doc rather than stored as 0, so a missing price is
 // distinguishable from a genuinely free one downstream.
 //
+// The same editor holds "Tryckytor (mm)" (SnapWear A3): the printer's real
+// print frames per garment × slot (printers/{uid}.printAreasMm). The Design
+// Studio reshapes its templates to the ROUTED printer's frames and hides slots
+// left empty here; checkout refuses them (slot-not-printable).
+//
+// API PRINTERS (SnapWear): a printers/{uid} doc with NO users/ counterpart —
+// type:'api', seeded by scripts/seed-snapwear-printer.cjs. It has no login, so
+// it is listed from the tier doc itself with an "API" badge, and Aktivera/
+// Inaktivera flips only printers/{uid}.active (there is no users doc to mirror).
+//
 // Above the printer list sits "Styrning per plagg" (Slice 3): the routing table
 // settings/printRouting, which decides WHICH printer makes which garment. It is
 // a PLATFORM decision, never per shop. The seller's production cost — and with
@@ -22,19 +32,12 @@ import { collection, getDoc, getDocs, query, where, doc, updateDoc, setDoc, serv
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, auth } from '../../firebase/config';
 import PlatformLayout from '../../components/platform/PlatformLayout';
+import PrinterRow, {
+  inputCls, btnPrimary, PRICED_SLOTS,
+  docToForm, formToPricing, formToPrintAreas, incompleteAreaCells,
+} from '../../components/platform/PrinterRow';
 import { POD_GARMENTS, garmentLabel } from '../../config/podGarments';
-import { POD_SLOTS } from '../../config/podSlots';
 import toast from 'react-hot-toast';
-
-// Shared platform-surface classes (same strings as PlatformDac7.jsx).
-const inputCls = 'rounded-lg border border-white/10 bg-gray-950 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-600 focus:border-indigo-500 focus:outline-none';
-const btnPrimary = 'rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50';
-const btnGhost = 'rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-white/10 disabled:opacity-50';
-const checkboxCls = 'rounded border-white/20 bg-gray-950 text-indigo-500 focus:ring-indigo-500';
-
-// Priced print slots — 'other' is deliberately excluded: it is the catch-all
-// placement in podSlots.js, not a surface the printer quotes a price for.
-const PRICED_SLOTS = POD_SLOTS.filter((s) => s.id !== 'other');
 
 // Kim's price list 2026-08-10 (ex moms) — the "Fyll i standardprislista" seed.
 // Still requires an explicit Save; this only fills the form. Garments Kim has
@@ -48,37 +51,10 @@ const DEFAULT_TIER = {
   printCostSek: { front: 40, back: 40, pocket: 20 },
 };
 
-/** Firestore doc → form state (numbers → strings; missing → ''). */
-const docToForm = (p) => {
-  const garments = Array.isArray(p?.garments) ? p.garments : [];
-  const blank = p?.pricing?.blankCostSek || {};
-  const print = p?.pricing?.printCostSek || {};
-  const str = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
-  return {
-    garments: new Set(garments),
-    blank: Object.fromEntries(POD_GARMENTS.map((g) => [g.id, str(blank[g.id])])),
-    print: Object.fromEntries(PRICED_SLOTS.map((s) => [s.id, str(print[s.id])])),
-  };
-};
-
-/**
- * Form state → the stored pricing maps. Empty/blank/invalid → key OMITTED
- * (see the header note: absent ≠ 0). Blank prices are kept only for garments
- * the printer actually offers, so unchecking a garment drops its price too.
- */
-const formToPricing = (form) => {
-  const num = (v) => {
-    const s = String(v ?? '').trim().replace(',', '.');
-    if (!s) return null;
-    const n = Number(s);
-    return Number.isFinite(n) && n >= 0 ? n : null;
-  };
-  const pick = (entries) => Object.fromEntries(entries.filter(([, n]) => n !== null));
-  return {
-    blankCostSek: pick(POD_GARMENTS.filter((g) => form.garments.has(g.id)).map((g) => [g.id, num(form.blank[g.id])])),
-    printCostSek: pick(PRICED_SLOTS.map((s) => [s.id, num(form.print[s.id])])),
-  };
-};
+// Order-independent JSON for "did these frames change?" (Firestore map key
+// order is not guaranteed).
+const stable = (v) => JSON.stringify(v ?? null, (k, x) => (x && typeof x === 'object' && !Array.isArray(x)
+  ? Object.fromEntries(Object.keys(x).sort().map((key) => [key, x[key]])) : x));
 
 const PlatformPrinters = () => {
   const [shops, setShops] = useState([]);
@@ -92,6 +68,8 @@ const PlatformPrinters = () => {
   const [openUid, setOpenUid] = useState(null);
   const [form, setForm] = useState(null);
   const [savingTier, setSavingTier] = useState(false);
+  // Garments whose print frames changed in the LAST tier save → the notice.
+  const [areasChanged, setAreasChanged] = useState([]);
 
   // Routing (settings/printRouting): per-garment printer + the catch-all default.
   // `route` is the edit buffer — '' means "no explicit rule, use the default".
@@ -165,38 +143,62 @@ const PlatformPrinters = () => {
     }
   };
 
-  const toggleActive = async (printer) => {
+  const shopName = (id) => shops.find((s) => s.id === id)?.name || id;
+
+  // ── One list of printers: print_shop USERS + tier docs with no user ──────
+  // A tier doc without a users/ counterpart is an API printer (type:'api',
+  // SnapWear) or a leftover tier whose account was removed ('tier'). Both can
+  // be routed to — the resolver only reads printers/{uid} — so both are shown.
+  const rows = [
+    ...printers.map((p) => ({
+      id: p.id,
+      kind: 'user',
+      title: p.contactPerson || p.email,
+      subtitle: `${p.email} · butiker: ${(p.printShopShops || []).map(shopName).join(', ') || '—'}`,
+      active: !!p.active,
+    })),
+    ...Object.values(tiers)
+      .filter((t) => !printers.some((p) => p.id === t.id))
+      .map((t) => ({
+        id: t.id,
+        kind: t.type === 'api' ? 'api' : 'tier',
+        title: t.name || t.id,
+        subtitle: t.type === 'api'
+          ? 'Ordrar skickas via tryckeriets API — ingen inloggning i tryckeriportalen'
+          : 'Prislista utan tryckerikonto',
+        // Absent flag = active, the resolver's own rule.
+        active: t.active !== false,
+      })),
+  ].map((r) => {
+    const g = Array.isArray(tiers[r.id]?.garments) ? tiers[r.id].garments : [];
+    return { ...r, garmentsLabel: g.length ? g.map(garmentLabel).join(', ') : 'inga angivna' };
+  });
+  const rowById = (uid) => rows.find((r) => r.id === uid);
+
+  const toggleActive = async (row) => {
     try {
-      await updateDoc(doc(db, 'users', printer.id), { active: !printer.active });
+      if (row.kind === 'user') {
+        await updateDoc(doc(db, 'users', row.id), { active: !row.active });
+      }
       // Mirror onto the tier doc so the routing resolver (client + server) can
       // skip a deactivated printer without a users/ read — a routed line must
-      // never land on a printer printGuard would reject.
-      await setDoc(doc(db, 'printers', printer.id), { active: !printer.active }, { merge: true });
-      toast.success(printer.active ? 'Konto inaktiverat' : 'Konto aktiverat');
+      // never land on a printer printGuard would reject. For an API printer
+      // this flag IS the switch (no users doc exists).
+      await setDoc(doc(db, 'printers', row.id), { active: !row.active }, { merge: true });
+      toast.success(row.active ? 'Tryckeri inaktiverat' : 'Tryckeri aktiverat');
       load();
     } catch (e) {
       toast.error('Kunde inte ändra status.');
     }
   };
 
-  const shopName = (id) => shops.find((s) => s.id === id)?.name || id;
-
   // ── Tier editor ──────────────────────────────────────────────────────────
-  const toggleEditor = (printer) => {
-    if (openUid === printer.id) { setOpenUid(null); setForm(null); return; }
-    setOpenUid(printer.id);
-    setForm(docToForm(tiers[printer.id]));
+  const toggleEditor = (row) => {
+    setAreasChanged([]);
+    if (openUid === row.id) { setOpenUid(null); setForm(null); return; }
+    setOpenUid(row.id);
+    setForm(docToForm(tiers[row.id]));
   };
-
-  const toggleGarment = (id) =>
-    setForm((f) => {
-      const garments = new Set(f.garments);
-      if (garments.has(id)) garments.delete(id); else garments.add(id);
-      return { ...f, garments };
-    });
-
-  const setBlank = (id, v) => setForm((f) => ({ ...f, blank: { ...f.blank, [id]: v } }));
-  const setPrint = (id, v) => setForm((f) => ({ ...f, print: { ...f.print, [id]: v } }));
 
   // Prefill Kim's standard list: check every garment it prices and fill both
   // price maps. Nothing is written until Save.
@@ -204,29 +206,49 @@ const PlatformPrinters = () => {
     setForm((f) => {
       const priced = POD_GARMENTS.filter((g) => typeof DEFAULT_TIER.blankCostSek[g.id] === 'number');
       return {
+        ...f,
         garments: new Set([...f.garments, ...priced.map((g) => g.id)]),
         blank: { ...f.blank, ...Object.fromEntries(priced.map((g) => [g.id, String(DEFAULT_TIER.blankCostSek[g.id])])) },
         print: { ...f.print, ...Object.fromEntries(PRICED_SLOTS.map((s) => [s.id, DEFAULT_TIER.printCostSek[s.id] != null ? String(DEFAULT_TIER.printCostSek[s.id]) : f.print[s.id]])) },
       };
     });
 
-  const saveTier = async (printer) => {
+  const saveTier = async (row) => {
     if (savingTier) return;
+    const incomplete = incompleteAreaCells(form);
+    if (incomplete.length) {
+      toast.error(`Ange både bredd och höjd (eller inget) för: ${incomplete.join(', ')}.`);
+      return;
+    }
     setSavingTier(true);
     try {
+      const garments = POD_GARMENTS.filter((g) => form.garments.has(g.id)).map((g) => g.id);
+      const printAreasMm = formToPrintAreas(form);
       const payload = {
-        name: printer.contactPerson || printer.email || printer.id,
-        active: printer.active === true,
-        garments: POD_GARMENTS.filter((g) => form.garments.has(g.id)).map((g) => g.id),
+        // A user printer is named after its account (as before); an API /
+        // account-less printer keeps the name on its tier doc (row.title).
+        name: row.title || row.id,
+        active: row.active === true,
+        garments,
         pricing: formToPricing(form),
+        printAreasMm,
+        provisionalAreas: garments.filter((g) => form.provisional.has(g)),
         updatedAt: serverTimestamp(),
         updatedBy: auth.currentUser?.uid || null,
       };
-      // merge:true so a future slice can add fields to the doc without this
-      // form wiping them; the three keys above are fully replaced each save.
-      await setDoc(doc(db, 'printers', printer.id), payload, { merge: true });
-      setTiers((t) => ({ ...t, [printer.id]: { ...(t[printer.id] || {}), id: printer.id, ...payload } }));
-      toast.success('Plagg & priser sparade.');
+      // mergeFields, not merge:true: a deep merge would keep a price or a print
+      // frame the operator just EMPTIED alive inside the nested maps — and an
+      // emptied frame must mean "cannot print". The listed fields are replaced
+      // whole; any other field on the doc (type, catalog, shippingSek from the
+      // SnapWear seed) survives.
+      await setDoc(doc(db, 'printers', row.id), payload, { mergeFields: Object.keys(payload) });
+      const before = tiers[row.id]?.printAreasMm || {};
+      const changed = POD_GARMENTS
+        .filter((g) => stable(before[g.id]) !== stable(printAreasMm[g.id]))
+        .map((g) => g.label);
+      setAreasChanged(changed);
+      setTiers((t) => ({ ...t, [row.id]: { ...(t[row.id] || {}), id: row.id, ...payload } }));
+      toast.success('Plagg, priser & tryckytor sparade.');
     } catch (e) {
       console.error('saveTier failed:', e);
       toast.error('Kunde inte spara plagg & priser.');
@@ -241,14 +263,12 @@ const PlatformPrinters = () => {
   // is not offerable — that is exactly the eligibility rule the resolver in
   // src/wagons/pod-wagon/printRouting.js applies, kept identical on purpose.
   const printersFor = (garmentId) =>
-    printers.filter((p) => p.active && (tiers[p.id]?.garments || []).includes(garmentId));
-  // Any printer with a tier may be the catch-all default (it need not list
-  // every garment — an unpriced blank simply falls back to the template price).
-  const defaultCandidates = printers.filter((p) => p.active && tiers[p.id]);
-  const printerLabel = (uid) => {
-    const p = printers.find((x) => x.id === uid);
-    return p?.contactPerson || p?.email || tiers[uid]?.name || uid;
-  };
+    rows.filter((r) => r.active && (tiers[r.id]?.garments || []).includes(garmentId));
+  // Any active printer with a tier may be the default. Since SnapWear A4 the
+  // resolver sends it only the garments it LISTS — a garment it does not make
+  // stays unrouted (hidden in the studio, refused at checkout).
+  const defaultCandidates = rows.filter((r) => r.active && tiers[r.id]);
+  const printerLabel = (uid) => rowById(uid)?.title || tiers[uid]?.name || uid;
   const routeDirty =
     defaultUid !== savedDefaultUid ||
     POD_GARMENTS.some((g) => (route[g.id] || '') !== (savedRoute[g.id] || ''));
@@ -385,8 +405,8 @@ const PlatformPrinters = () => {
           </div>
 
           <p className="mt-3 text-xs text-gray-500">
-            Plagg utan eget val går till standardtryckeriet. Saknas både val och standard — eller har
-            tryckeriet inget blankpris för plagget — används mallens gamla priser.
+            Plagg utan eget val går till standardtryckeriet — men bara om det tillverkar plagget. Ett plagg
+            som inget tryckeri tillverkar visas inte i designstudion och kan inte köpas.
           </p>
 
           {/* Frozen-cost notice. podCostSek is stamped on the product at publish
@@ -405,111 +425,25 @@ const PlatformPrinters = () => {
         <h2 className="mb-2 text-sm font-semibold">Befintliga tryckerier</h2>
         {loading ? (
           <p className="text-sm text-gray-400">Laddar…</p>
-        ) : printers.length === 0 ? (
-          <p className="text-sm text-gray-400">Inga tryckerikonton ännu.</p>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-gray-400">Inga tryckerier ännu.</p>
         ) : (
           <div className="space-y-2">
-            {printers.map((p) => {
-              const tier = tiers[p.id];
-              const tierGarments = Array.isArray(tier?.garments) ? tier.garments : [];
-              const open = openUid === p.id;
-              return (
-              <div key={p.id} className="rounded-lg border border-white/10 bg-white/5">
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-white">{p.contactPerson || p.email}</span>
-                      <span className={'rounded px-1.5 py-0.5 text-xs ' + (p.active ? 'bg-emerald-500/15 text-emerald-300' : 'bg-gray-500/20 text-gray-400')}>
-                        {p.active ? 'Aktiv' : 'Inaktiv'}
-                      </span>
-                    </div>
-                    <div className="truncate text-xs text-gray-400">
-                      {p.email} · butiker: {(p.printShopShops || []).map(shopName).join(', ') || '—'}
-                    </div>
-                    <div className="truncate text-xs text-gray-500">
-                      plagg: {tierGarments.length ? tierGarments.map(garmentLabel).join(', ') : 'inga angivna'}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button onClick={() => toggleEditor(p)}
-                      className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10">
-                      {open ? 'Stäng' : 'Plagg & priser'}
-                    </button>
-                    <button onClick={() => toggleActive(p)}
-                      className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10">
-                      {p.active ? 'Inaktivera' : 'Aktivera'}
-                    </button>
-                  </div>
-                </div>
-
-                {open && form && (
-                  <div className="border-t border-white/10 px-4 py-4">
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-white">Plagg &amp; priser</h3>
-                      <span className="rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-300">
-                        Alla priser ex. moms
-                      </span>
-                    </div>
-                    <p className="mb-4 text-xs text-gray-500">
-                      Kryssa i de plagg tryckeriet kan tillverka och ange blankpris per plagg samt tryckpris
-                      per placering. Tomt fält = inget pris angivet (sparas inte).
-                    </p>
-
-                    <div className="mb-5">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                        Plagg &amp; blankpris (kr, ex. moms)
-                      </div>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {POD_GARMENTS.map((g) => {
-                          const on = form.garments.has(g.id);
-                          return (
-                            <div key={g.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-gray-900 px-3 py-2">
-                              <label className="flex min-w-0 items-center gap-2 text-sm text-gray-300">
-                                <input type="checkbox" checked={on} onChange={() => toggleGarment(g.id)} className={checkboxCls} />
-                                <span className="truncate">{g.label}</span>
-                              </label>
-                              <input type="number" min="0" step="1" inputMode="decimal"
-                                value={form.blank[g.id]} disabled={!on}
-                                onChange={(e) => setBlank(g.id, e.target.value)}
-                                placeholder="—"
-                                className={`w-24 text-right tabular-nums disabled:opacity-40 ${inputCls}`} />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="mb-5">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                        Tryckpris per placering (kr, ex. moms)
-                      </div>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {PRICED_SLOTS.map((slot) => (
-                          <div key={slot.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-gray-900 px-3 py-2">
-                            <span className="truncate text-sm text-gray-300">{slot.label}</span>
-                            <input type="number" min="0" step="1" inputMode="decimal"
-                              value={form.print[slot.id]}
-                              onChange={(e) => setPrint(slot.id, e.target.value)}
-                              placeholder="—"
-                              className={`w-24 text-right tabular-nums ${inputCls}`} />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      <button type="button" onClick={fillDefaults} className={btnGhost}>
-                        Fyll i standardprislista
-                      </button>
-                      <button type="button" onClick={() => saveTier(p)} disabled={savingTier} className={btnPrimary}>
-                        {savingTier ? 'Sparar…' : 'Spara'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-              );
-            })}
+            {rows.map((r) => (
+              <PrinterRow
+                key={r.id}
+                row={r}
+                open={openUid === r.id}
+                form={openUid === r.id ? form : null}
+                setForm={setForm}
+                saving={savingTier}
+                areasNotice={openUid === r.id ? areasChanged : []}
+                onToggleEditor={() => toggleEditor(r)}
+                onToggleActive={() => toggleActive(r)}
+                onFillDefaults={fillDefaults}
+                onSave={() => saveTier(r)}
+              />
+            ))}
           </div>
         )}
       </div>

@@ -11,7 +11,9 @@
 // Storing mm (not viewBox px, not %) means the SAME placement re-renders correctly
 // when the provisional SVG flats are replaced by the real printshop garment photos
 // (whose px geometry will differ but whose physical print area is identical).
-import { effectiveDpiFor } from '../../../utils/podValidation';
+// Explicit .js: this module is also imported by plain `node` (rules-tests
+// placement suite), where ESM needs the extension; Vite resolves either way.
+import { effectiveDpiFor } from '../../../utils/podValidation.js';
 
 // Smallest allowed artwork width. Below ~2 cm a chest print is a production
 // mistake, and the resize handle becomes ungrabbable.
@@ -154,6 +156,35 @@ export const clampPlacement = (placement, template, slot, artwork, minDpi = null
     wMm,
     rotationDeg,
   };
+};
+
+// Float slack for "is this placement already clamped?" — clampPlacement's
+// arithmetic (rotated AABB margins) can differ from a stored value by far less
+// than this; anything bigger is a real out-of-area or over-DPI placement.
+const FIT_TOLERANCE_MM = 0.05;
+
+/**
+ * placementFits(placement, template, slot, artwork, minDpi) → boolean
+ *
+ * Publish-time check (SnapWear A3): does a stored placement still sit inside
+ * the slot's CURRENT print area — the one derived for the routed printer —
+ * i.e. is clampPlacement a no-op on it (position, width incl. the DPI cap,
+ * rotation)? A placement made against another area (the printer's frame
+ * changed, or it was set before the frames were known) is not.
+ *   • slot missing from the template → false (the printer cannot print it).
+ *   • placement null → true: the slot uses defaultPlacement/containPlacement,
+ *     which are computed against the current area and always fit.
+ *   • artwork without known dims → true: nothing can be clamped either, and
+ *     the studio cannot compose such a file anyway.
+ */
+export const placementFits = (placement, template, slot, artwork, minDpi = null) => {
+  if (!template?.printAreas?.[slot] || !template?.printAreaMm?.[slot]) return false;
+  if (!placement) return true;
+  if (!artworkAspect(artwork)) return true;
+  const c = clampPlacement(placement, template, slot, artwork, minDpi);
+  const near = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) <= FIT_TOLERANCE_MM;
+  return near(c.xMm, placement.xMm) && near(c.yMm, placement.yMm) && near(c.wMm, placement.wMm) &&
+    Math.abs((c.rotationDeg || 0) - (placement.rotationDeg || 0)) <= 0.01;
 };
 
 /**

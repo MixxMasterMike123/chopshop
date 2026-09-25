@@ -32,6 +32,10 @@
 #                                        (itemCostSek×qty + one printer shipping,
 #                                        ×1.25) withheld in the Connect fee;
 #                                        withheld=0 keeps legacy params identical.
+#   - printer-areas.test.mjs          } SnapWear A3: applyPrinterAreas derives the
+#                                        studio template from the ROUTED printer's
+#                                        frames (sleeves dropped, px/mm kept) and
+#                                        placementFits guards publish.
 #   - pod-shop-gating.test.cjs        → FIRESTORE emulator (getPrintShopContext D6 gate).
 #
 # Local run:
@@ -89,6 +93,8 @@ echo "==> [1/3] print-line-visibility (pure unit test — frozen printerUid/cost
 node rules-tests/print-line-visibility.test.cjs
 echo "==> [1/3] production-withholding (pure unit test — POD production cost held in the Connect fee)"
 node rules-tests/production-withholding.test.cjs
+echo "==> [1/3] printer-areas (pure unit test, ESM — routed printer's frames in the studio + publish fit check)"
+node rules-tests/printer-areas.test.mjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"

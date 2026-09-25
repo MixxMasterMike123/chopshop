@@ -185,6 +185,15 @@ const HOODIE_DARK_COLORWAYS = {
   orchid: { blend: 'normal' },
 };
 
+// Where the px print rects' TOP edge sits below the collar seam, in mm
+// (POD_PRINT_SPEC §1: front starts 60–70 mm, back 80–90 mm below the seam —
+// the mid values). DATA for applyPrinterAreas (src/config/printerAreas.js):
+// when the ROUTED printer's frame carries its own offsetTopMm (SnapWear: front
+// 30, back 40), the studio moves the rect by the difference so the preview
+// shows where that printer actually prints. Without this field the studio
+// keeps the rect's top where it is — nothing breaks before a reseed.
+const APPAREL_PRINT_OFFSET_TOP_MM = { front: 65, back: 85 };
+
 const TEMPLATES = [
   {
     id: 'tee_bc_e150',
@@ -194,6 +203,7 @@ const TEMPLATES = [
     // they carry `garment` too (src/config/podMockupTemplates.js
     // garmentOfTemplate falls back to the id prefix for un-reseeded docs).
     garment: 'tee',
+    printOffsetTopMm: APPAREL_PRINT_OFFSET_TOP_MM,
     profileId: 'apparel_dtg',
     // Kim's price list 2026-08-10: blank tee 60:-, stort tryck (fram/bak) 40:-,
     // pocket 20:-. The seller's cost is summed per DESIGNED slot in podPricing's
@@ -297,6 +307,7 @@ const TEMPLATES = [
     id: 'hoodie_hanging',
     label: 'Hoodie',
     garment: 'hoodie',
+    printOffsetTopMm: APPAREL_PRINT_OFFSET_TOP_MM,
     profileId: 'apparel_dtg',
     // Kim's price list 2026-08-10: blank hoodie 380:-, stort tryck 40:-, pocket 20:-.
     blankCostSek: sek(380),
@@ -370,6 +381,7 @@ const TEMPLATES = [
     id: 'longsleeve_hanging',
     label: 'Långärmad',
     garment: 'longsleeve',
+    printOffsetTopMm: APPAREL_PRINT_OFFSET_TOP_MM,
     profileId: 'apparel_dtg',
     // Kim's price list 2026-08-10: stort tryck (fram/bak) 40:-, pocket 20:-.
     // PROVISORISKT: blank longsleeve saknas i Systemas prislista — 72:- är en
@@ -453,6 +465,7 @@ const TEMPLATES = [
     id: 'sweatshirt_flat',
     label: 'Sweatshirt',
     garment: 'sweatshirt',
+    printOffsetTopMm: APPAREL_PRINT_OFFSET_TOP_MM,
     profileId: 'apparel_dtg',
     // PROVISORISKT: sweatshirt-plagget saknas i Kims prislista — 159:- är den
     // gamla schablonen 199 minus ett stort tryck (40). Tryckpriserna delas med

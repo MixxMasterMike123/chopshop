@@ -30,18 +30,23 @@ import { PLATFORM_CUT_SEK, podCostForSlots } from './podPricing.js';
  * The routing decision, in one place:
  *   1. An EXPLICIT route (routing.byGarment[garment]) wins — but only if that
  *      printer is still eligible: it has a printers/{uid} doc (deleting the doc
- *      un-routes it) AND that doc lists this garment in `garments[]`. A stale
- *      route to a printer that no longer makes the garment must NOT silently
- *      price the product off the wrong tier — it falls through to the default.
- *   2. Otherwise the DEFAULT printer (routing.defaultPrinterUid), if it has a
- *      tier doc. The default is deliberately NOT required to list the garment:
- *      it is the operator's "everything else goes here" catch-all, and its tier
- *      simply may not price that blank (→ tierCostForSlots returns null → the
- *      caller falls back to the template).
- *   3. Otherwise null — nothing is routed.
+ *      un-routes it), it is not deactivated, AND that doc lists this garment in
+ *      `garments[]`. A stale route to a printer that no longer makes the
+ *      garment must NOT silently price the product off the wrong tier — it
+ *      falls through to the default.
+ *   2. Otherwise the DEFAULT printer (routing.defaultPrinterUid) — under the
+ *      SAME eligibility rule, INCLUDING "lists the garment" (SnapWear A4,
+ *      2026-09-25). The default used to be an unconditional catch-all; that
+ *      was a capability bypass: a flat cap SnapWear cannot make would have
+ *      been "routed" to SnapWear, withheld nothing (no blank price) and been
+ *      sent nowhere. The default now means "who makes the garments nobody
+ *      routed explicitly", never "who gets what nobody can make".
+ *   3. Otherwise null — nothing is routed. The studio hides such a garment and
+ *      checkout refuses it (409 no-printer-for-garment).
  *
  * A null/unknown `garment` (an old mapping row, a template we can't classify)
- * takes route 2 straight away: there is no per-garment rule to apply.
+ * is listed by no printer → null. Fail closed: guessing would print a hoodie
+ * off a tee tier.
  */
 export const resolvePrinterUid = (garment, routing, printersById) => {
   const printers = printersById || {};
@@ -54,16 +59,47 @@ export const resolvePrinterUid = (garment, routing, printersById) => {
   // (docs written before the mirror existed).
   const eligible = (uid) => !!uid && !!printers[uid] && printers[uid].active !== false;
 
-  if (g) {
-    const uid = byGarment[g];
-    const tier = eligible(uid) ? printers[uid] : null;
-    const garments = Array.isArray(tier?.garments) ? tier.garments : [];
-    if (tier && garments.includes(g)) return uid;
-  }
+  if (!g) return null;
+  const makes = (uid) =>
+    eligible(uid) && Array.isArray(printers[uid].garments) && printers[uid].garments.includes(g);
 
+  const routedUid = byGarment[g];
+  if (makes(routedUid)) return routedUid;
   const fallbackUid = routing?.defaultPrinterUid || null;
-  return eligible(fallbackUid) ? fallbackUid : null;
+  return makes(fallbackUid) ? fallbackUid : null;
 };
+
+// A usable print frame: both sides positive, finite millimetres.
+const isArea = (a) =>
+  !!a && typeof a === 'object' && Number.isFinite(a.w) && a.w > 0 && Number.isFinite(a.h) && a.h > 0;
+
+/**
+ * isSlotPrintableInAreas(areasForGarment, slot) → boolean
+ *
+ * Can a printer whose frames for ONE garment are `areasForGarment`
+ * (printers/{uid}.printAreasMm[garment] = { [slot]: { w, h, offsetTopMm? } })
+ * print `slot`?
+ *   • no frames recorded for the garment (null / not an object) → true: the
+ *     printer published no capability data, so nothing is gated — the pre-A3
+ *     behaviour, and what every tier without printAreasMm keeps.
+ *   • 'other' → true: the catch-all placement is not a physical surface.
+ *   • the slot has its own frame → true.
+ *   • 'pocket' without one → true when `front` has a frame: the pocket is a
+ *     POSITION inside the front canvas (SnapWear places a left-chest logo 1:1
+ *     there), not a separate surface.
+ *   • otherwise false — an ABSENT slot means the printer cannot print it
+ *     (SnapWear: sleeves).
+ */
+export const isSlotPrintableInAreas = (areasForGarment, slot) => {
+  if (!areasForGarment || typeof areasForGarment !== 'object') return true;
+  if (slot === 'other') return true;
+  if (isArea(areasForGarment[slot])) return true;
+  return slot === 'pocket' && isArea(areasForGarment.front);
+};
+
+/** isSlotPrintable(tier, garment, slot) — isSlotPrintableInAreas on a tier doc. */
+export const isSlotPrintable = (tier, garment, slot) =>
+  isSlotPrintableInAreas(garment ? tier?.printAreasMm?.[garment] : null, slot);
 
 /**
  * tierCostForSlots(tier, garment, slots) → number (EX moms) | null

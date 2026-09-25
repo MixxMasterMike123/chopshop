@@ -37,6 +37,7 @@ export interface ProductionWithholding {
     withheldOre: number;
     perPrinter: Record<string, PrinterWithholding>;
     unpricedRouted: string[];
+    unrouted: string[];
 }
 type SnapshotLike = {
     lines?: Array<Partial<ProductionSnapshotLine>> | null;

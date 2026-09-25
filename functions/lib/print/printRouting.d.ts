@@ -30,6 +30,14 @@ export interface PrinterTier {
         printCostSek?: Record<string, number>;
     };
     shippingSek?: number;
+    printAreasMm?: Record<string, Record<string, PrintArea>>;
+    provisionalAreas?: string[];
+    type?: string;
+}
+export interface PrintArea {
+    w: number;
+    h: number;
+    offsetTopMm?: number;
 }
 export interface PrintRouting {
     byGarment?: Record<string, string>;
@@ -50,16 +58,29 @@ export interface RoutedCost {
 /**
  * Which printer makes `garment`.
  *
- *   1. routing.byGarment[garment] — only if that printer still has a tier doc
- *      AND lists the garment (a stale route must not price off the wrong tier).
- *   2. routing.defaultPrinterUid — the catch-all; NOT required to list the
- *      garment (its tier may simply not price that blank → null cost → the
- *      caller falls back to the template).
- *   3. null.
+ *   1. routing.byGarment[garment] — only if that printer still has a tier doc,
+ *      is active, AND lists the garment (a stale route must not price off the
+ *      wrong tier).
+ *   2. routing.defaultPrinterUid — under the SAME rule, including "lists the
+ *      garment" (SnapWear A4, 2026-09-25). It used to be an unconditional
+ *      catch-all: a garment the default cannot make was "routed" there anyway,
+ *      withheld nothing and was sent nowhere. Closed in BOTH twins.
+ *   3. null → checkout refuses the line (409 no-printer-for-garment).
  *
- * A null/unknown garment goes straight to 2: there is no per-garment rule.
+ * A null/unknown garment is listed by no printer → null (fail closed).
  */
 export declare const resolvePrinterUid: (garment: string | null | undefined, routing: PrintRouting | null | undefined, printersById: Record<string, PrinterTier> | null | undefined) => string | null;
+/**
+ * Can a printer whose frames for ONE garment are `areasForGarment` print
+ * `slot`? Twin of isSlotPrintableInAreas in the client module:
+ *   no frames for the garment → true (no capability data, nothing gated);
+ *   'other' → true; its own frame → true; 'pocket' → true when `front` has a
+ *   frame (the pocket is a position INSIDE the front canvas); otherwise false
+ *   (an absent slot = the printer cannot print it — SnapWear: sleeves).
+ */
+export declare const isSlotPrintableInAreas: (areasForGarment: Record<string, PrintArea> | null | undefined, slot: string) => boolean;
+/** isSlotPrintableInAreas on a tier doc. */
+export declare const isSlotPrintable: (tier: PrinterTier | null | undefined, garment: string | null | undefined, slot: string) => boolean;
 /**
  * blankCostSek[garment] + Σ printCostSek[slot], EX moms, WITHOUT the platform
  * cut (added once by podCostForSlotsRouted).

@@ -42,11 +42,20 @@ function computeProductionWithholding(snapshot, vatRate = exports.DEFAULT_PRODUC
     const itemsSekByPrinter = new Map();
     const shippingSekByPrinter = new Map();
     const unpricedRouted = [];
+    const unrouted = [];
     const seenItems = new Set();
+    const seenUnrouted = new Set();
     for (const line of lines) {
         const uid = typeof line?.printerUid === 'string' && line.printerUid ? line.printerUid : null;
-        if (!uid)
-            continue; // unrouted → pre-routing behaviour, withholds nothing
+        if (!uid) {
+            // unrouted → withholds nothing; reported once per item for the caller.
+            const idx = line?.itemIndex;
+            if (!seenUnrouted.has(idx)) {
+                seenUnrouted.add(idx);
+                unrouted.push(String(line?.sku || `item#${idx}`));
+            }
+            continue;
+        }
         // Shipping: first line routed to this printer that carries a rate. The
         // stamp lands on the printer's first line; scanning for the first finite
         // value keeps us correct even if a reader reorders lines.
@@ -89,6 +98,7 @@ function computeProductionWithholding(snapshot, vatRate = exports.DEFAULT_PRODUC
         withheldOre: Math.round(totalSek * vatFactor * 100),
         perPrinter,
         unpricedRouted,
+        unrouted,
     };
 }
 exports.computeProductionWithholding = computeProductionWithholding;
