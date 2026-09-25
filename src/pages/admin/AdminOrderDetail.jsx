@@ -18,6 +18,7 @@ import { formatPaymentMethodName } from '../../utils/paymentMethods';
 import { formatPickupDate } from '../../utils/pickupDates';
 import { escapeHtml } from '../../utils/escapeHtml';
 import { Page, Card, CardSection, RightRail, Button, StatusPill, toneForOrderStatus } from '../../components/admin/ui';
+import OrderPaymentCard, { formatSek as sek, SummaryRow as Row } from '../../components/admin/OrderPaymentCard';
 import { TruckIcon, MapPinIcon, PrinterIcon, TrashIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 
 // Dispute display maps (Slice A). disputeStatus mirrors Stripe's dispute status;
@@ -519,8 +520,6 @@ const AdminOrderDetail = () => {
 
 
   // ── Derivations for the Shopify layout ──
-  const sek = (n) =>
-    (Number(n) || 0).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr';
   const items = getEnhancedOrderDistribution(order);
   const isPickup = order.deliveryMethod === 'pickup';
   const isB2C = order.source === 'b2c';
@@ -584,13 +583,6 @@ const AdminOrderDetail = () => {
       )}
       <StatusPill tone={toneForOrderStatus(order.status)}>{getStatusInfo(order.status).text}</StatusPill>
     </>
-  );
-
-  const Row = ({ label, value, strong, accent }) => (
-    <div className="flex items-baseline justify-between gap-4 py-1 text-[13px]">
-      <span className={accent ? 'text-admin-success-text' : 'text-admin-text-muted'}>{label}</span>
-      <span className={`tabular-nums ${strong ? 'font-semibold text-admin-text' : accent ? 'text-admin-success-text' : 'text-admin-text'}`}>{value}</span>
-    </div>
   );
 
   return (
@@ -685,28 +677,17 @@ const AdminOrderDetail = () => {
                 </div>
               </Card>
 
-              {/* Payment summary card */}
-              <Card>
-                <div className="flex items-center gap-2 border-b border-admin-border px-4 py-3">
-                  <h3 className="text-[14px] font-semibold text-admin-text">Betalning</h3>
-                  {paid ? <StatusPill tone="success">Betald</StatusPill> : !isB2C ? <StatusPill tone="neutral">Faktura</StatusPill> : <StatusPill tone="warning">Väntar</StatusPill>}
-                </div>
-                <div className="px-4 py-3">
-                  <Row label="Delsumma" value={sek(subtotal)} />
-                  {isB2C && order.discountAmount > 0 && (
-                    <Row
-                      label={`Affiliate-rabatt (${affiliateCode || 'AFFILIATE'}), ${affiliatePct}%`}
-                      value={`- ${sek(order.discountAmount)}`}
-                      accent
-                    />
-                  )}
-                  {isB2C && order.shipping > 0 && <Row label="Frakt" value={sek(order.shipping)} />}
-                  <Row label="Moms (25%)" value={sek(vat)} />
-                  <div className="mt-1 border-t border-admin-border-soft pt-2">
-                    <Row label="Totalt" value={sek(total)} strong />
-                  </div>
-                </div>
-              </Card>
+              {/* Payment summary card (+ A1b: ONE fee line + the payout) */}
+              <OrderPaymentCard
+                order={order}
+                subtotal={subtotal}
+                vat={vat}
+                total={total}
+                paid={paid}
+                isB2C={isB2C}
+                affiliateCode={affiliateCode}
+                affiliatePct={affiliatePct}
+              />
 
               {/* Right-of-withdrawal proof (POD) — shown only for orders that had
                   a personalized item. Legal evidence that the buyer accepted the

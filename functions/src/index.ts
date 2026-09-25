@@ -226,6 +226,13 @@ export { onOrderProductionReady, sweepPrintNotifyOutbox } from './print/notifyOu
 // convert-to-PNG + trim + sRGB + BLOCKING 300-DPI contain gate (docs/POD_PRINT_SPEC.md).
 export { processPodArtwork } from './pod/processArtwork';
 
+// A13 "seller sees ONE number": the studio's production cost for a design as a
+// single server-computed figure (routed tier + platform cut, ex moms), and the
+// price-free printersPublic/{uid} mirror the studio reads for capability +
+// frames. printers/{uid} (the tiers) is platform-only.
+export { quotePodCost } from './pod/quotePodCost';
+export { syncPrintersPublicOnWrite } from './print/syncPrintersPublic';
+
 // Landing-page lead form ("Vill du ha en egen butik?") — public callable that
 // writes a platform-level `leads` doc + best-effort admin notification email.
 export { submitLead } from './leads/submitLead';

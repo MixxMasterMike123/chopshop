@@ -19,7 +19,6 @@ import { POD_SLOTS } from '../../config/podSlots';
 // Shared platform-surface classes (same strings as PlatformDac7.jsx).
 export const inputCls = 'rounded-lg border border-white/10 bg-gray-950 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-600 focus:border-indigo-500 focus:outline-none';
 export const btnPrimary = 'rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50';
-export const btnGhost = 'rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-white/10 disabled:opacity-50';
 const checkboxCls = 'rounded border-white/20 bg-gray-950 text-indigo-500 focus:ring-indigo-500';
 // Compact numeric cell for the frame table — inputCls is too roomy for 3 per slot.
 const mmCls = 'w-11 rounded-md border border-white/10 bg-gray-950 px-1.5 py-1 text-right text-xs tabular-nums text-gray-100 placeholder-gray-600 focus:border-indigo-500 focus:outline-none';
@@ -114,7 +113,6 @@ const PrinterRow = ({
   areasNotice = [], // garment labels whose frames changed in the LAST save
   onToggleEditor = () => {},
   onToggleActive = () => {},
-  onFillDefaults = () => {},
   onSave = () => {},
 }) => {
   const toggleGarment = (id) =>
@@ -303,9 +301,6 @@ const PrinterRow = ({
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button type="button" onClick={onFillDefaults} className={btnGhost}>
-              Fyll i standardprislista
-            </button>
             <button type="button" onClick={onSave} disabled={saving} className={btnPrimary}>
               {saving ? 'Sparar…' : 'Spara'}
             </button>

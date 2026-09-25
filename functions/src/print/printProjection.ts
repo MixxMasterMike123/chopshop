@@ -307,9 +307,20 @@ export type ProductionSnapshotLine = {
   //   before this field existed simply lack it, and every reader treats
   //   absent as 0. Frozen here so the Connect fee (productionWithholding.ts)
   //   reads ONE self-contained object and never re-reads printers/{uid}.
+  //
+  // ── WHERE THE MONEY LIVES (A13, "seller sees ONE number", 2026-09-25) ──────
+  // The three cost fields are stamped here, travel on the CHECKOUT snapshot
+  // (checkouts/{piId}, no client access) and feed productionWithholding at
+  // PaymentIntent time. They are then STRIPPED from the ORDER copy
+  // (payment/orderMoney.stripSnapshotMoney) because orders/{id} is readable by
+  // the seller and by anyone holding the order id. The full snapshot, costs
+  // included, is written to orderProduction/{orderId} (server-only) — THAT is
+  // the money SSOT; the 3-way split / production statement must read it there.
+  // On an order doc these fields are therefore ABSENT (optional below); every
+  // reader already treats absent as null/0.
   printerUid: string | null;
-  printCostSek: number | null;
-  itemCostSek: number | null;
+  printCostSek?: number | null;
+  itemCostSek?: number | null;
   printerShippingSek?: number | null;
   mappingId: string | null;
   artworkId: string | null;

@@ -21,8 +21,9 @@ const SNAPWEAR = {
   active: true,
   garments: ['tee', 'longsleeve', 'hoodie', 'sweatshirt', 'bag', 'cap', 'beanie'],
   pricing: {
-    blankCostSek: { tee: 31, longsleeve: 102, hoodie: 120, sweatshirt: 99, bag: 22, cap: 26, beanie: 65 },
-    printCostSek: { front: 38, back: 38, pocket: 38 },
+    // Placeholder figures, NOT a real supplier list (A13: no real prices in source).
+    blankCostSek: { tee: 100, longsleeve: 100, hoodie: 100, sweatshirt: 100, bag: 100, cap: 100, beanie: 100 },
+    printCostSek: { front: 10, back: 10, pocket: 10 },
   },
   printAreasMm: {
     tee: { front: { w: 390, h: 490, offsetTopMm: 30 }, back: { w: 390, h: 490, offsetTopMm: 40 }, pocket: { w: 100, h: 100 } },
@@ -38,7 +39,7 @@ const SNAPWEAR = {
 const USER_TIER = {
   id: 'uid-tryckeri-ab',
   garments: ['tee'],
-  pricing: { blankCostSek: { tee: 60 }, printCostSek: { front: 40 } },
+  pricing: { blankCostSek: { tee: 100 }, printCostSek: { front: 10 } },
 };
 
 const rowFor = (tier, extra) => ({
@@ -93,7 +94,6 @@ const Harness = () => {
                 setForm(docToForm(tiers[r.id]));
               }}
               onToggleActive={() => toast(`toggle ${r.id}`)}
-              onFillDefaults={() => toast('fillDefaults')}
               onSave={() => save(r)}
             />
           ))}

@@ -36,6 +36,12 @@
 #                                        studio template from the ROUTED printer's
 #                                        frames (sleeves dropped, px/mm kept) and
 #                                        placementFits guards publish.
+#   - one-number-pure.test.cjs        } A13 "seller sees ONE number": the
+#                                        printersPublic projection, the server
+#                                        cost quote (== the frozen itemCostSek),
+#                                        the order money strip/split, and grep
+#                                        guards keeping tier prices out of the
+#                                        client modules.
 #   - content-screening-parity.test.cjs } SnapWear A11: the brand-screening
 #                                        matcher (src/utils/contentScreening.js) and
 #                                        its server twin agree; decideScreening
@@ -43,6 +49,9 @@
 #   - pod-shop-gating.test.cjs        → FIRESTORE emulator (getPrintShopContext D6 gate).
 #   - infringement-screening.test.cjs → FIRESTORE emulator (A10 reports platform-only,
 #                                        A11 screening/takedown not seller-writable).
+#   - one-number.test.cjs             → FIRESTORE emulator (A13: printers platform-only,
+#                                        printersPublic active-user read / no client
+#                                        write, orderProduction no client access).
 #
 # Local run:
 #   JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
@@ -103,6 +112,8 @@ echo "==> [1/3] printer-areas (pure unit test, ESM — routed printer's frames i
 node rules-tests/printer-areas.test.mjs
 echo "==> [1/3] content-screening-parity (pure unit test — brand-screening matcher twins agree)"
 node rules-tests/content-screening-parity.test.cjs
+echo "==> [1/3] one-number-pure (pure unit test — A13 money stays server-side)"
+node rules-tests/one-number-pure.test.cjs
 
 # 2) The three Firestore-emulator suites in one emulator lifecycle.
 echo "==> [2/3] firestore-emulator suites (rules + isolation + functions-guard)"
@@ -111,7 +122,8 @@ $FIREBASE emulators:exec --only firestore --project "$PROJECT" \
    && node rules-tests/firestore-isolation.test.cjs \
    && node rules-tests/functions-isolation.test.cjs \
    && node rules-tests/pod-shop-gating.test.cjs \
-   && node rules-tests/infringement-screening.test.cjs'
+   && node rules-tests/infringement-screening.test.cjs \
+   && node rules-tests/one-number.test.cjs'
 
 # 3) The storage-emulator suite. If a Storage emulator is ALREADY listening on
 #    9199 (a dev left one running from a prior `emulators:start`), reuse it —

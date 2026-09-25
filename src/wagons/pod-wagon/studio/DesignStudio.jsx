@@ -36,6 +36,7 @@ import {
 import { loadPodProfiles, clearPodProfilesCache, getProfileById } from '../../../config/podProfiles';
 import { loadPod3dModels, clearPod3dModelsCache } from '../../../config/pod3dModels';
 import { loadPrintRouting, clearPrintRoutingCache } from '../../../config/printRouting';
+import { quotePodCost, clearPodCostQuoteCache } from '../../../config/podCostQuote';
 import { tierLabel } from '../components/podTier';
 import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, placementFits, templateWithPocketPosition } from './placementMath';
 import { renderMockup, createMockupSession } from './mockupRender';
@@ -58,7 +59,7 @@ import { skuFromName, uniqueSku } from '../../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../../utils/variantDerivation';
 import { setMapping } from '../../../utils/podMappings';
 import { priceFloor } from '../podPricing';
-import { podCostForSlotsRouted, resolvePrinterUid } from '../printRouting';
+import { resolvePrinterUid } from '../printRouting';
 import { STORE } from '../../../config/store';
 import { orderedVariantMockupUrls } from './mockupVariantImages';
 import { screenProduct } from '../../../utils/contentScreening';
@@ -70,6 +71,10 @@ import { loadScreeningBlocklist } from '../../../utils/loadContentScreening';
 // picker thumb. Only non-composable files (no raster preview/dims — PDF/SVG)
 // are unselectable, because the compositor literally has nothing to draw.
 const isSelectableArtwork = (art) => isComposable(art);
+
+// Publish/update refuse to write when the server cost quote could not be
+// fetched (A13) — see freshQuoteFor.
+const QUOTE_FAILED_MSG = 'Produktionskostnaden kunde inte hämtas. Kontrollera anslutningen och försök igen.';
 
 // The wizard page where colours are REVIEWED (6 · Godkänn). Seeing a colourway
 // only counts as a review while this page is on screen — that is where the big
@@ -83,7 +88,7 @@ const GarmentThumb = ({ template, colorway }) => (
 );
 
 // Does the platform route this template's garment to a printer that makes it?
-// With NO printer tiers at all (pre-seed, dev harness) nothing is routed yet
+// With NO printer docs at all (pre-seed, dev harness) nothing is routed yet
 // and every template stays offered — the studio keeps working exactly as
 // before the SnapWear seed. Once any printer exists, a garment nobody makes
 // (flat mössa at SnapWear) is simply not offered: checkout would refuse it
@@ -103,10 +108,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   const [meta, setMeta] = useState({ version: 0, provisional: true });
   const [profiles, setProfiles] = useState([]);
   const [models3d, setModels3d] = useState([]);
-  // PLATFORM print routing (which printer makes which garment) + every printer's
-  // price tier. Loaded ONCE alongside the templates; the seller's production
-  // cost comes from the ROUTED printer's tier, falling back to the template's
-  // legacy prices when nothing is routed (see podCostForSlotsRouted).
+  // PLATFORM print routing (which printer makes which garment) + each printer's
+  // CAPABILITY (printersPublic: garments + print frames — no prices). Loaded
+  // ONCE alongside the templates. The production cost is NOT derived from
+  // these: it comes from the server as one number (quotePodCost, below).
   const [routing, setRouting] = useState({ byGarment: {}, defaultPrinterUid: null });
   const [printersById, setPrintersById] = useState({});
 
@@ -246,26 +251,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     clearPodProfilesCache();
     clearPod3dModelsCache();
     clearPrintRoutingCache();
+    clearPodCostQuoteCache();
     setTemplateLoadAttempt((n) => n + 1);
   };
-
-  /**
-   * The seller's production cost (EX moms) for the currently selected template
-   * printed on `slots`, from the ROUTED printer's tier — with the template's
-   * legacy prices as the fallback while routing is unconfigured. Returns
-   * { cost, source, printerUid }; ONE helper so the floor gate, the stamp and
-   * PublishPanel's readout can never disagree about the basis.
-   */
-  const routedCostFor = useCallback(
-    (slots) => podCostForSlotsRouted({
-      garment: garmentOfTemplate(selectedTemplate),
-      slots,
-      routing,
-      printersById,
-      template: selectedTemplate,
-    }),
-    [selectedTemplate, routing, printersById]
-  );
 
   // Keep the colourway + slot valid whenever the template changes. Design state
   // (placements/overrides/mockups) resets too — it was built against the OLD
@@ -294,7 +282,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   }, [selectedTemplateId]);
 
   // PRINT AREA CHANGED UNDER A DESIGN (SnapWear A3). The derived template can
-  // change while the garment stays the same — the routing/printer tiers load
+  // change while the garment stays the same — the routing/printer docs load
   // or reload (retry) and the routed printer's frames differ from the ones the
   // placements were made against. Stored placements are then re-clamped into
   // the new area and the seller is told once. (effectivePlacementFor already
@@ -520,6 +508,36 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     return prints.filter((p) => valid.has(p.slot) && p.artworkId).map((p) => p.slot);
   };
 
+  // PRODUCTION COST — ONE number from the server (A13, "seller sees ONE
+  // number", Mikael 2026-09-25). The studio used to price the design itself off
+  // the routed printer's tier; tiers are platform-only now, so quotePodCost
+  // returns { costSek, printerUid } for (garment, DESIGNED slots) — blank +
+  // prints + platform cut already baked together, EX moms. It is the ONE value
+  // PublishPanel's Inköp/golv/vinst readout, the floor gate and the podCostSek
+  // stamp all consume, so they can never disagree about the basis.
+  //
+  // Reset to null on every input change so a stale number from the previous
+  // design is never shown (PublishPanel says "hämtar…" meanwhile); a late
+  // answer for an older input is dropped by the `alive` guard.
+  const [podCost, setPodCost] = useState({ costSek: null, printerUid: null });
+  const [podCostPending, setPodCostPending] = useState(false);
+  const quoteGarment = garmentOfTemplate(selectedTemplate);
+  const quoteSlotsKey = designedSlots(selectedTemplate).join(',');
+  useEffect(() => {
+    let alive = true;
+    setPodCost({ costSek: null, printerUid: null });
+    setPodCostPending(true);
+    quotePodCost({ shopId, garment: quoteGarment, slots: quoteSlotsKey ? quoteSlotsKey.split(',') : [] })
+      .then((q) => { if (alive) setPodCost(q); })
+      .finally(() => { if (alive) setPodCostPending(false); });
+    return () => { alive = false; };
+  }, [shopId, quoteGarment, quoteSlotsKey, templateLoadAttempt]);
+  // What publish/update STAMP: always a FRESH quote taken right before the
+  // write (never the memoised/displayed one) — a re-price or re-route since the
+  // panel rendered must not freeze a stale cost onto the product.
+  const freshQuoteFor = (slots) =>
+    quotePodCost({ shopId, garment: garmentOfTemplate(selectedTemplate), slots }, { fresh: true });
+
   // The placement a slot actually prints/renders: pocket is LOCKED to the
   // deterministic contain-centred rect (never user-stored); free slots use the
   // stored placement RE-CLAMPED against the given artwork (an override motif
@@ -744,14 +762,19 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     setPublishing(true);
     let docCreated = false;
     try {
+      const stampQuote = await freshQuoteFor(publishSlots);
+      // A FAILED quote is not "unpriced": creating the product now would skip
+      // the price floor and stamp no cost. Nothing is written yet — refuse.
+      if (stampQuote.failed) throw new Error(QUOTE_FAILED_MSG);
       // PRISGOLV — authoritative re-check in the handler (the UI enforces it
       // too, but the handler is the gate that actually creates a sellable
       // product; podPricing.js is the single formula source).
       {
         // Same cost basis as the stamp below and as PublishPanel's readout: the
         // DESIGNED slots decide the print cost, so the gate can't enforce a
-        // cheaper floor than the one the seller was just shown.
-        const costP = routedCostFor(publishSlots).cost;
+        // cheaper floor than the one the seller was just shown. Re-quoted just
+        // above (fresh) and reused for the stamp, so gate and stamp are one number.
+        const costP = stampQuote.costSek;
         const floorP = costP != null ? priceFloor(costP) : null;
         if (floorP != null) {
           if (!(parseFloat(price) >= floorP)) {
@@ -927,14 +950,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         // slots — plagg + ett tryckpris per tryckt yta + plattformsuttaget — så
         // fram+bak stämplar mer än bara fram.
         isPodProduct: true,
-        // podPrinterUid records WHOSE tier the frozen cost came from (null when
-        // the legacy template prices were used) so the product form and any
-        // later audit can see the basis without re-resolving today's routing —
-        // rerouting must never silently restate an existing product's economics.
-        ...(() => {
-          const { cost: c, printerUid } = routedCostFor(publishSlots);
-          return c != null ? { podCostSek: c, podPrinterUid: printerUid } : {};
-        })(),
+        // podPrinterUid records WHICH printer the frozen cost was quoted for, so
+        // the product form and any later audit can see the basis without
+        // re-resolving today's routing — rerouting must never silently restate
+        // an existing product's economics. podCostSek is the ONE quoted number
+        // (A13); nothing here says how it is made up.
+        ...(stampQuote.costSek != null
+          ? { podCostSek: stampQuote.costSek, podPrinterUid: stampQuote.printerUid }
+          : {}),
         sizeGuide: '',
         weight: { value: 0, unit: 'g' },
         dimensions: {
@@ -1053,8 +1076,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       // No PRISGOLV gate here: updating an existing product only refreshes
       // mockup images/artwork. Pricing is owned by the Products page —
       // ProductForm blocks any save below the floor (podPricing.js).
-      // costU is still needed to stamp podCostSek on the product below.
-      const { cost: costU, printerUid: printerUidU } = routedCostFor(publishSlots);
+      // costU is still needed to stamp podCostSek on the product below — a
+      // FRESH server quote (A13), never the memoised one the panel showed.
+      const { costSek: costU, printerUid: printerUidU, failed: quoteFailedU } = await freshQuoteFor(publishSlots);
+      if (quoteFailedU) throw new Error(QUOTE_FAILED_MSG); // before any upload/write
       const publicPath = `products/${shopId}/${productId}`;
       const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
       // 'studio_' prefix + deterministic (colorway, slot) names: re-running the
@@ -1179,9 +1204,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       await Promise.all(writes);
 
       // Same POD stamps as the create path — an existing product that gets a
-      // studio design IS a POD product from now on. costU (computed for the
-      // floor gate above) is the DESIGNED-slot cost: plagg + tryck per tryckt
-      // yta + plattformsuttaget, så fram+bak stämplar mer än bara fram.
+      // studio design IS a POD product from now on. costU (the fresh server
+      // quote above) is the DESIGNED-slot cost as ONE number — fram+bak
+      // stämplar mer än bara fram.
       updates.isPodProduct = true;
       if (costU != null) { updates.podCostSek = costU; updates.podPrinterUid = printerUidU; }
       await updateDoc(prodRef, updates);
@@ -1895,9 +1920,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         <PublishPanel
           mockups={mockups}
           template={selectedTemplate}
-          garment={garmentOfTemplate(selectedTemplate)}
-          routing={routing}
-          printersById={printersById}
+          cost={podCost.costSek}
+          costPending={podCostPending}
           vatRate={STORE.vatRate}
           hasArtwork={designedSlots(selectedTemplate).length > 0 && prints.every((p) => p.artworkId)}
           printSummary={designedSlots(selectedTemplate).map((s) => ({

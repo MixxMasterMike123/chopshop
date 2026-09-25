@@ -7,14 +7,17 @@
 // firebase, so the dev harness can mount it with a fake publish() and stay
 // Firebase-free.
 //
-// Money display note: prices are stored INKL. moms. Profit/margin are shown ex moms
-// (prisInklMoms / (1 + VAT) − cost). The VAT rate + template cost come from props so
-// this stays pure.
+// Money display note: prices are stored INKL. moms; the production cost arrives
+// EX moms and every seller-facing figure is converted to INKL. moms at the edge.
+// The VAT rate + the cost come from props so this stays pure.
+//
+// A13 ("seller sees ONE number", 2026-09-25): `cost` is ONE server-quoted number
+// (DesignStudio → quotePodCost). This panel no longer imports the routing module
+// and cannot see how the cost is made up — it only prices against it.
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
 import { sellerProfitInkl, sellerMargin, priceFloor, priceForMargin, roundUpTo9, inklMoms, FEE_RATE, FEE_FIXED } from '../podPricing';
-import { podCostForSlotsRouted } from '../printRouting';
 import { screeningNotice } from '../../../utils/contentScreening';
 
 // XS first (2026-08-27) — the printer's runs start at XS, and a size the seller
@@ -36,15 +39,12 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
 /**
  * Props:
  *   mockups        — [{ key, colorwayId, colorwayLabel, slot, objectUrl, ... }]
- *   template       — selectedTemplate (.colorways for labels; its legacy cost
- *                     fields are the FALLBACK basis, see garment/routing below)
- *   garment        — the template's garment type (the routing key) — string|null
- *   routing        — settings/printRouting, loaded ONCE by DesignStudio
- *   printersById   — printers/{uid} tiers by uid, loaded with it. This panel is
- *                     presentational: it never reads Firestore itself (the dev
- *                     harness mounts it standalone), so both arrive as props;
- *                     null/omitted simply means "nothing routed" → the
- *                     template's legacy prices, exactly as before Slice 3.
+ *   template       — selectedTemplate (.colorways for labels)
+ *   cost           — the design's production cost, EX moms, as ONE number from
+ *                     the server (quotePodCost: plagg + tryck per designad yta +
+ *                     plattformsuttag, baked together). null = not priced →
+ *                     "Produktionskostnad saknas", no floor.
+ *   costPending    — bool: the quote is in flight (say "hämtar…", not "saknas")
  *   vatRate        — number (e.g. 0.25)
  *   hasArtwork     — bool (the trycklista has ≥1 print AND every row has a motif —
  *                     publish needs a mapping motif per designed slot)
@@ -75,9 +75,8 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
 const PublishPanel = ({
   mockups = [],
   template = null,
-  garment = null,
-  routing = null,
-  printersById = null,
+  cost = null,
+  costPending = false,
   vatRate = 0.25,
   hasArtwork = false,
   printSummary = [],
@@ -122,16 +121,6 @@ const PublishPanel = ({
   const [sizeOptOut, setSizeOptOut] = useState({});
   // Per-colourway explicit price override (empty = inherit product price).
   const [rowPrices, setRowPrices] = useState({});
-
-  // Seller cost for THIS design: plagg + ett tryckpris per designad yta +
-  // plattformsuttaget. Priserna kommer från det TRYCKERI plattformen dirigerat
-  // plagget till (printRouting); saknas dirigering används mallens gamla priser.
-  // printSummary är precis de ytor som trycks, så fram+bak kostar ett tryck mer
-  // än bara fram — och golvet följer med. null (varken tryckeri- eller
-  // mallpris) → "Produktionskostnad saknas" längre ner.
-  const { cost } = podCostForSlotsRouted({
-    garment, slots: printSummary.map((p) => p.slot), routing, printersById, template,
-  });
 
   const selectedColorways = availableColorways;
   const selectedColorwayIds = selectedColorways.map((c) => c.id);
@@ -568,7 +557,9 @@ const PublishPanel = ({
             </div>
             {cost == null && (
               <p className="mt-1.5 text-[12px] text-admin-text-muted">
-                Produktionskostnad saknas för den här mallen — vinst och marginal visas när priset är satt av tryckeriet.
+                {costPending
+                  ? 'Hämtar produktionskostnaden…'
+                  : 'Produktionskostnad saknas för den här mallen — vinst och marginal visas när priset är satt av tryckeriet.'}
               </p>
             )}
           </div>

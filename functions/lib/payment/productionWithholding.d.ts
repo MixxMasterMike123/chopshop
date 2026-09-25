@@ -10,8 +10,9 @@
  * the platform must HOLD from the customer's payment so it can pay the printer.
  *
  * The frozen production snapshot (checkouts/{piId}.productionSnapshot → later
- * order.productionSnapshot) is the ONE source of cost: the same object that
- * the print portal fulfils decides the fee. No second cost computation, no
+ * orderProduction/{piId}.snapshot; the ORDER keeps a copy with the costs
+ * stripped, A13) is the ONE source of cost: the same object that the print
+ * portal fulfils decides the fee. No second cost computation, no
  * re-read of printers/{uid} (shipping is frozen onto the snapshot as
  * printerShippingSek by stampRouting).
  *

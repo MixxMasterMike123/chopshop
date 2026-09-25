@@ -32,6 +32,7 @@ const database_1 = require("../config/database");
 const shopFeatures_1 = require("../config/shopFeatures");
 const outboxCore_1 = require("./outboxCore");
 const printProjection_1 = require("./printProjection");
+const orderMoney_1 = require("../payment/orderMoney");
 const SWEEP_BATCH = 50;
 const PURGE_AFTER_DAYS = 60;
 function toMillis(value) {
@@ -240,8 +241,20 @@ exports.onOrderProductionReady = (0, firestore_1.onDocumentWritten)({
                     return;
                 }
                 const candidate = await (0, printProjection_1.buildProductionSnapshotInTransaction)(currentData, tx);
-                tx.update(orderRef, { productionSnapshot: candidate });
-                productionOrder = { ...currentData, productionSnapshot: candidate };
+                // A13 ("seller sees ONE number"): same split as the Stripe webhook —
+                // the order (seller-readable) gets the snapshot WITHOUT its cost
+                // fields; the full one goes to the server-only orderProduction doc,
+                // in this same transaction so the two can never disagree.
+                const stripped = (0, orderMoney_1.stripSnapshotMoney)(candidate);
+                tx.update(orderRef, { productionSnapshot: stripped });
+                tx.set(database_1.db.collection('orderProduction').doc(orderId), {
+                    shopId: String(currentData.shopId || ''),
+                    paymentIntentId: null,
+                    snapshot: candidate,
+                    connect: {},
+                    createdAt: new Date(),
+                }, { merge: true });
+                productionOrder = { ...currentData, productionSnapshot: stripped };
                 // A delayed paid event may find the order already printed/shipped.
                 // Freeze it for historical correctness, but do not notify production
                 // after production has already advanced past the notify statuses.

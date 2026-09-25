@@ -90,7 +90,7 @@ async function seed() {
     await setDoc(doc(db, 'campaigns/camA'), { shopId: 'shopA', status: 'active', code: 'CAMA' });
     await setDoc(doc(db, 'campaigns/camB'), { shopId: 'shopB', status: 'active', code: 'CAMB' });
     // printers/{uid} — per-print-shop capability + price tier (platform-managed,
-    // active-user readable: shop admins price products off the routed tier).
+    // PLATFORM-only read since A13; sellers read printersPublic instead).
     await setDoc(doc(db, 'printers/kim'), {
       name: 'Kim Tryck', garments: ['tee', 'hoodie'],
       pricing: { blankCostSek: { tee: 60, hoodie: 380 }, printCostSek: { front: 40 } },
@@ -121,7 +121,6 @@ async function run() {
   await check('platform updates any shop product (shopB)', assertSucceeds(updateDoc(doc(platformDb(), 'products/pB'), { name: 'B2' })));
   await check('shopA admin reads OWN campaign', assertSucceeds(getDoc(doc(shopAAdminDb(), 'campaigns/camA'))));
   await check('shopA admin creates product in OWN shop', assertSucceeds(setDoc(doc(shopAAdminDb(), 'products/pA2'), { shopId: 'shopA', isActive: true })));
-  await check('shopA admin reads printer tier (needs cost for pricing)', assertSucceeds(getDoc(doc(shopAAdminDb(), 'printers/kim'))));
 
   console.log('\n=== ADMIN → STORE direction: cross-shop / privilege access must be DENIED (no leak) ===');
 
@@ -146,6 +145,9 @@ async function run() {
   await check('shop admin CANNOT write productsPublic (server-only)', assertFails(updateDoc(doc(shopAAdminDb(), 'productsPublic/pA'), { name: 'x' })));
   await check('platform CANNOT write productsPublic via client SDK', assertFails(updateDoc(doc(platformDb(), 'productsPublic/pA'), { name: 'x' })));
   await check('customer CANNOT self-promote to admin (role field)', assertFails(setDoc(doc(customerDb('cust'), 'users/cust'), { role: 'admin' })));
+  // A13 "seller sees ONE number": tiers are platform-only; sellers read the
+  // price-free printersPublic mirror (rules-tests/one-number.test.cjs).
+  await check('shopA admin CANNOT read a printer tier (A13, platform-only)', assertFails(getDoc(doc(shopAAdminDb(), 'printers/kim'))));
   await check('shopA admin CANNOT write a printer tier (platform-only)', assertFails(updateDoc(doc(shopAAdminDb(), 'printers/kim'), { name: 'hacked' })));
   await check('anon CANNOT read a printer tier', assertFails(getDoc(doc(anonDb(), 'printers/kim'))));
   await check('anon CANNOT write a printer tier', assertFails(setDoc(doc(anonDb(), 'printers/pHack'), { name: 'x' })));

@@ -1,20 +1,26 @@
 // printRouting.js — cached loader for the PLATFORM print-routing decision:
-// which printer makes which garment, plus every printer's price tier.
+// which printer makes which garment, and what each printer can PRINT (garments,
+// frames). It carries NO prices.
 //
 // Two Firestore reads, one cache (same contract as pod3dModels.js /
 // podMockupTemplates.js — degrade to empty, never throw, so the studio still
 // opens when the platform has configured nothing yet):
 //
-//   settings/printRouting  →  { byGarment: { [garmentId]: printerUid },
-//                              defaultPrinterUid: string|null,
-//                              updatedAt, updatedBy }
-//   printers (collection)  →  printers/{uid} = { name, garments[],
-//                              pricing: { blankCostSek: {garment: n},
-//                                         printCostSek: {slot: n} } }   (EX moms)
+//   settings/printRouting      →  { byGarment: { [garmentId]: printerUid },
+//                                  defaultPrinterUid: string|null,
+//                                  updatedAt, updatedBy }
+//   printersPublic (collection) →  printersPublic/{uid} = { name, type, active,
+//                                  garments[], printAreasMm, provisionalAreas }
 //
-// Both are PLATFORM-written / active-user-read (firestore.rules). The routing
-// RULES themselves live in src/wagons/pod-wagon/printRouting.js — this file
-// only fetches; it holds no decision logic.
+// A13 ("seller sees ONE number", 2026-09-25): this used to read printers/{uid}
+// — the platform's price tiers — so the studio could compute the production
+// cost itself. Those docs are platform-only now; this reads the price-free
+// printersPublic mirror (server-maintained by syncPrintersPublicOnWrite) and
+// the cost arrives as ONE number from the quotePodCost callable
+// (src/config/podCostQuote.js). The cache shape { routing, printersById } is
+// unchanged on purpose — the routing/capability rules
+// (src/wagons/pod-wagon/printRouting.js) read exactly the fields the mirror
+// keeps — but `printersById` now holds capability docs, never tiers.
 //
 // ⚠️ POD-ONLY. Call this from pod-gated code paths only (the Design Studio,
 // which the pod add-on gates). A non-POD shop must never read these documents:
@@ -24,7 +30,7 @@ import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
 
 const ROUTING_REF = () => doc(db, 'settings', 'printRouting');
-const PRINTERS_REF = () => collection(db, 'printers');
+const PRINTERS_REF = () => collection(db, 'printersPublic');
 
 // Module-level cache. `null` = not loaded yet; an object = loaded (possibly empty).
 let _cache = null;
@@ -33,10 +39,10 @@ const EMPTY = () => ({ routing: { byGarment: {}, defaultPrinterUid: null }, prin
 
 /**
  * loadPrintRouting() → Promise<{ routing, printersById }>
- * Reads settings/printRouting + the printers collection once and caches the
- * pair. A missing routing doc (never configured) yields an empty routing, which
- * resolves to no printer — the cost calculation then falls back to the mockup
- * template's legacy prices, exactly as before this slice.
+ * Reads settings/printRouting + the printersPublic collection once and caches
+ * the pair. A missing routing doc (never configured) yields an empty routing,
+ * which resolves to no printer — the studio then offers every template and the
+ * cost quote comes back empty ("Produktionskostnad saknas").
  */
 export const loadPrintRouting = async () => {
   if (_cache !== null) return _cache;
@@ -53,7 +59,7 @@ export const loadPrintRouting = async () => {
       printersById,
     };
   } catch (err) {
-    console.warn('printRouting: could not load routing/printers, falling back to template prices :', err?.message);
+    console.warn('printRouting: could not load routing/printersPublic, studio runs unrouted:', err?.message);
     _cache = EMPTY();
   }
   return _cache;
@@ -66,7 +72,8 @@ export const clearPrintRoutingCache = () => {
 
 /** DEV-ONLY: pre-seed the cache so the studio harness can mount the FULL
  *  DesignStudio against a fake printer (e.g. SnapWear's frames) without
- *  Firestore. Same contract as seedPodMockupTemplatesCacheForDev. No-op in
+ *  Firestore. Pass printersPublic-shaped docs (no prices — the harness stubs
+ *  the cost via seedPodCostQuoteForDev). Same contract as seedPodMockupTemplatesCacheForDev. No-op in
  *  production builds. */
 export const seedPrintRoutingCacheForDev = (routing, printersById) => {
   if (!import.meta.env.DEV) return;

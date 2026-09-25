@@ -14,35 +14,24 @@
 //
 //   golv = (costSek · (1 + moms) + FEE_FIXED) / (1 − FEE_RATE), avrundat uppåt.
 //
-// Ex: en tee med ETT stort tryck fram → costSek 150 (plagg 60 + tryck 40 +
-// plattformsuttag 50) → golv 210 kr; vid 210 kr får plattformen 150 + avgiften
-// och säljaren 0 kr — därför prissätter ingen där frivilligt. Ett HÖGRE golv än
-// break-even är ett varumärkes-/optikbeslut (jfr Kents 230 kr) och medvetet INTE
-// kodat här — rekommenderat pris + marginalmål är styrmedlen ovanför golvet.
+// Ex: costSek 140 (ex moms) → golv 196 kr; vid 196 kr får plattformen
+// kostnaden + avgiften och säljaren 0 kr — därför prissätter ingen där
+// frivilligt. Ett HÖGRE golv än break-even är ett varumärkes-/optikbeslut (jfr
+// Kents 230 kr) och medvetet INTE kodat här — rekommenderat pris + marginalmål
+// är styrmedlen ovanför golvet.
 //
-// costSek är INTE längre en konstant per mall: den beror på hur många ytor som
-// faktiskt trycks (fram+bak kostar ett tryck mer än bara fram). podCostForSlots()
-// nedan är den enda platsen som räknar ihop den.
+// VAR costSek KOMMER IFRÅN (A13, "seller sees ONE number", 2026-09-25): EN
+// siffra från servern (quotePodCost-callablen, src/config/podCostQuote.js) —
+// plagg + tryck per designad yta + plattformsuttag, redan ihopbakade. Den här
+// modulen räknar ALDRIG ihop den själv längre: tryckeriets priser och
+// plattformsuttaget får inte finnas i klienten (varken i Firestore-läsbara
+// dokument eller i den här bundlen). Allt nedan tar costSek som indata.
 //
 // FEE_RATE/FEE_FIXED = BAS-nivåns transaktionsavgift (pricing-beslut 2026-08:
 // BAS 0 kr/mån · 8 % + 5 kr). När per-butik-nivåer (PLUS 5 %) får billing-rails
 // ska dessa läsas från butikens konfiguration i stället — byt då EN gång här.
 export const FEE_RATE = 0.08;
 export const FEE_FIXED = 5;
-
-// Flat platform cut per garment — plattformens del av varje tryckt plagg, en
-// post i costSek vid sidan av plagget och trycken. Detta är den
-// "plattformsmarginal" modellen ovan alltid beskrivit men som seed-datan aldrig
-// innehöll. Kollektions-rälsen (3-vägsdelningen) är en SEPARAT sak; den här
-// konstanten driver bara säljarens ekonomi (golv, vinst, marginal).
-//
-// EX MOMS, like every other cost term it is added to (blankCostSek/printCostSek
-// are the printer's ex-moms quotes; priceFloor multiplies the SUM by 1+moms).
-// Mikael 2026-08-30: 40 kr ex moms = 50 kr inkl. The earlier 50 was the
-// inkl-moms figure written into an ex-moms formula (floors ~12,5 kr too high).
-// The cut is the SAME whichever printshop makes the garment — only the
-// printer's blank + print prices vary with routing.
-export const PLATFORM_CUT_SEK = 40;
 
 /** Transaction fee (kr) on a final price INKL. moms. */
 export const transactionFee = (priceInkl) =>
@@ -56,7 +45,7 @@ export const sellerProfitExVat = (priceInkl, costSek, vatRate = 0.25) => {
 
 /**
  * DISPLAY helpers — Mikael 2026-08-30: everything the SELLER sees (inköp,
- * vinst, golv) is INKL. moms; storage (podCostSek, printer tiers) stays EX moms
+ * vinst, golv) is INKL. moms; storage (podCostSek, the quoted cost) stays EX moms
  * because that is how printers quote and how payouts are reckoned. Convert at
  * the edge, never in the stored number.
  */
@@ -75,35 +64,6 @@ export const sellerMargin = (priceInkl, costSek, vatRate = 0.25) => {
   const exVat = priceInkl > 0 ? priceInkl / (1 + vatRate) : 0;
   if (profit == null || !(exVat > 0)) return null;
   return profit / exVat;
-};
-
-/**
- * The seller's total cost (kr, EXKL. moms) for a product built on `template`
- * that actually prints `slots` — plagget + ett tryckpris per DESIGNAD yta +
- * plattformsuttaget. Fram+bak kostar alltså ett tryck mer än bara fram, vilket
- * är hela poängen med per-yta-prissättningen (beslut 3).
- *
- *   cost = blankCostSek + Σ printCostSek[slot] + PLATFORM_CUT_SEK
- *
- * `slots` får vara tom → plagg + uttag (en produkt utan tryck kostar inget tryck).
- * En yta som saknas i printCostSek räknas som 0 kr hellre än att sänka hela
- * kalkylen till null — en okänd tryckyta ska inte tysta golvet.
- *
- * LEGACY-FALLBACK: äldre cachade mall-dokument bär bara `costSek` (plagg + ETT
- * stort tryck, utan uttaget). De får costSek + PLATFORM_CUT_SEK — uttaget gäller
- * även dem, och per-yta-detaljen finns helt enkelt inte att hämta. Null när
- * varken blankCostSek eller costSek går att lita på.
- */
-export const podCostForSlots = (template, slots) => {
-  if (!Number.isFinite(template?.blankCostSek)) {
-    return Number.isFinite(template?.costSek) ? template.costSek + PLATFORM_CUT_SEK : null;
-  }
-  const printCost = template.printCostSek || {};
-  const prints = (Array.isArray(slots) ? slots : []).reduce(
-    (sum, slot) => sum + (Number.isFinite(printCost[slot]) ? printCost[slot] : 0),
-    0
-  );
-  return template.blankCostSek + prints + PLATFORM_CUT_SEK;
 };
 
 /** Break-even price floor (kr INKL. moms, rounded UP) — seller profit 0 here. */

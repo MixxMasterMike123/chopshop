@@ -1,23 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolvePrinterUid, tierCostForSlots, podCostForSlotsRouted, isSlotPrintable } from './printRouting.js';
-import { PLATFORM_CUT_SEK } from './podPricing.js';
+import * as printRouting from './printRouting.js';
 
-// Two printers. KIM makes tees and hoodies (Kim's list 2026-08-10, ex moms);
-// SMALAND is the catch-all default and makes only caps.
-const KIM = {
-  garments: ['tee', 'hoodie'],
-  pricing: { blankCostSek: { tee: 60, hoodie: 380 }, printCostSek: { front: 40, back: 40, pocket: 20 } },
-};
-const SMALAND = {
-  garments: ['cap'],
-  pricing: { blankCostSek: { cap: 50 }, printCostSek: { front: 35 } },
-};
+const { resolvePrinterUid, isSlotPrintable } = printRouting;
+
+// Two printers, as the studio sees them (printersPublic — capability only, no
+// prices). KIM makes tees and hoodies; SMALAND is the catch-all default and
+// makes only caps.
+const KIM = { garments: ['tee', 'hoodie'] };
+const SMALAND = { garments: ['cap'] };
 const printersById = { kim: KIM, smaland: SMALAND };
-
-// The template's LEGACY prices — the pre-routing basis, deliberately different
-// from Kim's so a test can tell which basis produced a number.
-const legacyTee = { blankCostSek: 70, printCostSek: { front: 45, back: 45 } };
 
 test('explicit route wins when the printer offers the garment', () => {
   const routing = { byGarment: { tee: 'kim' }, defaultPrinterUid: 'smaland' };
@@ -83,53 +75,7 @@ test('isSlotPrintable: absent slot = cannot print; pocket rides on front; no fra
   assert.equal(isSlotPrintable(KIM, 'tee', 'left_sleeve'), true);     // no printAreasMm at all
 });
 
-test('tierCostForSlots: blank + one print price per designed slot', () => {
-  assert.equal(tierCostForSlots(KIM, 'tee', ['front']), 100);       // 60 + 40
-  assert.equal(tierCostForSlots(KIM, 'tee', []), 60);                // blank only
-});
-
-test('tierCostForSlots: front+back charges one print more than front alone', () => {
-  assert.equal(tierCostForSlots(KIM, 'tee', ['front', 'back']) - tierCostForSlots(KIM, 'tee', ['front']), 40);
-});
-
-test('tierCostForSlots: missing blank price for the garment → null', () => {
-  assert.equal(tierCostForSlots(KIM, 'cap', ['front']), null);       // Kim never quoted caps
-  assert.equal(tierCostForSlots(KIM, null, ['front']), null);
-  assert.equal(tierCostForSlots(null, 'tee', ['front']), null);
-});
-
-test('tierCostForSlots: an unpriced SLOT counts 0, it does not null the cost', () => {
-  assert.equal(tierCostForSlots(SMALAND, 'cap', ['front', 'back']), 85); // 50 + 35 + 0
-});
-
-test('routed cost = printer tier + the platform cut; tee front = 60+40+40 = 140', () => {
-  const routing = { byGarment: { tee: 'kim' }, defaultPrinterUid: null };
-  const r = podCostForSlotsRouted({ garment: 'tee', slots: ['front'], routing, printersById, template: legacyTee });
-  assert.deepEqual(r, { cost: 140, source: 'printer', printerUid: 'kim' });
-  assert.equal(r.cost, 60 + 40 + PLATFORM_CUT_SEK);
-});
-
-test('no routing configured → the template legacy prices, printerUid null', () => {
-  const r = podCostForSlotsRouted({ garment: 'tee', slots: ['front'], routing: {}, printersById: {}, template: legacyTee });
-  assert.deepEqual(r, { cost: 70 + 45 + PLATFORM_CUT_SEK, source: 'template', printerUid: null });
-});
-
-test('routed printer without a blank price for the garment falls back to the template', () => {
-  // Småland is the default but has never quoted a tee.
-  const routing = { byGarment: {}, defaultPrinterUid: 'smaland' };
-  const r = podCostForSlotsRouted({ garment: 'tee', slots: ['front'], routing, printersById, template: legacyTee });
-  assert.equal(r.source, 'template');
-  assert.equal(r.printerUid, null);
-});
-
-test('neither basis can price it → cost null, source null', () => {
-  const r = podCostForSlotsRouted({ garment: 'tee', slots: ['front'], routing: {}, printersById: {}, template: {} });
-  assert.deepEqual(r, { cost: null, source: null, printerUid: null });
-});
-
-test('the routed cost tracks the DESIGNED slots (front+back costs one print more)', () => {
-  const routing = { byGarment: { tee: 'kim' }, defaultPrinterUid: null };
-  const one = podCostForSlotsRouted({ garment: 'tee', slots: ['front'], routing, printersById, template: legacyTee });
-  const two = podCostForSlotsRouted({ garment: 'tee', slots: ['front', 'back'], routing, printersById, template: legacyTee });
-  assert.equal(two.cost - one.cost, 40);
+test('A13: the client twin carries NO cost code (cost is server-only, quotePodCost)', () => {
+  assert.equal('tierCostForSlots' in printRouting, false);
+  assert.equal('podCostForSlotsRouted' in printRouting, false);
 });
