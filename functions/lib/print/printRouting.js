@@ -19,7 +19,7 @@
  * ALL AMOUNTS EX MOMS (the storage convention across the POD money path).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.podCostForSlotsRouted = exports.podCostForSlots = exports.tierCostForSlots = exports.resolvePrinterUid = exports.PLATFORM_CUT_SEK = void 0;
+exports.podCostForSlotsRouted = exports.podCostForSlots = exports.tierCostForSlots = exports.isSlotPrintable = exports.isSlotPrintableInAreas = exports.resolvePrinterUid = exports.PLATFORM_CUT_SEK = void 0;
 /** The platform's flat cut per printed garment, EX moms.
  *  MUST equal PLATFORM_CUT_SEK in src/wagons/pod-wagon/podPricing.js (40 kr =
  *  50 inkl); the parity test asserts the routed costs agree, which pins it. */
@@ -28,14 +28,16 @@ const isFiniteNumber = (n) => typeof n === 'number' && Number.isFinite(n);
 /**
  * Which printer makes `garment`.
  *
- *   1. routing.byGarment[garment] — only if that printer still has a tier doc
- *      AND lists the garment (a stale route must not price off the wrong tier).
- *   2. routing.defaultPrinterUid — the catch-all; NOT required to list the
- *      garment (its tier may simply not price that blank → null cost → the
- *      caller falls back to the template).
- *   3. null.
+ *   1. routing.byGarment[garment] — only if that printer still has a tier doc,
+ *      is active, AND lists the garment (a stale route must not price off the
+ *      wrong tier).
+ *   2. routing.defaultPrinterUid — under the SAME rule, including "lists the
+ *      garment" (SnapWear A4, 2026-09-25). It used to be an unconditional
+ *      catch-all: a garment the default cannot make was "routed" there anyway,
+ *      withheld nothing and was sent nowhere. Closed in BOTH twins.
+ *   3. null → checkout refuses the line (409 no-printer-for-garment).
  *
- * A null/unknown garment goes straight to 2: there is no per-garment rule.
+ * A null/unknown garment is listed by no printer → null (fail closed).
  */
 const resolvePrinterUid = (garment, routing, printersById) => {
     const printers = printersById || {};
@@ -45,17 +47,42 @@ const resolvePrinterUid = (garment, routing, printersById) => {
     // eligible: printGuard rejects it at login, so a line routed there would sit
     // unprintable. Absent flag = active (docs written before the mirror existed).
     const eligible = (uid) => !!uid && !!printers[uid] && printers[uid].active !== false;
-    if (g) {
-        const uid = byGarment[g];
-        const tier = eligible(uid) ? printers[uid] : null;
-        const garments = Array.isArray(tier?.garments) ? tier.garments : [];
-        if (tier && garments.includes(g))
-            return uid;
-    }
+    if (!g)
+        return null;
+    const makes = (uid) => eligible(uid) && Array.isArray(printers[uid].garments) &&
+        printers[uid].garments.includes(g);
+    const routedUid = byGarment[g];
+    if (makes(routedUid))
+        return routedUid;
     const fallbackUid = routing?.defaultPrinterUid || null;
-    return eligible(fallbackUid) ? fallbackUid : null;
+    return makes(fallbackUid) ? fallbackUid : null;
 };
 exports.resolvePrinterUid = resolvePrinterUid;
+const isArea = (a) => {
+    const f = a;
+    return !!f && typeof f === 'object' && isFiniteNumber(f.w) && f.w > 0 && isFiniteNumber(f.h) && f.h > 0;
+};
+/**
+ * Can a printer whose frames for ONE garment are `areasForGarment` print
+ * `slot`? Twin of isSlotPrintableInAreas in the client module:
+ *   no frames for the garment → true (no capability data, nothing gated);
+ *   'other' → true; its own frame → true; 'pocket' → true when `front` has a
+ *   frame (the pocket is a position INSIDE the front canvas); otherwise false
+ *   (an absent slot = the printer cannot print it — SnapWear: sleeves).
+ */
+const isSlotPrintableInAreas = (areasForGarment, slot) => {
+    if (!areasForGarment || typeof areasForGarment !== 'object')
+        return true;
+    if (slot === 'other')
+        return true;
+    if (isArea(areasForGarment[slot]))
+        return true;
+    return slot === 'pocket' && isArea(areasForGarment.front);
+};
+exports.isSlotPrintableInAreas = isSlotPrintableInAreas;
+/** isSlotPrintableInAreas on a tier doc. */
+const isSlotPrintable = (tier, garment, slot) => (0, exports.isSlotPrintableInAreas)(garment ? tier?.printAreasMm?.[garment] : null, slot);
+exports.isSlotPrintable = isSlotPrintable;
 /**
  * blankCostSek[garment] + Σ printCostSek[slot], EX moms, WITHOUT the platform
  * cut (added once by podCostForSlotsRouted).

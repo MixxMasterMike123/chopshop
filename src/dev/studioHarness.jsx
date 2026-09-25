@@ -24,6 +24,7 @@ import Studio3DSection from '../wagons/pod-wagon/studio/Studio3DSection';
 import DesignStudio from '../wagons/pod-wagon/studio/DesignStudio';
 import { seedPodMockupTemplatesCacheForDev } from '../config/podMockupTemplates';
 import { seedPodProfilesCacheForDev } from '../config/podProfiles';
+import { seedPrintRoutingCacheForDev } from '../config/printRouting';
 
 // Lazy: pixi.js stays in its own chunk, loaded only when the 3D testbed opens.
 const DisplacementPreview = React.lazy(() => import('../wagons/pod-wagon/studio/pixi/DisplacementPreview'));
@@ -899,7 +900,7 @@ const MockupDmSurfaceStressBench = () => {
   );
 };
 
-const WizardBench = () => {
+const WizardBench = ({ snapwear = false }) => {
   const arts = useMemo(() => [
     makeArtwork('art-dark', 'Mörkt motiv 1200×1600', 1200, 1600, '#e2574c', '#2c4b6e', '#ffffff'),
     makeArtwork('art-light', 'Ljust motiv 1200×1600', 1200, 1600, '#f5d76e', '#eeeeee', '#1a1a1a'),
@@ -911,10 +912,68 @@ const WizardBench = () => {
       <p className="mb-4 text-[12px] text-admin-text-muted">
         Hela komponenten med seedade mall/profil-cacher — ingen Firestore. Publicera
         misslyckas (ingen backend); allt före det steget är ögonbart.
+        {snapwear && ' ?snapwear=1: routad till en falsk SnapWear-prislista med deras tryckytor (inga ärmar, ingen flat mössa).'}
       </p>
-      <DesignStudio artwork={arts} loading={false} shopId={null} products={[]} />
+      <DesignStudio artwork={arts} loading={false} shopId={null} products={[]} showUnofferedTemplates={snapwear} />
     </div>
   );
+};
+
+// ?wizard=1&snapwear=1 — the studio routed to a FAKE SnapWear tier carrying the
+// frames scripts/seed-snapwear-printer.cjs seeds (tee 390×490, hoodie front
+// 390×280, no sleeves, no flat cap). Eyeball: sleeve cards gone in step 2,
+// hoodie front shorter, tee front larger, "Flat mössa" dimmed in step 1.
+const SNAPWEAR_FIXTURE = {
+  id: 'snapwear',
+  name: 'Snapwear (Łódź)',
+  type: 'api',
+  active: true,
+  garments: ['tee', 'longsleeve', 'hoodie', 'sweatshirt', 'bag', 'cap', 'beanie'],
+  pricing: {
+    blankCostSek: { tee: 31, longsleeve: 102, hoodie: 120, sweatshirt: 99, bag: 22, cap: 26, beanie: 65 },
+    printCostSek: { front: 38, back: 38, pocket: 38 },
+  },
+  printAreasMm: {
+    tee: { front: { w: 390, h: 490, offsetTopMm: 30 }, back: { w: 390, h: 490, offsetTopMm: 40 }, pocket: { w: 100, h: 100 } },
+    hoodie: { front: { w: 390, h: 280, offsetTopMm: 30 }, back: { w: 390, h: 490, offsetTopMm: 60 }, pocket: { w: 100, h: 100 } },
+    cap: { front: { w: 70, h: 50 } },
+  },
+};
+const HOODIE_HARNESS_COLORWAYS = [
+  { id: 'white', label: 'Vit', hex: '#e9e5eb' },
+  { id: 'black', label: 'Svart', hex: '#222023' },
+  { id: 'red', label: 'Röd', hex: '#aa1326' },
+];
+// MIRROR of hoodie_hanging in scripts/seed-pod-mockup-templates.cjs (photos only,
+// no displacement — geometry is what this bench checks).
+const WIZARD_HOODIE = {
+  id: 'hoodie_hanging',
+  label: 'Hoodie',
+  garment: 'hoodie',
+  profileId: 'apparel_dtg',
+  costSek: 400,
+  photo: {
+    w: 960,
+    h: 1104,
+    urls: Object.fromEntries(HOODIE_HARNESS_COLORWAYS.map((c) => [c.id, `/pod-garments/hoodie-hanging/${c.id}_front.webp`])),
+    backUrls: Object.fromEntries(HOODIE_HARNESS_COLORWAYS.map((c) => [c.id, `/pod-garments/hoodie-hanging/${c.id}_back.webp`])),
+  },
+  colorways: HOODIE_HARNESS_COLORWAYS,
+  printAreas: {
+    front: { x: 337, y: 387, w: 294, h: 313 },
+    back: { x: 366, y: 350, w: 228, h: 304 },
+    pocket: { x: 542, y: 387, w: 98, h: 98 },
+    left_sleeve: { x: 735, y: 410, w: 78, h: 78 },
+    right_sleeve: { x: 155, y: 410, w: 78, h: 78 },
+  },
+  pocketPositions: { left: { x: 542 }, center: { x: 434 }, right: { x: 327 } },
+  printAreaMm: {
+    front: { w: 300, h: 320 },
+    back: { w: 300, h: 400 },
+    pocket: { w: 100, h: 100 },
+    left_sleeve: { w: 80, h: 80 },
+    right_sleeve: { w: 80, h: 80 },
+  },
 };
 
 const HarnessRoot = () => {
@@ -949,9 +1008,26 @@ const HarnessRoot = () => {
       printAreas: { front: { x: 330, y: 330, w: 140, h: 100 } },
       printAreaMm: { front: { w: 70, h: 50 } },
     };
-    seedPodMockupTemplatesCacheForDev([WIZARD_TEE, WIZARD_CAP], { provisional: true });
+    const snapwear = new URLSearchParams(window.location.search).get('snapwear') === '1';
+    if (snapwear) {
+      const WIZARD_FLATCAP = {
+        id: 'flatcap_flat', label: 'Flat mössa', garment: 'flatcap', slotLabels: { front: 'Framsida' },
+        profileId: 'apparel_dtg', costSek: 99, colorways: COLORWAYS,
+        printAreas: { front: { x: 250, y: 470, w: 300, h: 120 } }, printAreaMm: { front: { w: 100, h: 40 } },
+      };
+      seedPodMockupTemplatesCacheForDev(
+        [{ ...WIZARD_TEE, printOffsetTopMm: { front: 65, back: 85 } }, WIZARD_HOODIE, WIZARD_CAP, WIZARD_FLATCAP],
+        { provisional: true }
+      );
+      seedPrintRoutingCacheForDev(
+        { byGarment: Object.fromEntries(SNAPWEAR_FIXTURE.garments.map((g) => [g, 'snapwear'])), defaultPrinterUid: 'snapwear' },
+        { snapwear: SNAPWEAR_FIXTURE }
+      );
+    } else {
+      seedPodMockupTemplatesCacheForDev([WIZARD_TEE, WIZARD_CAP], { provisional: true });
+    }
     seedPodProfilesCacheForDev([{ id: 'apparel_dtg', label: 'Plagg (DTG)', min_dpi: 150, target_dpi: 300 }]);
-    return <WizardBench />;
+    return <WizardBench snapwear={snapwear} />;
   }
   return (
     <>

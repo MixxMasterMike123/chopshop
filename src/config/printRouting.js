@@ -63,3 +63,15 @@ export const loadPrintRouting = async () => {
 export const clearPrintRoutingCache = () => {
   _cache = null;
 };
+
+/** DEV-ONLY: pre-seed the cache so the studio harness can mount the FULL
+ *  DesignStudio against a fake printer (e.g. SnapWear's frames) without
+ *  Firestore. Same contract as seedPodMockupTemplatesCacheForDev. No-op in
+ *  production builds. */
+export const seedPrintRoutingCacheForDev = (routing, printersById) => {
+  if (!import.meta.env.DEV) return;
+  _cache = {
+    routing: { byGarment: routing?.byGarment || {}, defaultPrinterUid: routing?.defaultPrinterUid || null },
+    printersById: printersById || {},
+  };
+};

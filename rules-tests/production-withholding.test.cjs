@@ -92,6 +92,21 @@ const CONNECT = { chargesEnabled: true, stripeAccountId: 'acct_SHOP', commission
     ok(computeProductionWithholding({ lines: [] }).withheldOre === 0, 'empty snapshot → 0');
   }
 
+  console.log('\n=== unrouted POD items are REPORTED (caller 409 no-printer-for-garment, SnapWear A4) ===');
+  {
+    const w = computeProductionWithholding({ lines: [
+      line(0, 'TEE', 1, 'snapwear', 107, 0),
+      line(1, 'FLATCAP', 2, null, null, null, 'front'),
+      line(1, 'FLATCAP', 2, null, null, null, 'back'), // same item, 2nd line → reported once
+    ] });
+    ok(eq(w.unrouted, ['FLATCAP']), 'unrouted = ["FLATCAP"] — once per ITEM, not per line');
+    ok(w.withheldOre === Math.round(107 * 1.25 * 100), 'the routed tee is still withheld normally (13375)');
+    ok(w.unpricedRouted.length === 0, 'an unrouted item is NOT "routed but unpriced" — different 409');
+    ok(eq(computeProductionWithholding({ lines: [line(0, 'TEE', 1, 'snapwear', 107)] }).unrouted, []),
+      'fully routed cart → unrouted empty');
+    ok(eq(computeProductionWithholding(null).unrouted, []), 'null snapshot (pod-disabled shop) → unrouted empty');
+  }
+
   console.log('\n=== routed but unpriced → detected (caller 409 routed-line-unpriced) ===');
   {
     const w = computeProductionWithholding({ lines: [

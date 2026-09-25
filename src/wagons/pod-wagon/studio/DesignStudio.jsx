@@ -31,12 +31,13 @@ import {
   getPodMockupTemplatesMeta,
   templateSlots,
   garmentOfTemplate,
+  applyPrinterAreas,
 } from '../../../config/podMockupTemplates';
 import { loadPodProfiles, clearPodProfilesCache, getProfileById } from '../../../config/podProfiles';
 import { loadPod3dModels, clearPod3dModelsCache } from '../../../config/pod3dModels';
 import { loadPrintRouting, clearPrintRoutingCache } from '../../../config/printRouting';
 import { tierLabel } from '../components/podTier';
-import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, templateWithPocketPosition } from './placementMath';
+import { isComposable, placementReadout, defaultPlacement, containPlacement, clampPlacement, placementFits, templateWithPocketPosition } from './placementMath';
 import { renderMockup, createMockupSession } from './mockupRender';
 import { uploadMockup } from './mockupUpload';
 import TemplateBackground, { viewForSlot, templateViewBox } from './TemplateBackground';
@@ -57,7 +58,7 @@ import { skuFromName, uniqueSku } from '../../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../../utils/variantDerivation';
 import { setMapping } from '../../../utils/podMappings';
 import { priceFloor } from '../podPricing';
-import { podCostForSlotsRouted } from '../printRouting';
+import { podCostForSlotsRouted, resolvePrinterUid } from '../printRouting';
 import { STORE } from '../../../config/store';
 import { orderedVariantMockupUrls } from './mockupVariantImages';
 
@@ -79,7 +80,20 @@ const GarmentThumb = ({ template, colorway }) => (
   <TemplateBackground template={template} colorway={colorway} />
 );
 
-const DesignStudio = ({ artwork = [], loading = false, shopId = null, products = [], onChanged = null, onOpenArtworkLibrary = null, designForProductId = null }) => {
+// Does the platform route this template's garment to a printer that makes it?
+// With NO printer tiers at all (pre-seed, dev harness) nothing is routed yet
+// and every template stays offered — the studio keeps working exactly as
+// before the SnapWear seed. Once any printer exists, a garment nobody makes
+// (flat mössa at SnapWear) is simply not offered: checkout would refuse it
+// (409 no-printer-for-garment), so letting a seller design it is a trap.
+const templateOffered = (template, routing, printersById) =>
+  Object.keys(printersById || {}).length === 0 ||
+  resolvePrinterUid(garmentOfTemplate(template), routing, printersById) != null;
+
+// `showUnofferedTemplates` (dev harness / a platform view only): list the
+// garments no printer makes, dimmed and unselectable, with a note — sellers
+// never see them.
+const DesignStudio = ({ artwork = [], loading = false, shopId = null, products = [], onChanged = null, onOpenArtworkLibrary = null, designForProductId = null, showUnofferedTemplates = false }) => {
   const [templates, setTemplates] = useState([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [templatesError, setTemplatesError] = useState(null);
@@ -179,11 +193,12 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         setRouting(routed.routing);
         setPrintersById(routed.printersById);
         setMeta(getPodMockupTemplatesMeta());
-        // Default-select the first template + its first colourway so the canvas
-        // isn't empty on open.
-        if (t.length && !selectedTemplateId) {
-          setSelectedTemplateId(t[0].id);
-          setColorwayId(t[0].colorways?.[0]?.id || null);
+        // Default-select the first OFFERED template + its first colourway so
+        // the canvas isn't empty on open (never a garment no printer makes).
+        const first = t.find((tpl) => templateOffered(tpl, routed.routing, routed.printersById));
+        if (first && !selectedTemplateId) {
+          setSelectedTemplateId(first.id);
+          setColorwayId(first.colorways?.[0]?.id || null);
         }
       } catch (error) {
         if (!alive) return;
@@ -197,10 +212,32 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateLoadAttempt]);
 
-  const selectedTemplate = useMemo(
+  // THE template every consumer reads (canvas, strip, trycklista, mockups,
+  // publish, cost). Derived ONCE: the raw mockup template reshaped to the
+  // ROUTED printer's real frames (applyPrinterAreas — SnapWear A3): its larger
+  // tee front, its shorter hoodie front, and no sleeves where it prints none.
+  // No routed printer / no frames for the garment → the raw template, exactly
+  // as before. Nothing below may read `templates.find(...)` directly.
+  const rawTemplate = useMemo(
     () => templates.find((t) => t.id === selectedTemplateId) || null,
     [templates, selectedTemplateId]
   );
+  const routedPrinterUid = useMemo(
+    () => (rawTemplate ? resolvePrinterUid(garmentOfTemplate(rawTemplate), routing, printersById) : null),
+    [rawTemplate, routing, printersById]
+  );
+  const selectedTemplate = useMemo(
+    () => applyPrinterAreas(
+      rawTemplate,
+      routedPrinterUid ? printersById[routedPrinterUid]?.printAreasMm?.[garmentOfTemplate(rawTemplate)] : null
+    ),
+    [rawTemplate, routedPrinterUid, printersById]
+  );
+  const offeredTemplates = useMemo(
+    () => templates.filter((t) => templateOffered(t, routing, printersById)),
+    [templates, routing, printersById]
+  );
+  const pickerTemplates = showUnofferedTemplates ? templates : offeredTemplates;
 
   const retryStudioResources = () => {
     clearPodMockupTemplatesCache();
@@ -250,8 +287,43 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     setSlot((cur) => (kept.some((p) => p.slot === cur) ? cur : first));
     setPocketPosition(DEFAULT_POCKET_POSITION);
     resetDesignState();
+    setAreaChangedNotice(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplateId]);
+
+  // PRINT AREA CHANGED UNDER A DESIGN (SnapWear A3). The derived template can
+  // change while the garment stays the same — the routing/printer tiers load
+  // or reload (retry) and the routed printer's frames differ from the ones the
+  // placements were made against. Stored placements are then re-clamped into
+  // the new area and the seller is told once. (effectivePlacementFor already
+  // clamps at render/publish time; this makes the STORED value — what the
+  // canvas shows as the seller's own choice — honest too.) A garment switch is
+  // not this case: that effect above resets the design outright.
+  const [areaChangedNotice, setAreaChangedNotice] = useState(false);
+  const derivedForIdRef = useRef({ id: null, template: null });
+  useEffect(() => {
+    const prev = derivedForIdRef.current;
+    derivedForIdRef.current = { id: selectedTemplateId, template: selectedTemplate };
+    if (!selectedTemplate || prev.id !== selectedTemplateId || prev.template === selectedTemplate) return;
+    const valid = new Set(templateSlots(selectedTemplate));
+    let changed = prints.some((p) => !valid.has(p.slot));
+    if (changed) setPrints((cur) => cur.filter((p) => valid.has(p.slot)));
+    const minDpi = profile?.min_dpi ?? null;
+    const next = {};
+    for (const [s, pl] of Object.entries(placements)) {
+      if (!valid.has(s)) { changed = true; continue; }
+      const art = printArtwork(s);
+      const clamped = art ? clampPlacement(pl, selectedTemplate, s, art, minDpi) : pl;
+      if (art && !placementFits(pl, selectedTemplate, s, art, minDpi)) changed = true;
+      next[s] = clamped;
+    }
+    if (changed) {
+      setPlacements(next);
+      invalidateComposite();
+      setAreaChangedNotice(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTemplate]);
 
   // (No global artwork-change reset anymore: changing a print row's motif
   // resets only THAT row's placement — see setPrintArtwork below.)
@@ -445,6 +517,31 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         ? clampPlacement(placements[s], effTemplate, s, art, profile?.min_dpi ?? null)
         : defaultPlacement(effTemplate, s, art, profile?.min_dpi ?? null)));
 
+  // PUBLISH GATE (SnapWear A3): every print row must be a slot the ROUTED
+  // printer can print (present on the derived template), and every stored
+  // placement must already sit inside that printer's area — clampPlacement a
+  // no-op (placementFits). effectivePlacementFor would silently clamp at
+  // publish; refusing instead means the seller never publishes a placement
+  // they have not seen. A stored placement was clamped against whichever motif
+  // was on the canvas (the base or a colour override), so any of them passing
+  // counts. Returns a Swedish message naming the slot, or null.
+  const printFitError = () => {
+    const valid = new Set(templateSlots(selectedTemplate));
+    const minDpi = profile?.min_dpi ?? null;
+    for (const p of prints) {
+      if (!valid.has(p.slot)) {
+        return `${labelForSlot(p.slot)} kan inte tryckas på det här plagget — ta bort trycket i steg 2 · Tryckytor.`;
+      }
+      const stored = p.slot === 'pocket' ? null : placements[p.slot];
+      if (!stored) continue;
+      const arts = [printArtwork(p.slot), ...Object.values(overrides[p.slot] || {}).map(artworkById)].filter(Boolean);
+      if (arts.length && !arts.some((a) => placementFits(stored, effTemplate, p.slot, a, minDpi))) {
+        return `Trycket på ${labelForSlot(p.slot)} får inte plats i tryckytan — justera placeringen i steg 4 · Placering.`;
+      }
+    }
+    return null;
+  };
+
   // OTHER designed prints sharing the ACTIVE slot's flat (slot→view mapping =
   // TemplateBackground's viewForSlot, the single source). They render as REAL
   // composites — artwork at its effective placement — so switching rows never
@@ -615,6 +712,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       setPublishError('Ett valt motiv finns inte längre i biblioteket — välj ett nytt motiv för trycket.');
       return;
     }
+    const fitError = printFitError();
+    if (fitError) { setPublishError(fitError); return; }
     const cleanName = (name || '').trim();
     if (!cleanName) { setPublishError('Ange ett produktnamn.'); return; }
     const productPrice = parseFloat(price) || 0;
@@ -876,6 +975,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       setPublishError('Ett valt motiv finns inte längre i biblioteket — välj ett nytt motiv för trycket.');
       return;
     }
+    const fitError = printFitError();
+    if (fitError) { setPublishError(fitError); return; }
     const selectedSet = new Set(selectedColorwayIds || []);
     if (selectedSet.size === 0) { setPublishError('Välj minst en färg.'); return; }
     const pubMockups = mockups.filter((m) => selectedSet.has(m.colorwayId));
@@ -1276,6 +1377,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           (förvalt som mål — du kan ändra det där).
         </div>
       )}
+      {areaChangedNotice && (
+        <p role="status" className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[13px] text-admin-caution-text">
+          Tryckytan har ändrats — placeringen justerades. Kontrollera den i steg 4 · Placering.
+        </p>
+      )}
 
       {/* Wizard chrome — persistent step header: ✓ done (clickable to revisit),
           current, or locked (dimmed until every earlier gate is met). Steps
@@ -1329,10 +1435,15 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
               Försök igen
             </button>
           </div>
-        ) : templates.length === 0 ? (
+        ) : pickerTemplates.length === 0 ? (
           <div className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-3">
             <p className="text-[13px] text-admin-caution-text">
-              Inga plaggmallar kunde hämtas. Försök igen eller kontakta plattformsadministratören om problemet kvarstår.
+              {templates.length > 0
+                // Templates loaded, but no printer is routed to make any of
+                // them (routing not configured yet) — a platform task, not a
+                // connection problem.
+                ? 'Inga plagg kan tillverkas just nu — inget tryckeri är kopplat. Kontakta plattformsadministratören.'
+                : 'Inga plaggmallar kunde hämtas. Försök igen eller kontakta plattformsadministratören om problemet kvarstår.'}
             </p>
             <button type="button" onClick={retryStudioResources} className="mt-2 min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3 py-2 text-[13px] font-medium text-admin-text hover:bg-admin-surface-2">
               Försök igen
@@ -1341,20 +1452,26 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         ) : (
           <>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
-              {templates.map((t) => {
+              {pickerTemplates.map((t) => {
                 const active = t.id === selectedTemplateId;
                 const thumbColorway = t.colorways?.[0] || null;
+                // Only reachable with showUnofferedTemplates (harness/platform):
+                // sellers get offeredTemplates, so this is always true for them.
+                const offered = offeredTemplates.includes(t);
                 return (
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => setSelectedTemplateId(t.id)}
+                    onClick={() => offered && setSelectedTemplateId(t.id)}
+                    disabled={!offered}
                     aria-pressed={active}
-                    title={t.label}
+                    title={offered ? t.label : `${t.label} — ingen tryckeripartner för detta plagg ännu`}
                     className={`rounded-[var(--radius-admin-el)] border p-1.5 text-left transition ${
                       active
                         ? 'border-admin-info-dot ring-1 ring-admin-info-dot/40'
-                        : 'border-admin-border hover:bg-admin-surface-2'
+                        : offered
+                          ? 'border-admin-border hover:bg-admin-surface-2'
+                          : 'cursor-not-allowed border-admin-border-soft opacity-50'
                     }`}
                   >
                     <div className="grid aspect-square place-items-center overflow-hidden rounded-[4px] bg-admin-surface-2">
@@ -1363,6 +1480,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
                       </div>
                     </div>
                     <div className="mt-1 truncate text-center text-[11px] font-medium text-admin-text">{t.label}</div>
+                    {!offered && (
+                      <div className="mt-0.5 text-center text-[10px] leading-tight text-admin-text-muted">
+                        Ingen tryckeripartner för detta plagg ännu
+                      </div>
+                    )}
                   </button>
                 );
               })}
@@ -1622,6 +1744,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             }}
             onPlacementChange={(p) => {
               setPlacements((prev) => ({ ...prev, [slot]: p }));
+              setAreaChangedNotice(false); // the seller has now placed it themselves
               // Moving the artwork changes the composite: generated mockups
               // are stale (they'd publish the OLD placement while the mapping
               // readout instructs the NEW one) and every colourway must be

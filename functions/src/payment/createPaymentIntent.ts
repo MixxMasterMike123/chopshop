@@ -19,7 +19,7 @@ import {
   writeCheckoutProductionSnapshot,
 } from '../checkout-recovery/writeCheckoutDoc';
 import { checkRateLimit, trustedClientIp } from '../protection/rate-limiting/durableRateLimit';
-import { buildProductionSnapshotAtomically } from '../print/printProjection';
+import { buildProductionSnapshotAtomically, SLOT_NOT_PRINTABLE_REASON } from '../print/printProjection';
 
 /**
  * Server-side price computation. NEVER trust client-supplied amounts:
@@ -672,8 +672,16 @@ export const createPaymentIntentV2 = onRequest(
                 reason: line.unresolvedReason,
               })),
             });
+            // A line whose slot the routed printer cannot print (stampRouting,
+            // SnapWear A4) rides this same unresolved path; it only gets a
+            // machine-readable reason so support can tell it from a broken
+            // artwork. Other unresolved causes keep the pre-A4 response shape.
+            const slotNotPrintable = unresolvedLines.some(
+              (line) => line.unresolvedReason === SLOT_NOT_PRINTABLE_REASON
+            );
             response.status(409).json({
               error: 'A product is temporarily unavailable for production',
+              ...(slotNotPrintable && { reason: 'slot-not-printable' }),
               success: false,
             });
             return;
@@ -698,6 +706,24 @@ export const createPaymentIntentV2 = onRequest(
       // (amountInOre) is unchanged → total-parity untouched. Non-POD carts and
       // unrouted (pre-routing) lines withhold 0 → legacy params unchanged.
       const withholding = computeProductionWithholding(checkoutProductionSnapshot, DEFAULT_PRODUCTION_VAT_RATE);
+      // Block 0 (SnapWear A4): a POD line routed to NO printer. The pre-routing
+      // "unrouted = visible to every printer" behaviour is retired for new
+      // checkouts: with the default printer now required to list the garment,
+      // null means nobody makes this garment (or the mapping has no garment) —
+      // the line would be sent nowhere and withhold nothing. Old paid
+      // snapshots are untouched (their null lines stay visible to all).
+      if (podEnabled && withholding.unrouted.length > 0) {
+        logger.error('⛔ Checkout blocked — POD item routed to no printer', {
+          shopId: resolvedShopId,
+          skus: withholding.unrouted,
+        });
+        response.status(409).json({
+          error: 'A product is temporarily unavailable for production',
+          reason: 'no-printer-for-garment',
+          success: false,
+        });
+        return;
+      }
       // Block 1: a line routed to a printer whose tier cannot price it. Selling
       // it would silently front the whole production cost unrecovered.
       if (withholding.unpricedRouted.length > 0) {

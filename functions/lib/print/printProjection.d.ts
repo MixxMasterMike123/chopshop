@@ -87,6 +87,7 @@ export declare function excludedArtworkIds(orders: any[], uid: string): Set<stri
  * through to orderHasPodLine's shop-level answer.
  */
 export declare function orderHasVisiblePodLine(order: any, mappingsBySku: Map<string, any[]>, uid: string): boolean;
+export declare const SLOT_NOT_PRINTABLE_REASON = "Tryckeriet kan inte trycka p\u00E5 den h\u00E4r ytan";
 /**
  * Resolve and freeze every POD item×slot from the live mapping/artwork graph.
  * Invalid mapped lines are preserved as explicit unresolved rows, never erased.

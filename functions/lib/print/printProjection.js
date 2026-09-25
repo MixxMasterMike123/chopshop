@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.toPrintJob = exports.toQueueRow = exports.toPrintNotificationLines = exports.orderHasPodLine = exports.findUnresolvedPodLines = exports.buildProductionSnapshotAtomically = exports.buildProductionSnapshotInTransaction = exports.buildProductionSnapshot = exports.orderHasVisiblePodLine = exports.excludedArtworkIds = exports.visibleSnapshotLines = exports.isLineVisibleTo = exports.productionSnapshotPending = exports.productionSnapshotLines = exports.PRODUCTION_SNAPSHOT_VERSION = exports.artworkDeliverable = exports.resolveMapping = exports.resolveSlots = exports.loadPrintRoutingInputs = exports.loadShopMappings = exports.signedUrlFor = exports.mappingSlotLabel = exports.slotLabel = exports.slotOf = exports.DEFAULT_SLOT = void 0;
+exports.toPrintJob = exports.toQueueRow = exports.toPrintNotificationLines = exports.orderHasPodLine = exports.findUnresolvedPodLines = exports.buildProductionSnapshotAtomically = exports.buildProductionSnapshotInTransaction = exports.buildProductionSnapshot = exports.SLOT_NOT_PRINTABLE_REASON = exports.orderHasVisiblePodLine = exports.excludedArtworkIds = exports.visibleSnapshotLines = exports.isLineVisibleTo = exports.productionSnapshotPending = exports.productionSnapshotLines = exports.PRODUCTION_SNAPSHOT_VERSION = exports.artworkDeliverable = exports.resolveMapping = exports.resolveSlots = exports.loadPrintRoutingInputs = exports.loadShopMappings = exports.signedUrlFor = exports.mappingSlotLabel = exports.slotLabel = exports.slotOf = exports.DEFAULT_SLOT = void 0;
 // printProjection.ts — builds the FIELD-MINIMISED production view of a POD order
 // for the print shop. This is the data-minimisation boundary: the printer (an
 // external sub-processor) gets ship-to + production fields ONLY — never customer
@@ -337,6 +337,10 @@ function orderHasVisiblePodLine(order, mappingsBySku, uid) {
     return orderHasPodLine(order, mappingsBySku);
 }
 exports.orderHasVisiblePodLine = orderHasVisiblePodLine;
+// unresolvedReason stamped on a line whose slot the ROUTED printer has no
+// print frame for (SnapWear A4: sleeves). Exported so createPaymentIntent can
+// name the 409 reason ('slot-not-printable') without a second capability check.
+exports.SLOT_NOT_PRINTABLE_REASON = 'Tryckeriet kan inte trycka på den här ytan';
 /**
  * Stamp the frozen routing + cost fields onto already-built lines.
  *
@@ -345,6 +349,14 @@ exports.orderHasVisiblePodLine = orderHasVisiblePodLine;
  * the item's garment (all of an item's lines share one garment — one physical
  * blank), take its tier, and charge blank + Σ prints + cut ONCE, on the first
  * line. Then, per PRINTER, stamp its flat shipping once (printerShippingSek).
+ *
+ * SLOT CAPABILITY (SnapWear A4): a line whose slot the routed printer has no
+ * frame for (printAreasMm[garment] present but the slot absent — pocket rides
+ * on front) is marked unresolved. That reuses the existing unresolved-line 409
+ * at checkout instead of adding a new branch: the studio already hides such a
+ * slot, so this only fires for a product published before the printer's
+ * frames existed (or edited around the studio). A line that is already
+ * unresolved keeps its original, more specific reason.
  * Mutates in place and returns the same array.
  */
 function stampRouting(lines, inputs) {
@@ -362,6 +374,9 @@ function stampRouting(lines, inputs) {
         const printPrices = tier?.pricing?.printCostSek || {};
         itemLines.forEach((line) => {
             line.printerUid = printerUid;
+            if (tier && !line.unresolvedReason && !(0, printRouting_1.isSlotPrintable)(tier, garment, line.placementSlot)) {
+                line.unresolvedReason = exports.SLOT_NOT_PRINTABLE_REASON;
+            }
             const p = printPrices[line.placementSlot];
             line.printCostSek = tier && typeof p === 'number' && Number.isFinite(p) ? p : null;
             line.itemCostSek = null; // the first line overwrites this below
