@@ -20,7 +20,7 @@ Rule: nothing goes live with a SnapWear-routed order until every ☐ under **A**
 | A6 | **Outbound submit** — `type:'api'` printer; outbox handler POSTs `/api/order/add` with stable `job_id` (= order id + line), retry-same-id, duplicate-400 = success, 422 = rejected → flag; SKU from catalog map; artwork + mockup URLs | C | ⏸ | Waiting on N: store-vs-fetch artwork, duplicate response text, charge-status in response |
 | A7 | Out-of-stock exception status on orders (accepted+charged, then SnapWear emails) | C | ☐ | Small |
 | A8 | Shipped status: manual click from SnapWear email (v1) | — | ☑ | Exists (AdminOrderDetail tracking field) |
-| A9 | Statement descriptor suffix per shop (`METEORPR* <SHOP>`) | C | ☐ | Hours |
+| A9 | Statement descriptor suffix per shop (`METEORPR* <SHOP>`) | C | ☑ | **Already built** — createPaymentIntent.ts appends the shop's sanitized name as `statement_descriptor_suffix` (verified 2026-09-25) |
 | A10 | "Rapportera intrång" link in every shop footer + admin takedown action (unpublish + flag + log) | C | ☐ | ~1 day |
 | A11 | Pre-publish screening: blocklist (brands/bands/clubs) on name/description/filename + platform review queue for a new shop's first products | C | ☐ | ~1 day. The item that PREVENTS the expensive IP case |
 | A12 | *Later:* inbound-email parser (Cloudflare Email Routing + Worker) → auto "shipped" + tracking; fail-safe forwards to a human | C | ☐ | After pilot. Needs N: sample shipping email |
