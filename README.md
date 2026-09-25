@@ -1,106 +1,82 @@
-# B8shield Reseller Portal
+# Chop Shop
 
-B8shield Reseller Portal is a web application for resellers to manage orders, track history, and handle customer information. It provides a comprehensive solution for order management with admin capabilities.
+Chop Shop is a multi-tenant storefront platform for small Swedish sellers, with print-on-demand
+merch as its primary business. One codebase, many shops: each shop gets its own identity,
+config, pages and products; sellers design merch in a built-in Design Studio, publish it to
+their shop, and the platform routes every sold garment to a print shop and takes its cut.
 
-## Features
+It grew out of the B8shield reseller portal, which is why the Firebase project, the
+Firestore database (`b8s-reseller-db`) and the npm package are still named `b8shield`.
+Those identifiers cannot be renamed; nothing else about the product is B8shield any more.
 
-- User authentication and management
-- Order creation and tracking
-- Admin dashboard with statistics
-- User role management (admin, reseller)
-- Email notifications for order status changes
+## What it does
 
-## Security Notice - API Keys
+- **Storefronts** — per-shop B2C shop (catalog, variants, cart, Stripe checkout, pickup /
+  click & collect, CMS pages, legal footer, cookie consent). Design system in
+  [DESIGN.md](DESIGN.md) ("NORD": bento modules, seasonal-commerce states).
+- **POD / merch (the `pod-wagon`)** — artwork library, Design Studio with multi-placement
+  print areas, colorways, Pixi-based compositor and 3D mockups, publish flow with a price
+  floor. Seller economics live in one place:
+  [src/wagons/pod-wagon/podPricing.js](src/wagons/pod-wagon/podPricing.js).
+- **Print routing** — the platform decides which print shop produces each garment type and
+  what it costs, from that printer's tier. Client logic in
+  [src/wagons/pod-wagon/printRouting.js](src/wagons/pod-wagon/printRouting.js), server twin
+  in [functions/src/print/printRouting.ts](functions/src/print/printRouting.ts), kept in
+  step by `rules-tests/print-routing-parity.test.cjs`. Printer cost and uid are frozen per
+  production line at payment; each print shop sees only its own lines.
+- **Print shop portal** — queue, order detail and artwork views for the printers
+  ([src/pages/print/](src/pages/print/)).
+- **Platform admin** — shops, users, printers, models, add-ons, leads, DAC7 reporting
+  ([src/pages/platform/](src/pages/platform/)).
+- **Shop admin** — products, orders, pages, settings, labels ([src/pages/admin/](src/pages/admin/)).
+- **Backend (Cloud Functions, TypeScript)** — payment and order processing, print outbox and
+  status, POD artwork processing, email orchestrator, affiliates, product reviews, DAC7,
+  withdrawal-right handling, checkout recovery ([functions/src/](functions/src/)).
 
-**IMPORTANT**: This project uses Firebase API keys which must be handled securely:
+[CAPABILITY_INVENTORY.md](CAPABILITY_INVENTORY.md) is the honest map of what EXISTS /
+PARTIAL / MISSING per area — read it before assuming a feature is done.
 
-1. Never commit the actual API keys to Git or any public repository
-2. Always use environment variables for storing sensitive credentials
-3. The `.env` file is excluded from Git via `.gitignore`
-4. Create your `.env` file based on `.env.example` with your own API keys
-5. When deploying, set environment variables in your hosting platform
+## Architecture: train + wagons
 
-### Regenerating Compromised API Keys
+The core app is the train; optional feature areas are **wagons** under
+[src/wagons/](src/wagons/) (`pod-wagon`, `dining-wagon`, `campaign-wagon`, `ambassador-wagon`,
+`writers-wagon`). A wagon is self-contained and registers itself through `WagonRegistry.js`;
+removing one is deleting its directory. See
+[src/wagons/WAGON_ARCHITECTURE.md](src/wagons/WAGON_ARCHITECTURE.md).
 
-If an API key has been compromised:
+Money terms in the POD path (`podCostSek`, printer tiers, snapshot line cost) are stored
+**ex moms**; inkl-moms is a display concern on seller-facing surfaces only.
 
-1. Go to the [Firebase Console](https://console.firebase.google.com/)
-2. Navigate to Project Settings > API keys
-3. Regenerate the compromised key
-4. Update your local `.env` file and any deployment environments
-5. Verify your application still works with the new key
+## Stack
 
-## Demo Mode
+React 18 · Vite · Tailwind · React Router · Firebase (Auth, Firestore, Storage, Cloud
+Functions on Node 22, Hosting) · Stripe (Connect) · Pixi.js for the studio compositor.
 
-This application includes a demo mode for testing and exploration without requiring Firebase configuration:
+## Layout
 
-1. When no valid Firebase API keys are provided, the app automatically runs in demo mode
-2. Demo mode provides mock authentication (auto-login as admin)
-3. Mock data for users and orders is pre-populated
-4. All functionality works with the mock data
+```
+src/            React app (pages/shop, pages/admin, pages/platform, pages/print, wagons/)
+functions/src/  Cloud Functions (TypeScript); functions/lib is compiled output
+rules-tests/    Firestore rules + isolation + routing-parity tests (npm run test:isolation)
+docs/           design explorations, specs, decisions
+scripts/        one-off maintenance scripts
+OBSOLETE/       kept for reference only — not part of the product
+*-harness.html  standalone browser harnesses for studio/mockup/colorway work
+```
 
-## Getting Started
+## Running it
 
-### Prerequisites
+```
+npm install
+cp .env.example .env      # Firebase + Stripe keys; never commit .env
+npm run dev               # http://localhost:5173
+npm run test:isolation    # Firestore rules, tenant isolation, print-routing parity
+```
 
-- Node.js (v14 or later)
-- npm or yarn
+Functions: `cd functions && npm install && npm run build`, then `firebase deploy --only functions`.
+Hosting targets are defined in [firebase.json](firebase.json).
 
-### Installation
+## Keys and secrets
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/yourusername/b8shield-portal.git
-   cd b8shield-portal
-   ```
-
-2. Install dependencies:
-   ```
-   npm install
-   ```
-
-3. Create a `.env` file based on `.env.example`:
-   ```
-   cp .env.example .env
-   ```
-
-4. To run in demo mode, leave the Firebase configuration variables as they are in the example file.
-
-   To connect to a real Firebase project:
-   - Create a Firebase project at [firebase.google.com](https://firebase.google.com)
-   - Enable Authentication, Firestore, and Storage
-   - Add a web app to your Firebase project
-   - Copy the configuration values to your `.env` file
-
-5. Start the development server:
-   ```
-   npm run dev
-   ```
-
-6. Open your browser and navigate to `http://localhost:5173`
-
-## Firebase Setup (for production use)
-
-If you want to use this with a real Firebase project:
-
-1. Create a Firebase project at [firebase.google.com](https://firebase.google.com)
-2. Enable Authentication with Email/Password
-3. Create a Firestore database
-4. Add your Firebase configuration to `.env`
-5. Deploy Firebase functions for email notifications
-   ```
-   firebase deploy --only functions
-   ```
-
-## Technologies Used
-
-- React 18
-- Firebase (Authentication, Firestore, Functions)
-- Tailwind CSS
-- Vite
-- React Router
-- React Hook Form
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 
+Firebase and Stripe keys come from `.env` / function config only. If a key leaks, regenerate
+it in the Firebase or Stripe console and rotate every deployment that used it.

@@ -503,6 +503,12 @@ export const stripeWebhookV2 = onRequest(
               applicationFeeId: ((paymentIntent.latest_charge as any)?.application_fee) || null,
               transferId: ((paymentIntent.latest_charge as any)?.transfer) || null,
               commissionBps: parseInt(metadata.commissionBps || '0', 10),
+              // SnapWear A1: the POD production cost (incl. moms) held back
+              // INSIDE applicationFeeAmount above — not on top of it. 0 / null
+              // when nothing was withheld (non-POD cart, pre-A1 PI). Source of
+              // the per-shop monthly production statement (B4).
+              productionWithheldOre: parseInt(metadata.productionWithheldOre || '0', 10),
+              productionVatRate: metadata.productionVatRate ? parseFloat(metadata.productionVatRate) : null,
               transferReversed: false
             }
           }),

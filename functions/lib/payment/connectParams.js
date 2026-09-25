@@ -8,36 +8,74 @@
  * tests assert the exact param shapes (the bugs that would actually hurt:
  * forgetting transfer_data, a wrong fee, or a Connect refund missing the
  * transfer reversal). Fee arithmetic lives in connectFee.ts.
+ *
+ * POD PRODUCTION WITHHOLDING (SnapWear A1): on a POD order the application fee
+ * is the platform % cut PLUS the frozen production cost incl. moms
+ * (productionWithholding.ts) — the platform pays the printer, so it must hold
+ * that money back from the transfer. REFUNDS: no separate handling. The
+ * withheld production is simply PART of the application fee, so the existing
+ * `refundApplicationFee` policy (settings/platform, see buildRefundParams)
+ * decides whether it goes back to the buyer on a refund. Once an item is
+ * printed its production is sunk cost for the platform → the recommended
+ * policy is settings/platform.refundApplicationFee = false (Mikael's call; the
+ * default in code is still true = pre-A1 behaviour).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.refundStateAfter = exports.validateRefundRequest = exports.summarizeConnectBalance = exports.buildDisputeReTransferParams = exports.buildDisputeReversalParams = exports.buildRefundParams = exports.buildConnectChargeParams = void 0;
 const connectFee_1 = require("./connectFee");
+const productionWithholding_1 = require("./productionWithholding");
 /**
  * Decide the destination-charge params for a checkout. A shop is "Connect-
  * enabled" ONLY when it has a usable connected account (chargesEnabled +
  * stripeAccountId); otherwise the result is empty and the PaymentIntent is the
  * legacy single-account charge. NO on_behalf_of → platform stays VAT MoR.
  *
+ * The application fee = the % commission + `withheldOre` (the POD production
+ * cost incl. moms, from computeProductionWithholding). With withheldOre = 0
+ * (non-POD cart, or pre-routing lines) params AND metadata are byte-identical
+ * to the pre-withholding build: the two production* metadata keys are only
+ * added when something is actually withheld.
+ *
  * @param pay              shops/{id}.payments map (may be undefined)
  * @param amountOre        gross charge amount in öre
  * @param platformDefaultBps  fallback commission (settings/platform → env)
+ * @param withheldOre      production cost to hold back, integer öre (default 0)
+ * @param productionVatRate  the moms rate withheldOre was computed with —
+ *                         recorded in metadata for reconciliation only
  */
-function buildConnectChargeParams(pay, amountOre, platformDefaultBps) {
+function buildConnectChargeParams(pay, amountOre, platformDefaultBps, withheldOre = 0, productionVatRate = productionWithholding_1.DEFAULT_PRODUCTION_VAT_RATE) {
     const useConnect = pay?.chargesEnabled === true && !!pay?.stripeAccountId;
+    // Legacy shop: nothing can be withheld without a destination charge. The
+    // caller blocks POD carts on such shops (409 pod-requires-connect) before
+    // this result is used, so feeExceedsGross is meaningless here → false.
     if (!useConnect)
-        return { params: {}, meta: {}, useConnect: false };
+        return { params: {}, meta: {}, useConnect: false, feeExceedsGross: false };
     const bps = (0, connectFee_1.resolveCommissionBps)(pay.commissionBps, platformDefaultBps);
-    const feeOre = (0, connectFee_1.computeApplicationFeeOre)(amountOre, bps);
+    const pctFeeOre = (0, connectFee_1.computeApplicationFeeOre)(amountOre, bps);
+    const withheld = Number.isFinite(withheldOre) && withheldOre > 0 ? Math.round(withheldOre) : 0;
+    const rawFeeOre = pctFeeOre + withheld;
+    const gross = Number.isFinite(amountOre) && amountOre > 0 ? amountOre : 0;
+    const feeExceedsGross = rawFeeOre > gross;
+    // Clamp ONLY to keep the Stripe params valid; feeExceedsGross makes the
+    // caller refuse the checkout, so a clamped fee is never actually charged.
+    const feeOre = Math.max(0, Math.min(rawFeeOre, gross));
     return {
         useConnect: true,
+        feeExceedsGross,
         params: {
             transfer_data: { destination: pay.stripeAccountId },
             application_fee_amount: feeOre,
         },
         meta: {
             connectedAccountId: pay.stripeAccountId,
+            // The TOTAL fee (commission + withheld production) — what Stripe takes;
+            // the webhook stamps it on order.connect.applicationFeeAmount.
             applicationFeeAmount: String(feeOre),
             commissionBps: String(bps),
+            ...(withheld > 0 && {
+                productionWithheldOre: String(withheld),
+                productionVatRate: String(productionVatRate),
+            }),
         },
     };
 }

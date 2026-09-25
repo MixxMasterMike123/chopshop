@@ -12,6 +12,7 @@ import { db } from '../config/database';
 import { DEFAULT_SHOP_ID } from '../config/tenancy';
 import { isShopFeatureEnabled } from '../config/shopFeatures';
 import { buildConnectChargeParams } from './connectParams';
+import { computeProductionWithholding, DEFAULT_PRODUCTION_VAT_RATE } from './productionWithholding';
 import { readPlatformConfig } from './platformConfig';
 import {
   writeAbandonedCheckoutDoc,
@@ -643,6 +644,78 @@ export const createPaymentIntentV2 = onRequest(
         itemCount: cartItems.length
       });
 
+      // Freeze production identity before the buyer can confirm payment. This
+      // prevents a mapping/artwork edit between checkout and webhook delivery
+      // from changing what the print shop receives.
+      //
+      // D7: a pod-disabled shop skips this entirely — no snapshot to freeze,
+      // no unresolved-line check, no checkout doc write below. It does not read
+      // or affect totals/amountInOre (already computed above). It runs BEFORE
+      // the Connect build (SnapWear A1) because the frozen snapshot is the ONE
+      // source of the production cost the application fee withholds — the
+      // same object the print portal later fulfils. It has no dependency on
+      // the Connect params, so the move changes no 409/503 behaviour.
+      let checkoutProductionSnapshot: Awaited<ReturnType<typeof buildProductionSnapshotAtomically>> | null = null;
+      if (podEnabled) {
+        try {
+          checkoutProductionSnapshot = await buildProductionSnapshotAtomically({
+            shopId: resolvedShopId,
+            items: totals.serverLines,
+          });
+          const unresolvedLines = checkoutProductionSnapshot.lines.filter((line) => line.unresolvedReason);
+          if (unresolvedLines.length > 0) {
+            logger.error('⛔ Checkout blocked — POD production snapshot is unresolved', {
+              shopId: resolvedShopId,
+              lines: unresolvedLines.map((line) => ({
+                sku: line.sku,
+                placementSlot: line.placementSlot,
+                reason: line.unresolvedReason,
+              })),
+            });
+            response.status(409).json({
+              error: 'A product is temporarily unavailable for production',
+              success: false,
+            });
+            return;
+          }
+        } catch (snapshotError: any) {
+          logger.error('❌ Could not freeze checkout production snapshot', {
+            shopId: resolvedShopId,
+            error: snapshotError?.message,
+          });
+          response.status(503).json({
+            error: 'Checkout is temporarily unavailable',
+            success: false,
+          });
+          return;
+        }
+      }
+
+      // 🏭 POD PRODUCTION WITHHOLDING (SnapWear A1). The platform pays the
+      // printer, so the frozen production cost (items × qty + one shipping per
+      // printer, incl. 25% moms — productionWithholding.ts) is held back from
+      // the shop's transfer inside application_fee_amount. The buyer's charge
+      // (amountInOre) is unchanged → total-parity untouched. Non-POD carts and
+      // unrouted (pre-routing) lines withhold 0 → legacy params unchanged.
+      const withholding = computeProductionWithholding(checkoutProductionSnapshot, DEFAULT_PRODUCTION_VAT_RATE);
+      // Block 1: a line routed to a printer whose tier cannot price it. Selling
+      // it would silently front the whole production cost unrecovered.
+      if (withholding.unpricedRouted.length > 0) {
+        logger.error('⛔ Checkout blocked — POD item routed to a printer but unpriced', {
+          shopId: resolvedShopId,
+          skus: withholding.unpricedRouted,
+        });
+        response.status(409).json({
+          error: 'A product is temporarily unavailable for production',
+          reason: 'routed-line-unpriced',
+          success: false,
+        });
+        return;
+      }
+      const hasPricedProduction = !!checkoutProductionSnapshot?.lines.some(
+        (line) => line.printerUid != null && line.itemCostSek != null
+      );
+
       // 💸 STRIPE CONNECT (opt-in per shop). If this shop has a usable connected
       // account, make this a DESTINATION CHARGE: the full amount transfers to
       // the shop's account minus the platform's cut (application_fee_amount).
@@ -661,11 +734,54 @@ export const createPaymentIntentV2 = onRequest(
         const cfg = await readPlatformConfig();
         platformDefaultBps = cfg.defaultCommissionBps;
       }
-      const connectBuild = buildConnectChargeParams(pay, amountInOre, platformDefaultBps);
+      const connectBuild = buildConnectChargeParams(
+        pay,
+        amountInOre,
+        platformDefaultBps,
+        withholding.withheldOre,
+        DEFAULT_PRODUCTION_VAT_RATE
+      );
       const connectParams = connectBuild.params;
       const connectMeta = connectBuild.meta;
+      // Block 2: something to withhold but no destination charge to withhold it
+      // FROM — a legacy single-account charge would leave the platform fronting
+      // the printer with no recovery path.
+      if (hasPricedProduction && !connectBuild.useConnect) {
+        logger.error('⛔ Checkout blocked — POD production needs a Connect-enabled shop', {
+          shopId: resolvedShopId,
+          withheldOre: withholding.withheldOre,
+        });
+        response.status(409).json({
+          error: 'A product is temporarily unavailable for production',
+          reason: 'pod-requires-connect',
+          success: false,
+        });
+        return;
+      }
+      // Block 3: % fee + production > gross (product priced below its floor).
+      // Never clamp-and-continue: the shop would get 0 and the platform would
+      // still under-collect production.
+      if (connectBuild.feeExceedsGross) {
+        logger.error('⛔ Checkout blocked — production cost exceeds the charge', {
+          shopId: resolvedShopId,
+          amountInOre,
+          withheldOre: withholding.withheldOre,
+          perPrinter: withholding.perPrinter,
+        });
+        response.status(409).json({
+          error: 'A product is temporarily unavailable for production',
+          reason: 'production-exceeds-gross',
+          success: false,
+        });
+        return;
+      }
       if (connectBuild.useConnect) {
-        logger.info('💸 Destination charge', { shopId: resolvedShopId, connectedAccountId: pay.stripeAccountId, fee: connectParams.application_fee_amount });
+        logger.info('💸 Destination charge', {
+          shopId: resolvedShopId,
+          connectedAccountId: pay.stripeAccountId,
+          fee: connectParams.application_fee_amount,
+          ...(withholding.withheldOre > 0 && { productionWithheldOre: withholding.withheldOre }),
+        });
       }
 
       // Item snapshot for the webhook's order creation. Stripe caps each
@@ -803,51 +919,6 @@ export const createPaymentIntentV2 = onRequest(
       if (!itemDetailsMeta) {
         response.status(400).json({ error: 'Cart too large for payment metadata' });
         return;
-      }
-
-      // Freeze production identity before the buyer can confirm payment. This
-      // prevents a mapping/artwork edit between checkout and webhook delivery
-      // from changing what the print shop receives.
-      //
-      // D7: a pod-disabled shop skips this entirely — no snapshot to freeze,
-      // no unresolved-line check, no checkout doc write below. This gate is
-      // purely about the print-projection graph; it does not read or affect
-      // totals/amountInOre/connectParams/baseMetadata money fields, all of
-      // which were already computed above.
-      let checkoutProductionSnapshot: Awaited<ReturnType<typeof buildProductionSnapshotAtomically>> | null = null;
-      if (podEnabled) {
-        try {
-          checkoutProductionSnapshot = await buildProductionSnapshotAtomically({
-            shopId: resolvedShopId,
-            items: totals.serverLines,
-          });
-          const unresolvedLines = checkoutProductionSnapshot.lines.filter((line) => line.unresolvedReason);
-          if (unresolvedLines.length > 0) {
-            logger.error('⛔ Checkout blocked — POD production snapshot is unresolved', {
-              shopId: resolvedShopId,
-              lines: unresolvedLines.map((line) => ({
-                sku: line.sku,
-                placementSlot: line.placementSlot,
-                reason: line.unresolvedReason,
-              })),
-            });
-            response.status(409).json({
-              error: 'A product is temporarily unavailable for production',
-              success: false,
-            });
-            return;
-          }
-        } catch (snapshotError: any) {
-          logger.error('❌ Could not freeze checkout production snapshot', {
-            shopId: resolvedShopId,
-            error: snapshotError?.message,
-          });
-          response.status(503).json({
-            error: 'Checkout is temporarily unavailable',
-            success: false,
-          });
-          return;
-        }
       }
 
       // Create Payment Intent with simplified configuration for live mode

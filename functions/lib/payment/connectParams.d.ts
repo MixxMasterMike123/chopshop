@@ -7,11 +7,23 @@
  * tests assert the exact param shapes (the bugs that would actually hurt:
  * forgetting transfer_data, a wrong fee, or a Connect refund missing the
  * transfer reversal). Fee arithmetic lives in connectFee.ts.
+ *
+ * POD PRODUCTION WITHHOLDING (SnapWear A1): on a POD order the application fee
+ * is the platform % cut PLUS the frozen production cost incl. moms
+ * (productionWithholding.ts) — the platform pays the printer, so it must hold
+ * that money back from the transfer. REFUNDS: no separate handling. The
+ * withheld production is simply PART of the application fee, so the existing
+ * `refundApplicationFee` policy (settings/platform, see buildRefundParams)
+ * decides whether it goes back to the buyer on a refund. Once an item is
+ * printed its production is sunk cost for the platform → the recommended
+ * policy is settings/platform.refundApplicationFee = false (Mikael's call; the
+ * default in code is still true = pre-A1 behaviour).
  */
 export interface ConnectChargeBuild {
     params: Record<string, any>;
     meta: Record<string, string>;
     useConnect: boolean;
+    feeExceedsGross: boolean;
 }
 /**
  * Decide the destination-charge params for a checkout. A shop is "Connect-
@@ -19,11 +31,20 @@ export interface ConnectChargeBuild {
  * stripeAccountId); otherwise the result is empty and the PaymentIntent is the
  * legacy single-account charge. NO on_behalf_of → platform stays VAT MoR.
  *
+ * The application fee = the % commission + `withheldOre` (the POD production
+ * cost incl. moms, from computeProductionWithholding). With withheldOre = 0
+ * (non-POD cart, or pre-routing lines) params AND metadata are byte-identical
+ * to the pre-withholding build: the two production* metadata keys are only
+ * added when something is actually withheld.
+ *
  * @param pay              shops/{id}.payments map (may be undefined)
  * @param amountOre        gross charge amount in öre
  * @param platformDefaultBps  fallback commission (settings/platform → env)
+ * @param withheldOre      production cost to hold back, integer öre (default 0)
+ * @param productionVatRate  the moms rate withheldOre was computed with —
+ *                         recorded in metadata for reconciliation only
  */
-export declare function buildConnectChargeParams(pay: any, amountOre: number, platformDefaultBps: number): ConnectChargeBuild;
+export declare function buildConnectChargeParams(pay: any, amountOre: number, platformDefaultBps: number, withheldOre?: number, productionVatRate?: number): ConnectChargeBuild;
 /**
  * Decide the refund params for an order. A destination-charge order must claw
  * the principal back from the connected account (reverse_transfer); whether it

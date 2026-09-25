@@ -29,6 +29,7 @@ export interface PrinterTier {
         blankCostSek?: Record<string, number>;
         printCostSek?: Record<string, number>;
     };
+    shippingSek?: number;
 }
 export interface PrintRouting {
     byGarment?: Record<string, string>;

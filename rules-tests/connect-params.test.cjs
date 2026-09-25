@@ -68,6 +68,52 @@ console.log('\n=== Destination-charge params (createPaymentIntent path) ===');
   ok(b.useConnect === false, 'chargesEnabled without stripeAccountId → legacy (no broken transfer)');
 }
 
+console.log('\n=== POD production withholding (SnapWear A1) ===');
+
+// fee = % commission + withheld production; metadata carries the TOTAL fee plus
+// the withheld part (for order.connect reconciliation).
+{
+  const pay = { chargesEnabled: true, stripeAccountId: 'acct_X', commissionBps: 800 };
+  const b = buildConnectChargeParams(pay, 34900, 500, 28250);
+  ok(b.params.application_fee_amount === 2792 + 28250, 'fee = pct 2792 + withheld 28250 = 31042');
+  ok(b.meta.applicationFeeAmount === '31042', 'meta.applicationFeeAmount is the TOTAL fee');
+  ok(b.meta.productionWithheldOre === '28250' && b.meta.productionVatRate === '0.25', 'meta carries productionWithheldOre + productionVatRate');
+  ok(b.feeExceedsGross === false, 'within gross → feeExceedsGross false');
+}
+
+// Every pre-A1 call shape (3 args) still yields the old params/meta, and says
+// nothing exceeded — legacy + non-POD Connect shops are byte-identical.
+{
+  const pay = { chargesEnabled: true, stripeAccountId: 'acct_X', commissionBps: 500 };
+  const b = buildConnectChargeParams(pay, 12500, 500);
+  ok(eq(b.meta, { connectedAccountId: 'acct_X', applicationFeeAmount: '625', commissionBps: '500' }), 'withheld omitted → meta has NO production* keys');
+  ok(eq(buildConnectChargeParams(pay, 12500, 500, 0), b), 'withheld 0 ≡ omitted (deep-equal)');
+  ok(b.feeExceedsGross === false, 'no withholding → never flagged');
+}
+
+// Under-floor price: % + production > gross → flagged; params stay valid.
+{
+  const pay = { chargesEnabled: true, stripeAccountId: 'acct_X', commissionBps: 800 };
+  const b = buildConnectChargeParams(pay, 20000, 500, 28250);
+  ok(b.feeExceedsGross === true, '1600 + 28250 > 20000 → feeExceedsGross true (caller 409s)');
+  ok(b.params.application_fee_amount === 20000, 'fee clamped to gross only to keep params Stripe-valid');
+}
+
+// Legacy shop with something to withhold → still empty (caller blocks with
+// pod-requires-connect; the builder never invents a destination charge).
+{
+  const b = buildConnectChargeParams({ chargesEnabled: false }, 34900, 500, 28250);
+  ok(b.useConnect === false && eq(b.params, {}) && eq(b.meta, {}) && b.feeExceedsGross === false,
+    'non-Connect + withheld → empty params/meta, not flagged');
+}
+
+// Garbage withheld never lowers or NaN-poisons the fee.
+{
+  const pay = { chargesEnabled: true, stripeAccountId: 'acct_X', commissionBps: 500 };
+  ok(buildConnectChargeParams(pay, 10000, 500, -300).params.application_fee_amount === 500, 'negative withheld → ignored (fee 500)');
+  ok(buildConnectChargeParams(pay, 10000, 500, NaN).params.application_fee_amount === 500, 'NaN withheld → ignored (fee 500)');
+}
+
 console.log('\n=== Refund params (connectRefund path) ===');
 
 // Connect order → must reverse the transfer AND refund the application fee.
