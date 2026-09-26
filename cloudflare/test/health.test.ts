@@ -33,7 +33,7 @@ describe("API foundation", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     await expect(response.json()).resolves.toEqual({
       database: "ready",
-      migration: "0014_receipt_tokens.sql",
+      migration: "0015_acting_as_revocation_id.sql",
       status: "ok",
     });
   });

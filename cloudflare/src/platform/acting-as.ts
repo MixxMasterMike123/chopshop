@@ -178,11 +178,12 @@ export async function grantActingAs(
  * Scoped to the caller: one operator ending their session must not end a
  * colleague's. ONE statement revokes the whole live set — no SELECT-then-UPDATE
  * and no LIMIT, so there is no count of grants past which "revoked" would leave
- * some alive (Codex review of db66555: a LIMIT 50 did exactly that). The audit
- * row is written in the same batch and only if something was revoked: it is an
- * INSERT … SELECT over the rows this call just stamped with `revoked_at = now`,
- * so a revoke is never recorded without a grant behind it, and never omitted
- * when one was ended. `not_found` when there was nothing live.
+ * some alive (Codex review of db66555: a LIMIT 50 did exactly that). Every row
+ * it revokes is stamped with this call's random `revocation_id`, and the audit
+ * row is an INSERT … SELECT over exactly those rows in the same batch — so a
+ * revoke is never recorded without a grant behind it, never omitted when one
+ * was ended, and never attributed to a second call that happened to share the
+ * same millisecond (Codex review of 7908e83). `not_found` when nothing was live.
  */
 export async function revokeActingAs(
   db: D1Database,
@@ -191,19 +192,20 @@ export async function revokeActingAs(
   now: number,
 ): Promise<RevokeActingAsResult> {
   const nowIso = new Date(now).toISOString();
+  const revocationId = crypto.randomUUID();
 
   const [revoked] = await db.batch<{ id: string }>([
     db
       .prepare(
         `UPDATE acting_as_grants
-         SET revoked_at = ?
+         SET revoked_at = ?, revocation_id = ?
          WHERE platform_user_id = ?
            AND tenant_id = ?
            AND revoked_at IS NULL
            AND expires_at > ?
          RETURNING id`,
       )
-      .bind(nowIso, principal.userId, tenantId, nowIso),
+      .bind(nowIso, revocationId, principal.userId, tenantId, nowIso),
     db
       .prepare(
         `INSERT INTO audit_events (
@@ -214,13 +216,12 @@ export async function revokeActingAs(
           json_object('grantIds', (
             SELECT json_group_array(id) FROM (
               SELECT id FROM acting_as_grants
-              WHERE platform_user_id = ? AND tenant_id = ? AND revoked_at = ?
+              WHERE revocation_id = ?
               ORDER BY created_at ASC
             )
           )), ?
         WHERE EXISTS (
-          SELECT 1 FROM acting_as_grants
-          WHERE platform_user_id = ? AND tenant_id = ? AND revoked_at = ?
+          SELECT 1 FROM acting_as_grants WHERE revocation_id = ?
         )`,
       )
       .bind(
@@ -229,13 +230,9 @@ export async function revokeActingAs(
         principal.userId,
         tenantId,
         crypto.randomUUID(),
-        principal.userId,
-        tenantId,
-        nowIso,
+        revocationId,
         now,
-        principal.userId,
-        tenantId,
-        nowIso,
+        revocationId,
       ),
   ]);
 

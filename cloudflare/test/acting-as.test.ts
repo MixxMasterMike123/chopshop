@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/auth/create-auth";
 import { authorizeTenantAdminRequest } from "../src/auth/request-authorization";
+import { grantActingAs, revokeActingAs } from "../src/platform/acting-as";
 import {
   ACTING_AS_TTL_MS,
   parseActingAsGrantInput,
@@ -551,6 +552,22 @@ describe("revoking a grant", () => {
     expect(new Set(ids)).toEqual(
       new Set(before.filter((grant) => grant.revoked_at === null).map((grant) => grant.id)),
     );
+  });
+});
+
+describe("revoke audit correlation (Codex 7908e83)", () => {
+  it("a second revoke in the SAME millisecond revokes nothing and audits nothing", async () => {
+    const platform = { accountType: "platform_admin" as const, userId: operator.userId };
+    const t = NOW + 5_000_000;
+    expect((await grantActingAs(env.DB, platform, SHOP_B, { reason: null }, t - 1)).status).toBe("ok");
+    const before = (await auditRows(SHOP_B, "acting_as.revoked")).length;
+
+    const first = await revokeActingAs(env.DB, platform, SHOP_B, t);
+    expect(first).toEqual({ revoked: 1, status: "ok" });
+    const second = await revokeActingAs(env.DB, platform, SHOP_B, t);
+    expect(second).toEqual({ status: "not_found" });
+
+    expect((await auditRows(SHOP_B, "acting_as.revoked")).length).toBe(before + 1);
   });
 });
 
