@@ -34,6 +34,18 @@ export default defineConfig({
             // production constructEventAsync verify them, so the real
             // verification code runs under test rather than being stubbed out.
             STRIPE_WEBHOOK_SECRET: "whsec_fake-signing-secret-for-tests-only",
+            // The six POD values. Test-only and never real: every suite injects
+            // a fake farm client through the symbol seam, so no test performs
+            // HTTP to a render farm, and the presigner (when not overridden)
+            // signs against these credentials producing URLs no test ever
+            // dereferences. The gate only asks whether all six EXIST.
+            R2_ACCESS_KEY_ID: "test-only-r2-access-key-id-value",
+            R2_ACCOUNT_ID: "test0account0id0for0workers0test",
+            R2_PRIVATE_BUCKET_NAME: "meteorshop-test-private",
+            R2_SECRET_ACCESS_KEY: "test-only-r2-secret-access-key-value",
+            RENDER_FARM_TOKEN: "test-only-render-farm-token-32-chars",
+            RENDER_FARM_URL:
+              "https://render-farm.test.invalid/renderFarmProcessArtwork",
             TEST_MIGRATIONS: migrations,
           },
           // Test-only: the deploy config has no R2 binding yet, so the object
