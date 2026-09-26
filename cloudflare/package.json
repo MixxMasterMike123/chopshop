@@ -6,14 +6,12 @@
   "scripts": {
     "build": "tsc --noEmit",
     "check": "npm run types:check && npm run build && npm test",
-    "deploy:dry-run": "wrangler deploy --dry-run",
-    "deploy:staging": "wrangler deploy",
-    "dev": "wrangler dev --local",
+    "dev": "wrangler dev --local --env staging",
     "startup": "wrangler check startup",
     "test": "vitest run",
     "test:watch": "vitest",
-    "types": "wrangler types worker-configuration.d.ts",
-    "types:check": "wrangler types worker-configuration.d.ts --check"
+    "types": "wrangler types worker-configuration.d.ts --env staging",
+    "types:check": "wrangler types worker-configuration.d.ts --env staging --check"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.21.3",
@@ -25,6 +23,7 @@
   "dependencies": {
     "aws4fetch": "1.0.20",
     "better-auth": "1.6.29",
+    "hono": "4.13.9",
     "stripe": "22.5.0"
   }
 }

@@ -9,13 +9,18 @@
 #   1. credentials file ($CHOPSHOP_CF_ENV_FILE, default ~/.config/chopshop/cloudflare.env) is
 #      mode 600 and defines CF_ACCOUNT_ID + CLOUDFLARE_API_TOKEN; CF_ACCOUNT_ID == pinned id;
 #   2. cloudflare/pinned.<env>.json has the full shape, stripeMode is sandbox (staging) or
-#      live (production), and production's dispatchTarget is "snapwear";
+#      live (production), production's dispatchTarget is "snapwear", and origins.api /
+#      origins.web are bare https:// origins (no path, query or fragment);
 #   3. `wrangler whoami --json`, run with THAT token, sees exactly one account, and its id ==
 #      CF_ACCOUNT_ID == pinned cloudflareAccountId;
 #   4. cloudflare/wrangler.jsonc account_id (top level, and env.<env> when set) == pinned id;
 #   5. unless --bootstrap: no null left in the pinned file (null = resource not created yet)
-#      and wrangler.jsonc has env.<env> whose name / APP_ENV / D1 / R2 / Queue bindings are
-#      the pinned ones (without that section wrangler silently deploys the top-level bindings);
+#      and wrangler.jsonc has env.<env> whose name (falling back to the top-level name) ==
+#      pinned workerName, whose APP_ENV / D1 / R2 / Queue bindings are the pinned ones (every
+#      R2 binding in the "eu" jurisdiction), whose vars.CANONICAL_ORIGINS deep-equals pinned
+#      origins, AUTH_BASE_URL == origins.api, AUTH_TRUSTED_ORIGINS == exactly the set
+#      {origins.api, origins.web}, SERVICE_NAME == pinned workerName, R2_PRIVATE_BUCKET_NAME
+#      == pinned r2.private and R2_JURISDICTION == "eu" (without that section wrangler silently deploys the top-level config);
 #   6. production without --bootstrap: every launch-gate item of docs/SnapWearDocs/LAUNCH_TODO.md
 #      (A1–A7, A9–A11, A13–A14, B1–B10 — PLAN §0) is ☑;
 #   7. Stripe, via ~/.config/chopshop/stripe.<env>.env (mode 600, STRIPE_SECRET_KEY; REQUIRED
@@ -153,12 +158,17 @@ def jsonc_to_json(text):
 
 SHAPE = {
     "cloudflareAccountId": str, "cloudflareAccountName": str, "workerName": str,
+    "origins": {"api": str, "web": str},
     "d1": {"name": str, "id": str},
     "r2": {"public": str, "private": str, "production": str},
     "queues": {"outbox": str, "email": str, "renderJobs": str},
     "stripeAccountId": str, "stripeMode": str, "stripeWebhookEndpointId": str, "dispatchTarget": str,
 }
 NULLABLE = {"d1.id", "stripeAccountId", "stripeWebhookEndpointId"}  # null = not created yet
+# A bare https origin exactly as a browser serialises it: lowercase host, optional port, and
+# nothing after it — no path (not even "/"), query, fragment or userinfo. Reset/verification
+# links are built from these (PLAN §2.1), so anything looser is a link-injection surface.
+ORIGIN = r"https://[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::[0-9]{1,5})?"
 
 def walk(obj, shape, prefix, nulls, where):
     if not isinstance(obj, dict):
@@ -187,6 +197,9 @@ def cmd_pinned(path, env, bootstrap):
     for key, pat in (("stripeAccountId", r"acct_[A-Za-z0-9]+"), ("stripeWebhookEndpointId", r"we_[A-Za-z0-9]+")):
         if p[key] is not None and not re.fullmatch(pat, p[key]):
             refuse(f"{path}: {key} {p[key]!r} is not a Stripe {pat.split('_')[0]}_ id")
+    for key in ("api", "web"):
+        if not re.fullmatch(ORIGIN, p["origins"][key]):
+            refuse(f"{path}: origins.{key} {p['origins'][key]!r} is not a bare https:// origin (lowercase host, optional port; no path, query or fragment)")
     want_mode = "sandbox" if env == "staging" else "live"
     if p["stripeMode"] != want_mode:
         refuse(f"{path}: stripeMode is {p['stripeMode']!r}, {env} requires {want_mode!r}")
@@ -229,11 +242,29 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
         return
     if not isinstance(e, dict):
         refuse(f"{jsonc} has no env.{env} section - wrangler would silently deploy the top-level bindings")
-    if cfg.get("name") != p["workerName"]:
-        refuse(f"{jsonc} name is {cfg.get('name')!r}, pinned workerName is {p['workerName']!r}")
-    app_env = (e.get("vars") or {}).get("APP_ENV")
+    # The deployed name: env.<env>.name, or the top-level name when the section sets none.
+    name = e.get("name", cfg.get("name"))
+    if name != p["workerName"]:
+        inherited = "" if "name" in e else " (inherited from the top-level name)"
+        refuse(f"{jsonc} env.{env}.name is {name!r}{inherited}, pinned workerName is {p['workerName']!r}")
+    v = e.get("vars") or {}
+    app_env = v.get("APP_ENV")
     if app_env != env:
         refuse(f"{jsonc} env.{env}.vars.APP_ENV is {app_env!r}, expected {env!r}")
+    origins = p["origins"]
+    if v.get("CANONICAL_ORIGINS") != origins:
+        refuse(f"{jsonc} env.{env}.vars.CANONICAL_ORIGINS is {json.dumps(v.get('CANONICAL_ORIGINS'), sort_keys=True)}, pinned origins are {json.dumps(origins, sort_keys=True)}")
+    if v.get("AUTH_BASE_URL") != origins["api"]:
+        refuse(f"{jsonc} env.{env}.vars.AUTH_BASE_URL is {v.get('AUTH_BASE_URL')!r}, pinned origins.api is {origins['api']!r}")
+    if v.get("SERVICE_NAME") != p["workerName"]:
+        refuse(f"{jsonc} env.{env}.vars.SERVICE_NAME is {v.get('SERVICE_NAME')!r}, pinned workerName is {p['workerName']!r}")
+    if v.get("R2_PRIVATE_BUCKET_NAME") != p["r2"]["private"]:
+        refuse(f"{jsonc} env.{env}.vars.R2_PRIVATE_BUCKET_NAME is {v.get('R2_PRIVATE_BUCKET_NAME')!r}, pinned r2.private is {p['r2']['private']!r}")
+    if v.get("R2_JURISDICTION") != "eu":
+        refuse(f"{jsonc} env.{env}.vars.R2_JURISDICTION is {v.get('R2_JURISDICTION')!r}, every R2 binding is in 'eu' so the presign host var must say 'eu'")
+    trusted = v.get("AUTH_TRUSTED_ORIGINS")
+    if not isinstance(trusted, str) or {o.strip() for o in trusted.split(",")} != {origins["api"], origins["web"]}:
+        refuse(f"{jsonc} env.{env}.vars.AUTH_TRUSTED_ORIGINS is {trusted!r}, it must be exactly the pinned origins {origins['api']},{origins['web']}")
     for db in e.get("d1_databases") or []:
         if (db.get("database_name"), db.get("database_id")) != (p["d1"]["name"], p["d1"]["id"]):
             refuse(f"{jsonc} env.{env} D1 binding {db.get('binding')} -> {db.get('database_name')} ({db.get('database_id')}) is not the pinned {p['d1']['name']} ({p['d1']['id']})")
@@ -241,6 +272,10 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     for b in e.get("r2_buckets") or []:
         if b.get("bucket_name") not in buckets:
             refuse(f"{jsonc} env.{env} R2 binding {b.get('binding')} -> {b.get('bucket_name')!r} is not a pinned {env} bucket")
+        # Every bucket was created in the EU jurisdiction (docs/cf-port/CP1_BOOTSTRAP.md); a
+        # binding without it would address a different, non-existent (or non-EU) bucket.
+        if b.get("jurisdiction") != "eu":
+            refuse(f"{jsonc} env.{env} R2 binding {b.get('binding')} -> {b.get('bucket_name')!r} has jurisdiction {b.get('jurisdiction')!r}, every bucket is in 'eu'")
     queues = set(p["queues"].values())
     q = e.get("queues") or {}
     for item in (q.get("producers") or []) + (q.get("consumers") or []):

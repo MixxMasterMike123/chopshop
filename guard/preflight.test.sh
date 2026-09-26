@@ -27,13 +27,24 @@ SKEY_LIVE="sk_live_FAKEpreflight$$key"
 RKEY_TEST="rk_test_FAKEpreflight$$key"
 STRIPE_STG=acct_1Tp7gtKAaBMOW5AC
 ONE_ACCOUNT="[{\"id\": \"$GOOD\", \"name\": \"Kent@meteorpr.se's Account\"}]"
-env_section() { # env_section <env> <stg|prod> — an env.<env> block bound to that env's pinned names
-  printf '{"%s": {"vars": {"APP_ENV": "%s"},
-  "d1_databases": [{"binding": "DB", "database_name": "chopshop-%s", "database_id": "d1-%s-uuid"}],
-  "r2_buckets": [{"binding": "PUBLIC", "bucket_name": "chopshop-%s-public"}, {"binding": "PRODUCTION", "bucket_name": "chopshop-%s-production"}],
-  "queues": {"producers": [{"binding": "OUTBOX", "queue": "chopshop-%s-outbox"}],
-             "consumers": [{"queue": "chopshop-%s-outbox"}, {"queue": "chopshop-%s-render-jobs"}]}}}' \
-    "$1" "$1" "$2" "$2" "$2" "$2" "$2" "$2" "$2"
+env_section() { # env_section <env> <stg|prod> [python on e, p] — an env.<env> block bound to that
+  # env's pinned names, worker name and origins (read from the repo's pinned.<env>.json), with
+  # D1 id d1-<stg|prod>-uuid (what PIN_STG / PIN_PROD pin); the optional statements edit `e`.
+  python3 -c 'import json, sys
+env, short, edit, p = sys.argv[1], sys.argv[2], sys.argv[3], json.load(open(sys.argv[4]))
+o = p["origins"]
+e = {"name": p["workerName"],
+     "vars": {"APP_ENV": env, "CANONICAL_ORIGINS": dict(o), "AUTH_BASE_URL": o["api"],
+              "AUTH_TRUSTED_ORIGINS": o["api"] + "," + o["web"],
+              "SERVICE_NAME": p["workerName"], "R2_PRIVATE_BUCKET_NAME": p["r2"]["private"],
+              "R2_JURISDICTION": "eu"},
+     "d1_databases": [{"binding": "DB", "database_name": p["d1"]["name"], "database_id": "d1-%s-uuid" % short}],
+     "r2_buckets": [{"binding": "PUBLIC", "bucket_name": "chopshop-%s-public" % short, "jurisdiction": "eu"},
+                    {"binding": "PRODUCTION", "bucket_name": "chopshop-%s-production" % short, "jurisdiction": "eu"}],
+     "queues": {"producers": [{"binding": "OUTBOX", "queue": "chopshop-%s-outbox" % short}],
+                "consumers": [{"queue": "chopshop-%s-outbox" % short}, {"queue": "chopshop-%s-render-jobs" % short}]}}
+exec(edit)
+print(json.dumps({env: e}))' "$1" "$2" "${3:-}" "$REPO/cloudflare/pinned.$1.json"
 }
 ENV_STAGING=$(env_section staging stg)
 ENV_PRODUCTION=$(env_section production prod)
@@ -210,10 +221,10 @@ new_tree; run qa --bootstrap -- whoami
 expect_refused "unknown environment → refused" "unknown environment 'qa'"
 
 # --- pinned resources ---------------------------------------------------------------------
-new_tree; run staging -- deploy
+new_tree; pin "$T" staging "p['d1']['id'] = None"; run staging -- deploy
 expect_refused "null pinned id without --bootstrap → refused" "still has null (not yet created) values: d1.id, stripeWebhookEndpointId"
 
-new_tree; run production -- deploy
+new_tree; pin "$T" production "p['d1']['id'] = None"; run production -- deploy
 expect_refused "production with null ids without --bootstrap → refused" "d1.id, stripeAccountId, stripeWebhookEndpointId"
 
 new_tree; pin "$T" production "p['dispatchTarget'] = 'fake-printer'"; run production --bootstrap -- whoami
@@ -242,6 +253,74 @@ expect_refused "env.staging queue is a production queue → refused" "queue 'cho
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(printf '%s' "$ENV_STAGING" | sed 's/chopshop-stg-production/chopshop-prod-production/')"; run staging -- deploy
 expect_refused "env.staging R2 bucket is a production bucket → refused" "'chopshop-prod-production' is not a pinned staging bucket"
+
+# --- worker name, canonical origins, R2 jurisdiction (CP1) --------------------------------
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['name'] = 'chopshop-api'")"; run staging -- deploy
+expect_refused "env.staging.name is the production worker's name → refused" "env.staging.name is 'chopshop-api', pinned workerName is 'chopshop-api-stg'"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['name']")"; run staging -- deploy
+expect_refused "env.staging without a name inherits the top-level name → refused" "env.staging.name is 'chopshop-api' (inherited from the top-level name)"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['CANONICAL_ORIGINS']['web'] = 'https://chopshop-web.kent-ee2.workers.dev'")"; run staging -- deploy
+expect_refused "CANONICAL_ORIGINS.web != pinned origins.web → refused" "env.staging.vars.CANONICAL_ORIGINS is {\"api\": \"https://chopshop-api-stg.kent-ee2.workers.dev\", \"web\": \"https://chopshop-web.kent-ee2.workers.dev\"}"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['CANONICAL_ORIGINS']['admin'] = p['origins']['web']")"; run staging -- deploy
+expect_refused "CANONICAL_ORIGINS with an extra key → refused (deep equality)" "\"admin\": \"https://chopshop-web-stg.kent-ee2.workers.dev\""
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['vars']['CANONICAL_ORIGINS']")"; run staging -- deploy
+expect_refused "CANONICAL_ORIGINS missing → refused" "env.staging.vars.CANONICAL_ORIGINS is null, pinned origins are"
+
+new_tree; pin "$T" staging "p['origins']['web'] = 'http://chopshop-web-stg.kent-ee2.workers.dev'"; run staging --bootstrap -- whoami
+expect_refused "pinned origin over http:// → refused (even under --bootstrap)" "origins.web 'http://chopshop-web-stg.kent-ee2.workers.dev' is not a bare https:// origin"
+
+new_tree; pin "$T" staging "p['origins']['api'] = 'https://chopshop-api-stg.kent-ee2.workers.dev/'"; run staging --bootstrap -- whoami
+expect_refused "pinned origin with a path → refused" "origins.api 'https://chopshop-api-stg.kent-ee2.workers.dev/' is not a bare https:// origin"
+
+new_tree; pin "$T" staging "p['origins']['web'] = 'https://chopshop-web-stg.kent-ee2.workers.dev?next=x#top'"; run staging --bootstrap -- whoami
+expect_refused "pinned origin with a query + fragment → refused" "origins.web 'https://chopshop-web-stg.kent-ee2.workers.dev?next=x#top' is not a bare https:// origin"
+
+new_tree; pin "$T" staging "del p['origins']['web']"; run staging --bootstrap -- whoami
+expect_refused "pinned origins without web → refused" "origins.web is missing"
+
+new_tree; pin "$T" staging "p['origins']['admin'] = 'https://admin.example.test'"; run staging --bootstrap -- whoami
+expect_refused "unknown pinned origins key → refused (extend the preflight first)" "unknown key(s) origins.admin - extend the preflight first"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['AUTH_BASE_URL'] = p['origins']['web']")"; run staging -- deploy
+expect_refused "AUTH_BASE_URL drifted from origins.api → refused" "env.staging.vars.AUTH_BASE_URL is 'https://chopshop-web-stg.kent-ee2.workers.dev', pinned origins.api is 'https://chopshop-api-stg.kent-ee2.workers.dev'"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['AUTH_TRUSTED_ORIGINS'] = p['origins']['api']")"; run staging -- deploy
+expect_refused "AUTH_TRUSTED_ORIGINS without the web origin → refused" "env.staging.vars.AUTH_TRUSTED_ORIGINS is 'https://chopshop-api-stg.kent-ee2.workers.dev', it must be exactly the pinned origins"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['AUTH_TRUSTED_ORIGINS'] += ',https://elsewhere.example.test'")"; run staging -- deploy
+expect_refused "AUTH_TRUSTED_ORIGINS with an extra origin → refused" "https://elsewhere.example.test', it must be exactly the pinned origins"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['r2_buckets'][1]['jurisdiction']")"; run staging -- deploy
+expect_refused "R2 binding without a jurisdiction → refused" "R2 binding PRODUCTION -> 'chopshop-stg-production' has jurisdiction None, every bucket is in 'eu'"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['r2_buckets'][0]['jurisdiction'] = 'fedramp'")"; run staging -- deploy
+expect_refused "R2 binding in another jurisdiction → refused" "R2 binding PUBLIC -> 'chopshop-stg-public' has jurisdiction 'fedramp'"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['SERVICE_NAME'] = 'chopshop-api'")"; run staging -- deploy
+expect_refused "SERVICE_NAME != pinned workerName → refused" "env.staging.vars.SERVICE_NAME is 'chopshop-api', pinned workerName is 'chopshop-api-stg'"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['R2_PRIVATE_BUCKET_NAME'] = 'chopshop-prod-private'")"; run staging -- deploy
+expect_refused "R2_PRIVATE_BUCKET_NAME != pinned r2.private → refused" "env.staging.vars.R2_PRIVATE_BUCKET_NAME is 'chopshop-prod-private', pinned r2.private is 'chopshop-stg-private'"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['vars']['R2_JURISDICTION']")"; run staging -- deploy
+expect_refused "R2_JURISDICTION var missing while bindings are eu → refused" "env.staging.vars.R2_JURISDICTION is None, every R2 binding is in 'eu'"
 
 # --- production launch gate ---------------------------------------------------------------
 new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$ENV_PRODUCTION"; run production -- deploy
@@ -293,6 +372,28 @@ new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$ENV_PRODUC
 launch_todo_all_done "$T"
 FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK=we_prod run production -- deploy
 expect_exec "production fully pinned, launch gate done (A8/A12/B11 open), live Stripe → execs" \
+  "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok"
+
+new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$(env_section production prod "del e['name']")"
+stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"
+FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK=we_prod run production -- deploy
+expect_exec "env.production without a name falls back to the top-level name (= pinned chopshop-api) → execs" \
+  "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok"
+
+# --- the repo's REAL wrangler.jsonc agrees with the repo's real pinned files ----------------
+# Only the Stripe ids that do not exist yet are filled in; every Cloudflare id, name, origin
+# and jurisdiction is the committed one, so drift between the two files fails here.
+new_tree; cp "$REPO/cloudflare/wrangler.jsonc" "$T/cloudflare/"; pin "$T" staging "p['stripeWebhookEndpointId'] = 'we_stg'"
+stripe_file "$T" staging "$SKEY_TEST"
+FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK=we_stg run staging -- deploy
+expect_exec "repo wrangler.jsonc passes every staging check against repo pinned.staging.json" \
+  "FAKE-WRANGLER EXEC: --env staging deploy | account=$GOOD token=ok"
+
+new_tree; cp "$REPO/cloudflare/wrangler.jsonc" "$T/cloudflare/"
+pin "$T" production "p['stripeAccountId'] = 'acct_PRODTEST'; p['stripeWebhookEndpointId'] = 'we_prod'"
+stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"
+FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK=we_prod run production -- deploy
+expect_exec "repo wrangler.jsonc passes every production check against repo pinned.production.json" \
   "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok"
 
 # --- secrets never surface ----------------------------------------------------------------

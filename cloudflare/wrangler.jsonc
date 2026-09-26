@@ -1,70 +1,145 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "meteorshop-stg-api",
-  "account_id": "0d392e5c79e386966a98a214ac91a133",
+  // Kent's Cloudflare account (docs/cf-port/PLAN.md §2, §6). Every wrangler call goes through
+  // scripts/cf-preflight.sh <staging|production>, which injects the project token, proves the
+  // token sees exactly this account, checks every binding below against
+  // cloudflare/pinned.<env>.json, and always passes --env <env>.
+  //
+  // NO bindings and NO vars at the top level, on purpose: wrangler env sections do NOT inherit
+  // bindings or vars, so anything declared here would silently become the config of a bare
+  // `wrangler deploy` (no --env). With nothing here, a bare deploy has no D1, no R2, no Queue
+  // and no vars to deploy against — and the Worker fails closed on every missing binding. The
+  // only deploy path is scripts/cf-deploy.sh, which always names the environment. The top-level
+  // name is deliberately NOT a real Worker's name: a bare deploy could otherwise still create or
+  // overwrite the production Worker (bindings-less) under its real name.
+  "name": "chopshop-api-unbound",
+  "account_id": "ee213082783ec86585150e876edb6107",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
-  "preview_urls": true,
-  "vars": {
-    "APP_ENV": "staging",
-    "AUTH_BASE_URL": "https://meteorshop-stg-api.micke-ohlen.workers.dev",
-    "AUTH_TRUSTED_ORIGINS": "https://meteorshop-stg-api.micke-ohlen.workers.dev",
-    // The R2 S3 endpoint's account id. A VAR, not a secret, and deliberately:
-    // it appears in plaintext inside every presigned URL the POD surface mints,
-    // and it is already recorded as a non-secret configuration identifier
-    // elsewhere in this repo (it is the `account_id` above). It must live here
-    // because CLOUDFLARE EXPOSES NO ACCOUNT ID TO A WORKER AT RUNTIME — there is
-    // no binding and no global, and the top-level `account_id` is a deploy-time
-    // targeting field that is never injected into `env`.
-    "R2_ACCOUNT_ID": "0d392e5c79e386966a98a214ac91a133",
-    // The private bucket's NAME, as distinct from the PRIVATE_BUCKET binding
-    // below. Both are needed and they are not interchangeable: the binding moves
-    // bytes without credentials, while a presigned S3 URL must address the
-    // bucket by name — and a binding carries no way to recover the name it
-    // points at.
-    "R2_PRIVATE_BUCKET_NAME": "meteorshop-stg-private",
-    "SERVICE_NAME": "meteorshop-stg-api"
-  },
-  "r2_buckets": [
-    {
-      "binding": "PRIVATE_BUCKET",
-      "bucket_name": "meteorshop-stg-private"
-    }
-  ],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "meteorshop-stg-db",
-      "database_id": "d709e702-17f6-4107-ad45-060f2b24dc89",
-      "migrations_dir": "migrations"
-    }
-  ],
-  "queues": {
-    "producers": [
-      {
-        "binding": "AUTH_EMAIL_QUEUE",
-        "queue": "meteorshop-stg-email-auth"
-      }
-    ],
-    "consumers": [
-      {
-        "queue": "meteorshop-stg-email-auth",
-        "max_batch_size": 10,
-        "max_batch_timeout": 5,
-        "max_retries": 8,
-        "dead_letter_queue": "meteorshop-stg-email-auth-dlq",
-        "max_concurrency": 2
-      }
-    ]
-  },
   "observability": {
     "enabled": true,
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1,
       "invocation_logs": true
+    }
+  },
+  // Queues: no dead-letter queues, deliberately. D1 is the durable record of every effect
+  // (outbox_events, email_deliveries — PLAN §2.2) and a 15-minute cron sweeper re-nudges
+  // anything not done, so a message that exhausts max_retries loses nothing. A DLQ would be a
+  // second, unread copy of state D1 already holds.
+  "env": {
+    "staging": {
+      "name": "chopshop-api-stg",
+      "workers_dev": true,
+      "preview_urls": true,
+      "vars": {
+        "APP_ENV": "staging",
+        "SERVICE_NAME": "chopshop-api-stg",
+        // The per-env canonical origin allowlist (PLAN §2.1): reset/verification links are
+        // built only from these, never from the request's Origin/Host. Must deep-equal
+        // pinned.staging.json → origins (the preflight checks it). D7: workers.dev until CP7.
+        "CANONICAL_ORIGINS": {
+          "api": "https://chopshop-api-stg.kent-ee2.workers.dev",
+          "web": "https://chopshop-web-stg.kent-ee2.workers.dev"
+        },
+        "AUTH_BASE_URL": "https://chopshop-api-stg.kent-ee2.workers.dev",
+        "AUTH_TRUSTED_ORIGINS": "https://chopshop-api-stg.kent-ee2.workers.dev,https://chopshop-web-stg.kent-ee2.workers.dev",
+        // The R2 S3 endpoint's account id. A VAR, not a secret, and deliberately:
+        // it appears in plaintext inside every presigned URL the POD surface mints,
+        // and it is already recorded as a non-secret configuration identifier
+        // elsewhere in this repo (it is the `account_id` above). It must live here
+        // because CLOUDFLARE EXPOSES NO ACCOUNT ID TO A WORKER AT RUNTIME — there is
+        // no binding and no global, and the top-level `account_id` is a deploy-time
+        // targeting field that is never injected into `env`.
+        "R2_ACCOUNT_ID": "ee213082783ec86585150e876edb6107",
+        // The private bucket's NAME, as distinct from the PRIVATE_BUCKET binding
+        // below. Both are needed and they are not interchangeable: the binding moves
+        // bytes without credentials, while a presigned S3 URL must address the
+        // bucket by name — and a binding carries no way to recover the name it
+        // points at.
+        "R2_PRIVATE_BUCKET_NAME": "chopshop-stg-private",
+        // Every bucket below is EU-jurisdiction: the S3 presign host must be the `.eu.` one
+        // (src/pod/render-farm-client.ts). The preflight requires this to match the bindings.
+        "R2_JURISDICTION": "eu"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "chopshop-stg",
+          "database_id": "d1162797-5a79-4a79-aef9-e5f7e1634fb1",
+          "migrations_dir": "migrations"
+        }
+      ],
+      // EU jurisdiction (GDPR: EU-resident object storage). A jurisdictional bucket is only
+      // reachable when the binding names its jurisdiction.
+      "r2_buckets": [
+        { "binding": "PUBLIC_BUCKET", "bucket_name": "chopshop-stg-public", "jurisdiction": "eu" },
+        { "binding": "PRIVATE_BUCKET", "bucket_name": "chopshop-stg-private", "jurisdiction": "eu" },
+        { "binding": "PRODUCTION_BUCKET", "bucket_name": "chopshop-stg-production", "jurisdiction": "eu" }
+      ],
+      "queues": {
+        "producers": [
+          { "binding": "OUTBOX_QUEUE", "queue": "chopshop-stg-outbox" },
+          { "binding": "EMAIL_QUEUE", "queue": "chopshop-stg-email" },
+          { "binding": "RENDER_JOBS_QUEUE", "queue": "chopshop-stg-render-jobs" }
+        ],
+        "consumers": [
+          { "queue": "chopshop-stg-outbox", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 8, "max_concurrency": 2 },
+          { "queue": "chopshop-stg-email", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 8, "max_concurrency": 2 },
+          { "queue": "chopshop-stg-render-jobs", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 8, "max_concurrency": 2 }
+        ]
+      }
+    },
+    "production": {
+      "name": "chopshop-api",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": {
+        "APP_ENV": "production",
+        "SERVICE_NAME": "chopshop-api",
+        // CP7 replaces both production origins with the real domains (DECISIONS D7) — here
+        // AND in pinned.production.json → origins, which the preflight requires to match.
+        "CANONICAL_ORIGINS": {
+          "api": "https://chopshop-api.kent-ee2.workers.dev",
+          "web": "https://chopshop-web.kent-ee2.workers.dev"
+        },
+        "AUTH_BASE_URL": "https://chopshop-api.kent-ee2.workers.dev",
+        "AUTH_TRUSTED_ORIGINS": "https://chopshop-api.kent-ee2.workers.dev,https://chopshop-web.kent-ee2.workers.dev",
+        // See env.staging.vars.R2_ACCOUNT_ID: a non-secret var because no account id reaches
+        // a Worker at runtime.
+        "R2_ACCOUNT_ID": "ee213082783ec86585150e876edb6107",
+        "R2_PRIVATE_BUCKET_NAME": "chopshop-prod-private",
+        // Every bucket below is EU-jurisdiction: the S3 presign host must be the `.eu.` one
+        // (src/pod/render-farm-client.ts). The preflight requires this to match the bindings.
+        "R2_JURISDICTION": "eu"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "chopshop-prod",
+          "database_id": "d401576e-184d-47bd-b68b-c3c80785844b",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "PUBLIC_BUCKET", "bucket_name": "chopshop-prod-public", "jurisdiction": "eu" },
+        { "binding": "PRIVATE_BUCKET", "bucket_name": "chopshop-prod-private", "jurisdiction": "eu" },
+        { "binding": "PRODUCTION_BUCKET", "bucket_name": "chopshop-prod-production", "jurisdiction": "eu" }
+      ],
+      "queues": {
+        "producers": [
+          { "binding": "OUTBOX_QUEUE", "queue": "chopshop-prod-outbox" },
+          { "binding": "EMAIL_QUEUE", "queue": "chopshop-prod-email" },
+          { "binding": "RENDER_JOBS_QUEUE", "queue": "chopshop-prod-render-jobs" }
+        ],
+        "consumers": [
+          { "queue": "chopshop-prod-outbox", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 8, "max_concurrency": 2 },
+          { "queue": "chopshop-prod-email", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 8, "max_concurrency": 2 },
+          { "queue": "chopshop-prod-render-jobs", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 8, "max_concurrency": 2 }
+        ]
+      }
     }
   }
 }
