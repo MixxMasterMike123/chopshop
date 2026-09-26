@@ -176,8 +176,13 @@ export async function grantActingAs(
  * Revokes every live grant THIS platform user holds on the shop.
  *
  * Scoped to the caller: one operator ending their session must not end a
- * colleague's. `not_found` when there was nothing live to revoke, so a revoke
- * is never recorded in the audit trail without a grant behind it.
+ * colleague's. ONE statement revokes the whole live set — no SELECT-then-UPDATE
+ * and no LIMIT, so there is no count of grants past which "revoked" would leave
+ * some alive (Codex review of db66555: a LIMIT 50 did exactly that). The audit
+ * row is written in the same batch and only if something was revoked: it is an
+ * INSERT … SELECT over the rows this call just stamped with `revoked_at = now`,
+ * so a revoke is never recorded without a grant behind it, and never omitted
+ * when one was ended. `not_found` when there was nothing live.
  */
 export async function revokeActingAs(
   db: D1Database,
@@ -186,50 +191,56 @@ export async function revokeActingAs(
   now: number,
 ): Promise<RevokeActingAsResult> {
   const nowIso = new Date(now).toISOString();
-  const live = await db
-    .prepare(
-      `SELECT id
-       FROM acting_as_grants
-       WHERE platform_user_id = ?
-         AND tenant_id = ?
-         AND revoked_at IS NULL
-         AND expires_at > ?
-       ORDER BY created_at ASC
-       LIMIT 50`,
-    )
-    .bind(principal.userId, tenantId, nowIso)
-    .all<{ id: string }>();
 
-  const grantIds = live.results.map((row) => row.id);
-  if (grantIds.length === 0) {
-    return { status: "not_found" };
-  }
-
-  await db.batch([
-    ...grantIds.map((grantId) =>
-      db
-        .prepare(
-          `UPDATE acting_as_grants
-           SET revoked_at = ?
-           WHERE id = ?
-             AND platform_user_id = ?
-             AND tenant_id = ?
-             AND revoked_at IS NULL`,
+  const [revoked] = await db.batch<{ id: string }>([
+    db
+      .prepare(
+        `UPDATE acting_as_grants
+         SET revoked_at = ?
+         WHERE platform_user_id = ?
+           AND tenant_id = ?
+           AND revoked_at IS NULL
+           AND expires_at > ?
+         RETURNING id`,
+      )
+      .bind(nowIso, principal.userId, tenantId, nowIso),
+    db
+      .prepare(
+        `INSERT INTO audit_events (
+          event_id, tenant_id, actor_user_id, action, resource_type,
+          resource_id, reason, request_id, metadata_json, created_at
         )
-        .bind(nowIso, grantId, principal.userId, tenantId),
-    ),
-    auditStatement(
-      db,
-      principal,
-      "acting_as.revoked",
-      tenantId,
-      null,
-      { grantIds },
-      now,
-    ),
+        SELECT ?, ?, ?, 'acting_as.revoked', 'tenant', ?, NULL, ?,
+          json_object('grantIds', (
+            SELECT json_group_array(id) FROM (
+              SELECT id FROM acting_as_grants
+              WHERE platform_user_id = ? AND tenant_id = ? AND revoked_at = ?
+              ORDER BY created_at ASC
+            )
+          )), ?
+        WHERE EXISTS (
+          SELECT 1 FROM acting_as_grants
+          WHERE platform_user_id = ? AND tenant_id = ? AND revoked_at = ?
+        )`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        tenantId,
+        principal.userId,
+        tenantId,
+        crypto.randomUUID(),
+        principal.userId,
+        tenantId,
+        nowIso,
+        now,
+        principal.userId,
+        tenantId,
+        nowIso,
+      ),
   ]);
 
-  return { revoked: grantIds.length, status: "ok" };
+  const count = revoked?.results.length ?? 0;
+  return count === 0 ? { status: "not_found" } : { revoked: count, status: "ok" };
 }
 
 /**

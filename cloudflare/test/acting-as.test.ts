@@ -528,6 +528,30 @@ describe("revoking a grant", () => {
     expect((await actingAs(SHOP_A, "POST", operator.cookie)).status).toBe(201);
     expect((await createProduct(operator.cookie, SHOP_A)).status).toBe(201);
   });
+
+  it("revokes EVERY live grant, however many were minted (Codex db66555)", async () => {
+    // 51 more on top of the live one: a bounded SELECT-then-UPDATE would leave
+    // the newest alive and still answer 204.
+    for (let i = 0; i < 51; i += 1) {
+      expect((await actingAs(SHOP_A, "POST", operator.cookie)).status).toBe(201);
+    }
+    const before = await grantRows(operator.userId, SHOP_A);
+    expect(before.filter((grant) => grant.revoked_at === null).length).toBeGreaterThan(50);
+
+    expect((await actingAs(SHOP_A, "DELETE", operator.cookie)).status).toBe(204);
+
+    const after = await grantRows(operator.userId, SHOP_A);
+    expect(after.every((grant) => grant.revoked_at !== null)).toBe(true);
+    expect((await createProduct(operator.cookie, SHOP_A)).status).toBe(404);
+
+    const audits = await auditRows(SHOP_A, "acting_as.revoked");
+    const last = audits[audits.length - 1];
+    const ids = (JSON.parse(last?.metadata_json ?? "{}") as { grantIds: string[] }).grantIds;
+    expect(ids).toHaveLength(52);
+    expect(new Set(ids)).toEqual(
+      new Set(before.filter((grant) => grant.revoked_at === null).map((grant) => grant.id)),
+    );
+  });
 });
 
 describe("grant ledger integrity (schema)", () => {
