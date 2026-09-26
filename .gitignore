@@ -161,3 +161,4 @@ functions/merchant-service-account.json
 # Archived one-off scripts / superseded plan docs / stale logs (2026-07-02 cleanup)
 OBSOLETE/
 .claude/skills/impeccable/
+.context/

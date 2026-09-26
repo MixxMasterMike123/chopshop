@@ -1,187 +1,200 @@
-# Cloudflare full port — the plan
+# Cloudflare full port — the plan (v2)
 
-Status: **DRAFT for Mikael's approval — no code until approved.** 2026-09-26.
-Evidence base (read these first, every claim below cites them):
-`INVENTORY_FUNCTIONS.md` (82 exports, verdicts) · `INVENTORY_CLIENT_DATA.md` (frontend data surface) ·
-`INVENTORY_CF_BRANCH.md` (what `cloudflare-migration` already delivers) · `INVENTORY_DOCS.md` (docs quarantine).
+Status: **DRAFT v2 for Mikael's approval — no code until approved.** 2026-09-26.
+v1 was reviewed by Codex (gpt-6-astra, session `01a0dcfa…`, two rounds); v2 restructures around its verdict: *"the gates can pass without proving that a paid order can be fulfilled."* §13 maps every finding to what changed.
+
+Evidence base: `INVENTORY_FUNCTIONS.md` · `INVENTORY_CLIENT_DATA.md` · `INVENTORY_CF_BRANCH.md` · `INVENTORY_DOCS.md`.
 
 ---
 
-## 0. The decision and the rules it comes with
+## 0. Decision and rules
 
-**Decision (Mikael 2026-09-26):** full migration to Cloudflare — Workers + D1 + R2 + Queues + cron — replacing Firebase entirely (Firestore, Auth, Storage, Functions, Hosting). Not the hybrid. The hybrid produced a month of drift (CF branch frozen at 2026-08-27 while 80 commits landed on Firebase) and a Firebase deploy of 82 functions.
+**Decision (Mikael 2026-09-26):** full migration to Cloudflare (Workers + D1 + R2 + Queues + cron) replacing Firebase entirely; the hybrid is abandoned (a month of drift, 82-function deploys).
 
-Non-negotiables, each enforced by a gate, not by memory:
+**The spine of v2:** nothing broad gets built until **one paid order on Cloudflare is proven fulfillable and refundable under failure injection** (CP2). Breadth comes after, in dependency order.
 
-| Rule | Enforced by |
+Non-negotiables, each enforced by a *mechanical* gate:
+
+| Rule | Gate |
 |---|---|
-| **Firebase feature freeze.** Only hotfixes that keep melodie-mc's test usable. | Every Firebase commit after this date needs a `hotfix:` prefix and a one-line justification. |
-| **Port what earns its place, delete the rest.** | §3 scope table; DELETE needs Mikael's sign-off (§11). |
-| **Zero B8shield transfer.** No name, id, bucket, env var, identifier, comment, doc or image. | CI grep-guard `scripts/guard-no-b8shield.test.mjs` fails the build on `/b8shield|b8s[-_]|reseller/i` in the new tree. Rename list in §8. |
-| **Correct account, always.** Kent's Cloudflare account; never the personal staging account (`0d39…`), never Ninetone's, never the igpholding token. | `scripts/cf-preflight.sh` runs before every wrangler/API action, compares `wrangler whoami` account id with the pinned `CF_ACCOUNT_ID`, and refuses on mismatch. Same preflight checks the Stripe key prefix per env. |
-| **Storefront design preserved 100%.** React + Vite + Tailwind + NORD tokens stay; only the data layer changes. | Baseline screenshots of every route on Firebase BEFORE the port (§7); every checkpoint diffs against them. Impeccable freezes the design system first. |
-| **Two reviewers before any deploy.** Opus 5.5 builds, Sonnet does data-transfer scripts, **Fable + Codex review every checkpoint** before it goes to staging. | §9 pipeline; a checkpoint without both review notes in its handover entry does not deploy. |
-| **Plan first.** | This document; changes to scope are edits here, approved, before code. |
+| Firebase feature freeze | Firebase commits need a `hotfix:` prefix + one-line justification; CI rejects others on `main`. |
+| Port what earns its place, delete the rest | §3; DELETE list signed by Mikael (§11). Deferred features get an explicit retirement procedure (§3.4). |
+| Zero B8shield transfer | `guard/` tests fail on `/b8shield|b8s[-_]|reseller/i` and on `from 'firebase/` **outside a shrinking allowlist** (`guard/allowlist.txt`, seeded with today's file list); CI fails if the allowlist ever grows; it must be empty by CP7. |
+| Correct account, always | `scripts/cf-preflight.sh` is the only wrangler/API entry point. It verifies: `whoami` account id == pinned; every binding's resource id (D1, R2, Queue) == the pinned id for `APP_ENV`; Stripe `GET /v1/account` id == pinned per env (sandbox for staging, live platform for production); Stripe webhook endpoint id + URL == pinned; connected accounts referenced by shops belong to that platform account. Any mismatch → refuse. |
+| Storefront design preserved | Baseline screenshots of the **launch-scope pages** captured on Firebase before any change (§7); pixel diff ≤ 0.5 % or an explained delta per checkpoint. No redesign before the baseline. |
+| Two reviews before any deploy | `scripts/cf-deploy.sh <env>` refuses unless `docs/cf-port/reviews/<git-sha>.md` exists for the **exact SHA** with both `codex: PASS` and `fable: PASS` lines, and the clean-checkout CI run for that SHA is green. Reviews list what was checked; an empty findings list is allowed but must say so. |
+| Launch gate = LAUNCH_TODO | Production may accept a real order only when every A and B item in `docs/SnapWearDocs/LAUNCH_TODO.md` is ☑. The staging fake printer (§2.6) never exists in production config; `cf-preflight.sh` refuses a production deploy whose dispatch target is not SnapWear. |
+| Plan first | This document. Scope changes are edits here, approved, before code. |
 
 ---
 
-## 1. What the inventories say (headline numbers)
+## 1. What the inventories say (corrected numbers)
 
-- **Functions:** 82 exports → **29 PORT now · 35 PORT-LATER · 18 DELETE** (`INVENTORY_FUNCTIONS.md` §counts). 9 callables have no client caller at all. 3 need sharp/ffmpeg (`processPodArtwork` now; the two content-studio ones later).
-- **Frontend:** 141 live files touch the SDK — 173 reads, 134 writes, 17 realtime listeners, 67 callable sites, 51 Storage ops, 15 Auth calls, 41 collections. **Storefront is thin (32 of 37 files trivial). The pre-pivot CRM wagons alone own 9 of the 17 listeners and 8 collections nobody else uses.** 83 sites depend on the Firestore Timestamp shape (`.toDate()` / `.seconds`).
-- **CF branch:** foundation is real and reusable (tenant resolution, live D1 authz, Better Auth on D1, fail-closed conventions, schema discipline, R2 ownership, rate limiter, Stripe client + webhook ledger, render-farm contract + extracted sharp core, vitest-pool-workers harness). But **only 11 of 82 exports have any counterpart; 71 have none**, and **the committed branch fails its own gate** (48 vitest failures + 64 tsc errors — checkpoint 27 forgot its test config). Staging lives in Mikael's *personal* account.
-- **Docs:** 9 files to quarantine now, 7 need a call, ~529 MB of untracked clutter at the repo root.
-
-Honest size: this is a **new backend + a data-layer rewrite of one frontend**, not "move 82 functions". The frontend rewrite is the largest single chunk (§5).
+- **Functions:** 82 exports → **29 PORT now · 40 PORT-LATER · 13 DELETE** (affiliate moved to LATER with a spec, Mikael 2026-09-26). 9 callables have no client caller. 3 need sharp/ffmpeg.
+- **Frontend:** 141 live files touch Firebase; ~460 SDK operations including query scaffolding (173 read calls, 134 writes, 17 listeners, 67 callable sites, 51 Storage, 15 Auth). The launch backlog is the subset in §3.1, not the whole inventory. 83 sites depend on the Firestore Timestamp shape.
+- **CF branch:** reusable foundation (tenant resolution, live D1 authz, Better Auth, fail-closed conventions, schema triggers, R2 ownership, rate limiter, Stripe client + webhook ledger, sharp core extraction, vitest-pool-workers). Its **upload contract is Worker-streamed with checksum**, not browser-presigned. Its **render client is synchronous (330 s)**; an async job contract does not exist yet. Its test gate is red at HEAD (config omitted in cp27). Staging lives in Mikael's personal account.
+- **Docs:** 9 files to quarantine, 7 need a call, ~529 MB untracked clutter.
+- **Known defects to fix in the port, not carry:** concurrent *different* partial refunds race in `connectRefund.ts` (cumulative total read-then-write; refund status not checked); `run-all.sh` only rebuilds `functions/lib` when one file is missing (stale compiled code can pass); the artwork upload modal awaits a synchronous callable.
 
 ---
 
 ## 2. Target architecture
 
 ```
-Kent's Cloudflare account
-├─ Worker  chopshop-api        (one deploy unit; envs: staging, production)
-│   ├─ Hono router (replaces the branch's if-chain — 35 routes today, ~150 at the end)
-│   ├─ Better Auth on D1 (sessions; roles resolved LIVE from D1, never from cookie claims)
-│   ├─ D1  chopshop-{stg,prod}  (start from the branch's 12 migrations, then §4)
-│   ├─ R2  chopshop-{stg,prod}-private  +  chopshop-{stg,prod}-public (images via custom domain)
-│   ├─ Queues: email, print-outbox, screening      ·  Cron: sweeps (abandoned checkouts, outbox, review requests later)
-│   ├─ Rate Limiting binding (replaces the D1 limiter where per-IP is enough; D1 stays for per-email quotas)
-│   └─ Secrets: STRIPE_*, RESEND_API_KEY, BETTER_AUTH_SECRET, SNAPWEAR_API_TOKEN, RENDER_TOKEN, TURNSTILE_*
-├─ Worker  chopshop-web        (static assets: the SAME Vite build; hostname → tenant, custom domains via CF for SaaS)
-└─ Render service              (sharp today, ffmpeg later): DECISION §11 — Cloudflare Containers on this account,
-                               else one Cloud Run container in a NEW GCP project (never the b8shield project)
+Kent's Cloudflare account (ee213082783ec86585150e876edb6107)  —  envs: staging · production
+├─ Worker chopshop-web   : same Vite build as static assets  +  same-origin /api/* → chopshop-api via service binding
+├─ Worker chopshop-api   : Hono router · Better Auth on D1 · D1 · R2 (3 classes) · Queues · cron · Rate Limiting binding
+├─ Render service        : sharp (ffmpeg later) — §2.6, decision by benchmark (§11)
+└─ D1 chopshop-{stg,prod} · R2 {public, private, production} per env · Queues {outbox, email, render-jobs}
 ```
 
-Principles carried over from the branch (they are the good part): tenant from hostname only; opaque 404s; config checks before anything; same-origin checks; `tenant_id` immutable with triggers; append-only `audit_events`; R2 objects owned by rows (`stored_objects`); Stripe webhook = raw-body signature + `payment_events` ledger + one atomic batch.
+### 2.1 Tenant + session contract
+- **Storefront:** tenant = request hostname (custom domain or `<shop>.<platform-domain>`), resolved in `chopshop-web`, forwarded to the API over the **service binding** as an internal header; the API accepts that header only on the binding, never from the public edge. Custom hostnames require ownership verification (CF for SaaS TXT/CNAME) before they resolve to a tenant.
+- **Admin / platform / print:** one hostname each; the *active shop* is explicit (`X-Shop-Id` validated against the session's memberships; a platform user's chosen shop). Platform "open shop admin" = a server-minted, audited, time-boxed acting-as session (replaces the Firebase custom-token handoff).
+- Cookies `Secure; HttpOnly; SameSite=Lax`, scoped per hostname; reset/verification links carry the origin they were requested from; no credential reuse across origins.
+- **Guest orders:** the confirmation page authorizes with a **tenant-bound receipt capability** (random 256-bit token stored hashed on the order, returned once at checkout, expiring after 30 days); the buyer-facing response is a separate **allowlisted schema** (no cost, printer, Connect or snapshot fields). Tests: cross-shop access with a valid token → 404; private fields never in the buyer schema.
 
-What changes versus the Firebase model, on purpose:
-- **No triggers.** "Publish a product" is one handler that validates, screens, projects and writes in one D1 batch. The whole class of audit findings from this week (F1 rules-can't-express, F4 trigger fan-out, P0-01 re-homing) does not exist here.
-- **No public projections as tables.** `productsPublic` / `printersPublic` become allowlisted read queries (`INVENTORY_FUNCTIONS.md`, D1 seed section).
-- **No realtime by default.** The 8 core `onSnapshot`s become: order-confirmation → poll `GET /orders/:id` until the webhook lands (max 90 s, as today); admin presence → dropped (or 60 s poll later); pages/payments/dac7/migration progress → poll. The 9 CRM-wagon listeners are deleted with the wagons.
-- **Timestamps are ISO-8601 strings** end to end. A single `src/lib/time.js` (`toDate(x)`) replaces the 83 `.toDate()`/`.seconds` sites — mechanical, Opus.
+### 2.2 Cross-system consistency
+D1 `batch()` is atomic **only for its own statements**. Every write that must cause an external effect writes the effect as an **outbox row in the same batch** (`outbox_events`: type, dedupe_key, payload, attempts, next_at, done_at, last_error). A Queue consumer + a 1-minute cron sweeper deliver at-least-once with **idempotency on the receiver** (dedupe_key = the effect's natural key: `order:{id}:dispatch`, `email:{order}:{type}`, `render:{artwork}:{version}`). A daily reconciliation cron compares Stripe ↔ orders ↔ outbox ↔ dispatch and writes an `alerts` row (+ email) for anything stranded > 15 min. Crash windows after commit are recoverable, never lost.
+
+### 2.3 Money
+- PaymentIntent: one per checkout, keyed by checkout id; fingerprinted on priced inputs (port of the existing rule); Connect destination charge with commission + **production withholding** + descriptor suffix.
+- Webhook: raw-body signature (`constructEventAsync`), `payment_events` ledger keyed by Stripe event id (idempotent), then one batch: order + items + production snapshot + `outbox(dispatch)` + `outbox(email)` + discount burn.
+- **Refunds as a state machine:** `refund_operations` row (requested → submitted → succeeded/failed/pending) created **before** calling Stripe, with an optimistic version on the order's refund total; a concurrent second refund fails the version check and re-reads. Stripe refund status is recorded from the API response *and* from `refund.updated` / `charge.refunded` webhooks, so dashboard-originated refunds reconcile. Transfer-reversal amounts are stored; the seller payout is computed from recorded facts.
+- **Cancellation vs dispatch:** a refund or cancellation *before* dispatch marks the outbox row `superseded` in the same batch (dispatch consumer checks order state before sending); *after* dispatch acceptance it creates a `printer_cancellations` outbox effect (SnapWear: manual/email today — recorded as a required human action + alert); after printer production it is a return case, never an automatic cancel. All three paths are tests in CP2.
+- **Retention:** the abandoned-checkout sweep cancels a PaymentIntent and purges its snapshot **only after** Stripe confirms a terminal state (`canceled`/`requires_payment_method` with no charge); a delayed `payment_intent.succeeded` racing the sweep is a CP2 injected test (the ledger keyed by event id wins; the snapshot is rebuilt from the order's frozen lines).
+- Disputes, `payment_intent.payment_failed`, `account.updated` handled as in Firebase (ported invariants).
+
+### 2.4 Invariants survive the trigger model
+- **Screening revalidation** is a service call on every mutation that changes screened content: product text, mapping create/delete/artwork change, artwork rename/replace, and on routing/print-area edits (eligibility). Same predicate (`productUsesMappingSku`), same state machine (`decideScreening`), synchronous, in the same batch.
+- **Public catalogue eligibility** is one predicate used by every public read and by cache invalidation: `is_active AND b2c_available AND shop.status='active' AND shop.published!=false AND takedown_at IS NULL AND screening.status NOT IN ('blocked')` (advisory statuses stay public — decision §11.6). Every transition invalidates the cached list for that tenant.
+- **Production eligibility at checkout** is recomputed server-side from current facts (routing, print areas, slot printability, quote) when the snapshot is frozen.
+- **Takedown / deletion protection:** `products.takedown_at` + D1 trigger `BEFORE DELETE ... WHEN takedown_at IS NOT NULL` (deletion by platform goes through an explicit `force` path that clears the stamp first, audited); `tenant_id` immutable triggers on every tenant table (from the branch).
+
+### 2.5 Storage classes
+| Class | Bucket | Access | Examples |
+|---|---|---|---|
+| public | `chopshop-{env}-public` | public read via custom domain, immutable versioned keys | catalogue images, collection covers, branding, mockup previews |
+| private | `chopshop-{env}-private` | owner-checked, short-lived signed GET only | artwork originals, customer documents, invoices, page attachments |
+| production | `chopshop-{env}-production` | server-only; immutable; retained ≥ 24 months | print masters per order line, snapshot artwork refs |
+
+Upload = the branch's **Worker-streamed, checksum-verified** route (size caps per class, content-type sniffing, no overwrite of immutable keys, nightly orphan sweep). Browser-presigned PUT is not used. Stored URLs are rewritten **per class** during migration; private/production never get public URLs.
+
+### 2.6 Render service (contract, whichever host)
+`render_jobs` (artwork id + version, input key, output keys, state, lease_until, attempts, error). Worker enqueues; the service pulls the job, reads input via a scoped short-lived URL minted at execution, writes outputs to immutable keys, then POSTs completion `{job_id, checksums}` signed with HMAC (Containers, private binding, no public ingress) or an audience-bound OIDC token (Cloud Run). Leases expire → retry; partial outputs cleaned; 3 attempts → alert. The studio flow becomes async: upload → "processing" → poll job state. **CP1 benchmarks the largest allowed artwork on both hosts** (memory, cold start, wall time, cost at expected concurrency) and the decision is recorded with numbers. Staging dispatch target for SnapWear = a **fake printer** route that records submissions and returns SnapWear-shaped responses (incl. duplicate-`job_id` 400 and 422); it is bound only in the staging config.
+
+### 2.7 D1 budgets
+Limits: 10 GB per database (Paid), 2 MB per row, 100 bound params per query, 30 s per query, single-threaded per DB. Rules: no binary/base64 in rows (R2 keys only); `(tenant_id, …)` index on every tenant table; every list query bounded (`LIMIT` + cursor); `IN (...)` chunked ≤ 90; capacity alert at 5 GB; Time Travel + weekly export to R2 with a **restore drill in CP1**; one database now, tenant sharding designed (tenant id in every key) but not built.
+
+### 2.8 Time
+All timestamps are **UTC ISO-8601 strings written by the server** (`created_at`, `updated_at` never client-supplied); date-only fields (pickup dates, DAC7 periods) are `YYYY-MM-DD` with the shop's timezone (`Europe/Stockholm`) applied only at display; nulls stay null. `src/lib/time.js` (`toDate`, `formatDate`, `formatDateOnly`) replaces the 83 `.toDate()`/`.seconds` sites; tests cover DST boundaries for pickup dates.
+
+### 2.9 Realtime → polling
+Order confirmation polls `GET /orders/:id` (receipt capability) every 2 s for ≤ 90 s with cancellation on unmount and an explicit timeout state; Connect status refetches on return/focus; pages/DAC7/migration/content-studio refetch on mutation or while a job is running (backoff 2→10 s); admin presence dropped. Every poll has an error state.
 
 ---
 
-## 3. Scope — port / later / delete
+## 3. Scope — 29 / 40 / 13
 
-### 3.1 PORT now (the first live shop needs it)
-From `INVENTORY_FUNCTIONS.md` (29 exports) plus the client surfaces that use them:
+### 3.1 PORT now (what one live shop needs), in CP order
+CP2 slice: auth (sign-in, reset with email delivery), shop config read, one product path (artwork → render → mapping → quote → publish), storefront PDP/cart/checkout/confirmation, PaymentIntent + webhook + orders + refunds + withdrawals, Connect onboarding endpoints, outbox + dispatch (+ cancellation paths), payout card, legal gate + acceptance, screening on publish, takedown, retention sweep.
+CP3–6 breadth: platform (shops, features, live gate, users, printers/tiers/areas/routing, reports queue, settings), catalogue (variants, images, collections, pages, menu, branding, legal pages), admin (ProductForm + POD gate, orders list/detail, settings/delivery/pickup, payments UI, users with deactivate), POD (full studio, mappings UI, 3D read-only, infringement report page, rescreen on every mutation), email templates actually sent today.
 
-| Domain | Backend (from the 29) | Frontend surfaces |
-|---|---|---|
-| Auth & users | password reset (one flow, not three), platform super-admin + shop user provisioning, delete platform user | login (admin/platform/print), `AuthContext` → session client, users tabs |
-| Tenancy / platform | shops (full `shops` schema, not the thin `tenants`), features/add-on flags, live gate, provisioning | PlatformShops, ShopDetail, Addons, Users, Printers (tiers, areas, routing), Reports (screening/takedown queue), settings |
-| Catalogue | products (variants, images, POD fields), collections, pages, menu, branding, legal pages | ProductForm, AdminProducts, Collections, Menu builder, Pages, Store settings, Legal pages + acceptance |
-| Storefront | public reads: catalogue, collections, pages, branding, menu, legal; cart; checkout; order confirmation; rapportera-intrång | every `src/pages/shop/*` — data layer only, pixels unchanged |
-| Checkout / money | PaymentIntent (Connect destination charge, commission, **production withholding**, descriptor suffix), webhook (succeeded, failed, disputes ×2, account.updated), orders, refunds (cumulative), withdrawals, Connect onboarding ×4, commission/payout-delay/balance | Checkout, StripePaymentForm, OrderConfirmation, AdminOrders/Detail (one-number card), AdminPayments |
-| Email | Resend transport + the order/auth templates actually sent today (order confirmation, admin notification, status update, refund, withdrawal, password reset, infringement admin) | — |
-| POD | artwork upload (R2 presigned) + `processArtwork` on the render service, mappings, mockup templates/profiles, `quotePodCost`, studio publish gate, production snapshot at checkout, print outbox + sweep (SnapWear A6 hook), screening (in the publish path, no trigger), takedown | Design Studio, PodAdminPage (artwork, mappings), 3D read-only view |
-| Retention | abandoned-checkout PI cancel + snapshot purge (the reminder emails wait) | — |
-| Legal | platform terms + acceptance evidence + checkout gate, withdrawal (ångerrätt) | PlatformTermsGate, legal pages |
+### 3.2 PORT-LATER (40)
+Reviews, abandoned-cart reminder emails, discount-code admin, content studio (ffmpeg), B2B, migrators, DAC7, print portal, B2C accounts (guest checkout + guest withdrawal stay), marketing materials, custom-domain admin UI, **affiliate** (spec `specs/AFFILIATE.md` written in CP0 from the live code before retirement), 3D model tooling, generic provisioning UI beyond CP3.
 
-### 3.2 PORT-LATER (real add-ons; not needed for melodie-mc's first live sale)
-Reviews (6), abandoned-checkout reminder emails (2), discount-code admin (1), content studio (3, ffmpeg), B2B wholesale (2), Shopify/Woo migrators (2), DAC7 (8), print portal (7 — SnapWear never logs in; revisit if a second printer returns), B2C customer accounts (guest checkout + guest withdrawal already work), marketing materials, custom-domain admin UI (CF makes the mechanism trivial; the UI can wait), **affiliate program (5 functions, 5 collections — Mikael 2026-09-26: will be REINSTATED later, so before its Firebase code is retired CP0 writes `docs/cf-port/specs/AFFILIATE.md`: data model, commission/reversal/payout rules, click attribution + consent (MFL), admin + storefront surfaces, and what was dead (campaign revenue-share) vs live — the CF rebuild is designed from that spec, not from the b8shield-era code).** Each gets its own later checkpoint; none is deleted.
+### 3.3 DELETE (13 + code/docs) — needs sign-off
+Pre-pivot CRM wagons (dining/ambassador/campaign/writers), `deleteCustomerAccountV2`/`toggleCustomerActiveStatusV2` (order-wiping delete → replaced by deactivate), `getGeoDataV2`, `createAdminUserV2`, `syncAdminClaims`, `aggregateDac7Year`, V1 `confirmPasswordReset`, three dead email callables, `processB2COrderCompletionHttpV2`, `scrapeWebsiteMetaV2`; `OBSOLETE/`, b8shield-era docs/images, untracked root clutter.
 
-### 3.3 DELETE (needs Mikael's sign-off, §11)
-- **Pre-pivot CRM wagons:** dining, ambassador, campaign, writers (`enabled` flags, 9 listeners, 8 private collections, `scrapeWebsiteMetaV2`, two callables that don't even exist).
-- `deleteCustomerAccountV2` / `toggleCustomerActiveStatusV2` (the delete wipes every order of the user — replaced by a proper deactivate in the new users API), `getGeoDataV2`, `createAdminUserV2`, `syncAdminClaims`, `aggregateDac7Year`, the V1 `confirmPasswordReset`, the three dead email callables, `processB2COrderCompletionHttpV2`, the DAC7 duplicate.
-- Everything in `OBSOLETE/` and every b8shield-era doc/image (§8).
-- The untracked root clutter: `cloudflare/` (355 MB node_modules dump), three image dumps (174 MB), `worker-startup.cpuprofile`.
+### 3.4 Retirement procedure (deferred + deleted features)
+For each item: routes removed from `App.jsx`, navigation entries and feature flags removed, imports deleted (guard allowlist shrinks), Firestore data **archived** (JSON export per collection to `chopshop-prod-private/archive/firebase/<collection>/`, checksummed, listed in the manifest) before any deletion, and a one-line entry in `docs/cf-port/RETIRED.md` (what, where archived, how to restore). Done per checkpoint, verified by the allowlist shrinking.
 
 ---
 
-## 4. Data
+## 4. Data: migration manifest
 
-- **Schema:** start from the branch's 12 migrations/30 tables; add (from the functions inventory D1 seed): full `shops`, `users` (roles, printer membership), `products` (+ `product_variants`, `product_images`), `collections`, `pages`, `menus`, `pod_artwork`, `pod_mappings`, `printers` (+ tiers, areas), `settings_*` as typed tables (platform, print_routing, pod_profiles, mockup_templates, content_screening), `orders` (+ items, status history, customer/shipping/pickup snapshot, consent proof, Connect fields), `order_production` (server-only money), `checkouts`, `infringement_reports`, `legal_acceptances`, `audit_events`. Not tables: public projections, rate limits, password resets, print notifications (Queue + state).
-- **Re-seed, don't migrate.** No live customers. Sonnet writes idempotent scripts that read Firestore (named DB, ADC) and write D1 via the Worker's admin API or `wrangler d1 execute`: shops (5), users, melodie-mc + sillmans products/collections/pages/settings/branding, podArtwork + mappings (18 rows; the garment-less ones are re-published by Kent anyway), printers + routing + screening + templates seeds (already scripts — retarget). **Orders are not migrated** (9 test orders). Firebase Storage objects → R2 via a copy script; every stored download URL is rewritten to the R2 public URL (`INVENTORY_CLIENT_DATA.md` §0.5 lists the 15 path families; `ProductForm.jsx:737` parses Firebase URLs — replaced).
-- **Auth:** Better Auth (already on the branch). Firebase Auth users are re-created by email with **forced password reset** (one email each; ~10 people). The two auth contexts (`AuthContext` for admin/platform/print, `SimpleAuthContext` for b2c) collapse into one session client with roles; b2c accounts are PORT-LATER, guest checkout stays.
+`docs/cf-port/MIGRATION_MANIFEST.md` (CP0 output) lists every Firestore collection/doc with a fate — **carry** (shops incl. Connect ids/commission/payout settings + `legalAcceptances` copied append-only with evidence; users with an **old→new id map** + role/membership/suspension; products/variants/images; collections; pages; menus; branding; `settings/{platform,app,printRouting,podProfiles,podMockupTemplates,contentScreening}`; `printers` + `printerCatalog`; `pod3dModels`; `podArtwork` + `podMappings`; translations; `infringementReports`; `auditLogs`), **archive** (orders + `orderProduction`, deferred-feature collections), **drop** (rate limits, presence, password resets, projections). Storage objects copied per class with a verified checksum list; URLs rewritten by class.
+
+**Phases and authority:** staging seeds may be re-run freely; the **production import runs once**, with deterministic ids (Firestore ids preserved where the schema allows, else the id map), collision = abort; **after the first CF order is accepted, no destructive re-import is permitted** (scripts refuse when `orders` is non-empty). Users recreated in Better Auth with **forced reset**; reset delivery tested on staging first. Go-live settings applied by script and verified: `refundApplicationFee=false`, commission defaults, Connect ids. Sonnet-written idempotent scripts with dry-run + verify tables.
 
 ---
 
-## 5. Frontend: swap the data layer, keep the pixels
+## 5. Frontend
 
-- New `src/api/` client (fetch + session cookie, typed per domain: `catalogue`, `orders`, `checkout`, `pod`, `platform`, `auth`, `storage`). The 25 existing wrapper modules (`podMappings.js`, `podArtwork.js`, `shopConfig.js`, `printRouting.js`, `podCostQuote.js`, `imageUpload.js`, …) are re-implemented on top of it — their importers don't change. The 112 files that call the SDK inline are edited file by file, in checkpoint order, by Opus, with the per-file effort ratings from `INVENTORY_CLIENT_DATA.md` §1 as the work list.
-- `firebase/*` imports go to zero; `src/firebase/config.js` is deleted; the guard test also greps for `from 'firebase/`.
-- Uploads: browser → `POST /storage/reserve` → PUT to the R2 presigned URL → `POST /storage/confirm` (the branch's contract). Public images are served from the public bucket on a custom domain, so `<img src>` stays a plain URL.
-- Realtime: see §2. Harnesses (`src/dev/*`) get a mock API client so they keep working without a backend.
+`src/api/*` typed client on the session cookie; the 25 wrapper modules re-implemented on it; the 112 inline-SDK files edited in checkpoint order from the inventory's per-file list. **Auth contract tests** (from `AuthContext.jsx`): role, platform flag, active shop, printer membership, acting-as — each a test before the swap. Removing deferred features changes those screens (users edit page, add-on tabs) — listed per checkpoint; "pixel-identical" applies to launch-scope pages only. Harnesses get a mock API client.
 
 ---
 
 ## 6. Accounts, environments, credentials
 
-- **One account: Kent's** — `Kent@meteorpr.se's Account`, **account id `ee213082783ec86585150e876edb6107`** (verified with the project token 2026-09-26; the token sees no other account). Token `chopshop-cf-port` lives in `~/.config/chopshop/cloudflare.env` (mode 600, outside the repo); `scripts/cf-preflight.sh` is the only thing that reads it. Two Worker envs in it: `staging` (`*.staging.<domain>`) and `production`. The old personal-account staging is never reused and is deleted at the end (its Email Sending domain `outpost.mohlenmedia.com` is unrelated — untouched).
-- `cloudflare/wrangler.jsonc` pins `account_id` = Kent's; `scripts/cf-preflight.sh` is the only entry point for wrangler (deploy, d1, r2, secret) and refuses on any other account, on a missing `APP_ENV`, or on a Stripe key whose prefix doesn't match the env (`sk_test_`/sandbox for staging, `sk_live_` for production).
-- **Secrets are rotated, never copied:** new Stripe webhook endpoint + secret per env, new Resend key, SnapWear token straight into CF, Better Auth secret generated. The known-exposed SMTP/SA/PAT secrets are retired as part of this, not later.
-- Stripe: the platform account and Connect accounts are unaffected by hosting; only the webhook endpoint URL changes. Staging keeps the sandbox ("-sandlåda", not test mode — as learned 2026-08-22).
+Kent's account `Kent@meteorpr.se's Account` (`ee213082783ec86585150e876edb6107`) — token `chopshop-cf-port` in `~/.config/chopshop/cloudflare.env` (600, outside the repo), expires 2027-02-01; Mikael's `wrangler` OAuth login is not a member of this account and is never used for it. `cf-preflight.sh` reads the file and performs the §0 checks.
+
+**Secrets — rotation sequence (Firebase stays alive until CP7):** (1) create the new secret (Stripe webhook endpoint + secret per env, Resend key, SnapWear token, Better Auth secret) and deploy the CF consumer; (2) verify on staging; (3) only revoke a secret when nothing running uses it — the Firebase-side Resend/Stripe secrets are revoked at CP7 after the webhook handover. **Exception:** the already-compromised SMTP password, service-account key and GitHub PAT are revoked in **CP0** (they are not used by the retained Firebase paths after the Resend cutover; verify with a grep + a 24 h log check before revoking).
 
 ---
 
-## 7. Design gate (the "100%")
+## 7. Design gate
 
-1. **Checkpoint 0 captures the baseline while Firebase is still live:** gstack browse screenshots at 375/768/1440 of every storefront route (home, /produkter, collection, product, cart, checkout steps, confirmation, legal pages, rapportera-intrång), every admin page, every platform page, light + dark where applicable — stored under `docs/cf-port/baseline/` (git-lfs or a release asset if size demands).
-2. **Impeccable freezes the design system:** `/impeccable` audit → `DESIGN.md` updated to a complete token + component contract (NORD storefront, Admin-Neutral, Platform-dark), and any drift found NOW is fixed on Firebase as a hotfix so the baseline is the truth.
-3. **Every checkpoint that touches a page** re-shoots the same routes on staging and diffs (pixel diff ≤ 0.5 % or an explained delta — e.g. a timestamp). A red diff blocks the checkpoint. Reviewers see the before/after pair, not a description.
+1. CP0 captures baseline screenshots (375/768/1440, light/dark) of the **launch-scope pages only** on the current Firebase deploy, before any change. 2. Impeccable audit → design contract in `DESIGN.md`; drift found is *recorded*, not fixed pre-baseline. 3. Each checkpoint re-shoots its pages on staging and diffs; red blocks; deferred pages are not shot.
 
 ---
 
-## 8. Zero-B8shield rename list (done on the way over, guarded by CI)
-
-GCP project `b8shield-reseller-app` (never referenced), named DB `b8s-reseller-db`, storage bucket names, `DEFAULT_SHOP_ID` and every `b8shield` default/fallback in `src/config` + `src/utils` (15 files) + `functions/src` (21 files), the reseller-era wagons and their READMEs, `stripe-review-export/` (quarantine), `OBSOLETE/` (stays behind), `public/images/README.txt`. "Reseller" survives only where it is a live legal term in the platform terms (allowlisted by path in the guard).
-
----
-
-## 9. Build → review → deploy pipeline (per checkpoint)
-
-1. Opus builds in a worktree (or Sonnet for data scripts); gate green (`vitest` in `cloudflare/`, the ported pure invariants, the guard tests).
-2. **Codex review** (`/codex review` on the diff) → findings fixed.
-3. **Fable review** (line by line, adversarial: what did the reviewer miss, what broke, reverse-check) → findings fixed.
-4. Deploy to **staging** via preflight; smoke (`stg-*.sh` style) + design diff.
-5. Handover entry in `docs/cf-port/HANDOVER.md` (what, evidence, both review notes, open gaps) — the branch's checkpoint style, which worked.
-6. Production deploy only at cutover (CP8), on Mikael's explicit go.
+## 8. Zero-B8shield rename list
+`b8shield-reseller-app`, `b8s-reseller-db`, storage bucket names, `DEFAULT_SHOP_ID` and b8shield fallbacks (`src/config`, `src/utils` 15 files, `functions/src` 21), reseller-era wagons, `stripe-review-export/`, `OBSOLETE/`, `public/images/README.txt`. "Reseller" allowlisted only by path in the legal templates.
 
 ---
 
-## 10. Checkpoints (ordered; each independently shippable to staging)
-
-| CP | Scope | Builder | Exit criteria |
-|---|---|---|---|
-| **0 Hygiene + baseline** | New branch `cf-port` from main; bring `cloudflare/` + handover from `cloudflare-migration`; **fix the broken test gate** (vitest config, `env.d.ts`, types); Hono router; guard tests (b8shield, no-firebase-import); `cf-preflight.sh`; docs quarantine (§3.3, `docs/_archive/` + INDEX); root clutter removed; **design baseline captured (§7.1) + impeccable freeze (§7.2)**; Firebase freeze announced in LAUNCH_TODO. | Opus + Sonnet (docs move) | gate green on the branch; baseline in repo; preflight refuses wrong account (tested) |
-| **1 Account + foundation** | Kent's account bootstrapped: D1 ×2, R2 ×4, Queues, secrets (rotated), envs; migrations applied; Better Auth mounted with password reset + invitation; platform super-admin bootstrap. | Opus | `whoami` = Kent's id; sign-in works on staging; audit_events written |
-| **2 Frontend API layer + auth** | `src/api/*`, `time.js`, session client; `AuthContext` swapped; login/reset pages for admin/platform/print; harness mock client. Nothing else changes yet. | Opus | login on staging renders pixel-identical to baseline; no `firebase/` import in the auth path |
-| **3 Platform + tenancy** | Full `shops` + features + live gate + provisioning; users; printers (tiers, areas, routing) + `printersPublic` query; settings tables + seeds retargeted; platform pages swapped. | Opus (+ Sonnet seeds) | every platform page diff-clean; SnapWear seed lands in D1 |
-| **4 Catalogue + storefront** | products/variants/images/POD fields, collections, pages, menu, branding, legal pages; public read API with allowlist; R2 public images + URL rewrite; **all storefront pages swapped**. | Opus (+ Sonnet copy of melodie-mc/sillmans data) | storefront 100 % diff-clean at 3 widths, light/dark; anon can read nothing non-public (authz tests) |
-| **5 Admin core** | ProductForm (incl. POD gate), products list, collections, menu, pages, store settings/identity/delivery/pickup, legal pages + acceptance, orders list/detail (one-number card), payments/Connect onboarding UI. | Opus | admin pages diff-clean; F1–F5 invariants re-tested as Worker tests |
-| **6 Checkout + money** | Full checkout contract (pickup, consent, campaign discounts, legal gate, POD snapshot, Turnstile), PaymentIntent with Connect + withholding + descriptor, webhook (5 events), orders, refunds, withdrawals, Connect endpoints, Resend templates. Pure invariants ported (checkout, withholding, connect-params, dispute recovery, refund state). | Opus; Fable on the money path | real sandbox test order on staging: PI fee = commission + withholding; refund reflects on the card; webhook replay idempotent |
-| **7 POD** | Artwork upload → render service → validation; mappings; templates/profiles; `quotePodCost`; studio publish (screening inline, fit checks, price floor); production snapshot; print outbox + sweep; **SnapWear A5/A6 if Natalia has answered, else the outbox stub**; takedown + infringement report + Anmälningar/Granskning. Render-service decision executed (§11). | Opus; Fable reviews the pipeline core move | publish → order → outbox job with the SnapWear payload shape; screening/takedown authz tests |
-| **8 Cutover** | Production env; data re-seed (final); forced password resets; domains + DNS (melodie-mc first); Stripe prod webhook; Resend domain; smoke + one real test order + refund; Firebase → **read-only for 14 days**, then project deleted; personal-account staging deleted; memory + docs updated. | Sonnet (data) + Opus; Mikael runs DNS/Stripe dashboard steps | melodie-mc live on CF; Firebase billing → 0 |
-| **9+ Later** | Reviews, abandoned-cart emails, discount-code admin, content studio (ffmpeg), B2B, migrators, DAC7, print portal, b2c accounts, custom-domain UI, SSR/SEO for the storefront. | — | one checkpoint each, same pipeline |
-
-Rough size: CP0–2 ≈ 1.5 weeks, CP3–5 ≈ 3 weeks, CP6–7 ≈ 2–3 weeks, CP8 ≈ 1 week → **7–9 weeks** of Claude time, assuming Mikael's turnaround on decisions/DNS/Stripe steps within a day. SnapWear A5/A6 land inside CP7 only if Natalia's answers (C1–C6) arrive by then.
+## 9. Build → review → deploy (per checkpoint)
+Opus builds (Sonnet for data scripts) → CI on a **clean checkout of the SHA** (vitest-pool-workers, ported pure invariants, guard tests, failure-injection suite from CP2 on) → `/codex review` → Fable review → `reviews/<sha>.md` with both verdicts → `cf-deploy.sh staging` (preflight) → smoke + design diff → handover entry. Production only at CP7 on Mikael's go.
 
 ---
 
-## 11. Decisions Mikael owes (blocking the checkpoint noted)
+## 10. Checkpoints (dependency order)
 
-1. **Kent's account: personal or company (Meteor PR AB) — and is it on Workers Paid?** Needed for D1 limits, Queues and Containers. Mikael must be invited as admin; today `wrangler whoami` cannot see it. *(blocks CP1)*
-2. **Render service:** Cloudflare Containers on that account (if the plan allows) vs one Cloud Run container in a **new** GCP project. Recommendation: Containers if available (one account, one bill), else Cloud Run. *(blocks CP7)*
-3. **Domains at cutover:** real domains (melodiemc.com for Kent's shop, a platform domain for admin/platform) vs keep temporary hostnames. Recommendation: real. *(blocks CP8)*
-4. **DELETE sign-off** for §3.3 — especially the CRM wagons (affiliate is NOT deleted: spec-then-retire, §3.2). *(blocks CP0's quarantine of their code)*
-5. **Docs UNSURE (7)** in `INVENTORY_DOCS.md`: the two July legal `.docx` drafts, `juridik.md`, `stripe-review-export/`, `METEOR_PAKETERING_KENT.pdf`. *(CP0)*
-6. **Storefront SEO:** keep the SPA shell for the port (design-identical) and do SSR as a later checkpoint — or fold SSR in now? Recommendation: later; it is not a data-layer change.
+| CP | Scope | Exit criteria |
+|---|---|---|
+| **0 Hygiene + baseline** | Branch `cf-port` from `main`; bring `cloudflare/` + handover from `cloudflare-migration`; **fix the red gate**; Hono router; guard tests with the **shrinking allowlist**; `cf-preflight.sh` + `cf-deploy.sh`; `run-all.sh` always-rebuild hotfix on Firebase; docs quarantine + clutter removal; `MIGRATION_MANIFEST.md`; `specs/AFFILIATE.md`; `RETIRED.md` started; **design baseline**; compromised secrets revoked (§6); freeze announced in LAUNCH_TODO. | gate green on a clean checkout; preflight demonstrably refuses a wrong account/resource; baseline committed; manifest reviewed |
+| **1 Foundation** | Kent's account: D1 ×2, R2 ×6, Queues, secrets created, envs; migrations applied; Better Auth + **password reset with Resend delivery**; §2.1 routing contract (hostname → tenant, service-binding header, `/api` same-origin, acting-as, receipt capability); platform super-admin bootstrap; D1 backup + **restore drill**; **render benchmark on both hosts → decision**; `render_jobs` + async contract; fake printer route (staging only). | sign-in + reset work on staging; wrong host → opaque 404; restore drill documented; render decision recorded with numbers |
+| **2 Vertical slice (THE gate)** | One melodie-mc product seeded by script: artwork upload (streamed) → render job → validation → mapping → `quotePodCost` → publish (screening inline, fit, floor) → storefront PDP/cart/checkout (legal gate, consent, pickup) → sandbox PaymentIntent (Connect, withholding, descriptor) → webhook → order + snapshot + outbox in one batch → dispatch consumer → fake printer → payout card → refund via `refund_operations` → cancellation paths (§2.3) → retention sweep → reconciliation cron. **Failure-injection suite:** crash after each external success and before each local commit; duplicate webhook replay; delayed success vs retention sweep; two concurrent partial refunds; duplicate dispatch delivery; refund before/after dispatch. | money reconciles to the öre; **exactly one** production submission per order under every injected failure; stranded work alerts within 15 min; refund race cannot double-write; guest receipt cannot read another shop's order; design diff clean on the slice pages |
+| **3 Platform minimal** | Shops config + features + live gate, users + memberships, printers/tiers/areas/routing + `printersPublic` query, settings tables, legal/terms, screening settings, reports queue; manifest scripts executed on staging. | slice operable by a platform user without scripts; staging data = manifest |
+| **4 Catalogue + storefront** | Full products/variants/images, collections, pages, menu, branding, legal pages, public read API with the §2.4 eligibility predicate + invalidation; every storefront page swapped; public R2 images. | storefront diff-clean; anon reads only public fields; eligibility transitions tested |
+| **5 Admin** | ProductForm + POD gate, products list, collections, menu, pages, settings/delivery/pickup, orders list/detail, payments/Connect UI, users (deactivate replaces delete). | admin diff-clean; F1–F5 invariants as Worker tests |
+| **6 POD breadth** | Full studio, mappings UI, 3D read-only, infringement report page + footer link, rescreen on all mutations, remaining email templates; **SnapWear A5/A6 real submit** when Natalia's answers land — otherwise a LAUNCH_TODO blocker, never a stub in production. | publish → paid order → SnapWear submission validated against their API doc |
+| **7 Cutover (runbook)** | Production env + secrets + pinned ids; **production import once** (§4); users recreated + resets sent; Stripe prod webhook created via API and pinned; staging soak; **write freeze on Firebase = Functions writers + schedules disabled explicitly** (deploy a no-op build / delete triggers), outstanding PaymentIntents cancelled, **webhook handover** (CF endpoint enabled → Firebase endpoint disabled → reconciliation run); DNS (melodiemc.com first); **rollback plan** (re-enable Firebase endpoint + hosting) valid until the first CF order; Firebase archived (verified export, §3.4) → read-only 14 days → **deletion checklist** (archive verified, no traffic, no deferred data unarchived). | melodie-mc live on CF; reconciliation clean; archive verified; LAUNCH_TODO A+B all ☑ before the first real order |
+| **8+** | PORT-LATER items, one checkpoint each, same pipeline. | — |
+
+**Estimate:** none until measured. CP0–CP2 are timed; the burn rate then projects CP3–7 with stated contingency and the external dependencies (Kent: plan, agreements, insurance, accountant; Natalia: C1–C6; Mikael: §11).
 
 ---
 
-## 12. Risks and how the plan handles them
+## 11. Decisions Mikael owes
+1. Kent's account on **Workers Paid?** — blocks CP1
+2. Render host: decided by the CP1 benchmark; Mikael approves the numbers — blocks CP2
+3. Domains at CP7: real (melodiemc.com + a platform domain, name?) — blocks CP7
+4. DELETE sign-off (§3.3) — blocks CP0
+5. The 7 UNSURE docs — CP0
+6. Screening policy: advisory (today) or approval-before-first-sale — sets the §2.4 predicate — blocks CP2
+7. SSR for the storefront: later checkpoint (recommended)
 
+---
+
+## 12. Risks
 | Risk | Mitigation |
 |---|---|
-| Drift again (building on Firebase "just this once") | Freeze rule + `hotfix:` prefix; LAUNCH_TODO marks the freeze; memory records it. |
-| Silent scope creep in the frontend rewrite | Per-file work list with effort ratings; a checkpoint owns a fixed file set. |
-| Design drift | Baseline screenshots + pixel diff gate; impeccable contract first. |
-| Wrong account / wrong Stripe mode | Preflight script is the only wrangler entry point; key-prefix check per env. |
-| Money-path regressions | Pure invariants ported as tests before the routes (CP6 exit criteria include a sandbox order). |
-| B8shield residue | CI guard + rename list; `OBSOLETE/` never crosses. |
-| Render service latency/cost | Contract v0 exists; artwork validation is async (queue + status), studio already handles "processing". |
-| Reviewer fatigue → rubber stamps | Two independent reviewers, findings must be listed in the handover entry (empty list is suspicious and gets challenged). |
-| SnapWear unknowns (C1–C6) | Outbox stub keeps CP7 shippable; A5/A6 slot in when answers arrive. |
+| Paid order recorded but never fulfilled / fulfilled twice | outbox + idempotent receivers + failure-injection + reconciliation alerts; launch gate |
+| Drift back to Firebase | freeze rule in CI |
+| Frontend scope creep | per-file work list; launch-scope pages; deferred screens listed; retirement procedure |
+| Wrong account / Stripe target | preflight verifies account + resource ids + Stripe account + webhook per env |
+| Private assets exposed | three storage classes; buyer schema allowlist; authz tests |
+| Refund / cancellation races | state machine + version check + refund webhooks + cancellation paths tested |
+| D1 limits | budgets; alerts; restore drill |
+| Render unknowns | benchmark first; async contract with leases |
+| Data overwritten at cutover | import-once; refuse when orders exist |
+| Reviewer rubber-stamping | deploy script refuses without both verdicts for the exact SHA |
+| Estimate optimism | no number until measured |
+
+---
+
+## 13. Codex findings → v2
+**Round 1:** 1 launch gate → §0 rule + CP6/CP7 · 2 atomicity → §2.2 · 3 refunds → §2.3 · 4 invariants → §2.4 · 5 tenant/auth → §2.1 · 6 storage → §2.5 · 7 cutover → CP7 · 8 gates → shrinking allowlist, review-gated deploy, clean-checkout CI, `run-all.sh` hotfix · 9 account proof → §0 preflight · 10 arithmetic → §1 · Q1 order → §10 · Q2 manifest → §4 · Q3 D1 → §2.7 · Q4 polling → §2.9 · Q5 render → §2.6 · Q6 estimate → measured · Q7 → CP2.
+**Round 2 (B1–B8):** guest authorization → §2.1 · payment/fulfilment cancellation races → §2.3 · retention vs delayed success → §2.3 · public eligibility predicate → §2.4 · retirement procedure → §3.4 · reseed overwriting CF state → §4 phases · timestamps → §2.8 · secrets rotation sequence → §6.
