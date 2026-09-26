@@ -62,7 +62,10 @@
         "R2_PRIVATE_BUCKET_NAME": "chopshop-stg-private",
         // Every bucket below is EU-jurisdiction: the S3 presign host must be the `.eu.` one
         // (src/pod/render-farm-client.ts). The preflight requires this to match the bindings.
-        "R2_JURISDICTION": "eu"
+        "R2_JURISDICTION": "eu",
+        // Printer dispatch target — must equal pinned.<env>.json → dispatchTarget (the preflight
+        // checks it). "fake-printer" exists only in staging; production is always "snapwear".
+        "DISPATCH_TARGET": "fake-printer"
       },
       "d1_databases": [
         {
@@ -113,7 +116,10 @@
         "R2_PRIVATE_BUCKET_NAME": "chopshop-prod-private",
         // Every bucket below is EU-jurisdiction: the S3 presign host must be the `.eu.` one
         // (src/pod/render-farm-client.ts). The preflight requires this to match the bindings.
-        "R2_JURISDICTION": "eu"
+        "R2_JURISDICTION": "eu",
+        // Printer dispatch target — must equal pinned.<env>.json → dispatchTarget (the preflight
+        // checks it). "fake-printer" exists only in staging; production is always "snapwear".
+        "DISPATCH_TARGET": "snapwear"
       },
       "d1_databases": [
         {

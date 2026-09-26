@@ -11,9 +11,37 @@ import {
   PRINT_CONTENT_TYPE,
 } from "./render-farm-client";
 import { getProfile, toJobProfile } from "./pod-profiles";
+import {
+  canonicalOutputKeys,
+  insertRenderJobStatement,
+  nudgeRenderJob,
+} from "./render-jobs";
+
+/**
+ * WHICH CREATION PATH THE ADMIN ROUTE USES.
+ *
+ * `false` (the only supported setting since CP1-C): artwork creation ENQUEUES a
+ * render job (enqueueArtwork) and answers 202 with a 'processing' artwork; the
+ * farm pulls the job through /v1/render (src/pod/render-jobs.ts) and the admin
+ * GET on the artwork is the poll (PLAN §2.6 "upload → processing → poll").
+ *
+ * `true` restores the pre-CP1-C synchronous dispatch (createArtwork below: one
+ * request holds the farm for up to 330 s). It is kept, unchanged apart from
+ * sharing the canonical key helper, only so the two behaviours can be diffed
+ * during review; it is not a runtime switch and nothing sets it. Delete it —
+ * with createArtwork and render-farm-client's dispatch — once the async path
+ * has run on staging.
+ */
+export const SYNC_RENDER_FALLBACK = false;
 
 /**
  * The POD artwork library — the caller side of the render-farm seam.
+ *
+ * Since CP1-C creation is ASYNCHRONOUS (enqueueArtwork + src/pod/render-jobs.ts);
+ * the flow below is the synchronous createArtwork, kept behind
+ * SYNC_RENDER_FALLBACK for review. Its ordering rules still hold for the async
+ * path: steps 1–2 are shared, and step 5's verify-before-ready happens at the
+ * farm's completion.
  *
  * ── THE FLOW, AND WHY IT IS ORDERED THIS WAY ────────────────────────────────
  *
@@ -96,6 +124,7 @@ interface ArtworkRow {
  */
 export type CreateArtworkResult =
   | { artwork: ArtworkDetail; status: "created" }
+  | { artwork: ArtworkDetail; status: "queued" }
   | { artwork: ArtworkDetail; status: "rejected" }
   | { status: "conflict" | "farm_error" | "not_found" };
 
@@ -340,7 +369,85 @@ async function discardOutputs(
 }
 
 /**
- * Dispatch one artwork job and persist its verdict.
+ * Create an artwork and QUEUE its render (the path SYNC_RENDER_FALLBACK=false
+ * selects).
+ *
+ * Steps 1–2 of the synchronous flow, unchanged — profile and original resolved
+ * and ownership-checked, then one guarded batch — except that the batch also
+ * writes the 'queued' render_jobs row, so an artwork can never exist without
+ * the job that will measure it (or the reverse). The UNIQUE (tenant, original,
+ * profile) triple still arbitrates a race before anything is queued.
+ *
+ * The verdict arrives later through the farm's completion
+ * (src/pod/render-jobs.ts), which writes exactly the fields step 5 of the
+ * synchronous flow writes. A job that fails three times ends with an alert and
+ * REMOVES the 'processing' row, keeping the synchronous path's "replay is the
+ * retry" rule: the same body can be posted again.
+ */
+export async function enqueueArtwork(
+  env: Env,
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  input: { objectId: string; profileId: string },
+  now: number,
+): Promise<CreateArtworkResult> {
+  const tenantId = principal.tenantId;
+
+  const profile = await getProfile(db, input.profileId);
+  if (profile === null || !profile.active) {
+    return { status: "not_found" };
+  }
+
+  const original = await loadOriginal(db, tenantId, input.objectId);
+  if (original === null) {
+    return { status: "not_found" };
+  }
+
+  const artworkId = crypto.randomUUID();
+  const renderJobId = crypto.randomUUID();
+
+  try {
+    await db.batch([
+      db
+        .prepare(
+          `INSERT INTO pod_artwork (
+             artwork_id, tenant_id, original_object_id, profile_id, status,
+             created_at, updated_at
+           ) VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
+        )
+        .bind(artworkId, tenantId, input.objectId, input.profileId, now, now),
+      insertRenderJobStatement(db, {
+        artworkId,
+        inputBytes: original.sizeBytes,
+        inputKey: original.objectKey,
+        jobId: renderJobId,
+        now,
+        profile: toJobProfile(profile),
+        tenantId,
+      }),
+      auditStatement(db, principal, "pod.artwork.dispatch", artworkId, now, {
+        profileId: input.profileId,
+        renderJobId,
+      }),
+    ]);
+  } catch (error) {
+    if (isUniqueConstraintFailure(error)) {
+      return { status: "conflict" };
+    }
+    throw error;
+  }
+
+  await nudgeRenderJob(env, renderJobId);
+
+  const row = await loadArtworkRow(db, tenantId, artworkId);
+  return row === null
+    ? { status: "not_found" }
+    : { artwork: toDetail(row), status: "queued" };
+}
+
+/**
+ * Dispatch one artwork job and persist its verdict — the SYNCHRONOUS path,
+ * reachable only with SYNC_RENDER_FALLBACK = true (see its comment).
  *
  * ── WHY A FARM FAILURE DELETES THE ROW ──────────────────────────────────────
  * The alternative — a 'failed' status with retry semantics — was considered and
@@ -388,8 +495,7 @@ export async function createArtwork(
   const artworkId = crypto.randomUUID();
   // Keys are derived from the artwork id, so they are unique per dispatch and
   // cannot be predicted from anything a client supplies.
-  const printKey = `pod/${tenantId}/print/${artworkId}.png`;
-  const previewKey = `pod/${tenantId}/preview/${artworkId}.webp`;
+  const { previewKey, printKey } = canonicalOutputKeys(tenantId, artworkId);
 
   // ── 2. The guarded insert. Before the farm is touched. ────────────────────
   try {
@@ -663,6 +769,17 @@ export async function deleteArtwork(
         `DELETE FROM pod_artwork WHERE tenant_id = ? AND artwork_id = ?`,
       )
       .bind(tenantId, artworkId),
+    // A 'processing' artwork may still have a live render job. It ends here,
+    // in the same batch, so no farm can lease it afterwards and a farm already
+    // working on it is answered 409 (and its attempt outputs swept) when it
+    // reports. The job row itself stays: that answer needs it.
+    db
+      .prepare(
+        `UPDATE render_jobs
+         SET state = 'failed', error = 'artwork_deleted', updated_at = ?
+         WHERE tenant_id = ? AND artwork_id = ? AND state IN ('queued', 'leased')`,
+      )
+      .bind(new Date(now).toISOString(), tenantId, artworkId),
     auditStatement(db, principal, "pod.artwork.delete", artworkId, now, {
       profileId: row.profile_id,
       status: row.status,

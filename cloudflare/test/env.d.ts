@@ -39,6 +39,10 @@ declare global {
       R2_SECRET_ACCESS_KEY: string;
       RENDER_FARM_TOKEN: string;
       RENDER_FARM_URL: string;
+      // CP1-C: staging dispatches to the fake printer; the suites pin the
+      // staging shape and override it to prove the route dark elsewhere.
+      DISPATCH_TARGET: string;
+      FAKE_PRINTER_TOKEN: string;
       STRIPE_SECRET_KEY: string;
       STRIPE_WEBHOOK_SECRET: string;
       TEST_MIGRATIONS: D1Migration[];

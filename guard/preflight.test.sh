@@ -37,7 +37,7 @@ e = {"name": p["workerName"],
      "vars": {"APP_ENV": env, "CANONICAL_ORIGINS": dict(o), "AUTH_BASE_URL": o["api"],
               "AUTH_TRUSTED_ORIGINS": o["api"] + "," + o["web"],
               "SERVICE_NAME": p["workerName"], "R2_PRIVATE_BUCKET_NAME": p["r2"]["private"],
-              "R2_JURISDICTION": "eu"},
+              "R2_JURISDICTION": "eu", "DISPATCH_TARGET": p["dispatchTarget"]},
      "d1_databases": [{"binding": "DB", "database_name": p["d1"]["name"], "database_id": "d1-%s-uuid" % short}],
      "r2_buckets": [{"binding": "PUBLIC_BUCKET", "bucket_name": p["r2"]["public"], "jurisdiction": "eu"},
                     {"binding": "PRIVATE_BUCKET", "bucket_name": p["r2"]["private"], "jurisdiction": "eu"},
@@ -334,6 +334,10 @@ expect_refused "a queue consumer missing → refused" "queue consumers are ['cho
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['r2_buckets'].append(dict(e['r2_buckets'][0]))")"; run staging -- deploy
 expect_refused "a binding declared twice → refused" "declares binding 'PUBLIC_BUCKET' twice"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['DISPATCH_TARGET'] = 'snapwear'")"; run staging -- deploy
+expect_refused "DISPATCH_TARGET != pinned dispatchTarget → refused" "env.staging.vars.DISPATCH_TARGET is 'snapwear', pinned dispatchTarget is 'fake-printer'"
 
 # --- bootstrap can never deploy; the worker name cannot be overridden ---------------------
 new_tree; run staging --bootstrap -- deploy

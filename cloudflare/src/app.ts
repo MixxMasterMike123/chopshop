@@ -70,9 +70,11 @@ import {
 import {
   createArtwork,
   deleteArtwork,
+  enqueueArtwork,
   getArtwork,
   getPreviewKey,
   listArtwork,
+  SYNC_RENDER_FALLBACK,
 } from "./pod/artwork-store";
 import { parseCreateArtworkInput } from "./pod/artwork-routes";
 import {
@@ -110,6 +112,12 @@ import {
   handleReceiptClaimRoute,
   RECEIPT_CLAIM_ROUTE,
 } from "./routes/receipts";
+import {
+  handleRenderJobsRoute,
+  RENDER_API_PATH_PREFIX,
+} from "./routes/render-jobs";
+import { handleFakePrinterRoute } from "./routes/fake-printer";
+import { FAKE_PRINTER_JOBS_PATH } from "./dispatch/fake-printer";
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -140,7 +148,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0016_acting_as_revocation_id_final.sql";
+const REQUIRED_MIGRATION = "0018_fake_printer.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -181,9 +189,10 @@ export const BOOTSTRAP_IP_WINDOW_MS = 10 * MINUTE_MS;
  *
  * TIGHT — 5 per minute, half the anonymous checkout allowance — even though
  * this surface sits behind a live tenant-admin session, because of what one
- * request costs. Past this gate is a synchronous call to the render farm that
- * may hold a 2 GiB Firebase instance for up to 300 seconds running sharp over a
- * file up to the profile's cap, and the farm runs at concurrency 1. A handful
+ * request costs. Past this gate is a render job (queued since CP1-C rather than
+ * dispatched synchronously, but the same compute) that may hold a 2 GiB
+ * instance for up to 300 seconds running sharp over a file up to the profile's
+ * cap, and the farm runs at concurrency 1. A handful
  * of parallel dispatches is therefore not "some load on D1"; it is the whole
  * render capacity of the platform, occupied.
  *
@@ -1259,15 +1268,21 @@ async function handleAdminPodRoute(
       return invalidRequestResponse();
     }
 
-    const result = await createArtwork(
-      env,
-      env.DB,
-      resolveRenderFarmClient(env),
-      resolveR2Presigner(env),
-      principal,
-      input,
-      now,
-    );
+    // Asynchronous since CP1-C: the artwork is created 'processing' with a
+    // queued render job, and the farm pulls it (src/pod/render-jobs.ts). The
+    // synchronous dispatch stays reachable only by flipping the constant; see
+    // SYNC_RENDER_FALLBACK.
+    const result = SYNC_RENDER_FALLBACK
+      ? await createArtwork(
+          env,
+          env.DB,
+          resolveRenderFarmClient(env),
+          resolveR2Presigner(env),
+          principal,
+          input,
+          now,
+        )
+      : await enqueueArtwork(env, env.DB, principal, input, now);
 
     if (result.status === "not_found") {
       // Unknown/foreign/pending original, or an unknown or retired profile.
@@ -1286,6 +1301,12 @@ async function handleAdminPodRoute(
         },
         409,
       );
+    }
+
+    // 202: accepted for processing. The body is the 'processing' artwork; its
+    // detail GET is the poll.
+    if (result.status === "queued") {
+      return jsonResponse({ artwork: result.artwork }, 202);
     }
 
     // 201 for a ready verdict, 200 for a rejection. A rejection is a
@@ -1865,6 +1886,17 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
 
   app.all(PLATFORM_POD_PROFILES_PATH, (c) =>
     handlePlatformPodProfilesRoute(c.env, c.req.raw),
+  );
+
+  // The render farm's pull surface (PLAN §2.6): bearer-authenticated, no
+  // session, no tenant hostname; the whole prefix is one handler so every path
+  // under it shares the configuration gate, the limiter and the token check.
+  app.all(`${RENDER_API_PATH_PREFIX}*`, (c) =>
+    handleRenderJobsRoute(c.env, c.req.raw, new URL(c.req.url).pathname),
+  );
+  // Staging-only SnapWear stand-in; a 404 everywhere else (see the handler).
+  app.all(FAKE_PRINTER_JOBS_PATH, (c) =>
+    handleFakePrinterRoute(c.env, c.req.raw),
   );
   app.all(PLATFORM_BOOTSTRAP_PATH, (c) =>
     handlePlatformBootstrapRoute(c.env, c.req.raw),

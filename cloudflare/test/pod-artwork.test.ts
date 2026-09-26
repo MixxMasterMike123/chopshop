@@ -1,8 +1,10 @@
 import { env } from "cloudflare:workers";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
 import { createAuth } from "../src/auth/create-auth";
+import type { TenantAdminPrincipal } from "../src/auth/live-authorization";
+import { createArtwork, SYNC_RENDER_FALLBACK } from "../src/pod/artwork-store";
 import {
   R2_PRESIGNER_OVERRIDE,
   RENDER_FARM_OVERRIDE,
@@ -11,6 +13,7 @@ import {
   type R2Presigner,
   type RenderFarmClient,
 } from "../src/pod/render-farm-client";
+import type { RenderJobLease } from "../src/pod/render-jobs";
 
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
 const HOST_A = "https://admin-a.podartwork.test";
@@ -474,6 +477,151 @@ function podEnv(overrides: Record<PropertyKey, unknown> = {}): Env {
   } as unknown as Env;
 }
 
+// ── the farm's side of the pull contract (CP1-C) ───────────────────────────
+
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+interface FarmRun {
+  lease: RenderJobLease | null;
+  report: Response | null;
+}
+
+/**
+ * One pass of a pull-based farm through the REAL /v1/render surface: acquire
+ * (validating the envelope exactly as createFakeFarm does for the synchronous
+ * dispatch), then behave per `options` — PUT the outputs to the attempt keys and
+ * complete, complete with a rejection, or report a failure. Reported sha256s
+ * are the real hashes of the bytes PUT, because promotion now has R2 verify
+ * them; `reported*Bytes` still lets a case lie about sizes.
+ */
+async function runFarm(
+  options: FakeFarmOptions & {
+    beforeReport?: (lease: RenderJobLease) => Promise<void>;
+  } = {},
+  targetEnv: Env = podEnv(),
+): Promise<FarmRun> {
+  const farmHeaders = () => ({
+    authorization: `Bearer ${env.RENDER_FARM_TOKEN}`,
+    "cf-connecting-ip": `10.9.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250) + 1}`,
+    "content-type": "application/json",
+  });
+  const acquired = await worker.fetch(
+    new Request(`${HOST_A}/v1/render/jobs/acquire`, {
+      headers: farmHeaders(),
+      method: "POST",
+    }),
+    targetEnv,
+  );
+  if (acquired.status === 204) {
+    return { lease: null, report: null };
+  }
+  expect(acquired.status).toBe(200);
+
+  const lease = await acquired.json<RenderJobLease>();
+  farmCallCount += 1;
+  lastEnvelope = lease;
+  envelopeViolations = validateEnvelope(lease);
+
+  await options.beforeReport?.(lease);
+
+  const {
+    previewBytes = 2_000,
+    printBytes = 500_000,
+    result = "ok",
+    skipUpload = false,
+  } = options;
+  const report = (action: "complete" | "fail", body: unknown) =>
+    worker.fetch(
+      new Request(`${HOST_A}/v1/render/jobs/${lease.jobId}/${action}`, {
+        body: JSON.stringify(body),
+        headers: farmHeaders(),
+        method: "POST",
+      }),
+      targetEnv,
+    );
+  const claim = { attempt: lease.attempt, leaseToken: lease.leaseToken };
+
+  if (result === "failed") {
+    return { lease, report: await report("fail", { ...claim, error: "job_failed" }) };
+  }
+
+  if (result === "rejected") {
+    return {
+      lease,
+      report: await report("complete", {
+        ...claim,
+        ok: false,
+        reasons: [
+          {
+            code: "resolution_too_low",
+            message:
+              "Motivet är 900 × 900 px. I sin största tryckstorlek 25 × 25 cm blir det 91 DPI — minimikravet är 300 DPI.",
+          },
+        ],
+      }),
+    };
+  }
+
+  const printData = new Uint8Array(printBytes);
+  const previewData = new Uint8Array(previewBytes);
+  const printKey = keyFromPresignedUrl(lease.output.printPngPutUrl);
+  const previewKey = keyFromPresignedUrl(lease.output.previewWebpPutUrl);
+  if (!skipUpload) {
+    await env.PRIVATE_BUCKET.put(printKey, printData, {
+      httpMetadata: { contentType: "image/png" },
+    });
+    await env.PRIVATE_BUCKET.put(previewKey, previewData, {
+      httpMetadata: { contentType: "image/webp" },
+    });
+  }
+
+  return {
+    lease,
+    report: await report("complete", {
+      ...claim,
+      fields: {
+        effectiveDpi: 325,
+        heightPx: 3200,
+        maxPrintMm: { h: 250, w: 250 },
+        pipelineVersion: 1,
+        profileId: lease.profile.id,
+        widthPx: 3200,
+      },
+      notices: [
+        {
+          code: "opaque",
+          message: "Bilden saknar transparent bakgrund — hela rektangeln trycks.",
+        },
+      ],
+      ok: true,
+      outputs: {
+        previewWebp: {
+          bytes: options.reportedPreviewBytes ?? previewBytes,
+          key: previewKey,
+          sha256: await sha256Hex(previewData),
+        },
+        printPng: {
+          bytes: options.reportedPrintBytes ?? printBytes,
+          key: printKey,
+          sha256: await sha256Hex(printData),
+        },
+      },
+    }),
+  };
+}
+
+async function renderJobCount(): Promise<number> {
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM render_jobs").first<{
+    n: number;
+  }>();
+  return row?.n ?? 0;
+}
+
 /** An env with one POD config value removed — the dark-surface fixture. */
 function envMissing(key: string): Env {
   const stripped = { ...podEnv() } as Record<string, unknown>;
@@ -558,6 +706,9 @@ beforeEach(async () => {
   lastEnvelope = null;
   envelopeViolations = [];
   presignCallCount = 0;
+  // Before pod_artwork, and for a sharper reason than tidiness: acquire is
+  // GLOBAL, so a queued job left by one case would be leased by the next.
+  await env.DB.prepare("DELETE FROM render_jobs").run();
   await env.DB.prepare("DELETE FROM pod_artwork").run();
   await env.DB.prepare("DELETE FROM pod_profiles").run();
   await env.DB.prepare("DELETE FROM rate_limit_windows").run();
@@ -986,14 +1137,21 @@ describe("profiles", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-describe("dispatch — the happy path", () => {
+// CP1-C: creation is ASYNCHRONOUS. The POST answers 202 with a 'processing'
+// artwork and a queued render job; the farm pulls the job through /v1/render
+// (runFarm above, the real routes); the detail GET is the poll. The sync
+// dispatch's assertions are kept below in their async form — same envelope
+// pin, same persisted facts, same verify-before-ready — and the synchronous
+// code path itself is pinned by the "synchronous fallback" block.
+describe("creation — queued, then polled", () => {
   beforeEach(async () => {
     await seedProfile("apparel_dtg");
   });
 
-  it("sends an envelope that satisfies the farm's validator exactly", async () => {
+  it("answers 202 with a processing artwork and a queued job, and nudges the queue", async () => {
     const objectId = crypto.randomUUID();
-    await seedOriginal(TENANT_A, objectId);
+    const originalKey = await seedOriginal(TENANT_A, objectId);
+    const sent: unknown[] = [];
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
@@ -1001,10 +1159,149 @@ describe("dispatch — the happy path", () => {
         cookie: adminA.cookie,
         method: "POST",
       }),
-      podEnv(),
+      podEnv({
+        RENDER_JOBS_QUEUE: {
+          send: async (body: unknown) => {
+            sent.push(body);
+          },
+        },
+      }),
     );
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
+    const body = await response.json<{ artwork: Record<string, unknown> }>();
+    expect(body.artwork.status).toBe("processing");
+    expect(body.artwork.effectiveDpi).toBeNull();
+    // Creation only queues: no farm was called, nothing was presigned.
+    expect(farmCallCount).toBe(0);
+    expect(presignCallCount).toBe(0);
+
+    const jobs = await env.DB.prepare(
+      `SELECT id, tenant_id, artwork_id, version, attempt, state, input_key,
+              input_bytes, profile_json
+       FROM render_jobs`,
+    ).all<Record<string, unknown>>();
+    expect(jobs.results).toHaveLength(1);
+    const job = jobs.results[0];
+    expect(job).toMatchObject({
+      artwork_id: body.artwork.artworkId,
+      attempt: 0,
+      input_bytes: 4_000_000,
+      input_key: originalKey,
+      state: "queued",
+      tenant_id: TENANT_A,
+      version: 1,
+    });
+    // The profile is FROZEN into the job: every attempt measures under it.
+    expect(JSON.parse(String(job?.profile_json))).toStrictEqual({
+      accepted_formats: [{ ext: "png" }, { ext: "jpg" }],
+      id: "apparel_dtg",
+      max_file_mb: 50,
+      min_dpi: 300,
+      print_area_mm: { h: 400, w: 300 },
+    });
+    expect(sent).toStrictEqual([{ renderJobId: job?.id }]);
+
+    const audit = await env.DB.prepare(
+      `SELECT metadata_json FROM audit_events
+       WHERE action = 'pod.artwork.dispatch' AND resource_id = ?`,
+    )
+      .bind(body.artwork.artworkId as string)
+      .first<{ metadata_json: string }>();
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toStrictEqual({
+      profileId: "apparel_dtg",
+      renderJobId: job?.id,
+    });
+  });
+
+  it("the detail GET is the poll: processing, then the verdict", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const created = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { objectId, profileId: "apparel_dtg" },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      podEnv(),
+    );
+    const { artwork } = await created.json<{ artwork: { artworkId: string } }>();
+    const poll = async () => {
+      const response = await worker.fetch(
+        podRequest(`/v1/admin/pod/artwork/${artwork.artworkId}`, { cookie: adminA.cookie }),
+        podEnv(),
+      );
+      return response.json<{ artwork: { status: string }; previewUrl: string | null }>();
+    };
+
+    const before = await poll();
+    expect(before.artwork.status).toBe("processing");
+    expect(before.previewUrl).toBeNull();
+
+    const { report } = await runFarm();
+    expect(report?.status).toBe(200);
+
+    const after = await poll();
+    expect(after.artwork.status).toBe("ready");
+    expect(after.previewUrl).toContain("X-Amz-Expires=300");
+  });
+
+  it("a queue that refuses the nudge does not fail the request: the row is the truth", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const response = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { objectId, profileId: "apparel_dtg" },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      podEnv({
+        RENDER_JOBS_QUEUE: {
+          send: async () => {
+            throw new Error("queue unavailable");
+          },
+        },
+      }),
+    );
+    warn.mockRestore();
+
+    expect(response.status).toBe(202);
+    const { report } = await runFarm();
+    expect(report?.status).toBe(200);
+  });
+
+  it("the synchronous fallback is switched off", () => {
+    expect(SYNC_RENDER_FALLBACK).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("render — the happy path", () => {
+  beforeEach(async () => {
+    await seedProfile("apparel_dtg");
+  });
+
+  async function post(objectId: string): Promise<Response> {
+    return worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { objectId, profileId: "apparel_dtg" },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      podEnv(),
+    );
+  }
+
+  it("hands the farm an envelope that satisfies its validator exactly", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+
+    expect((await post(objectId)).status).toBe(202);
+    const { report } = await runFarm();
+
+    expect(report?.status).toBe(200);
     // THE PIN. Any drift in the envelope this worker builds shows up here as a
     // named violation rather than as a 400 in production.
     expect(envelopeViolations).toStrictEqual([]);
@@ -1027,14 +1324,8 @@ describe("dispatch — the happy path", () => {
     // 1 MB object under a 50 MB profile: the envelope must ask for 1 MB.
     await seedOriginal(TENANT_A, objectId, 1_048_576);
 
-    await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv(),
-    );
+    await post(objectId);
+    await runFarm();
 
     expect(lastEnvelope?.input.maxBytes).toBe(1_048_576);
   });
@@ -1043,16 +1334,9 @@ describe("dispatch — the happy path", () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
 
-    const response = await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv(),
-    );
-
-    expect(response.status).toBe(201);
+    await post(objectId);
+    const { report } = await runFarm();
+    expect(report?.status).toBe(200);
 
     const row = await env.DB.prepare(
       `SELECT status, width_px, height_px, effective_dpi, max_print_w_mm,
@@ -1069,9 +1353,11 @@ describe("dispatch — the happy path", () => {
     expect(row?.max_print_w_mm).toBe(250);
     expect(row?.max_print_h_mm).toBe(250);
     expect(row?.pipeline_version).toBe(1);
-    expect(row?.print_sha256).toBe("c".repeat(64));
+    // Real hashes of the bytes the farm PUT: promotion has R2 verify them, so
+    // the fixed placeholder hashes the synchronous tests used cannot pass.
+    expect(row?.print_sha256).toBe(await sha256Hex(new Uint8Array(500_000)));
     expect(row?.print_bytes).toBe(500_000);
-    expect(row?.preview_sha256).toBe("b".repeat(64));
+    expect(row?.preview_sha256).toBe(await sha256Hex(new Uint8Array(2_000)));
     expect(row?.preview_bytes).toBe(2_000);
     expect(row?.reasons_json).toBeNull();
     expect(JSON.parse(String(row?.notices_json))).toStrictEqual([
@@ -1082,12 +1368,13 @@ describe("dispatch — the happy path", () => {
     ]);
     // The row lands under the OWNER tenant.
     expect(row?.tenant_id).toBe(TENANT_A);
-    // Output keys live under the dedicated pod/ prefix, never shops/.
+    // Output keys live under the dedicated pod/ prefix, never shops/ — and are
+    // the canonical keys, not the attempt keys the farm wrote to.
     expect(String(row?.print_object_key)).toMatch(
-      new RegExp(`^pod/${TENANT_A}/print/`),
+      new RegExp(`^pod/${TENANT_A}/print/[0-9a-f-]+\\.png$`),
     );
     expect(String(row?.preview_object_key)).toMatch(
-      new RegExp(`^pod/${TENANT_A}/preview/`),
+      new RegExp(`^pod/${TENANT_A}/preview/[0-9a-f-]+\\.webp$`),
     );
   });
 
@@ -1095,31 +1382,19 @@ describe("dispatch — the happy path", () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
 
-    await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv(),
-    );
+    await post(objectId);
+    await runFarm();
 
     expect(lastEnvelope?.output.printPngPutUrl).toContain("image%2Fpng");
     expect(lastEnvelope?.output.previewWebpPutUrl).toContain("image%2Fwebp");
   });
 
-  it("both outputs actually exist in R2 after a ready verdict", async () => {
+  it("both outputs actually exist in R2 after a ready verdict, and nothing else does", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
 
-    await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv(),
-    );
+    await post(objectId);
+    await runFarm();
 
     const row = await env.DB.prepare(
       "SELECT print_object_key, preview_object_key FROM pod_artwork LIMIT 1",
@@ -1130,32 +1405,47 @@ describe("dispatch — the happy path", () => {
 
     expect(print?.size).toBe(500_000);
     expect(preview?.size).toBe(2_000);
+    // The attempt copies were swept after promotion.
+    const listed = await env.PRIVATE_BUCKET.list({ prefix: `pod/${TENANT_A}/` });
+    expect(listed.objects.map((object) => object.key).sort()).toStrictEqual(
+      [row?.preview_object_key, row?.print_object_key].sort(),
+    );
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-describe("dispatch — verdicts and failures", () => {
+describe("render — verdicts and failures", () => {
   beforeEach(async () => {
     await seedProfile("apparel_dtg");
   });
 
-  it("a rejection persists reasons, answers 200, and KEEPS the original", async () => {
-    const objectId = crypto.randomUUID();
-    await seedOriginal(TENANT_A, objectId);
-
-    const response = await worker.fetch(
+  async function post(objectId: string, profileId = "apparel_dtg"): Promise<Response> {
+    return worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId },
         cookie: adminA.cookie,
         method: "POST",
       }),
-      podEnv({ [RENDER_FARM_OVERRIDE]: createFakeFarm({ result: "rejected" }) }),
+      podEnv(),
     );
+  }
 
-    // 200, not 4xx: the request was correct and the artwork is what failed.
-    expect(response.status).toBe(200);
+  it("a rejection persists reasons and KEEPS the original", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
 
-    const body = await response.json<{
+    const created = await post(objectId);
+    const { artwork } = await created.json<{ artwork: { artworkId: string } }>();
+    const { report } = await runFarm({ result: "rejected" });
+    // The farm's report is accepted: the request was correct and the artwork
+    // is what failed.
+    expect(report?.status).toBe(200);
+
+    const detail = await worker.fetch(
+      podRequest(`/v1/admin/pod/artwork/${artwork.artworkId}`, { cookie: adminA.cookie }),
+      podEnv(),
+    );
+    const body = await detail.json<{
       artwork: { reasons: Array<{ code: string }>; status: string };
     }>();
     expect(body.artwork.status).toBe("rejected");
@@ -1179,134 +1469,96 @@ describe("dispatch — verdicts and failures", () => {
     expect(original?.status).toBe("active");
   });
 
-  it("a farm failure leaves NO stuck processing row, and a retry succeeds", async () => {
+  it("three farm failures end the job, leave NO stuck processing row, and a retry succeeds", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
 
-    const failed = await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv({ [RENDER_FARM_OVERRIDE]: createFakeFarm({ result: "failed" }) }),
-    );
+    expect((await post(objectId)).status).toBe(202);
 
-    expect(failed.status).toBe(502);
+    // Attempts 1 and 2 requeue; the artwork keeps saying 'processing'.
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const { report } = await runFarm({ result: "failed" });
+      expect(await report?.json()).toStrictEqual({ status: "queued" });
+      const row = await env.DB.prepare("SELECT status FROM pod_artwork").first<{ status: string }>();
+      expect(row?.status).toBe("processing");
+    }
+
+    const { report } = await runFarm({ result: "failed" });
+    expect(await report?.json()).toStrictEqual({ status: "failed" });
 
     const stuck = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM pod_artwork",
     ).first<{ n: number }>();
     expect(stuck?.n).toBe(0);
+    const alerts = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM alerts WHERE kind = 'render_job_failed' AND tenant_id = ?",
+    )
+      .bind(TENANT_A)
+      .first<{ n: number }>();
+    expect(alerts?.n).toBeGreaterThanOrEqual(1);
 
     // REPLAY IS THE RETRY: the identical request now works, because the row the
-    // failed attempt would have left behind does not occupy the UNIQUE triple.
-    const retried = await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv(),
-    );
-
-    expect(retried.status).toBe(201);
+    // failed job would have left behind does not occupy the UNIQUE triple.
+    expect((await post(objectId)).status).toBe(202);
+    expect((await runFarm()).report?.status).toBe(200);
   });
 
   it("a size disagreement does NOT mark ready", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
+    await post(objectId);
 
-    const response = await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv({
-        // The farm PUTs 500_000 bytes but claims it wrote 999_999 — exactly the
-        // shape a truncated upload takes.
-        [RENDER_FARM_OVERRIDE]: createFakeFarm({
-          printBytes: 500_000,
-          reportedPrintBytes: 999_999,
-        }),
-      }),
-    );
+    // The farm PUTs 500_000 bytes but claims it wrote 999_999 — exactly the
+    // shape a truncated upload takes.
+    const { report } = await runFarm({ printBytes: 500_000, reportedPrintBytes: 999_999 });
+    expect(report?.status).toBe(422);
 
-    expect(response.status).toBe(502);
-
-    const rows = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM pod_artwork",
-    ).first<{ n: number }>();
-    expect(rows?.n).toBe(0);
+    const row = await env.DB.prepare(
+      "SELECT status, print_object_key FROM pod_artwork",
+    ).first<{ print_object_key: string | null; status: string }>();
+    expect(row?.status).toBe("processing");
+    expect(row?.print_object_key).toBeNull();
+    // The job goes back to the queue for another attempt.
+    const job = await env.DB.prepare("SELECT state FROM render_jobs").first<{ state: string }>();
+    expect(job?.state).toBe("queued");
   });
 
   it("a farm that never uploaded does NOT mark ready", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
+    await post(objectId);
 
-    const response = await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv({
-        [RENDER_FARM_OVERRIDE]: createFakeFarm({ skipUpload: true }),
-      }),
-    );
+    const { report } = await runFarm({ skipUpload: true });
+    expect(report?.status).toBe(422);
 
-    expect(response.status).toBe(502);
-    const rows = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM pod_artwork",
-    ).first<{ n: number }>();
-    expect(rows?.n).toBe(0);
+    const row = await env.DB.prepare("SELECT status FROM pod_artwork").first<{ status: string }>();
+    expect(row?.status).toBe("processing");
   });
 
   it("sweeps half-written outputs when verification fails", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
+    await post(objectId);
 
-    await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv({
-        [RENDER_FARM_OVERRIDE]: createFakeFarm({
-          previewBytes: 1_000,
-          reportedPreviewBytes: 7,
-        }),
-      }),
-    );
+    const { report } = await runFarm({ previewBytes: 1_000, reportedPreviewBytes: 7 });
+    expect(report?.status).toBe(422);
 
     // Nothing must be left at a key no row claims.
     const listed = await env.PRIVATE_BUCKET.list({ prefix: `pod/${TENANT_A}/` });
     expect(listed.objects).toHaveLength(0);
   });
 
-  it("two racing dispatches produce ONE row and ONE farm call", async () => {
+  it("two racing creations produce ONE row and ONE job", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
 
-    const makeRequest = () =>
-      worker.fetch(
-        podRequest("/v1/admin/pod/artwork", {
-          body: { objectId, profileId: "apparel_dtg" },
-          cookie: adminA.cookie,
-          method: "POST",
-        }),
-        podEnv(),
-      );
-
-    const [first, second] = await Promise.all([makeRequest(), makeRequest()]);
+    const [first, second] = await Promise.all([post(objectId), post(objectId)]);
     const statuses = [first.status, second.status].sort();
 
-    // One winner, one conflict — and the loser never reached the farm, because
-    // the UNIQUE triple arbitrates BEFORE the dispatch.
-    expect(statuses).toStrictEqual([201, 409]);
-    expect(farmCallCount).toBe(1);
+    // One winner, one conflict — the UNIQUE triple arbitrates before anything
+    // is queued, so the loser leaves no job behind.
+    expect(statuses).toStrictEqual([202, 409]);
+    expect(await renderJobCount()).toBe(1);
 
     const rows = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM pod_artwork",
@@ -1319,30 +1571,96 @@ describe("dispatch — verdicts and failures", () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
 
-    const first = await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv(),
-    );
-    const second = await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "bag_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv(),
-    );
-
-    expect(first.status).toBe(201);
-    expect(second.status).toBe(201);
+    expect((await post(objectId, "apparel_dtg")).status).toBe(202);
+    expect((await post(objectId, "bag_dtg")).status).toBe(202);
+    expect(await renderJobCount()).toBe(2);
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-describe("dispatch — ownership and validation", () => {
+describe("the synchronous fallback (SYNC_RENDER_FALLBACK = true path)", () => {
+  // The route no longer reaches createArtwork (the constant is false); these
+  // cases call it directly so the kept code stays proven until it is deleted.
+  beforeEach(async () => {
+    await seedProfile("apparel_dtg");
+  });
+
+  function principalA(): TenantAdminPrincipal {
+    return {
+      accountType: "tenant_admin",
+      role: "admin",
+      tenantId: TENANT_A,
+      userId: adminA.userId,
+    };
+  }
+
+  it("dispatches synchronously and writes a ready verdict", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+
+    const result = await createArtwork(
+      podEnv(),
+      env.DB,
+      createFakeFarm(),
+      createFakePresigner(),
+      principalA(),
+      { objectId, profileId: "apparel_dtg" },
+      Date.now(),
+    );
+
+    expect(result.status).toBe("created");
+    expect(envelopeViolations).toStrictEqual([]);
+    expect(farmCallCount).toBe(1);
+    expect(await renderJobCount()).toBe(0);
+    const row = await env.DB.prepare(
+      "SELECT status, print_sha256, print_object_key FROM pod_artwork",
+    ).first<Record<string, unknown>>();
+    expect(row?.status).toBe("ready");
+    expect(row?.print_sha256).toBe("c".repeat(64));
+    expect(String(row?.print_object_key)).toMatch(new RegExp(`^pod/${TENANT_A}/print/`));
+  });
+
+  it("persists a synchronous rejection", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+
+    const result = await createArtwork(
+      podEnv(),
+      env.DB,
+      createFakeFarm({ result: "rejected" }),
+      createFakePresigner(),
+      principalA(),
+      { objectId, profileId: "apparel_dtg" },
+      Date.now(),
+    );
+
+    expect(result.status).toBe("rejected");
+  });
+
+  it("deletes its row on a farm failure", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+
+    const result = await createArtwork(
+      podEnv(),
+      env.DB,
+      createFakeFarm({ result: "failed" }),
+      createFakePresigner(),
+      principalA(),
+      { objectId, profileId: "apparel_dtg" },
+      Date.now(),
+    );
+
+    expect(result.status).toBe("farm_error");
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM pod_artwork").first<{
+      n: number;
+    }>();
+    expect(rows?.n).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("creation — ownership and validation", () => {
   beforeEach(async () => {
     await seedProfile("apparel_dtg");
   });
@@ -1362,7 +1680,7 @@ describe("dispatch — ownership and validation", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(farmCallCount).toBe(0);
+    expect(await renderJobCount()).toBe(0);
   });
 
   it("a PENDING original is refused — its bytes may not exist", async () => {
@@ -1392,7 +1710,7 @@ describe("dispatch — ownership and validation", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(farmCallCount).toBe(0);
+    expect(await renderJobCount()).toBe(0);
   });
 
   it("an object of the wrong KIND is refused", async () => {
@@ -1422,7 +1740,7 @@ describe("dispatch — ownership and validation", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(farmCallCount).toBe(0);
+    expect(await renderJobCount()).toBe(0);
   });
 
   it("a retired profile is refused", async () => {
@@ -1440,7 +1758,7 @@ describe("dispatch — ownership and validation", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(farmCallCount).toBe(0);
+    expect(await renderJobCount()).toBe(0);
   });
 
   const INVALID_BODIES: Array<[string, unknown]> = [
@@ -1454,7 +1772,7 @@ describe("dispatch — ownership and validation", () => {
   ];
 
   for (const [label, body] of INVALID_BODIES) {
-    it(`rejects ${label} without touching the farm`, async () => {
+    it(`rejects ${label} without queueing anything`, async () => {
       const response = await worker.fetch(
         podRequest("/v1/admin/pod/artwork", {
           body,
@@ -1465,11 +1783,11 @@ describe("dispatch — ownership and validation", () => {
       );
 
       expect(response.status).toBe(400);
-      expect(farmCallCount).toBe(0);
+      expect(await renderJobCount()).toBe(0);
     });
   }
 
-  it("an anonymous dispatch is a 404 and never reaches the farm", async () => {
+  it("an anonymous creation is a 404 and queues nothing", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
 
@@ -1482,7 +1800,7 @@ describe("dispatch — ownership and validation", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(farmCallCount).toBe(0);
+    expect(await renderJobCount()).toBe(0);
   });
 
   it("a cross-site dispatch is refused before the body is parsed", async () => {
@@ -1497,7 +1815,7 @@ describe("dispatch — ownership and validation", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(farmCallCount).toBe(0);
+    expect(await renderJobCount()).toBe(0);
   });
 });
 
@@ -1529,10 +1847,10 @@ describe("the rate limiter", () => {
       responses.push((await worker.fetch(request, podEnv())).status);
     }
 
-    expect(responses.slice(0, 5)).toStrictEqual([201, 201, 201, 201, 201]);
+    expect(responses.slice(0, 5)).toStrictEqual([202, 202, 202, 202, 202]);
     expect(responses[5]).toBe(429);
-    // The sixth request never reached the farm.
-    expect(farmCallCount).toBe(5);
+    // The sixth request queued nothing.
+    expect(await renderJobCount()).toBe(5);
   });
 
   it("runs BEFORE the farm is touched, even for an invalid body", async () => {
@@ -1614,7 +1932,9 @@ describe("list, detail and delete", () => {
     );
 
     const body = await response.json<{ artwork: { artworkId: string } }>();
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
+    const { report } = await runFarm();
+    expect(report?.status).toBe(200);
     return body.artwork.artworkId;
   }
 
@@ -1669,11 +1989,12 @@ describe("list, detail and delete", () => {
         cookie: adminA.cookie,
         method: "POST",
       }),
-      podEnv({ [RENDER_FARM_OVERRIDE]: createFakeFarm({ result: "rejected" }) }),
+      podEnv(),
     );
     const { artwork } = await created.json<{
       artwork: { artworkId: string };
     }>();
+    await runFarm({ result: "rejected" });
 
     const detail = await worker.fetch(
       podRequest(`/v1/admin/pod/artwork/${artwork.artworkId}`, {
@@ -1839,33 +2160,30 @@ describe("list, detail and delete", () => {
   it("the ready UPDATE will not overwrite a verdict written mid-flight", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
-
-    // A farm that flips the row to `rejected` before it answers ok:true — the
-    // in-flight race, reproduced deterministically.
-    const racingFarm: RenderFarmClient = {
-      async dispatch(envelope: JobEnvelope): Promise<JobResult> {
-        await env.DB.prepare(
-          `UPDATE pod_artwork
-           SET status = 'rejected',
-               reasons_json = '[{"code":"raced","message":"raced"}]',
-               updated_at = ?
-           WHERE artwork_id = ?`,
-        )
-          .bind(Date.now(), envelope.jobId)
-          .run();
-
-        return createFakeFarm().dispatch(envelope);
-      },
-    };
-
-    const response = await worker.fetch(
+    await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
         body: { objectId, profileId: "apparel_dtg" },
         cookie: adminA.cookie,
         method: "POST",
       }),
-      podEnv({ [RENDER_FARM_OVERRIDE]: racingFarm }),
+      podEnv(),
     );
+
+    // Another actor writes a verdict while the farm holds the lease — the
+    // in-flight race, reproduced deterministically between acquire and report.
+    const { report } = await runFarm({
+      beforeReport: async () => {
+        await env.DB.prepare(
+          `UPDATE pod_artwork
+           SET status = 'rejected',
+               reasons_json = '[{"code":"raced","message":"raced"}]',
+               updated_at = ?
+           WHERE original_object_id = ?`,
+        )
+          .bind(Date.now(), objectId)
+          .run();
+      },
+    });
 
     // The verdict written mid-flight STANDS. The guarded update matched no row,
     // so nothing was overwritten and no output key was attached to a rejection.
@@ -1879,8 +2197,8 @@ describe("list, detail and delete", () => {
     expect(row?.status).toBe("rejected");
     expect(row?.print_object_key).toBeNull();
     expect(row?.effective_dpi).toBeNull();
-    // The route still answers rather than throwing.
-    expect([200, 201, 502]).toContain(response.status);
+    // The farm's report still completes its job rather than throwing.
+    expect(report?.status).toBe(200);
   });
 
   it("an unknown artwork id is a 404 on every verb", async () => {
@@ -1956,7 +2274,10 @@ describe("response hygiene", () => {
       }),
       podEnv(),
     );
-    bodies.push(await created.text());
+    const createdText = await created.text();
+    bodies.push(createdText);
+    const { artworkId } = (JSON.parse(createdText) as { artwork: { artworkId: string } })
+      .artwork;
 
     const listed = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", { cookie: adminA.cookie }),
@@ -1964,17 +2285,15 @@ describe("response hygiene", () => {
     );
     bodies.push(await listed.text());
 
-    const failedObjectId = crypto.randomUUID();
-    await seedOriginal(TENANT_A, failedObjectId);
-    const failed = await worker.fetch(
-      podRequest("/v1/admin/pod/artwork", {
-        body: { objectId: failedObjectId, profileId: "apparel_dtg" },
-        cookie: adminA.cookie,
-        method: "POST",
-      }),
-      podEnv({ [RENDER_FARM_OVERRIDE]: createFakeFarm({ result: "failed" }) }),
-    );
-    bodies.push(await failed.text());
+    // The poll while processing, and again after a farm failure was reported.
+    const detail = () =>
+      worker.fetch(
+        podRequest(`/v1/admin/pod/artwork/${artworkId}`, { cookie: adminA.cookie }),
+        podEnv(),
+      );
+    bodies.push(await (await detail()).text());
+    await runFarm({ result: "failed" });
+    bodies.push(await (await detail()).text());
 
     for (const body of bodies) {
       expect(body).not.toContain(env.RENDER_FARM_TOKEN);
@@ -1983,26 +2302,38 @@ describe("response hygiene", () => {
       expect(body).not.toContain("r2.cloudflarestorage");
       expect(body).not.toContain(env.R2_SECRET_ACCESS_KEY);
       expect(body).not.toContain(env.R2_ACCESS_KEY_ID);
-      // The list and create responses must not carry object keys either.
+      // No object keys, no render-job internals.
       expect(body).not.toContain("shops/");
+      expect(body).not.toContain("pod/");
+      expect(body.toLowerCase()).not.toContain("lease");
+      expect(body.toLowerCase()).not.toContain("job_failed");
     }
   });
 
-  it("the 502 body names neither the farm nor its answer", async () => {
+  it("a farm failure shows the admin 'processing' and nothing about the farm", async () => {
     const objectId = crypto.randomUUID();
     await seedOriginal(TENANT_A, objectId);
-
-    const response = await worker.fetch(
+    const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
         body: { objectId, profileId: "apparel_dtg" },
         cookie: adminA.cookie,
         method: "POST",
       }),
-      podEnv({ [RENDER_FARM_OVERRIDE]: createFakeFarm({ result: "failed" }) }),
+      podEnv(),
     );
-    const body = await response.text();
+    const { artwork } = await created.json<{ artwork: { artworkId: string } }>();
+    await runFarm({ result: "failed" });
 
-    expect(response.status).toBe(502);
+    const detail = await worker.fetch(
+      podRequest(`/v1/admin/pod/artwork/${artwork.artworkId}`, { cookie: adminA.cookie }),
+      podEnv(),
+    );
+    const body = await detail.text();
+
+    expect(detail.status).toBe(200);
+    expect((JSON.parse(body) as { artwork: { status: string } }).artwork.status).toBe(
+      "processing",
+    );
     expect(body.toLowerCase()).not.toContain("farm");
     expect(body.toLowerCase()).not.toContain("firebase");
     expect(body.toLowerCase()).not.toContain("sharp");
@@ -2025,6 +2356,7 @@ describe("response hygiene", () => {
     const { artwork } = await created.json<{
       artwork: { artworkId: string };
     }>();
+    await runFarm();
 
     const detail = await worker.fetch(
       podRequest(`/v1/admin/pod/artwork/${artwork.artworkId}`, {

@@ -301,6 +301,18 @@ export function isPodConfigured(env: Env): boolean {
     env.RENDER_FARM_URL.length >= MINIMUM_SECRET_LENGTH &&
     typeof env.RENDER_FARM_TOKEN === "string" &&
     env.RENDER_FARM_TOKEN.length >= MINIMUM_SECRET_LENGTH &&
+    isR2PresignerConfigured(env)
+  );
+}
+
+/**
+ * The presigning half of isPodConfigured on its own: the S3 credentials, the
+ * account id, the bucket name and a known jurisdiction. The render-job pull
+ * surface (src/pod/render-jobs.ts) needs exactly this — it presigns, but it
+ * never calls the farm, so it has no use for RENDER_FARM_URL.
+ */
+export function isR2PresignerConfigured(env: Env): boolean {
+  return (
     typeof env.R2_ACCESS_KEY_ID === "string" &&
     env.R2_ACCESS_KEY_ID.length >= MINIMUM_SECRET_LENGTH &&
     typeof env.R2_SECRET_ACCESS_KEY === "string" &&
@@ -381,8 +393,9 @@ export function resolveR2Presigner(env: Env): R2Presigner {
 // ── the real presigner ─────────────────────────────────────────────────────
 
 export function createR2Presigner(env: Env): R2Presigner {
-  if (!isPodConfigured(env)) {
-    // Unreachable through the routes, which gate on isPodConfigured first. Kept
+  if (!isR2PresignerConfigured(env)) {
+    // Unreachable through the routes, which gate on isPodConfigured (or, for
+    // the render-job pull surface, isRenderJobsConfigured) first. Kept
     // strict for the same reason createStripeGateway is: a future caller that
     // forgets the gate must fail loudly here rather than sign with `undefined`
     // and produce a 403 from R2 that looks like a credentials problem.
@@ -600,8 +613,12 @@ export function createRenderFarmClient(env: Env): RenderFarmClient {
           method: "POST",
           // A redirect would move a request carrying the shared secret to a
           // host nobody approved. The farm never redirects; anything that does
-          // is not the farm.
-          redirect: "error",
+          // is not the farm. "manual" rather than "error": workerd REJECTS
+          // `redirect: "error"` with a TypeError on every call (verified under
+          // the pool, CP1-C), which made every real dispatch a `failed`. With
+          // "manual" a 3xx comes back as a non-ok response and is `failed`
+          // below — never followed.
+          redirect: "manual",
           // The only bound this worker controls. See FARM_TIMEOUT_MS.
           signal: AbortSignal.timeout(FARM_TIMEOUT_MS),
         });
@@ -634,61 +651,73 @@ export function createRenderFarmClient(env: Env): RenderFarmClient {
         return { status: "failed" };
       }
 
-      if (!isPlainObject(body)) {
-        return { status: "failed" };
-      }
-
-      // ── 200 { ok: false, reasons } — a VERDICT, not an error ─────────────
-      // The job ran correctly; the artwork failed the gate. Reasons carry the
-      // Swedish messages verbatim.
-      if (body.ok === false) {
-        const reasons = parseNotices(body.reasons);
-        // A rejection with no reasons is unusable: the uploader would see a
-        // rejected card with no explanation, and the schema refuses to store
-        // it. Treating it as a job failure is the honest reading — the farm did
-        // not tell us what happened.
-        if (reasons === null || reasons.length === 0) {
-          return { status: "failed" };
-        }
-
-        return { reasons, status: "rejected" };
-      }
-
-      if (body.ok !== true) {
-        return { status: "failed" };
-      }
-
-      // ── 200 { ok: true, fields, notices, outputs } ───────────────────────
-      // Every field is re-validated rather than trusted. The farm is a service
-      // this platform operates, but it is still a separate deployment reached
-      // over the network, and the values below go straight into a financial-
-      // adjacent record that a print shop will act on. A malformed success is
-      // treated as a failure, which leaves the artwork retryable rather than
-      // writing a half-understood verdict.
-      const meta = parseMeta(body.fields);
-      const notices = parseNotices(body.notices);
-      const outputs = isPlainObject(body.outputs) ? body.outputs : null;
-      const printPng =
-        outputs === null ? null : parseOutputReport(outputs.printPng);
-      const previewWebp =
-        outputs === null ? null : parseOutputReport(outputs.previewWebp);
-
-      if (
-        meta === null ||
-        notices === null ||
-        printPng === null ||
-        previewWebp === null
-      ) {
-        return { status: "failed" };
-      }
-
-      return {
-        meta,
-        notices,
-        outputs: { previewWebp, printPng },
-        status: "ok",
-      };
+      return parseFarmResult(body);
     },
+  };
+}
+
+/**
+ * The farm's verdict body — `{ ok: true, fields, notices, outputs }` or
+ * `{ ok: false, reasons }` — validated field by field into a JobResult.
+ *
+ * Shared by the synchronous dispatch above and the render-job completion
+ * endpoint (src/pod/render-jobs.ts), which receives the SAME body plus its
+ * lease fields: one parser, so both paths persist exactly the same verdict
+ * facts under exactly the same validation. Anything malformed is `failed`.
+ */
+export function parseFarmResult(body: unknown): JobResult {
+  if (!isPlainObject(body)) {
+    return { status: "failed" };
+  }
+
+  // ── { ok: false, reasons } — a VERDICT, not an error ───────────────────
+  // The job ran correctly; the artwork failed the gate. Reasons carry the
+  // Swedish messages verbatim.
+  if (body.ok === false) {
+    const reasons = parseNotices(body.reasons);
+    // A rejection with no reasons is unusable: the uploader would see a
+    // rejected card with no explanation, and the schema refuses to store it.
+    // Treating it as a job failure is the honest reading — the farm did not
+    // tell us what happened.
+    if (reasons === null || reasons.length === 0) {
+      return { status: "failed" };
+    }
+
+    return { reasons, status: "rejected" };
+  }
+
+  if (body.ok !== true) {
+    return { status: "failed" };
+  }
+
+  // ── { ok: true, fields, notices, outputs } ─────────────────────────────
+  // Every field is re-validated rather than trusted. The farm is a service
+  // this platform operates, but it is still a separate deployment reached over
+  // the network, and the values below go straight into a financial-adjacent
+  // record that a print shop will act on. A malformed success is treated as a
+  // failure, which leaves the artwork retryable rather than writing a
+  // half-understood verdict.
+  const meta = parseMeta(body.fields);
+  const notices = parseNotices(body.notices);
+  const outputs = isPlainObject(body.outputs) ? body.outputs : null;
+  const printPng = outputs === null ? null : parseOutputReport(outputs.printPng);
+  const previewWebp =
+    outputs === null ? null : parseOutputReport(outputs.previewWebp);
+
+  if (
+    meta === null ||
+    notices === null ||
+    printPng === null ||
+    previewWebp === null
+  ) {
+    return { status: "failed" };
+  }
+
+  return {
+    meta,
+    notices,
+    outputs: { previewWebp, printPng },
+    status: "ok",
   };
 }
 

@@ -72,7 +72,16 @@ export default defineConfig({
             R2_JURISDICTION: "eu",
             R2_PRIVATE_BUCKET_NAME: "meteorshop-test-private",
             R2_SECRET_ACCESS_KEY: "test-only-r2-secret-access-key-value",
+            // ≥ 32 characters: since CP1-C this token also authenticates the
+            // farm TO the worker on the /v1/render pull surface.
             RENDER_FARM_TOKEN: "test-only-render-farm-token-32-chars",
+            // CP1-C dispatch: the staging shape (the reviewer adds
+            // DISPATCH_TARGET="fake-printer" to env.staging.vars and
+            // FAKE_PRINTER_TOKEN as a staging secret). Test-only token; the
+            // suites override both to prove the route dark in every other
+            // configuration.
+            DISPATCH_TARGET: "fake-printer",
+            FAKE_PRINTER_TOKEN: "test-only-fake-printer-token-32-characters",
             RENDER_FARM_URL:
               "https://render-farm.test.invalid/renderFarmProcessArtwork",
             TEST_MIGRATIONS: migrations,

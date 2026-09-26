@@ -1,4 +1,5 @@
 import { handleEmailQueueBatch } from "./email/email-queue-consumer";
+import { handleRenderJobsQueueBatch } from "./pod/render-jobs-queue";
 
 /**
  * The one `queue()` export, shared by every queue this Worker consumes.
@@ -9,8 +10,9 @@ import { handleEmailQueueBatch } from "./email/email-queue-consumer";
  * environment without knowing which one it is in.
  *
  *   -email        → the auth email consumer (src/email/email-queue-consumer.ts)
+ *   -render-jobs  → the render-job nudge consumer (src/pod/render-jobs-queue.ts):
+ *                   the row is the truth and the farm pulls, so it acks
  *   -outbox       → no consumer yet (CP2): held, retried later
- *   -render-jobs  → no consumer yet (CP1 render contract / CP2): held, retried
  *   anything else → held, retried later — including the legacy
  *                   `…-email-auth` queue and any dead-letter queue
  *
@@ -25,10 +27,13 @@ export const QUEUE_SUFFIX_RENDER_JOBS = "-render-jobs";
 
 export const HELD_QUEUE_RETRY_SECONDS = 300;
 
-export type QueueRoute = "email" | "held";
+export type QueueRoute = "email" | "held" | "render_jobs";
 
 export function routeQueue(queueName: string): QueueRoute {
-  return queueName.endsWith(QUEUE_SUFFIX_EMAIL) ? "email" : "held";
+  if (queueName.endsWith(QUEUE_SUFFIX_EMAIL)) {
+    return "email";
+  }
+  return queueName.endsWith(QUEUE_SUFFIX_RENDER_JOBS) ? "render_jobs" : "held";
 }
 
 function holdBatch(batch: MessageBatch<unknown>, reason: string): void {
@@ -47,15 +52,18 @@ export async function handleQueueBatch(
   batch: MessageBatch<unknown>,
   env: Env,
 ): Promise<void> {
-  if (routeQueue(batch.queue) === "email") {
+  const route = routeQueue(batch.queue);
+  if (route === "email") {
     await handleEmailQueueBatch(batch, env);
     return;
   }
 
-  if (
-    batch.queue.endsWith(QUEUE_SUFFIX_OUTBOX) ||
-    batch.queue.endsWith(QUEUE_SUFFIX_RENDER_JOBS)
-  ) {
+  if (route === "render_jobs") {
+    handleRenderJobsQueueBatch(batch);
+    return;
+  }
+
+  if (batch.queue.endsWith(QUEUE_SUFFIX_OUTBOX)) {
     holdBatch(batch, "consumer_not_built");
     return;
   }

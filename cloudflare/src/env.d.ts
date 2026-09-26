@@ -91,7 +91,10 @@ interface Env {
 
   // The shared secret the farm authenticates the platform with — the same value
   // held in Firebase Secret Manager as RENDER_FARM_TOKEN. Sent as
-  // `Authorization: Bearer`; the farm compares it in constant time.
+  // `Authorization: Bearer`; the farm compares it in constant time. Since CP1-C
+  // it ALSO authenticates the farm to this worker on the pull surface
+  // (/v1/render/*, src/routes/render-jobs.ts), which requires it to be ≥ 32
+  // characters and stays a 404 otherwise.
   RENDER_FARM_TOKEN: string | undefined;
 
   // R2 S3-API credentials. Required because R2 BINDINGS CANNOT PRESIGN: an
@@ -128,4 +131,17 @@ interface Env {
   // values the code accepts; any other runtime value darkens the POD surface
   // (src/pod/render-farm-client.ts) rather than being guessed at.
   R2_JURISDICTION: "eu" | undefined;
+
+  // ── PRINTER DISPATCH (PLAN §2.3, §2.6) ─────────────────────────────────────
+  // Which printer this environment dispatches to: "snapwear" (production pins
+  // it; the preflight refuses anything else there) or "fake-printer" (staging).
+  // Unset or any other value ⇒ resolvePrinterClient returns null and dispatch
+  // holds its work (src/dispatch/printer-client.ts).
+  DISPATCH_TARGET: string | undefined;
+
+  // Worker SECRET, staging only: the bearer the staging fake printer route
+  // (/v1/staging/fake-printer/jobs) requires, and the dispatcher presents. The
+  // route is a 404 unless APP_ENV="staging", DISPATCH_TARGET="fake-printer"
+  // and this is ≥ 32 characters.
+  FAKE_PRINTER_TOKEN: string | undefined;
 }

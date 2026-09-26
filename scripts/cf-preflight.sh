@@ -21,7 +21,7 @@
 #      three consumers), each on its own pinned resource (every R2 binding in "eu"), whose vars.CANONICAL_ORIGINS deep-equals pinned
 #      origins, AUTH_BASE_URL == origins.api, AUTH_TRUSTED_ORIGINS == exactly the set
 #      {origins.api, origins.web}, SERVICE_NAME == pinned workerName, R2_PRIVATE_BUCKET_NAME
-#      == pinned r2.private and R2_JURISDICTION == "eu" (without that section wrangler silently deploys the top-level config);
+#      == pinned r2.private, R2_JURISDICTION == "eu" and DISPATCH_TARGET == pinned dispatchTarget (without that section wrangler silently deploys the top-level config);
 #   6. production without --bootstrap: every launch-gate item of docs/SnapWearDocs/LAUNCH_TODO.md
 #      (A1–A7, A9–A11, A13–A14, B1–B10 — PLAN §0) is ☑;
 #   7. Stripe, via ~/.config/chopshop/stripe.<env>.env (mode 600, STRIPE_SECRET_KEY; REQUIRED
@@ -271,6 +271,8 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
         refuse(f"{jsonc} env.{env}.vars.SERVICE_NAME is {v.get('SERVICE_NAME')!r}, pinned workerName is {p['workerName']!r}")
     if v.get("R2_PRIVATE_BUCKET_NAME") != p["r2"]["private"]:
         refuse(f"{jsonc} env.{env}.vars.R2_PRIVATE_BUCKET_NAME is {v.get('R2_PRIVATE_BUCKET_NAME')!r}, pinned r2.private is {p['r2']['private']!r}")
+    if v.get("DISPATCH_TARGET") != p["dispatchTarget"]:
+        refuse(f"{jsonc} env.{env}.vars.DISPATCH_TARGET is {v.get('DISPATCH_TARGET')!r}, pinned dispatchTarget is {p['dispatchTarget']!r}")
     if v.get("R2_JURISDICTION") != "eu":
         refuse(f"{jsonc} env.{env}.vars.R2_JURISDICTION is {v.get('R2_JURISDICTION')!r}, every R2 binding is in 'eu' so the presign host var must say 'eu'")
     trusted = v.get("AUTH_TRUSTED_ORIGINS")

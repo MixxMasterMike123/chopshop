@@ -445,7 +445,11 @@ describe("queue dispatch by suffix", () => {
     ["chopshop-prod-email", "email"],
     ["chopshop-test-email", "email"],
     ["chopshop-stg-outbox", "held"],
-    ["chopshop-prod-render-jobs", "held"],
+    // CP1-C: the render-jobs queue has its (nudge-only) consumer; see
+    // test/render-jobs.test.ts for what it does with a batch.
+    ["chopshop-prod-render-jobs", "render_jobs"],
+    ["chopshop-test-render-jobs", "render_jobs"],
+    ["chopshop-stg-render-jobs-dlq", "held"],
     ["meteorshop-stg-email-auth", "held"],
     ["chopshop-stg-email-dlq", "held"],
     ["email", "held"],
@@ -455,7 +459,7 @@ describe("queue dispatch by suffix", () => {
 
   it.each([
     "chopshop-stg-outbox",
-    "chopshop-stg-render-jobs",
+    "chopshop-stg-render-jobs-dlq",
     "meteorshop-stg-email-auth",
     "chopshop-stg-email-dlq",
   ])("holds %s for 300 s without reading a body", async (queueName) => {
