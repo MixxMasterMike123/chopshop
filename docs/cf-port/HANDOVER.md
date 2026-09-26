@@ -27,6 +27,8 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 **CP1-D (Opus, launched 22:45):** render service on Cloudflare Containers (D6): `cloudflare/render/` image (Node 22 + sharp, pull loop against the CP1-C API, 300-DPI gate, PNG master + WebP preview), `RenderContainer` Durable Object with `sleepAfter`, wake-up from the `-render-jobs` consumer, `RENDER_BENCHMARK.md` protocol + local numbers. Reviewer applies the `wrangler.jsonc` containers/DO config and runs the staging benchmark (Docker Desktop must be running for the image build at deploy).
 
+**Deploy attempt 23:55 (CP1-C + CP1-D, HEAD `c95e789`, notes pushed):** gate passed, image built (`chopshop-api-stg-rendercontainer-staging:4692fae9`, 92 MB), **registry push refused: Containers API 403 on the account** → DECISIONS **D35** (Mikael enables Containers / adds the token permission). Worker untouched (still `f2c91794`). Rerun `scripts/cf-deploy.sh staging` once D35 is done; then `secret put RENDER_FARM_TOKEN` + `FAKE_PRINTER_TOKEN`, smoke, benchmark.
+
 **Codex (6 runs, gpt-6-astra, high):** `65f610c` 4×P1 + 2×P2 → fixed `9b02e24` (+ P2 → `9aadb15`, re-reviewed clean); `6f68d10` 3×P1 all supplied by `db66555`; `db66555` 1×P2 → `7908e83` → P2 → `694e559` → P2 → `29412a5` (5-line trigger, Fable-reviewed). Verdict at HEAD: no open findings.
 
 **Verification (at `29412a5`):** `bash guard/preflight.test.sh` 70/70 · `node guard/guards.test.mjs` PASS · `cd cloudflare && npm run check` types up to date, tsc 0, vitest 1097/1097 (31 files).
