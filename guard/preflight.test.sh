@@ -221,7 +221,7 @@ new_tree; run qa --bootstrap -- whoami
 expect_refused "unknown environment → refused" "unknown environment 'qa'"
 
 # --- pinned resources ---------------------------------------------------------------------
-new_tree; pin "$T" staging "p['d1']['id'] = None"; run staging -- deploy
+new_tree; pin "$T" staging "p['d1']['id'] = None; p['stripeWebhookEndpointId'] = None"; run staging -- deploy
 expect_refused "null pinned id without --bootstrap → refused" "still has null (not yet created) values: d1.id, stripeWebhookEndpointId"
 
 new_tree; pin "$T" production "p['d1']['id'] = None"; run production -- deploy
@@ -356,8 +356,8 @@ new_tree; run staging --bootstrap -- deploy --dry-run
 expect_exec "correct account + --bootstrap → execs wrangler with the file's token and pinned account" \
   "FAKE-WRANGLER EXEC: --env staging deploy --dry-run | account=$GOOD token=ok cwd=cloudflare"
 
-new_tree; stripe_file "$T" staging "$SKEY_TEST"; FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG run staging --bootstrap -- whoami
-expect_exec "matching Stripe sandbox account → execs" "FAKE-WRANGLER EXEC: --env staging whoami | account=$GOOD token=ok"
+new_tree; pin "$T" staging "p['stripeWebhookEndpointId'] = None"; stripe_file "$T" staging "$SKEY_TEST"; FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG run staging --bootstrap -- whoami
+expect_exec "matching Stripe sandbox account → execs (webhook not yet pinned, bootstrap)" "FAKE-WRANGLER EXEC: --env staging whoami | account=$GOOD token=ok"
 
 new_tree; pin "$T" staging "$PIN_STG"; write_jsonc "$T" "$GOOD" "$ENV_STAGING"; stripe_file "$T" staging "$SKEY_TEST"
 FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK=we_stg run staging -- deploy
