@@ -15,7 +15,7 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 **Done (all on `cf-port`, each verified by Fable before commit):**
 - `83080ed` `cloudflare/` worker tree + `docs/CLOUDFLARE_HANDOVER.md` + `RENDER_FARM_CONTRACT.md` brought over from `cloudflare-migration` @ `2b13d05`, unchanged.
 - `e24f17a` **test gate green**: the six test-only POD env values cp27 forgot (`vitest.config.ts`, `test/env.d.ts`) + regenerated `worker-configuration.d.ts` — recovered from `stash@{0}`. `npm run check` → types up to date, tsc 0, **vitest 916/916** (independent run).
-- `ea74f4e` docs quarantine: 9 files → `docs/_archive/{b8shield,superseded}` with `INDEX.md`; `docs/cf-port/RETIRED.md` ledger; 173 MB image dumps moved to `~/Cursor Apps/chopshop-quarantine/`; cpuprofile deleted; zero live references (verified).
+- `ea74f4e` docs quarantine: 9 files → the two `docs/_archive/` subfolders (legacy-brand, superseded) with `INDEX.md`; `docs/cf-port/RETIRED.md` ledger; 173 MB image dumps moved to `~/Cursor Apps/chopshop-quarantine/`; cpuprofile deleted; zero live references (verified).
 - `8cd7466` `MIGRATION_MANIFEST.md` — 75 rows (22 carry / 46 archive / 7 drop), read-only prod census, 15 open questions (→ DECISIONS D9–D23).
 - `b2a8ba9` `specs/AFFILIATE.md` — live program specified from source; found the `approveAffiliate` takeover hole → **hotfix `f807625` on `main`** (merged `65628e1`), deploy pending Mikael (DECISIONS D1).
 - `d882b00` storefront **design baseline** — 12 launch-scope pages × 375/768/1440 on bundle `index-EybuBb5L.js`, manifest with sha256, re-shoot script + ImageMagick diff script (0.5 % gate); re-shoot 10 min later: 33/36 identical, 3 within 0.003 %.
@@ -29,7 +29,7 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 1. Hono router → slid into CP1-B (routing contract lands with the entrypoints).
 2. ~~Impeccable audit → design contract~~ ✅ `ef88c4d` `DESIGN_CONTRACT.md`.
 3. Admin/platform baseline screenshots — still needs a logged-in browser session handed off by Mikael.
-4. ~~Compromised-secret revocation~~ ✅ verified unused, commands in `c3f31df` `SECRETS_REVOKE.md`; **Mikael runs them** (D4).
+4. ~~Compromised-secret revocation~~ ✅ verified unused, commands in `c3f31df` `SECRETS_REVOKE.md` (now `scripts/cf-port/SECRETS_REVOKE.md` — Firebase-side runbook, guard-excluded like the export tooling); **Mikael runs them** (D4).
 5. Code retirement of the DELETE list — blocked on D2 sign-off.
 6. Codex review of the CP0 tooling — folded into the CP1 review (same deploy).
 7. ~~Token scopes~~ ✅ D5b answered (R2 + DNS scopes added; `r2 bucket list` on Kent's account works).
