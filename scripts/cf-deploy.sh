@@ -40,8 +40,14 @@ git fetch -q origin 2>/dev/null || refuse "git fetch origin failed — cannot co
 # Attestations may have been recorded on another checkout: an ordinary fetch does not bring
 # refs/notes/reviews, so fetch it into a SEPARATE ref (never overwriting local notes) and accept
 # a line found in either.
-git fetch -q origin "+refs/notes/reviews:refs/notes/reviews-origin" 2>/dev/null || true
-notes=$( { git notes --ref=reviews show HEAD 2>/dev/null; git notes --ref=reviews-origin show HEAD 2>/dev/null; } || true)
+# The cached copy is dropped FIRST so a failed fetch can never leave stale remote attestations
+# behind to be trusted (Codex P2 on 9b02e24): after a failure only local notes count.
+git update-ref -d refs/notes/reviews-origin 2>/dev/null || true
+if git fetch -q origin "+refs/notes/reviews:refs/notes/reviews-origin" 2>/dev/null; then
+  notes=$( { git notes --ref=reviews show HEAD 2>/dev/null; git notes --ref=reviews-origin show HEAD 2>/dev/null; } || true)
+else
+  notes=$(git notes --ref=reviews show HEAD 2>/dev/null || true)
+fi
 has_line() { printf '%s\n' "$notes" | grep -qE "^[[:space:]]*$1[[:space:]]*\$"; }
 missing=
 has_line 'codex: PASS' || missing="$missing 'codex: PASS'"
