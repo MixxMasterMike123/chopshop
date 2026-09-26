@@ -110,7 +110,7 @@ Reviews (6), abandoned-checkout reminder emails (2), discount-code admin (1), co
 
 ## 6. Accounts, environments, credentials
 
-- **One account: Kent's** (§11 asks personal vs company). Two Worker envs in it: `staging` (`*.staging.<domain>`) and `production`. The old personal-account staging is never reused and is deleted at the end (its Email Sending domain `outpost.mohlenmedia.com` is unrelated — untouched).
+- **One account: Kent's** — `Kent@meteorpr.se's Account`, **account id `ee213082783ec86585150e876edb6107`** (verified with the project token 2026-09-26; the token sees no other account). Token `chopshop-cf-port` lives in `~/.config/chopshop/cloudflare.env` (mode 600, outside the repo); `scripts/cf-preflight.sh` is the only thing that reads it. Two Worker envs in it: `staging` (`*.staging.<domain>`) and `production`. The old personal-account staging is never reused and is deleted at the end (its Email Sending domain `outpost.mohlenmedia.com` is unrelated — untouched).
 - `cloudflare/wrangler.jsonc` pins `account_id` = Kent's; `scripts/cf-preflight.sh` is the only entry point for wrangler (deploy, d1, r2, secret) and refuses on any other account, on a missing `APP_ENV`, or on a Stripe key whose prefix doesn't match the env (`sk_test_`/sandbox for staging, `sk_live_` for production).
 - **Secrets are rotated, never copied:** new Stripe webhook endpoint + secret per env, new Resend key, SnapWear token straight into CF, Better Auth secret generated. The known-exposed SMTP/SA/PAT secrets are retired as part of this, not later.
 - Stripe: the platform account and Connect accounts are unaffected by hosting; only the webhook endpoint URL changes. Staging keeps the sandbox ("-sandlåda", not test mode — as learned 2026-08-22).
