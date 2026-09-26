@@ -37,7 +37,11 @@ git fetch -q origin 2>/dev/null || refuse "git fetch origin failed — cannot co
 [ -n "$(git branch -r --contains HEAD 2>/dev/null)" ] ||
   refuse "HEAD $SHA is not on any remote branch — push it first"
 
-notes=$(git notes --ref=reviews show HEAD 2>/dev/null || true)
+# Attestations may have been recorded on another checkout: an ordinary fetch does not bring
+# refs/notes/reviews, so fetch it into a SEPARATE ref (never overwriting local notes) and accept
+# a line found in either.
+git fetch -q origin "+refs/notes/reviews:refs/notes/reviews-origin" 2>/dev/null || true
+notes=$( { git notes --ref=reviews show HEAD 2>/dev/null; git notes --ref=reviews-origin show HEAD 2>/dev/null; } || true)
 has_line() { printf '%s\n' "$notes" | grep -qE "^[[:space:]]*$1[[:space:]]*\$"; }
 missing=
 has_line 'codex: PASS' || missing="$missing 'codex: PASS'"

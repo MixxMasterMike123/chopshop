@@ -4,8 +4,8 @@
 // Forbidden in tracked files (pattern families):
 //   b8shield  /b8shield|b8s[-_]/i   path or text content
 //   reseller  /reseller/i           path or text content
-//   firebase  import of any firebase package: from '…firebase…', require('firebase…'),
-//             import('firebase…')   text content
+//   firebase  import of any firebase package: from '…firebase…', import '…firebase…' (side-
+//             effect), require('firebase…'), import('firebase…') — whitespace-tolerant   text content
 // A matching file passes only if it is listed in guard/allowlist.txt (legacy debt that may
 // only SHRINK and must be empty by CP7), or — for the reseller family ONLY — in
 // guard/permanent-exemptions.txt (a live legal/business term). An exemption never covers
@@ -32,7 +32,7 @@ const BASELINE = 'guard/allowlist.baseline';
 const FAMILIES = [
   { name: 'b8shield', re: /b8shield|b8s[-_]/i, matchPath: true },
   { name: 'reseller', re: /reseller/i, matchPath: true },
-  { name: 'firebase', re: /from\s*['"]firebase['"/-]|require\(\s*['"]firebase|import\(\s*['"]firebase/, matchPath: false },
+  { name: 'firebase', re: /from\s*['"]firebase['"/-]|import\s*['"]firebase['"/-]|require\s*\(\s*['"]firebase|import\s*\(\s*['"]firebase/, matchPath: false },
 ];
 
 // Out of scope: dependencies, build output, archived material, tool state, lockfiles — and

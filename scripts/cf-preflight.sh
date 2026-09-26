@@ -15,9 +15,10 @@
 #      CF_ACCOUNT_ID == pinned cloudflareAccountId;
 #   4. cloudflare/wrangler.jsonc account_id (top level, and env.<env> when set) == pinned id;
 #   5. unless --bootstrap: no null left in the pinned file (null = resource not created yet)
-#      and wrangler.jsonc has env.<env> whose name (falling back to the top-level name) ==
-#      pinned workerName, whose APP_ENV / D1 / R2 / Queue bindings are the pinned ones (every
-#      R2 binding in the "eu" jurisdiction), whose vars.CANONICAL_ORIGINS deep-equals pinned
+#      and wrangler.jsonc has env.<env> whose name (or wrangler's effective `<top>-<env>`) ==
+#      pinned workerName, whose APP_ENV is <env>, whose bindings are EXACTLY DB / PUBLIC_BUCKET /
+#      PRIVATE_BUCKET / PRODUCTION_BUCKET / OUTBOX_QUEUE / EMAIL_QUEUE / RENDER_JOBS_QUEUE (+ the
+#      three consumers), each on its own pinned resource (every R2 binding in "eu"), whose vars.CANONICAL_ORIGINS deep-equals pinned
 #      origins, AUTH_BASE_URL == origins.api, AUTH_TRUSTED_ORIGINS == exactly the set
 #      {origins.api, origins.web}, SERVICE_NAME == pinned workerName, R2_PRIVATE_BUCKET_NAME
 #      == pinned r2.private and R2_JURISDICTION == "eu" (without that section wrangler silently deploys the top-level config);
@@ -61,10 +62,19 @@ shift
 [ $# -gt 0 ] || refuse "no wrangler arguments after '--' — $USAGE"
 for arg in "$@"; do
   case $arg in
-    --env* | --config* | --cwd* | -[ec]* | -[!-]*[ec]*)
-      refuse "wrangler argument '$arg' is not allowed — environment, config file and credentials are fixed by the preflight" ;;
+    --env* | --config* | --cwd* | --name* | -[ec]* | -[!-]*[ec]*)
+      refuse "wrangler argument '$arg' is not allowed — environment, config file, worker name and credentials are fixed by the preflight" ;;
   esac
 done
+# --bootstrap exists to CREATE resources before their ids are pinned; it skips the resource,
+# launch-gate and Stripe checks, so it must never be able to deploy anything. Only these
+# subcommands may run under it.
+if [ "$BOOTSTRAP" = 1 ]; then
+  case $1 in
+    whoami | d1 | r2 | queues) ;;
+    *) refuse "wrangler subcommand '$1' is not allowed under --bootstrap (only whoami, d1, r2, queues) — deploys go through scripts/cf-deploy.sh with the full checks" ;;
+  esac
+fi
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 CF_DIR=$ROOT/cloudflare
@@ -77,7 +87,7 @@ STRIPE_FILE=$HOME/.config/chopshop/stripe.$ENV_NAME.env
 
 # Drop every inherited Cloudflare credential/target before anything can reach wrangler.
 unset CLOUDFLARE_API_TOKEN CLOUDFLARE_API_KEY CLOUDFLARE_EMAIL CLOUDFLARE_ACCOUNT_ID \
-  CLOUDFLARE_API_BASE_URL CF_API_TOKEN CF_API_KEY CF_EMAIL CF_ACCOUNT_ID
+  CLOUDFLARE_API_BASE_URL CF_API_BASE_URL CF_API_TOKEN CF_API_KEY CF_EMAIL CF_ACCOUNT_ID
 
 command -v python3 >/dev/null 2>&1 || refuse "python3 is required (JSON parsing)"
 [ -x "$WRANGLER" ] || refuse "wrangler is not installed at $WRANGLER (run npm ci in cloudflare/)"
@@ -242,10 +252,11 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
         return
     if not isinstance(e, dict):
         refuse(f"{jsonc} has no env.{env} section - wrangler would silently deploy the top-level bindings")
-    # The deployed name: env.<env>.name, or the top-level name when the section sets none.
-    name = e.get("name", cfg.get("name"))
+    # The deployed name: env.<env>.name, or — when the section sets none — wrangler's
+    # effective name `<top-level name>-<env>`.
+    name = e.get("name", f"{cfg.get('name')}-{env}")
     if name != p["workerName"]:
-        inherited = "" if "name" in e else " (inherited from the top-level name)"
+        inherited = "" if "name" in e else " (wrangler's effective name: top-level name + '-" + env + "')"
         refuse(f"{jsonc} env.{env}.name is {name!r}{inherited}, pinned workerName is {p['workerName']!r}")
     v = e.get("vars") or {}
     app_env = v.get("APP_ENV")
@@ -265,22 +276,46 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     trusted = v.get("AUTH_TRUSTED_ORIGINS")
     if not isinstance(trusted, str) or {o.strip() for o in trusted.split(",")} != {origins["api"], origins["web"]}:
         refuse(f"{jsonc} env.{env}.vars.AUTH_TRUSTED_ORIGINS is {trusted!r}, it must be exactly the pinned origins {origins['api']},{origins['web']}")
-    for db in e.get("d1_databases") or []:
-        if (db.get("database_name"), db.get("database_id")) != (p["d1"]["name"], p["d1"]["id"]):
-            refuse(f"{jsonc} env.{env} D1 binding {db.get('binding')} -> {db.get('database_name')} ({db.get('database_id')}) is not the pinned {p['d1']['name']} ({p['d1']['id']})")
-    buckets = set(p["r2"].values())
+    # Every binding the Worker code reads must exist and point at exactly its pinned resource:
+    # a missing binding fails closed at runtime (bad), a binding on the wrong resource does not
+    # (worse — PRIVATE_BUCKET on the public bucket would publish private uploads).
+    def bindings(items, key_name, target_key):
+        seen = {}
+        for item in items or []:
+            b = item.get(key_name)
+            if b in seen:
+                refuse(f"{jsonc} env.{env} declares binding {b!r} twice")
+            seen[b] = item.get(target_key)
+        return seen
+    d1 = bindings(e.get("d1_databases"), "binding", "database_name")
+    if set(d1) != {"DB"}:
+        refuse(f"{jsonc} env.{env} d1_databases bindings are {sorted(d1)}, expected exactly ['DB']")
+    db = next(x for x in e["d1_databases"] if x.get("binding") == "DB")
+    if (db.get("database_name"), db.get("database_id")) != (p["d1"]["name"], p["d1"]["id"]):
+        refuse(f"{jsonc} env.{env} D1 binding DB -> {db.get('database_name')} ({db.get('database_id')}) is not the pinned {p['d1']['name']} ({p['d1']['id']})")
+    want_r2 = {"PUBLIC_BUCKET": p["r2"]["public"], "PRIVATE_BUCKET": p["r2"]["private"], "PRODUCTION_BUCKET": p["r2"]["production"]}
+    r2 = bindings(e.get("r2_buckets"), "binding", "bucket_name")
+    if set(r2) != set(want_r2):
+        refuse(f"{jsonc} env.{env} r2_buckets bindings are {sorted(r2)}, expected exactly {sorted(want_r2)}")
+    for b, bucket in want_r2.items():
+        if r2[b] != bucket:
+            refuse(f"{jsonc} env.{env} R2 binding {b} -> {r2[b]!r} is not its pinned bucket {bucket!r}")
     for b in e.get("r2_buckets") or []:
-        if b.get("bucket_name") not in buckets:
-            refuse(f"{jsonc} env.{env} R2 binding {b.get('binding')} -> {b.get('bucket_name')!r} is not a pinned {env} bucket")
         # Every bucket was created in the EU jurisdiction (docs/cf-port/CP1_BOOTSTRAP.md); a
         # binding without it would address a different, non-existent (or non-EU) bucket.
         if b.get("jurisdiction") != "eu":
             refuse(f"{jsonc} env.{env} R2 binding {b.get('binding')} -> {b.get('bucket_name')!r} has jurisdiction {b.get('jurisdiction')!r}, every bucket is in 'eu'")
-    queues = set(p["queues"].values())
+    want_q = {"OUTBOX_QUEUE": p["queues"]["outbox"], "EMAIL_QUEUE": p["queues"]["email"], "RENDER_JOBS_QUEUE": p["queues"]["renderJobs"]}
     q = e.get("queues") or {}
-    for item in (q.get("producers") or []) + (q.get("consumers") or []):
-        if item.get("queue") not in queues:
-            refuse(f"{jsonc} env.{env} queue {item.get('queue')!r} is not a pinned {env} queue")
+    producers = bindings(q.get("producers"), "binding", "queue")
+    if set(producers) != set(want_q):
+        refuse(f"{jsonc} env.{env} queue producer bindings are {sorted(producers)}, expected exactly {sorted(want_q)}")
+    for b, queue in want_q.items():
+        if producers[b] != queue:
+            refuse(f"{jsonc} env.{env} queue producer {b} -> {producers[b]!r} is not its pinned queue {queue!r}")
+    consumers = sorted(item.get("queue") for item in (q.get("consumers") or []))
+    if consumers != sorted(want_q.values()):
+        refuse(f"{jsonc} env.{env} queue consumers are {consumers}, expected exactly the pinned {sorted(want_q.values())}")
 
 def cmd_stripe(path, code, pinned_acct, key_file):
     s = load_json(path, "Stripe /v1/account response")

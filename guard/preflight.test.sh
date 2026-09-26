@@ -39,10 +39,13 @@ e = {"name": p["workerName"],
               "SERVICE_NAME": p["workerName"], "R2_PRIVATE_BUCKET_NAME": p["r2"]["private"],
               "R2_JURISDICTION": "eu"},
      "d1_databases": [{"binding": "DB", "database_name": p["d1"]["name"], "database_id": "d1-%s-uuid" % short}],
-     "r2_buckets": [{"binding": "PUBLIC", "bucket_name": "chopshop-%s-public" % short, "jurisdiction": "eu"},
-                    {"binding": "PRODUCTION", "bucket_name": "chopshop-%s-production" % short, "jurisdiction": "eu"}],
-     "queues": {"producers": [{"binding": "OUTBOX", "queue": "chopshop-%s-outbox" % short}],
-                "consumers": [{"queue": "chopshop-%s-outbox" % short}, {"queue": "chopshop-%s-render-jobs" % short}]}}
+     "r2_buckets": [{"binding": "PUBLIC_BUCKET", "bucket_name": p["r2"]["public"], "jurisdiction": "eu"},
+                    {"binding": "PRIVATE_BUCKET", "bucket_name": p["r2"]["private"], "jurisdiction": "eu"},
+                    {"binding": "PRODUCTION_BUCKET", "bucket_name": p["r2"]["production"], "jurisdiction": "eu"}],
+     "queues": {"producers": [{"binding": "OUTBOX_QUEUE", "queue": p["queues"]["outbox"]},
+                              {"binding": "EMAIL_QUEUE", "queue": p["queues"]["email"]},
+                              {"binding": "RENDER_JOBS_QUEUE", "queue": p["queues"]["renderJobs"]}],
+                "consumers": [{"queue": p["queues"]["outbox"]}, {"queue": p["queues"]["email"]}, {"queue": p["queues"]["renderJobs"]}]}}
 exec(edit)
 print(json.dumps({env: e}))' "$1" "$2" "${3:-}" "$REPO/cloudflare/pinned.$1.json"
 }
@@ -53,7 +56,8 @@ PIN_PROD="p['d1']['id'] = 'd1-prod-uuid'; p['stripeAccountId'] = 'acct_PRODTEST'
 
 # Inherited credentials the preflight must ignore.
 export CLOUDFLARE_API_TOKEN=INHERITED-WRONG-TOKEN CLOUDFLARE_API_KEY=inherited-global-key \
-  CLOUDFLARE_EMAIL=inherited@example.com CLOUDFLARE_ACCOUNT_ID=$OTHER CF_API_TOKEN=INHERITED-WRONG-TOKEN
+  CLOUDFLARE_EMAIL=inherited@example.com CLOUDFLARE_ACCOUNT_ID=$OTHER CF_API_TOKEN=INHERITED-WRONG-TOKEN \
+  CLOUDFLARE_API_BASE_URL=https://inherited.example.test CF_API_BASE_URL=https://inherited-alias.example.test
 
 write_jsonc() { # write_jsonc <tree> <account_id> [env-section-json] — real JSONC: comments, // in strings, trailing commas
   local envline=
@@ -87,7 +91,7 @@ make_tree() { # make_tree <tree> — defaults: staging bootstrap-able, token + a
   cat >"$d/cloudflare/node_modules/.bin/wrangler" <<'EOF'
 #!/usr/bin/env bash
 expected=$(cat "$FAKE_TOKEN_FILE")
-if [ -n "${CLOUDFLARE_API_KEY:-}${CLOUDFLARE_EMAIL:-}${CF_API_TOKEN:-}" ]; then
+if [ -n "${CLOUDFLARE_API_KEY:-}${CLOUDFLARE_EMAIL:-}${CF_API_TOKEN:-}${CLOUDFLARE_API_BASE_URL:-}${CF_API_BASE_URL:-}" ]; then
   echo "FAKE-WRANGLER: inherited credentials leaked through" >&2; exit 90
 fi
 case " $* " in *"$expected"*) echo "FAKE-WRANGLER: token on the command line" >&2; exit 91 ;; esac
@@ -248,11 +252,11 @@ expect_refused "staging deploy with only an env.production section → refused" 
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(printf '%s' "$ENV_STAGING" | sed 's/chopshop-stg-outbox/chopshop-prod-outbox/g')"; run staging -- deploy
-expect_refused "env.staging queue is a production queue → refused" "queue 'chopshop-prod-outbox' is not a pinned staging queue"
+expect_refused "env.staging queue is a production queue → refused" "queue producer OUTBOX_QUEUE -> 'chopshop-prod-outbox' is not its pinned queue 'chopshop-stg-outbox'"
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(printf '%s' "$ENV_STAGING" | sed 's/chopshop-stg-production/chopshop-prod-production/')"; run staging -- deploy
-expect_refused "env.staging R2 bucket is a production bucket → refused" "'chopshop-prod-production' is not a pinned staging bucket"
+expect_refused "env.staging R2 bucket is a production bucket → refused" "R2 binding PRODUCTION_BUCKET -> 'chopshop-prod-production' is not its pinned bucket 'chopshop-stg-production'"
 
 # --- worker name, canonical origins, R2 jurisdiction (CP1) --------------------------------
 new_tree; pin "$T" staging "$PIN_STG"
@@ -261,7 +265,7 @@ expect_refused "env.staging.name is the production worker's name → refused" "e
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['name']")"; run staging -- deploy
-expect_refused "env.staging without a name inherits the top-level name → refused" "env.staging.name is 'chopshop-api' (inherited from the top-level name)"
+expect_refused "env.staging without a name → wrangler's effective '<top>-staging' → refused" "env.staging.name is 'chopshop-api-staging' (wrangler's effective name: top-level name + '-staging'), pinned workerName is 'chopshop-api-stg'"
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['CANONICAL_ORIGINS']['web'] = 'https://chopshop-web.kent-ee2.workers.dev'")"; run staging -- deploy
@@ -304,11 +308,42 @@ expect_refused "AUTH_TRUSTED_ORIGINS with an extra origin → refused" "https://
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['r2_buckets'][1]['jurisdiction']")"; run staging -- deploy
-expect_refused "R2 binding without a jurisdiction → refused" "R2 binding PRODUCTION -> 'chopshop-stg-production' has jurisdiction None, every bucket is in 'eu'"
+expect_refused "R2 binding without a jurisdiction → refused" "R2 binding PRIVATE_BUCKET -> 'chopshop-stg-private' has jurisdiction None, every bucket is in 'eu'"
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['r2_buckets'][0]['jurisdiction'] = 'fedramp'")"; run staging -- deploy
-expect_refused "R2 binding in another jurisdiction → refused" "R2 binding PUBLIC -> 'chopshop-stg-public' has jurisdiction 'fedramp'"
+expect_refused "R2 binding in another jurisdiction → refused" "R2 binding PUBLIC_BUCKET -> 'chopshop-stg-public' has jurisdiction 'fedramp'"
+
+# --- complete binding mapping (Codex P1 on 65f610c) --------------------------------------
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['r2_buckets'][1]['bucket_name'] = p['r2']['public']")"; run staging -- deploy
+expect_refused "PRIVATE_BUCKET bound to the public bucket → refused" "R2 binding PRIVATE_BUCKET -> 'chopshop-stg-public' is not its pinned bucket 'chopshop-stg-private'"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['d1_databases']")"; run staging -- deploy
+expect_refused "no D1 binding at all → refused" "d1_databases bindings are [], expected exactly ['DB']"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['queues']['producers'] = [q for q in e['queues']['producers'] if q['binding'] != 'EMAIL_QUEUE']")"; run staging -- deploy
+expect_refused "EMAIL_QUEUE producer missing → refused" "queue producer bindings are ['OUTBOX_QUEUE', 'RENDER_JOBS_QUEUE'], expected exactly ['EMAIL_QUEUE', 'OUTBOX_QUEUE', 'RENDER_JOBS_QUEUE']"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['queues']['consumers'].pop()")"; run staging -- deploy
+expect_refused "a queue consumer missing → refused" "queue consumers are ['chopshop-stg-email', 'chopshop-stg-outbox'], expected exactly the pinned"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['r2_buckets'].append(dict(e['r2_buckets'][0]))")"; run staging -- deploy
+expect_refused "a binding declared twice → refused" "declares binding 'PUBLIC_BUCKET' twice"
+
+# --- bootstrap can never deploy; the worker name cannot be overridden ---------------------
+new_tree; run staging --bootstrap -- deploy
+expect_refused "--bootstrap with deploy → refused" "wrangler subcommand 'deploy' is not allowed under --bootstrap"
+
+new_tree; run staging --bootstrap -- versions upload
+expect_refused "--bootstrap with versions upload → refused" "wrangler subcommand 'versions' is not allowed under --bootstrap"
+
+new_tree; run staging -- deploy --name other-worker
+expect_refused "--name override → refused" "wrangler argument '--name' is not allowed"
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['SERVICE_NAME'] = 'chopshop-api'")"; run staging -- deploy
@@ -352,9 +387,9 @@ FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK=w
 expect_refused "pinned webhook endpoint missing on the Stripe account → refused" "stripeWebhookEndpointId we_stg does not exist"
 
 # --- the happy paths ----------------------------------------------------------------------
-new_tree; run staging --bootstrap -- deploy --dry-run
+new_tree; run staging --bootstrap -- d1 list
 expect_exec "correct account + --bootstrap → execs wrangler with the file's token and pinned account" \
-  "FAKE-WRANGLER EXEC: --env staging deploy --dry-run | account=$GOOD token=ok cwd=cloudflare"
+  "FAKE-WRANGLER EXEC: --env staging d1 list | account=$GOOD token=ok cwd=cloudflare"
 
 new_tree; pin "$T" staging "p['stripeWebhookEndpointId'] = None"; stripe_file "$T" staging "$SKEY_TEST"; FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG run staging --bootstrap -- whoami
 expect_exec "matching Stripe sandbox account → execs (webhook not yet pinned, bootstrap)" "FAKE-WRANGLER EXEC: --env staging whoami | account=$GOOD token=ok"
@@ -377,8 +412,7 @@ expect_exec "production fully pinned, launch gate done (A8/A12/B11 open), live S
 new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$(env_section production prod "del e['name']")"
 stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"
 FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK=we_prod run production -- deploy
-expect_exec "env.production without a name falls back to the top-level name (= pinned chopshop-api) → execs" \
-  "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok"
+expect_refused "env.production without a name → wrangler's effective '<top>-production' → refused" "env.production.name is 'chopshop-api-production' (wrangler's effective name: top-level name + '-production'), pinned workerName is 'chopshop-api'"
 
 # --- the repo's REAL wrangler.jsonc agrees with the repo's real pinned files ----------------
 # Only the Stripe ids that do not exist yet are filled in; every Cloudflare id, name, origin
