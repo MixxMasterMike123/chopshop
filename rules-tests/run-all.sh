@@ -80,12 +80,12 @@ command -v java >/dev/null 2>&1 && echo "    java: $(java -version 2>&1 | head -
   exit 1
 }
 
-# 1) Pure unit test first (fast, no emulator) — fail early if the money-path
-#    builders regressed. Requires functions/lib to be compiled.
-if [ ! -f functions/lib/payment/connectParams.js ]; then
-  echo "==> functions/lib missing — building functions (tsc)…"
-  ( cd functions && npm run build )
-fi
+# 1) Pure unit tests first (fast, no emulator) — fail early if the money-path
+#    builders regressed. ALWAYS rebuild functions/lib first: the old "only if a
+#    file is missing" shortcut let stale compiled code pass the gate (CODEX plan
+#    review 2026-09-26, finding 8).
+echo "==> building functions (tsc) so the pure suites test CURRENT source…"
+( cd functions && npm run build )
 echo "==> [1/3] connect-params (pure unit test)"
 node rules-tests/connect-params.test.cjs
 echo "==> [1/3] dispute-recovery (pure unit test)"

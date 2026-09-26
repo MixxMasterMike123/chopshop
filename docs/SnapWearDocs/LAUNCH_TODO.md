@@ -5,6 +5,8 @@ Owner: **K** = Kent · **M** = Mikael · **C** = Claude (Mikael runs) · **N** =
 
 Rule: nothing goes live with a SnapWear-routed order until every ☐ under **A** and **B** is ☑.
 
+> **🧊 FIREBASE FEATURE FREEZE — 2026-09-26.** The platform is being fully ported to Cloudflare (`docs/cf-port/PLAN.md`, CP0–1 approved). No new product work lands on Firebase; only `hotfix:` commits that keep melodie-mc's test usable. Remaining A-items (A5/A6/A7/A12) are built on Cloudflare.
+
 ---
 
 ## A. Platform build (code)
