@@ -1,0 +1,5 @@
+codex: PASS
+
+fable: PASS
+
+config-only re-pin of D1 ids after EU recreate; code unchanged since the Codex-reviewed 29412a5 (docs commits in between)
