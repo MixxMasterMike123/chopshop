@@ -2,7 +2,11 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
-## CP1 — Foundation on Kent's account (approved 2026-09-26, in progress)
+## CP2 — Vertical slice (GO 2026-09-27 01:10, in progress)
+
+**Mikael:** "Skip all Codex reviews until 01:55 … GO!" — CP2 build started under the recommended defaults for D8–D11 (assumed; veto window until the CP2 deploy). Codex reviews resume 01:55 and gate the deploy as always. **Split (three Opus builders in parallel, disjoint files, route mounts via anchors in `src/app.ts`):** CP2-A money (refunds reserve-first, Stripe event handlers, Connect PI params, payout facts, retention sweep, reconciliation), CP2-B outbox with claims + dispatch state machine + cancellation ×4 + 15-min sweeper cron + manual resolution, CP2-C POD product path (mappings, screening D8, quotePodCost, publish gate, production snapshot at checkout, storefront POD fields). Then CP2-D: seed script + failure-injection suite + reconcile-to-the-öre report.
+
+## CP1 — Foundation on Kent's account (approved 2026-09-26, ✅ CLOSED 2026-09-27 01:05)
 
 **Session note:** the two CP1 Opus builders started at the end of the first 2026-09-26 session died with it — nothing reached disk or Cloudflare (verified: clean `git status`, `wrangler.jsonc` still on the old account, Kent's account held zero chopshop resources). Both were relaunched from written briefs in the second session; this entry is filled in when their diffs pass Fable review.
 

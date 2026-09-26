@@ -15,7 +15,7 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 | # | Decision | Recommended default |
 |---|---|---|
 
-## Blocks CP2 (vertical slice)
+## Blocks CP2 (vertical slice) — **GO given 2026-09-27 01:10 ("GO!"); D8–D11 proceed on the recommended defaults below (assumed, Mikael may veto until the CP2 deploy)**
 
 | # | Decision | Recommended default |
 |---|---|---|

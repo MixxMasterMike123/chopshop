@@ -1942,6 +1942,15 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     ),
   );
 
+  // ── CP2 route mounts. Each CP2 builder appends ONLY inside its own anchor
+  // block; the reviewer consolidates after merge. ──────────────────────────
+  // CP2-ROUTES-A (money: refunds, payouts) — begin
+  // CP2-ROUTES-A — end
+  // CP2-ROUTES-B (outbox/dispatch: manual resolution, cancellation) — begin
+  // CP2-ROUTES-B — end
+  // CP2-ROUTES-C (POD product path: mappings, publish, quote) — begin
+  // CP2-ROUTES-C — end
+
   const platformTenants: Endpoint = (c) =>
     handlePlatformTenantRoute(c.env, c.req.raw, new URL(c.req.url));
   app.all(PLATFORM_TENANTS_PATH, platformTenants);
