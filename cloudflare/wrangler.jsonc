@@ -68,7 +68,7 @@
         {
           "binding": "DB",
           "database_name": "chopshop-stg",
-          "database_id": "d1162797-5a79-4a79-aef9-e5f7e1634fb1",
+          "database_id": "5ee51e82-ab3b-4f39-b937-a5507aee2522",
           "migrations_dir": "migrations"
         }
       ],
@@ -119,7 +119,7 @@
         {
           "binding": "DB",
           "database_name": "chopshop-prod",
-          "database_id": "d401576e-184d-47bd-b68b-c3c80785844b",
+          "database_id": "6216ebd9-760b-4506-8165-af4507d3f1fe",
           "migrations_dir": "migrations"
         }
       ],

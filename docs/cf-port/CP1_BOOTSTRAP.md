@@ -1,3 +1,5 @@
+> **2026-09-26 21:24 update (D32 → D1 too):** both D1 databases were deleted (empty) and recreated with `--jurisdiction eu`; the ids below were rewritten to the new ones (`chopshop-stg` `5ee51e82-ab3b-4f39-b937-a5507aee2522`, `chopshop-prod` `6216ebd9-760b-4506-8165-af4507d3f1fe`). The `weur` location hint is superseded by the jurisdiction.
+
 # CP1-A bootstrap: Kent's account, env-aware config, preflight v2
 
 Date: 2026-09-26 · builder: CP1-A (Opus) · plan: `PLAN.md` §2, §2.5, §6, §10 CP1 · decisions: D5, D5b, D7.
@@ -8,8 +10,8 @@ Every Cloudflare call below went through `scripts/cf-preflight.sh <env> --bootst
 
 | env | kind | name | id | placement |
 |---|---|---|---|---|
-| staging | D1 | `chopshop-stg` | `d1162797-5a79-4a79-aef9-e5f7e1634fb1` | location hint `weur` (created in WEUR) |
-| production | D1 | `chopshop-prod` | `d401576e-184d-47bd-b68b-c3c80785844b` | location hint `weur` (created in WEUR), **empty, no migrations** |
+| staging | D1 | `chopshop-stg` | `5ee51e82-ab3b-4f39-b937-a5507aee2522` | location hint `weur` (created in WEUR) |
+| production | D1 | `chopshop-prod` | `6216ebd9-760b-4506-8165-af4507d3f1fe` | location hint `weur` (created in WEUR), **empty, no migrations** |
 | staging | R2 | `chopshop-stg-public` | (named) | jurisdiction `eu` |
 | staging | R2 | `chopshop-stg-private` | (named) | jurisdiction `eu` |
 | staging | R2 | `chopshop-stg-production` | (named) | jurisdiction `eu` |

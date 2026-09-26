@@ -1,7 +1,7 @@
 # D1 backup + restore — runbook and drill record
 
 PLAN §2.7: "Time Travel + weekly export to R2 with a restore drill in CP1". Drill run 2026-09-26 on
-`chopshop-stg` (`d1162797-5a79-4a79-aef9-e5f7e1634fb1`), through the preflight only.
+`chopshop-stg` (`5ee51e82-ab3b-4f39-b937-a5507aee2522`), through the preflight only.
 
 ## Two mechanisms, different jobs
 

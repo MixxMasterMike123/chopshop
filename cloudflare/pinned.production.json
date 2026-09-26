@@ -6,7 +6,7 @@
     "api": "https://chopshop-api.kent-ee2.workers.dev",
     "web": "https://chopshop-web.kent-ee2.workers.dev"
   },
-  "d1": { "name": "chopshop-prod", "id": "d401576e-184d-47bd-b68b-c3c80785844b" },
+  "d1": { "name": "chopshop-prod", "id": "6216ebd9-760b-4506-8165-af4507d3f1fe" },
   "r2": {
     "public": "chopshop-prod-public",
     "private": "chopshop-prod-private",
