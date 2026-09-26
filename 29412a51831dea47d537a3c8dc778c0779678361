@@ -1,0 +1,5 @@
+codex: PASS
+
+fable: PASS
+
+codex coverage: 65f610c, 6f68d10, db66555, 7908e83, 9b02e24, 9aadb15, 694e559 reviewed (all P1/P2 fixed); 29412a5 = 5-line trigger follow-up, Fable-reviewed
