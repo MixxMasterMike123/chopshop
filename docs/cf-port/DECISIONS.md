@@ -6,7 +6,6 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 
 | # | Decision | Recommended default |
 |---|---|---|
-| D1 | **Deploy the `approveAffiliate` hotfix** (`main` `f807625`; account-takeover hole, function is live). Claude's deploy is blocked by the permission classifier. | Run: `cd "/Users/mikaelohlen/Cursor Apps/chopshop/.claude/worktrees/hotfix-affiliate-main" && npx firebase deploy --only functions:approveAffiliate --project b8shield-reseller-app` — or add a permission rule so Claude can. |
 | D2 | **DELETE sign-off** (PLAN §3.3): CRM wagons (dining/ambassador/campaign/writers), `deleteCustomerAccountV2` + `toggleCustomerActiveStatusV2`, `getGeoDataV2`, `createAdminUserV2`, `syncAdminClaims`, `aggregateDac7Year`, V1 `confirmPasswordReset`, 3 dead email callables, `processB2COrderCompletionHttpV2`, `scrapeWebsiteMetaV2`, `OBSOLETE/`, b8shield-era docs/images. | **Yes to all.** Data of deleted features is archived per §3.4 before deletion. |
 | D3 | The 7 UNSURE docs: `docs/Plattformsvillkor….docx`, `docs/Tryckeriavtal….docx` (July drafts), `juridik.md`, `docs/METEOR_PAKETERING_KENT.pdf`, `stripe-review-export/` (11 files), `OBSOLETE/docs/plattformsoverview.md`, `OBSOLETE/README.md`. | Archive the two `.docx` + the PDF under `docs/_archive/superseded/` (the live `.md` legal templates supersede them); archive `stripe-review-export/` (fixes are live); keep `juridik.md` but move it to `docs/legal-notes/juridik.md`; leave `OBSOLETE/*` (already quarantined). |
 | D4 | Compromised secrets (SMTP password, GCP service-account key, GitHub PAT — open since June): revoke now? | **Yes.** Claude verifies they are unused by the retained Firebase paths (grep + 24 h log check) and hands you the exact revoke commands/links; you run them. |
@@ -66,4 +65,4 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 
 ## Answered
 
-_(none yet)_
+| D1 | approveAffiliate hotfix deployed to Firebase (`f807625`) | ✅ 2026-09-26 — Mikael: "You do it"; `Successful update operation` |
