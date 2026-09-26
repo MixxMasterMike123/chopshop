@@ -6,7 +6,10 @@
     "api": "https://chopshop-api-stg.kent-ee2.workers.dev",
     "web": "https://chopshop-web-stg.kent-ee2.workers.dev"
   },
-  "d1": { "name": "chopshop-stg", "id": "d1162797-5a79-4a79-aef9-e5f7e1634fb1" },
+  "d1": {
+    "name": "chopshop-stg",
+    "id": "d1162797-5a79-4a79-aef9-e5f7e1634fb1"
+  },
   "r2": {
     "public": "chopshop-stg-public",
     "private": "chopshop-stg-private",
@@ -19,6 +22,6 @@
   },
   "stripeAccountId": "acct_1Tp7gtKAaBMOW5AC",
   "stripeMode": "sandbox",
-  "stripeWebhookEndpointId": null,
+  "stripeWebhookEndpointId": "we_1UK0jhKAaBMOW5ACAHh8BxB8",
   "dispatchTarget": "fake-printer"
 }
