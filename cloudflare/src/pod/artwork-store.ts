@@ -721,7 +721,12 @@ export async function getPreviewKey(
   return row === null || row.status !== "ready" ? null : row.preview_object_key;
 }
 
-export type DeleteArtworkResult = { status: "not_found" | "ok" };
+/**
+ * `conflict` (CP2-C): a POD mapping references the artwork. The route in
+ * src/app.ts answers every non-ok result 404 until the consolidation maps
+ * this one to 409 (docs/cf-port/CP2_C_REPORT.md).
+ */
+export type DeleteArtworkResult = { status: "conflict" | "not_found" | "ok" };
 
 /**
  * Delete an artwork row and BOTH of its output objects.
@@ -741,14 +746,14 @@ export type DeleteArtworkResult = { status: "not_found" | "ok" };
  * a 'ready' artwork whose print file does not exist — which the print portal
  * would discover at the worst possible moment.
  *
- * ── "ONLY WHILE NOTHING REFERENCES IT" ──────────────────────────────────────
- * Nothing can reference an artwork yet: POD products, order lines and print
- * jobs are all later checkpoints. There is therefore no reference check to
- * write, and writing a fake one against tables that do not exist would be
- * theatre. What exists instead is the SHAPE for it — the delete is a single
- * guarded statement whose WHERE clause is where a `NOT EXISTS (SELECT … FROM
- * pod_product_artwork …)` term lands when there is something to check, and the
- * `changes === 0` branch already answers correctly when the guard refuses.
+ * ── "ONLY WHILE NOTHING REFERENCES IT" (CP2-C) ──────────────────────────────
+ * A POD mapping (active, inactive or suspended — rows are never deleted)
+ * references the artwork, and through it the print master a frozen checkout
+ * snapshot or an order line may still need. Such an artwork is NOT deletable:
+ * the delete is guarded by `NOT EXISTS (… pod_mappings …)` in the same
+ * statement (and by the mappings FK), and a refused guard answers `conflict`.
+ * Consequently no artwork deletion can change any product's screened text or
+ * eligibility, which is why this path needs no rescreen (PLAN §2.4).
  */
 export async function deleteArtwork(
   env: Env,
@@ -763,10 +768,26 @@ export async function deleteArtwork(
     return { status: "not_found" };
   }
 
+  const referenced = await db
+    .prepare(
+      "SELECT 1 AS present FROM pod_mappings WHERE tenant_id = ? AND artwork_id = ? LIMIT 1",
+    )
+    .bind(tenantId, artworkId)
+    .first();
+  if (referenced !== null) {
+    return { status: "conflict" };
+  }
+
   const deleted = await db.batch([
     db
       .prepare(
-        `DELETE FROM pod_artwork WHERE tenant_id = ? AND artwork_id = ?`,
+        `DELETE FROM pod_artwork
+         WHERE tenant_id = ? AND artwork_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM pod_mappings
+             WHERE pod_mappings.tenant_id = pod_artwork.tenant_id
+               AND pod_mappings.artwork_id = pod_artwork.artwork_id
+           )`,
       )
       .bind(tenantId, artworkId),
     // A 'processing' artwork may still have a live render job. It ends here,

@@ -9,15 +9,26 @@ import {
   normalizeShippingRates,
   toShippingRatesWire,
 } from "../commerce/shipping";
+import { evaluatePodGate } from "../pod/pod-mappings";
+import type { ScreeningStatus } from "./screening-core";
+import { screeningStatementsFor } from "./screening";
 
 export interface AdminProduct {
   allowPickup: boolean;
   allowShipping: boolean;
   currency: string;
   description: string | null;
+  /** Sticky once the product gets its first POD mapping. */
+  isPod: boolean;
   name: string;
   priceMinor: number;
   productId: string;
+  /**
+   * PLAN §2.4 / D8: null until the product is first published (screened);
+   * 'pending' = a shop's first products wait for a platform approval before
+   * they are public; 'blocked' = never public (hard block or takedown).
+   */
+  screeningStatus: ScreeningStatus | null;
   // The admin-facing `{region: {cost}}` form, identical to what a write sends
   // and to what the column stores, so a product round-trips unchanged.
   shippingRates: ShippingRatesWire | null;
@@ -28,8 +39,27 @@ export interface AdminProduct {
 
 export type ProductStatus = "draft" | "active" | "archived";
 
+/**
+ * Why a publish (or a price edit) was refused — answered 422 with the code.
+ *
+ *   taken_down           a platform takedown stamp is set (A10)
+ *   pod_mapping_missing  a POD product has a sellable unit with no active mapping
+ *   pod_mapping_suspended a routing edit suspended one of its mappings
+ *   pod_unpriced         its printer SKU / slots have no price (A1)
+ *   currency_mismatch    the printer prices in another currency
+ *   price_below_floor    PRISGOLV (podPricing.js): a price under the break-even floor
+ */
+export type AdminRefusalCode =
+  | "currency_mismatch"
+  | "pod_mapping_missing"
+  | "pod_mapping_suspended"
+  | "pod_unpriced"
+  | "price_below_floor"
+  | "taken_down";
+
 export type AdminCatalogResult =
   | { product: AdminProduct; status: "ok" }
+  | { code: AdminRefusalCode; status: "refused" }
   | { status: "conflict" | "invalid" | "not_found" };
 
 export interface CreateProductInput {
@@ -61,12 +91,15 @@ interface ProductRow {
   allow_shipping: number;
   currency: string;
   description: string | null;
+  is_pod: number;
   name: string;
   b2c_price_minor: number;
   product_id: string;
+  screening_status: ScreeningStatus | null;
   shipping_json: string | null;
   sku: string;
   status: ProductStatus;
+  takedown_at: string | null;
   weight_grams: number;
 }
 
@@ -107,11 +140,17 @@ const DEFAULT_WEIGHT_GRAMS = 0;
 const DEFAULT_ALLOW_SHIPPING = true;
 const DEFAULT_ALLOW_PICKUP = false;
 const PRODUCT_SELECT = `SELECT
-     product_id, sku, name, description, b2c_price_minor, currency, status,
-     weight_grams, allow_shipping, allow_pickup, shipping_json
-   FROM products
-   WHERE tenant_id = ?
-     AND product_id = ?
+     product.product_id, product.sku, product.name, product.description,
+     product.b2c_price_minor, product.currency, product.status,
+     product.weight_grams, product.allow_shipping, product.allow_pickup,
+     product.shipping_json, product.is_pod, product.takedown_at,
+     screening.status AS screening_status
+   FROM products AS product
+   LEFT JOIN product_screening AS screening
+     ON screening.product_id = product.product_id
+    AND screening.tenant_id = product.tenant_id
+   WHERE product.tenant_id = ?
+     AND product.product_id = ?
    LIMIT 1`;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -373,9 +412,11 @@ function toAdminProduct(row: ProductRow): AdminProduct {
     allowShipping: row.allow_shipping === 1,
     currency: row.currency,
     description: row.description,
+    isPod: row.is_pod === 1,
     name: row.name,
     priceMinor: row.b2c_price_minor,
     productId: row.product_id,
+    screeningStatus: row.screening_status,
     // Re-validated on the way out with the same gate that guards the way in. A
     // row that somehow holds a malformed blob reports no table rather than
     // handing an admin a shape the checkout engine will refuse to price from.
@@ -519,9 +560,11 @@ export async function createAdminProduct(
       allowShipping,
       currency: input.currency,
       description: input.description,
+      isPod: false,
       name: input.name,
       priceMinor: input.priceMinor,
       productId,
+      screeningStatus: null,
       shippingRates: toWire(emptyToNull(shippingRates)),
       sku: input.sku,
       status: "draft",
@@ -563,9 +606,11 @@ export async function updateAdminProduct(
     description: input.description === undefined
       ? current.description
       : input.description,
+    isPod: current.isPod,
     name: input.name ?? current.name,
     priceMinor: input.priceMinor ?? current.priceMinor,
     productId,
+    screeningStatus: current.screeningStatus,
     shippingRates: toWire(nextRates),
     sku: input.sku ?? current.sku,
     status: input.status ?? current.status,
@@ -582,6 +627,20 @@ export async function updateAdminProduct(
     )
     .bind(principal.tenantId, productId)
     .first<{ published: number }>();
+
+  // PRISGOLV (src/wagons/pod-wagon/podPricing.js, enforced by ProductForm on
+  // every save of a live POD product): a price edit may not put a POD product
+  // under its break-even floor. Only answerable once the product is quotable —
+  // a POD product without a priced mapping has no floor yet, and the publish
+  // gate refuses it on its own.
+  if (input.priceMinor !== undefined && existing.is_pod === 1) {
+    const failure = await evaluatePodGate(db, principal.tenantId, productId, {
+      productPriceMinor: input.priceMinor,
+    });
+    if (failure === "price_below_floor") {
+      return { code: "price_below_floor", status: "refused" };
+    }
+  }
 
   const statements: D1PreparedStatement[] = [
     db
@@ -635,6 +694,23 @@ export async function updateAdminProduct(
     );
   }
 
+  // PLAN §2.4: product text is screened content. A product that stays live
+  // through this edit is re-screened from the text this batch writes, in this
+  // batch; one that leaves the storefront (archived/draft) is not live, and a
+  // draft harms nobody (the Firebase `isLive` rule).
+  const liveAfter = publication?.published === 1 && next.status === "active";
+  let screeningStatus = current.screeningStatus;
+  if (liveAfter) {
+    const screening = await screeningStatementsFor(db, {
+      now,
+      productId,
+      tenantId: principal.tenantId,
+      texts: { description: next.description, name: next.name },
+    });
+    statements.push(...screening.statements);
+    screeningStatus = screening.status;
+  }
+
   statements.push(
     auditStatement(db, principal, "product.update", productId, now, {
       fields: Object.keys(input).sort(),
@@ -650,9 +726,20 @@ export async function updateAdminProduct(
     throw error;
   }
 
-  return { product: next, status: "ok" };
+  return { product: { ...next, screeningStatus }, status: "ok" };
 }
 
+/**
+ * Publish = the product becomes LIVE. In one batch: the public projection, the
+ * product's screening (its first one creates the D8 row — a shop's first N
+ * products land 'pending' and stay off the storefront until a platform
+ * approval), and the audit row. catalog_version bumps by trigger.
+ *
+ * Refused (422 + code) before anything is written when the product is taken
+ * down, or — for a POD product — when any sellable unit has no active mapping,
+ * is unpriced, or is priced under PRISGOLV (evaluatePodGate). A 'pending'
+ * product is NOT refused: publishing is how it enters the review queue.
+ */
 export async function publishAdminProduct(
   db: D1Database,
   principal: TenantAdminPrincipal,
@@ -666,6 +753,22 @@ export async function publishAdminProduct(
   if (existing.status !== "active") {
     return { status: "conflict" };
   }
+  if (existing.takedown_at !== null) {
+    return { code: "taken_down", status: "refused" };
+  }
+  if (existing.is_pod === 1) {
+    const failure = await evaluatePodGate(db, principal.tenantId, productId);
+    if (failure !== null) {
+      return { code: failure, status: "refused" };
+    }
+  }
+
+  const screening = await screeningStatementsFor(db, {
+    now,
+    productId,
+    tenantId: principal.tenantId,
+    texts: { description: existing.description, name: existing.name },
+  });
 
   await db.batch([
     db
@@ -694,10 +797,14 @@ export async function publishAdminProduct(
         now,
         now,
       ),
+    ...screening.statements,
     auditStatement(db, principal, "product.publish", productId, now, null),
   ]);
 
-  return { product: toAdminProduct(existing), status: "ok" };
+  return {
+    product: { ...toAdminProduct(existing), screeningStatus: screening.status },
+    status: "ok",
+  };
 }
 
 export async function unpublishAdminProduct(

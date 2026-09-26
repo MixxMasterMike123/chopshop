@@ -21,9 +21,11 @@ interface AdminProductBody {
     allowShipping: boolean;
     currency: string;
     description: string | null;
+    isPod: boolean;
     name: string;
     priceMinor: number;
     productId: string;
+    screeningStatus: string | null;
     shippingRates: Record<string, { cost: number }> | null;
     sku: string;
     status: string;
@@ -117,6 +119,33 @@ async function seedTenant(tenantId: string, hostname: string): Promise<void> {
       ) VALUES (?, ?, ?, 'admin', 'verified', ?, ?)`,
     ).bind(`domain-${tenantId}`, tenantId, hostname, NOW, NOW),
   ]);
+}
+
+/**
+ * DECISIONS D8: a shop's first N=2 published products wait for a platform
+ * approval before they are public. This suite is about the catalogue surface,
+ * not screening (test/pod-publish.test.ts owns that), so each fixture shop is
+ * given two already-live products up front: every product this suite
+ * publishes is then past the first-N rule and goes public as 'advisory'.
+ */
+async function seedLiveCatalogue(tenantId: string): Promise<void> {
+  for (const index of [1, 2]) {
+    const productId = `live-${tenantId}-${index}`;
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO products (
+          product_id, tenant_id, status, sku, name, description,
+          b2c_price_minor, currency, is_pod, created_at, updated_at
+        ) VALUES (?, ?, 'active', ?, ?, NULL, 10000, 'SEK', 0, ?, ?)`,
+      ).bind(productId, tenantId, `SKU-LIVE-${index}`, `Live ${index}`, NOW, NOW),
+      env.DB.prepare(
+        `INSERT INTO product_publications (
+          product_id, tenant_id, published, public_name, public_description,
+          public_price_minor, currency, projection_version, published_at, updated_at
+        ) VALUES (?, ?, 1, ?, NULL, 10000, 'SEK', 1, ?, ?)`,
+      ).bind(productId, tenantId, `Live ${index}`, NOW, NOW),
+    ]);
+  }
 }
 
 async function seedMembership(
@@ -250,6 +279,8 @@ async function countProducts(tenantId: string): Promise<number> {
 beforeAll(async () => {
   await seedTenant(TENANT_A, "admin-a.adminshop.test");
   await seedTenant(TENANT_B, "admin-b.adminshop.test");
+  await seedLiveCatalogue(TENANT_A);
+  await seedLiveCatalogue(TENANT_B);
 
   adminA = await signUp("admin-a@adminshop.test");
   adminB = await signUp("admin-b@adminshop.test");
@@ -287,9 +318,12 @@ describe("tenant-admin catalogue lifecycle", () => {
       allowShipping: true,
       currency: "SEK",
       description: "Soft cotton",
+      // Not POD until a mapping exists; not screened until first published.
+      isPod: false,
       name: "Lifecycle Tee",
       priceMinor: 19_900,
       productId: expect.any(String),
+      screeningStatus: null,
       shippingRates: null,
       sku: "SKU-LIFECYCLE",
       status: "draft",
@@ -315,6 +349,10 @@ describe("tenant-admin catalogue lifecycle", () => {
       ),
     );
     expect(published.status).toBe(200);
+    // Past the shop's first-N (seedLiveCatalogue), so screened and public.
+    expect(
+      (await published.json<AdminProductBody>()).product.screeningStatus,
+    ).toBe("advisory");
     expect(await listPublicProducts(HOST_A)).toContain(productId);
 
     const beforeRepricing = await publicationRow(productId);

@@ -240,6 +240,8 @@ describe("GET /v1/products/{productId}", () => {
         currency: "SEK",
         description: null,
         name: "Alpha Tee",
+        // Not a POD product: no print areas, no previews.
+        pod: null,
         priceMinor: 12_900,
         productId: "product-a-live",
         sku: "SKU-A-LIVE",

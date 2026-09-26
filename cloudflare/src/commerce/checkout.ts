@@ -1,4 +1,13 @@
 import type { TenantContext } from "../tenancy/resolve-tenant";
+import {
+  ELIGIBLE_PRODUCTS_FROM,
+  PUBLIC_ELIGIBILITY_PREDICATE,
+} from "../catalog/eligibility";
+import {
+  printerShippingMinor,
+  resolveProductionLine,
+} from "../pod/pod-mappings";
+import { withholdMinorFor } from "../pod/pod-quote";
 import type { ResolvedDiscount } from "./discount-codes";
 import {
   isValidDiscountCode,
@@ -60,6 +69,8 @@ interface ResolvedLine extends CheckoutLine {
   allowPickup: boolean;
   allowShipping: boolean;
   currency: string;
+  /** products.is_pod — the line needs a production snapshot line. */
+  isPod: boolean;
   shippingRates: ShippingRates | null;
   weightGrams: number;
 }
@@ -100,6 +111,7 @@ interface PublicationRow {
   allow_pickup: number;
   allow_shipping: number;
   currency: string;
+  is_pod: number;
   product_id: string;
   public_name: string;
   public_price_minor: number;
@@ -414,10 +426,11 @@ function isIdempotencyCollision(error: unknown): boolean {
  * This is the pricing authority. The request contributes exactly three things —
  * a product id, an optional variant id, and a quantity — and every other value
  * on the resulting line (sku, name, unit price, currency) is read here from
- * rows the tenant owns. The publication join is deliberately the same predicate
- * set the public catalogue uses (published = 1, product active, both rows on
- * this tenant), so nothing purchasable through checkout is invisible on the
- * storefront and nothing hidden from the storefront is purchasable.
+ * rows the tenant owns. The eligibility test is THE public predicate
+ * (src/catalog/eligibility.ts — the same fragment the public catalogue runs:
+ * published, active, not taken down, shop active and live, screening public,
+ * a POD product mapped), so nothing purchasable through checkout is invisible
+ * on the storefront and nothing hidden from the storefront is purchasable.
  */
 async function resolveLine(
   db: D1Database,
@@ -436,15 +449,12 @@ async function resolveLine(
          product.weight_grams AS weight_grams,
          product.allow_shipping AS allow_shipping,
          product.allow_pickup AS allow_pickup,
-         product.shipping_json AS shipping_json
-       FROM product_publications AS publication
-       INNER JOIN products AS product
-         ON product.product_id = publication.product_id
-        AND product.tenant_id = publication.tenant_id
+         product.shipping_json AS shipping_json,
+         product.is_pod AS is_pod
+       ${ELIGIBLE_PRODUCTS_FROM}
        WHERE publication.tenant_id = ?
          AND product.tenant_id = ?
-         AND publication.published = 1
-         AND product.status = 'active'
+         AND ${PUBLIC_ELIGIBILITY_PREDICATE}
          AND publication.product_id = ?
        LIMIT 1`,
     )
@@ -503,6 +513,7 @@ async function resolveLine(
     allowPickup: publication.allow_pickup === 1,
     allowShipping: publication.allow_shipping === 1,
     currency: publication.currency,
+    isPod: publication.is_pod === 1,
     itemIndex,
     lineTotalMinor: unitPriceMinor * item.quantity,
     name: publication.public_name,
@@ -863,11 +874,126 @@ function storedLine(row: CheckoutItemRow): CheckoutLine {
   };
 }
 
+/**
+ * The printers the production snapshot may name (the shared CP2 contract):
+ * the staging fake printer or SnapWear. Each environment can only hold its own
+ * (PUT /v1/platform/printers pins an `api` printer's id to DISPATCH_TARGET).
+ */
+const SNAPSHOT_PRINTERS: readonly string[] = ["fake-printer", "snapwear"];
+
+export interface CheckoutOptions {
+  /**
+   * The environment's dispatch target (src/pod/printers.ts dispatchTargetOf):
+   *   a printer id  every POD line must route to exactly that printer;
+   *   null          this environment cannot dispatch at all → a POD cart is
+   *                 refused (nothing is sold that no printer will receive);
+   *   undefined     the caller did not say (the route predates the option):
+   *                 the freeze still requires one of SNAPSHOT_PRINTERS, which
+   *                 only the environment's own seed can have created.
+   */
+  dispatchTarget?: "fake-printer" | "snapwear" | null;
+}
+
+/**
+ * The frozen production snapshot (the CP2 shared contract; column
+ * checkouts.production_snapshot_json, migrations/0023):
+ *
+ *   { printer, lines: [{ lineNo, sku, quantity, printFiles: [{ slot, r2Key,
+ *     sha256, widthMm, heightMm }], productionCostMinor, withholdMinor }],
+ *     totals: { productionCostMinor, withholdMinor } }
+ *
+ * PRODUCTION ELIGIBILITY IS RECOMPUTED HERE FROM CURRENT FACTS (PLAN §2.3) —
+ * resolveProductionLine re-proves every POD line's mapping, printer, capability,
+ * artwork and price — and ANY miss refuses the whole checkout: a line that
+ * cannot be produced must not be paid for.
+ *
+ * Money (LAUNCH_TODO A1, productionWithholding.ts): a line's cost is
+ * (blank + Σ prints + platform cut) × quantity, ex VAT; the totals add the
+ * printer's flat per-order shipping ONCE and are the authoritative figures —
+ * `totals.withholdMinor` is rounded once over the sum (per-line
+ * `withholdMinor` is informational and may differ from the total by rounding
+ * and shipping). A withholding larger than the checkout total refuses it
+ * (A1: "the fee would exceed gross").
+ *
+ * Only POD lines appear; `lineNo` = item_index + 1, the stable printer job id
+ * suffix (`{orderId}-{lineNo}`). null snapshot = a cart with no POD line.
+ * SERVER-ONLY: it is written to the row and never returned.
+ */
+async function freezeProductionSnapshot(
+  db: D1Database,
+  tenant: TenantContext,
+  lines: readonly ResolvedLine[],
+  currency: string,
+  totalMinor: number,
+  dispatchTarget: string | null | undefined,
+): Promise<{ json: string | null } | null> {
+  const podLines = lines.filter((line) => line.isPod);
+  if (podLines.length === 0) {
+    return { json: null };
+  }
+  if (dispatchTarget === null) {
+    return null;
+  }
+
+  let printer: string | null = null;
+  let productionCostMinor = 0;
+  const snapshotLines = [];
+  for (const line of podLines) {
+    const production = await resolveProductionLine(
+      db,
+      tenant.tenantId,
+      { productId: line.productId, quantity: line.quantity, variantId: line.variantId },
+      dispatchTarget ?? null,
+    );
+    if (
+      production === null ||
+      !SNAPSHOT_PRINTERS.includes(production.printerId) ||
+      // A4: one order → one printer (one parcel, one submission target).
+      (printer !== null && printer !== production.printerId) ||
+      production.currency !== currency
+    ) {
+      return null;
+    }
+    printer = production.printerId;
+    productionCostMinor += production.productionCostMinor;
+    snapshotLines.push({
+      lineNo: line.itemIndex + 1,
+      sku: production.sku,
+      quantity: line.quantity,
+      printFiles: production.printFiles.map((file) => ({
+        slot: file.slot,
+        r2Key: file.r2Key,
+        sha256: file.sha256,
+        widthMm: file.widthMm,
+        heightMm: file.heightMm,
+      })),
+      productionCostMinor: production.productionCostMinor,
+      withholdMinor: withholdMinorFor(production.productionCostMinor),
+    });
+  }
+
+  const shipping = printer === null ? null : await printerShippingMinor(db, printer);
+  if (printer === null || shipping === null) {
+    return null;
+  }
+  const totalCostMinor = productionCostMinor + shipping;
+  const totals = {
+    productionCostMinor: totalCostMinor,
+    withholdMinor: withholdMinorFor(totalCostMinor),
+  };
+  if (totals.withholdMinor > totalMinor) {
+    return null;
+  }
+
+  return { json: JSON.stringify({ printer, lines: snapshotLines, totals }) };
+}
+
 export async function createCheckout(
   db: D1Database,
   tenant: TenantContext,
   input: CreateCheckoutInput,
   now: number,
+  options: CheckoutOptions = {},
 ): Promise<CreateCheckoutResult> {
   if (input.items.length === 0 || input.items.length > MAX_CHECKOUT_ITEMS) {
     return { status: "invalid_items" };
@@ -922,6 +1048,21 @@ export async function createCheckout(
     return { status: "invalid_items" };
   }
 
+  // Refused with the same opaque answer as any other unresolvable line: naming
+  // which POD line cannot be produced would be an oracle for a tenant's
+  // printer set-up.
+  const snapshot = await freezeProductionSnapshot(
+    db,
+    tenant,
+    lines,
+    currency,
+    quote.totalMinor,
+    options.dispatchTarget,
+  );
+  if (snapshot === null) {
+    return { status: "invalid_items" };
+  }
+
   const expiresAt = now + CHECKOUT_TTL_MS;
   const checkoutId = crypto.randomUUID();
   const idempotencyKeyHash = await hashIdempotencyKey(
@@ -936,9 +1077,9 @@ export async function createCheckout(
           checkout_id, tenant_id, status, customer_email, currency,
           delivery_method, shipping_country, subtotal_minor, shipping_minor,
           vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
-          payment_intent_id, idempotency_key_hash,
+          payment_intent_id, idempotency_key_hash, production_snapshot_json,
           expires_at, created_at, updated_at
-        ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
       )
       .bind(
         checkoutId,
@@ -960,6 +1101,7 @@ export async function createCheckout(
         discount.discountCodeId,
         quote.totalMinor,
         idempotencyKeyHash,
+        snapshot.json,
         expiresAt,
         now,
         now,

@@ -2521,7 +2521,10 @@ describe("migration 0009 schema survival", () => {
        ORDER BY name`,
     ).all<{ name: string }>();
 
-    expect(triggers.results.map((row) => row.name)).toEqual([
+    // Survival of the 0009 set, not an exhaustive list: later checkpoints add
+    // their own guards to these tables (CP2-A's money columns, CP2-C's frozen
+    // production snapshot), and each of those is pinned by its own suite.
+    expect(triggers.results.map((row) => row.name)).toEqual(expect.arrayContaining([
       "checkout_items_snapshot_immutable",
       "checkout_items_tenant_immutable",
       "checkout_items_tenant_matches_checkout_insert",
@@ -2531,7 +2534,7 @@ describe("migration 0009 schema survival", () => {
       "checkout_items_variant_matches_product_insert",
       "checkout_items_variant_matches_product_update",
       "checkouts_tenant_immutable",
-    ]);
+    ]));
   });
 
   it("kept every checkout index through the table recreate", async () => {
@@ -2543,11 +2546,11 @@ describe("migration 0009 schema survival", () => {
        ORDER BY name`,
     ).all<{ name: string }>();
 
-    expect(indexes.results.map((row) => row.name)).toEqual([
+    expect(indexes.results.map((row) => row.name)).toEqual(expect.arrayContaining([
       "checkout_items_checkout_idx",
       "checkouts_tenant_email_idx",
       "checkouts_tenant_status_idx",
-    ]);
+    ]));
   });
 
   it("left the child's foreign key pointing at the live parent", async () => {
