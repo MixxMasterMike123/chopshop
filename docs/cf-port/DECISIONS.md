@@ -42,6 +42,15 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 | D22 | Feature flags at import: store effective values, drop keys of deleted features? | **Yes.** |
 | D23 | DAC7 (PORT-LATER) has a hard date — seller due diligence by 31 Dec 2026. | Schedule DAC7 as **CP9 in November**; `dac7Sellers` archived until then. |
 
+## Surfaced by CP1 bootstrap (answer before the first staging deploy)
+
+| # | Decision | Recommended default |
+|---|---|---|
+| D7b | **`melodiemc.com` is already an active zone on Kent's Cloudflare account.** D7 chose workers.dev until CP7, but workers.dev cannot host per-shop hostnames (no wildcard subdomains), so staging can exercise only ONE tenant by hostname (the worker's own hostname registered as melodie-mc's staging domain; multi-tenant hostname resolution is proven in vitest). Alternative: a `*.stg.melodiemc.com` record on the existing zone (touches the live customer zone's DNS, apex untouched). | **Keep D7** (workers.dev, one staging tenant by hostname) until CP4 needs a second storefront; revisit then. |
+| D32 | R2 buckets created with **`--jurisdiction eu`** (data stays in the EU; GDPR) — set at creation, irreversible per bucket. D1 has no jurisdiction option (location hint `weur` only). | **Yes, EU.** Veto = delete + recreate the six empty buckets before anything is uploaded. |
+| D33 | Queues without dead-letter queues: D1 (`outbox_events`, `email_deliveries`) is the durable record and the 15-minute sweeper re-nudges; a DLQ would be a second unread copy. | **Yes, no DLQs.** |
+| D34 | Staging Stripe key file `~/.config/chopshop/stripe.staging.env` (`STRIPE_SECRET_KEY=` sandbox `sk_test_…`/`rk_test_…` for `acct_1Tp7gtKAaBMOW5AC`, mode 600) does not exist — the non-bootstrap preflight refuses without it, so the first staging deploy is blocked on it. | **Mikael creates it** (a restricted key is enough: Charges/PaymentIntents/Refunds/Webhook endpoints read+write, Account read). |
+
 ## Affiliate rebuild (PORT-LATER — answer before that checkpoint, not now)
 
 | # | Decision | Recommended default |

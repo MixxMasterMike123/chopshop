@@ -2,6 +2,14 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
+## CP1 — Foundation on Kent's account (approved 2026-09-26, in progress)
+
+**Session note:** the two CP1 Opus builders started at the end of the first 2026-09-26 session died with it — nothing reached disk or Cloudflare (verified: clean `git status`, `wrangler.jsonc` still on the old account, Kent's account held zero chopshop resources). Both were relaunched from written briefs in the second session; this entry is filled in when their diffs pass Fable review.
+
+**Facts established before relaunch (read-only API/wrangler, token from `~/.config/chopshop/cloudflare.env`):** the token sees exactly one account (Kent's, `ee213082783ec86585150e876edb6107`); workers.dev subdomain `kent-ee2`; account holds unrelated `ai-content-hub` D1 + R2 bucket `ai-content-hub-media` (do not touch); zone **`melodiemc.com` is ACTIVE on Kent's account** (→ DECISIONS D7b); no queues, no Workers.
+
+**Split:** CP1-A = account bootstrap (D1 ×2, R2 ×6, Queues ×6, staging migrations, env-aware `wrangler.jsonc`, pinned ids, preflight extension, `CP1_BOOTSTRAP.md`). CP1-B = worker contract (Hono, two entrypoints + header stripping, `X-Shop-Id` + acting-as, canonical-origin allowlist, password reset via EMAIL_QUEUE → Resend, guest receipt capability, `CP1_B_REPORT.md`). Still to come in CP1: render benchmark + decision (D6), `render_jobs` acquire/complete with fencing, fake printer route (staging only), D1 backup + restore drill.
+
 ## CP0 — Hygiene + baseline (approved 2026-09-26, in progress)
 
 **Done (all on `cf-port`, each verified by Fable before commit):**
@@ -17,13 +25,13 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 **Reviews:** Fable reviewed every builder diff line by line (this file's author). Codex reviewed the PLAN (3 rounds); Codex review of the CP0 *code* (guards/preflight/deploy) is **pending** — CP0 has no deploy, so the `cf-deploy.sh` gate is not yet exercised for real.
 
-**Open in CP0:**
-1. Hono router (replace the if-chain in `cloudflare/src/index.ts`) — can slide into CP1 with the routing contract.
-2. Impeccable audit → design contract in `DESIGN.md` (PLAN §7.2).
-3. Admin/platform baseline screenshots — needs a logged-in browser session handed off by Mikael.
-4. Compromised-secret revocation (DECISIONS D4) — Mikael runs; Claude verifies unused first.
-5. Code retirement of the DELETE list (DECISIONS D2) — wagons/dead callables removed from `src/` + `functions/src`, allowlist shrinks.
-6. Codex review of the CP0 tooling.
-7. **Token scopes** (DECISIONS D5b): the project token lacks R2 (`Workers R2 Storage: Edit`) and `DNS: Edit` — required before CP1 creates buckets/zones.
+**Open in CP0 (status 2026-09-26 evening):**
+1. Hono router → slid into CP1-B (routing contract lands with the entrypoints).
+2. ~~Impeccable audit → design contract~~ ✅ `ef88c4d` `DESIGN_CONTRACT.md`.
+3. Admin/platform baseline screenshots — still needs a logged-in browser session handed off by Mikael.
+4. ~~Compromised-secret revocation~~ ✅ verified unused, commands in `c3f31df` `SECRETS_REVOKE.md`; **Mikael runs them** (D4).
+5. Code retirement of the DELETE list — blocked on D2 sign-off.
+6. Codex review of the CP0 tooling — folded into the CP1 review (same deploy).
+7. ~~Token scopes~~ ✅ D5b answered (R2 + DNS scopes added; `r2 bucket list` on Kent's account works).
 
 **Known gaps carried into CP1:** `wrangler.jsonc` must be retargeted (Kent's `account_id`, `env.staging`/`env.production` with the pinned names); `cloudflare/package.json` scripts call wrangler directly (bypass the preflight) — remove them; `cf-deploy.sh` does not itself enforce clean-checkout CI (CI does); git notes need `git push origin refs/notes/reviews`.
