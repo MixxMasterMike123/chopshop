@@ -40,6 +40,89 @@ export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string
   );
 }
 
+function insertPendingStatement(
+  db: D1Database,
+  job: AuthEmailJob,
+  recipientHash: string,
+  fingerprint: string,
+  now: number,
+): D1PreparedStatement {
+  return db.prepare(
+    `INSERT INTO email_deliveries (
+      delivery_id, tenant_id, kind, recipient_hash, status, attempts,
+      max_attempts, next_attempt_at, expires_at, created_at, updated_at,
+      job_fingerprint
+    ) VALUES (?, ?, ?, ?, 'pending', 0, 8, ?, ?, ?, ?, ?)
+    ON CONFLICT(delivery_id) DO NOTHING`,
+  ).bind(
+    job.deliveryId,
+    job.tenantId ?? null,
+    job.kind,
+    recipientHash,
+    now,
+    job.expiresAt,
+    job.createdAt,
+    Math.max(now, job.createdAt),
+    fingerprint,
+  );
+}
+
+/**
+ * Records a delivery in the ledger BEFORE its job is enqueued.
+ *
+ * The producer half of the ledger: the row exists, `pending`, bound to the
+ * job's fingerprint, from the moment the job is handed to the queue — so an
+ * operator can see a delivery that was requested but never delivered, and the
+ * consumer's claim will refuse a queue message whose body does not match what
+ * the producer recorded. Idempotent: re-recording the same job is a no-op, and
+ * the consumer's claim performs the same insert-if-absent, so a job that
+ * somehow reached the queue unrecorded is still ledgered on first claim.
+ */
+export async function recordAuthEmailDelivery(
+  db: D1Database,
+  job: AuthEmailJob,
+  now: number,
+): Promise<void> {
+  const [recipientHash, fingerprint] = await Promise.all([
+    hashEmailRecipient(job.recipient),
+    fingerprintAuthEmailJob(job),
+  ]);
+  await insertPendingStatement(db, job, recipientHash, fingerprint, now).run();
+}
+
+/**
+ * Closes a recorded delivery whose job never reached the queue.
+ *
+ * Only a row nobody has claimed yet (`pending`, zero attempts) can be
+ * abandoned, so this can never race a consumer that did receive the message.
+ * Without it a failed enqueue would leave a `pending` row that no consumer
+ * will ever see — the ledger holds no recipient, so nothing could resend it.
+ */
+export async function abandonAuthEmailDelivery(
+  db: D1Database,
+  deliveryId: string,
+  errorCode: string,
+  now: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE email_deliveries
+       SET status = 'failed', resolved_at = ?, last_error_code = ?,
+           updated_at = MAX(updated_at, ?)
+       WHERE delivery_id = ?
+         AND status = 'pending'
+         AND attempts = 0`,
+    )
+    .bind(
+      now,
+      ERROR_CODE_PATTERN.test(errorCode) ? errorCode : "E_UNKNOWN",
+      now,
+      deliveryId,
+    )
+    .run();
+  return result.meta.changes === 1;
+}
+
 export async function claimAuthEmailDelivery(
   db: D1Database,
   job: AuthEmailJob,
@@ -53,24 +136,7 @@ export async function claimAuthEmailDelivery(
   const leaseUntil = now + LEASE_DURATION_MS;
 
   const [, claimResult] = await db.batch([
-    db.prepare(
-      `INSERT INTO email_deliveries (
-        delivery_id, tenant_id, kind, recipient_hash, status, attempts,
-        max_attempts, next_attempt_at, expires_at, created_at, updated_at,
-        job_fingerprint
-      ) VALUES (?, ?, ?, ?, 'pending', 0, 8, ?, ?, ?, ?, ?)
-      ON CONFLICT(delivery_id) DO NOTHING`,
-    ).bind(
-      job.deliveryId,
-      job.tenantId ?? null,
-      job.kind,
-      recipientHash,
-      now,
-      job.expiresAt,
-      job.createdAt,
-      now,
-      fingerprint,
-    ),
+    insertPendingStatement(db, job, recipientHash, fingerprint, now),
     db.prepare(
       `UPDATE email_deliveries
        SET status = 'processing',
@@ -167,7 +233,9 @@ export async function completeAuthEmailDelivery(
   db: D1Database,
   deliveryId: string,
   leaseToken: string,
-  providerMessageId: string,
+  // Null when the provider accepted the message without a readable id; the
+  // row is still `sent` — resending to learn the id would email twice.
+  providerMessageId: string | null,
   now: number,
 ): Promise<boolean> {
   const result = await db
@@ -181,6 +249,38 @@ export async function completeAuthEmailDelivery(
          AND lease_token = ?`,
     )
     .bind(providerMessageId, now, now, deliveryId, leaseToken)
+    .run();
+  return result.meta.changes === 1;
+}
+
+/**
+ * Terminally fails a claimed delivery — the provider refused the message
+ * itself (a 4xx that no retry can fix). Lease-guarded like completion, so only
+ * the consumer holding the claim can close it.
+ */
+export async function failAuthEmailDelivery(
+  db: D1Database,
+  deliveryId: string,
+  leaseToken: string,
+  errorCode: string,
+  now: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE email_deliveries
+       SET status = 'failed', resolved_at = ?, lease_token = NULL,
+           lease_until = NULL, last_error_code = ?, updated_at = ?
+       WHERE delivery_id = ?
+         AND status = 'processing'
+         AND lease_token = ?`,
+    )
+    .bind(
+      now,
+      ERROR_CODE_PATTERN.test(errorCode) ? errorCode : "E_UNKNOWN",
+      now,
+      deliveryId,
+      leaseToken,
+    )
     .run();
   return result.meta.changes === 1;
 }

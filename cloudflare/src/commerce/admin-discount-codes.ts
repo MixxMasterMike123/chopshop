@@ -1,4 +1,5 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
+import { auditMetadataJson } from "../auth/live-authorization";
 import type { DiscountScope, DiscountType } from "./discount-codes";
 import {
   DISCOUNT_SCOPES,
@@ -572,7 +573,7 @@ function auditStatement(
   action: string,
   discountCodeId: string,
   now: number,
-  metadata: unknown,
+  metadata: Record<string, unknown> | null,
 ): D1PreparedStatement {
   return db
     .prepare(
@@ -591,7 +592,7 @@ function auditStatement(
       // Field NAMES only. The code string itself is a capability a buyer can
       // spend, and the values are the merchant's campaign terms; neither
       // belongs in an append-only log read by platform operators.
-      metadata === null ? null : JSON.stringify(metadata),
+      auditMetadataJson(principal, metadata),
       now,
     );
 }

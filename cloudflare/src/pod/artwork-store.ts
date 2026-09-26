@@ -1,4 +1,5 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
+import { auditMetadataJson } from "../auth/live-authorization";
 import type {
   JobNotice,
   R2Presigner,
@@ -197,7 +198,7 @@ function auditStatement(
       action,
       artworkId,
       crypto.randomUUID(),
-      JSON.stringify(metadata),
+      auditMetadataJson(principal, metadata),
       now,
     );
 }

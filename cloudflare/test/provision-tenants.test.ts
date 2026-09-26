@@ -117,11 +117,21 @@ async function seedAccess(userId: string, accountType: string): Promise<void> {
 function platformRequest(
   target: string,
   method: string,
-  options: { body?: unknown; cookie?: string; origin?: string | null } = {},
+  options: {
+    body?: unknown;
+    cookie?: string;
+    origin?: string | null;
+    // The active shop for a tenant-admin route (PLAN §2.1). Platform routes
+    // never read it.
+    shopId?: string;
+  } = {},
 ): Request {
   const headers = new Headers();
   if (options.cookie !== undefined) {
     headers.set("cookie", options.cookie);
+  }
+  if (options.shopId !== undefined) {
+    headers.set("x-shop-id", options.shopId);
   }
   const origin =
     options.origin === undefined ? new URL(target).origin : options.origin;
@@ -521,6 +531,7 @@ describe("platform tenant admin grants", () => {
           sku: "SKU-GRANTED",
         },
         cookie: grantee.cookie,
+        shopId: "grant-shop",
       }),
     );
 

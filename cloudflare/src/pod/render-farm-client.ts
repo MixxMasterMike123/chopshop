@@ -25,7 +25,8 @@ import { AwsClient } from "aws4fetch";
  * deliberately does not carry. So the same bytes are reachable two ways in this
  * checkpoint: through the binding (used for HEAD verification and delete, where
  * it is simplest and needs no credentials) and through SigV4 against
- * `https://{accountId}.r2.cloudflarestorage.com` (used for the two capability
+ * `https://{accountId}.r2.cloudflarestorage.com` — or its `.eu.` form for
+ * EU-jurisdiction buckets, see r2S3Endpoint — (used for the two capability
  * URLs handed to the farm). That is not redundancy — they are different
  * mechanisms for different jobs.
  *
@@ -233,6 +234,32 @@ const MINIMUM_SECRET_LENGTH = 16;
 const R2_ENDPOINT_SUFFIX = ".r2.cloudflarestorage.com";
 
 /**
+ * The S3 endpoint for the configured bucket jurisdiction.
+ *
+ * A bucket created with a jurisdiction is only reachable through that
+ * jurisdiction's host — for EU buckets
+ * `https://{accountId}.eu.r2.cloudflarestorage.com` — and a URL signed for the
+ * plain host would be refused by R2 as a bucket that does not exist there. The
+ * CP1 buckets are EU-jurisdiction, so R2_JURISDICTION="eu" is the production
+ * value; unset means the default (non-jurisdictional) host.
+ *
+ * Both hosts still end in `.r2.cloudflarestorage.com`, so the farm's suffix
+ * allowlist accepts either.
+ *
+ * Any OTHER value is not guessed at: isPodConfigured reports the surface
+ * unconfigured, so a typo in the var darkens POD rather than minting URLs for
+ * the wrong jurisdiction.
+ */
+export function r2S3Endpoint(env: Env): string {
+  const jurisdiction = env.R2_JURISDICTION === "eu" ? ".eu" : "";
+  return `https://${env.R2_ACCOUNT_ID as string}${jurisdiction}${R2_ENDPOINT_SUFFIX}`;
+}
+
+function isKnownJurisdiction(value: unknown): boolean {
+  return value === undefined || value === "" || value === "eu";
+}
+
+/**
  * Whether the ENTIRE POD surface exists.
  *
  * FOUR values, and all four are required, because each one is load-bearing for
@@ -281,7 +308,8 @@ export function isPodConfigured(env: Env): boolean {
     typeof env.R2_ACCOUNT_ID === "string" &&
     env.R2_ACCOUNT_ID.length > 0 &&
     typeof env.R2_PRIVATE_BUCKET_NAME === "string" &&
-    env.R2_PRIVATE_BUCKET_NAME.length > 0
+    env.R2_PRIVATE_BUCKET_NAME.length > 0 &&
+    isKnownJurisdiction(env.R2_JURISDICTION)
   );
 }
 
@@ -361,7 +389,6 @@ export function createR2Presigner(env: Env): R2Presigner {
     throw new Error("POD render farm is not configured");
   }
 
-  const accountId = env.R2_ACCOUNT_ID as string;
   const bucketName = env.R2_PRIVATE_BUCKET_NAME as string;
 
   const client = new AwsClient({
@@ -374,7 +401,7 @@ export function createR2Presigner(env: Env): R2Presigner {
     service: "s3",
   });
 
-  const endpoint = `https://${accountId}${R2_ENDPOINT_SUFFIX}`;
+  const endpoint = r2S3Endpoint(env);
 
   const sign = async (
     objectKey: string,

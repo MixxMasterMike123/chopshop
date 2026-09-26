@@ -148,15 +148,43 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
     .join("");
 }
 
+/**
+ * Admin routes take the active shop from `X-Shop-Id` (PLAN §2.1), never from
+ * the hostname. Each fixture host stands for one shop, so the helpers name the
+ * shop their host stands for; `shopId` overrides that and `null` omits it.
+ */
+const SHOP_BY_HOST: Record<string, string> = {
+  [new URL(HOST_A).host]: TENANT_A,
+  [new URL(HOST_B).host]: TENANT_B,
+};
+
+function setShopHeader(
+  headers: Headers,
+  target: string,
+  shopId: string | null | undefined,
+): void {
+  const resolved =
+    shopId === undefined ? SHOP_BY_HOST[new URL(target).host] : shopId;
+  if (resolved !== undefined && resolved !== null) {
+    headers.set("x-shop-id", resolved);
+  }
+}
+
 function objectRequest(
   target: string,
   method: string,
-  options: { body?: unknown; cookie?: string; origin?: string | null } = {},
+  options: {
+    body?: unknown;
+    cookie?: string;
+    origin?: string | null;
+    shopId?: string | null;
+  } = {},
 ): Request {
   const headers = new Headers();
   if (options.cookie !== undefined) {
     headers.set("cookie", options.cookie);
   }
+  setShopHeader(headers, target, options.shopId);
   const origin =
     options.origin === undefined ? new URL(target).origin : options.origin;
   if (origin !== null) {
@@ -184,12 +212,14 @@ function uploadRequest(
     contentLength?: string;
     cookie?: string;
     origin?: string | null;
+    shopId?: string | null;
   } = {},
 ): Request {
   const headers = new Headers();
   if (options.cookie !== undefined) {
     headers.set("cookie", options.cookie);
   }
+  setShopHeader(headers, target, options.shopId);
   const origin =
     options.origin === undefined ? new URL(target).origin : options.origin;
   if (origin !== null) {
@@ -561,7 +591,11 @@ describe("admin object upload integrity", () => {
     const response = await exports.default.fetch(
       new Request(`${HOST_A}/v1/admin/objects/${reserved.objectId}/content`, {
         body: readable,
-        headers: { cookie: adminA.cookie, origin: HOST_A },
+        headers: {
+          cookie: adminA.cookie,
+          origin: HOST_A,
+          "x-shop-id": TENANT_A,
+        },
         method: "PUT",
       }),
     );
@@ -643,6 +677,7 @@ describe("admin object reserve validation", () => {
       "content-type": "application/json",
       cookie: adminA.cookie,
       origin: HOST_A,
+      "x-shop-id": TENANT_A,
     });
     const response = await exports.default.fetch(
       new Request(`${HOST_A}/v1/admin/objects`, {

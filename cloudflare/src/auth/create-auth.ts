@@ -1,5 +1,11 @@
 import { betterAuth } from "better-auth";
 
+import { readCanonicalOrigins } from "../lib/origins";
+import {
+  enqueuePasswordResetEmail,
+  PASSWORD_RESET_TOKEN_TTL_SECONDS,
+} from "./password-reset";
+
 const MINIMUM_SECRET_LENGTH = 32;
 
 export function isAuthConfigured(env: Env): boolean {
@@ -9,14 +15,23 @@ export function isAuthConfigured(env: Env): boolean {
   );
 }
 
-function trustedOrigins(value: string): string[] {
-  const origins = value
-    .split(",")
+function trustedOrigins(env: Env): string[] {
+  const origins = env.AUTH_TRUSTED_ORIGINS.split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
 
   if (origins.length === 0) {
     throw new Error("AUTH_TRUSTED_ORIGINS must contain at least one origin");
+  }
+
+  // The canonical WEB origin is trusted by definition: it is where the reset
+  // link's redirect lands, and Better Auth validates that redirect against this
+  // list. Adding it here rather than relying on AUTH_TRUSTED_ORIGINS to repeat
+  // it keeps one source of truth for "the web app's origin". A missing or
+  // malformed allowlist adds nothing — and the reset routes are dark anyway.
+  const canonical = readCanonicalOrigins(env);
+  if (canonical !== null && !origins.includes(canonical.web)) {
+    origins.push(canonical.web);
   }
 
   return origins;
@@ -28,6 +43,18 @@ export function createAuth(env: Env) {
   }
 
   return betterAuth({
+    advanced: {
+      ipAddress: {
+        // The client address Better Auth's own limiter keys on. Its default is
+        // X-Forwarded-For, which a caller can set to anything — every forged
+        // value a fresh bucket, so its sign-in and reset limits were
+        // bypassable. CF-Connecting-IP is set by Cloudflare's edge and is the
+        // same header src/lib/rate-limit.ts trusts. Without it (a request that
+        // did not come through the edge) Better Auth falls back to one shared
+        // bucket, which is stricter, never looser.
+        ipAddressHeaders: ["cf-connecting-ip"],
+      },
+    },
     appName: "MeteorShop",
     baseURL: env.AUTH_BASE_URL,
     database: env.DB,
@@ -49,7 +76,19 @@ export function createAuth(env: Env) {
       autoSignIn: false,
       enabled: true,
       requireEmailVerification: false,
+      // One hour, matching the lifetime of the email job that carries it.
+      resetPasswordTokenExpiresIn: PASSWORD_RESET_TOKEN_TTL_SECONDS,
       revokeSessionsOnPasswordReset: true,
+      // Never sends inline: records a ledger row and enqueues the job for the
+      // `-email` consumer (src/auth/password-reset.ts). The link is rebuilt
+      // there from the token and the canonical origins; the `url` Better Auth
+      // offers is ignored on purpose.
+      sendResetPassword: async ({ token, user }) => {
+        await enqueuePasswordResetEmail(env, {
+          recipient: user.email,
+          token,
+        });
+      },
     },
     rateLimit: {
       enabled: true,
@@ -63,7 +102,7 @@ export function createAuth(env: Env) {
       expiresIn: 60 * 60 * 24 * 7,
       updateAge: 60 * 60 * 24,
     },
-    trustedOrigins: trustedOrigins(env.AUTH_TRUSTED_ORIGINS),
+    trustedOrigins: trustedOrigins(env),
     verification: {
       storeIdentifier: "hashed",
     },

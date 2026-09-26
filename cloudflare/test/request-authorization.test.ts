@@ -134,7 +134,13 @@ describe("session-to-live-principal authorization", () => {
     await expect(authorizePlatformRequest(env, request)).resolves.toBeNull();
   });
 
-  it("binds tenant authorization to both session and request hostname", async () => {
+  /**
+   * CONTRACT CHANGE (CP1, PLAN §2.1): the active shop is the one the request
+   * NAMES in X-Shop-Id, checked against the session's live memberships. The
+   * hostname used to decide it; it no longer takes part at all, so this test
+   * sends every request to one shared admin host and lets only the header vary.
+   */
+  it("binds tenant authorization to the session and the X-Shop-Id it names", async () => {
     const signedUp = await signUp("tenant-session@example.test");
     await seedAccess(signedUp.userId, "tenant_admin");
     await seedTenantAdmin(
@@ -153,6 +159,41 @@ describe("session-to-live-principal authorization", () => {
       .bind(NOW + 1, "tenant-session-b")
       .run();
 
+    const onSharedHost = (shopId: string | null): Request => {
+      const request = authenticatedRequest(
+        "https://admin.session.test/products",
+        signedUp.cookie,
+      );
+      if (shopId !== null) {
+        request.headers.set("x-shop-id", shopId);
+      }
+      return request;
+    };
+
+    await expect(
+      authorizeTenantAdminRequest(env, onSharedHost("tenant-session-a")),
+    ).resolves.toEqual({
+      accountType: "tenant_admin",
+      role: "admin",
+      tenantId: "tenant-session-a",
+      userId: signedUp.userId,
+    });
+    // Revoked membership, no header, malformed header, unknown shop.
+    await expect(
+      authorizeTenantAdminRequest(env, onSharedHost("tenant-session-b")),
+    ).resolves.toBeNull();
+    await expect(
+      authorizeTenantAdminRequest(env, onSharedHost(null)),
+    ).resolves.toBeNull();
+    await expect(
+      authorizeTenantAdminRequest(env, onSharedHost("TENANT-SESSION-A")),
+    ).resolves.toBeNull();
+    await expect(
+      authorizeTenantAdminRequest(env, onSharedHost("tenant-session-zzz")),
+    ).resolves.toBeNull();
+
+    // The hostname carries no authority any more: shop A's own admin host with
+    // no header is refused, and shop B's host naming shop A is accepted.
     await expect(
       authorizeTenantAdminRequest(
         env,
@@ -161,16 +202,15 @@ describe("session-to-live-principal authorization", () => {
           signedUp.cookie,
         ),
       ),
-    ).resolves.toMatchObject({ tenantId: "tenant-session-a" });
-    await expect(
-      authorizeTenantAdminRequest(
-        env,
-        authenticatedRequest(
-          "https://admin-b.session.test/products",
-          signedUp.cookie,
-        ),
-      ),
     ).resolves.toBeNull();
+    const viaOtherHost = authenticatedRequest(
+      "https://admin-b.session.test/products",
+      signedUp.cookie,
+    );
+    viaOtherHost.headers.set("x-shop-id", "tenant-session-a");
+    await expect(
+      authorizeTenantAdminRequest(env, viaOtherHost),
+    ).resolves.toMatchObject({ tenantId: "tenant-session-a" });
   });
 
   it("invalidates the session after server-side revocation", async () => {

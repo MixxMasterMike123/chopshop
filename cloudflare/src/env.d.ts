@@ -1,4 +1,49 @@
 interface Env {
+  // ── THE CP1 BINDING/VAR CONTRACT (shared with the wrangler.jsonc owner) ───
+  // Declared here so the code compiles against the contract rather than
+  // against whichever environment `wrangler types` last generated from. Every
+  // binding a surface needs is optional (`| undefined`) and that surface
+  // answers a fail-closed 404 — or, for a queue consumer, retries — until it
+  // exists.
+
+  // "staging" | "production", and the Worker's name. Reported by /health.
+  APP_ENV: string;
+  SERVICE_NAME: string;
+
+  // The API's own origin; Better Auth's baseURL, and the only origin an
+  // auth-email action link may point at (src/email/auth-email-job.ts).
+  AUTH_BASE_URL: string;
+
+  // Comma-separated origins Better Auth accepts state-changing requests from.
+  AUTH_TRUSTED_ORIGINS: string;
+
+  // JSON object var `{ "api": "https://…", "web": "https://…" }` — the
+  // per-environment canonical origin allowlist (PLAN §2.1). Typed `unknown`
+  // on purpose: it is only ever read through src/lib/origins.ts, which
+  // validates it and fails closed when it is missing or malformed.
+  CANONICAL_ORIGINS: unknown;
+
+  // Resend API key (Worker secret). Absent ⇒ the email consumer never
+  // attempts delivery; it logs and retries the batch with a delay.
+  RESEND_API_KEY: string | undefined;
+
+  // The `from` address for transactional email, e.g.
+  // "ChopShop <no-reply@example.com>". Absent or malformed ⇒ same as a
+  // missing RESEND_API_KEY: no delivery attempt, retry later.
+  EMAIL_FROM: string | undefined;
+
+  // Queue producers. The consumer side is the single `queue()` export, which
+  // dispatches on the SUFFIX of `batch.queue` (`-outbox`, `-email`,
+  // `-render-jobs`) because the full names are environment-specific
+  // (`chopshop-stg-email`, `chopshop-prod-email`, ...).
+  OUTBOX_QUEUE: Queue | undefined;
+  EMAIL_QUEUE: Queue | undefined;
+  RENDER_JOBS_QUEUE: Queue | undefined;
+
+  // The three storage classes (PLAN §2.5). Only PRIVATE_BUCKET is read today.
+  PUBLIC_BUCKET: R2Bucket | undefined;
+  PRODUCTION_BUCKET: R2Bucket | undefined;
+
   // Deployed as a Worker secret; absent until the auth checkpoint provisions
   // it, so every reader must treat "not configured" as "no session possible".
   BETTER_AUTH_SECRET: string | undefined;
@@ -76,4 +121,11 @@ interface Env {
   // while the S3 path addresses the bucket by name inside a signed URL. A
   // binding carries no way to recover the name it points at.
   R2_PRIVATE_BUCKET_NAME: string | undefined;
+
+  // The buckets' R2 jurisdiction. "eu" ⇒ presigned URLs use the
+  // `{account}.eu.r2.cloudflarestorage.com` host that EU-jurisdiction buckets
+  // are only reachable through; unset ⇒ the default host. Typed as the two
+  // values the code accepts; any other runtime value darkens the POD surface
+  // (src/pod/render-farm-client.ts) rather than being guessed at.
+  R2_JURISDICTION: "eu" | undefined;
 }

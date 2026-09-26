@@ -15,9 +15,33 @@ export default defineConfig({
       return {
         wrangler: {
           configPath: "./wrangler.jsonc",
+          // Bindings live under env.staging (top level is bindings-less by design).
+          environment: "staging",
         },
         miniflare: {
           bindings: {
+            // Pinned here rather than inherited from wrangler.jsonc, so the
+            // suites keep one fixed origin whichever environment section the
+            // deploy config moves these vars into. The suites hardcode this
+            // origin as AUTH_ORIGIN.
+            APP_ENV: "staging",
+            AUTH_BASE_URL: "https://meteorshop-stg-api.micke-ohlen.workers.dev",
+            AUTH_TRUSTED_ORIGINS:
+              "https://meteorshop-stg-api.micke-ohlen.workers.dev",
+            SERVICE_NAME: "meteorshop-stg-api",
+            // The per-env canonical origin allowlist (PLAN §2.1), as an object
+            // var exactly as the deploy config declares it. .invalid is
+            // reserved (RFC 2606): a link built from these can never resolve.
+            CANONICAL_ORIGINS: {
+              api: "https://api.test.invalid",
+              web: "https://web.test.invalid",
+            },
+            // Test-only and never real. Every email-consumer suite injects a
+            // fake fetch through the symbol seam, and outboundService below
+            // refuses any request that escapes it, so this key can never be
+            // presented to api.resend.com.
+            RESEND_API_KEY: "re_test_only_fake_key_for_workers_tests",
+            EMAIL_FROM: "ChopShop Test <no-reply@mail.test.invalid>",
             BETTER_AUTH_SECRET:
               "test-only-better-auth-secret-at-least-32-characters",
             BOOTSTRAP_TOKEN:
@@ -41,6 +65,11 @@ export default defineConfig({
             // dereferences. The gate only asks whether all six EXIST.
             R2_ACCESS_KEY_ID: "test-only-r2-access-key-id-value",
             R2_ACCOUNT_ID: "test0account0id0for0workers0test",
+            // The CP1 buckets were created with EU jurisdiction, so the S3
+            // endpoint is {account}.eu.r2.cloudflarestorage.com. Pinned here
+            // exactly as deployed; the presigner suite overrides it to prove
+            // the default-host fallback.
+            R2_JURISDICTION: "eu",
             R2_PRIVATE_BUCKET_NAME: "meteorshop-test-private",
             R2_SECRET_ACCESS_KEY: "test-only-r2-secret-access-key-value",
             RENDER_FARM_TOKEN: "test-only-render-farm-token-32-chars",
@@ -48,9 +77,28 @@ export default defineConfig({
               "https://render-farm.test.invalid/renderFarmProcessArtwork",
             TEST_MIGRATIONS: migrations,
           },
-          // Test-only: the deploy config has no R2 binding yet, so the object
-          // store must be exercised against a local bucket.
-          r2Buckets: ["PRIVATE_BUCKET"],
+          // The three CP1 queues, under test-only names that keep the
+          // production suffixes (`-email`, `-outbox`, `-render-jobs`) the
+          // single queue() export dispatches on.
+          queueProducers: {
+            EMAIL_QUEUE: { queueName: "chopshop-test-email" },
+            OUTBOX_QUEUE: { queueName: "chopshop-test-outbox" },
+            RENDER_JOBS_QUEUE: { queueName: "chopshop-test-render-jobs" },
+          },
+          queueConsumers: {
+            "chopshop-test-email": { maxBatchSize: 10, maxRetries: 8 },
+            "chopshop-test-outbox": { maxBatchSize: 10, maxRetries: 8 },
+            "chopshop-test-render-jobs": { maxBatchSize: 10, maxRetries: 8 },
+          },
+          // No test reaches the network. Every third-party client (Stripe, the
+          // render farm, Resend) is replaced by a fake through its seam; this
+          // is the backstop that makes a missed seam fail loudly instead of
+          // quietly calling a real API with a fake key.
+          outboundService: (request: Request) =>
+            new Response(
+              `outbound network is disabled in tests: ${new URL(request.url).host}`,
+              { status: 599 },
+            ),
         },
       };
     }),

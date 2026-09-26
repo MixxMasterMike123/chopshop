@@ -133,14 +133,38 @@ async function seedMembership(
     .run();
 }
 
+/**
+ * Admin routes take the active shop from `X-Shop-Id` (PLAN §2.1), never from
+ * the hostname. Each fixture host stands for one shop, so by default the helper
+ * names the shop its host stands for; `shopId` overrides that, and `null`
+ * omits the header. The host itself no longer reaches the guard — pinned by the
+ * "active shop" cases in this file.
+ */
+const SHOP_BY_HOST: Record<string, string> = {
+  [new URL(HOST_A).host]: TENANT_A,
+  [new URL(HOST_B).host]: TENANT_B,
+};
+
 function adminRequest(
   target: string,
   method: string,
-  options: { body?: unknown; cookie?: string; origin?: string | null } = {},
+  options: {
+    body?: unknown;
+    cookie?: string;
+    origin?: string | null;
+    shopId?: string | null;
+  } = {},
 ): Request {
   const headers = new Headers();
   if (options.cookie !== undefined) {
     headers.set("cookie", options.cookie);
+  }
+  const shopId =
+    options.shopId === undefined
+      ? SHOP_BY_HOST[new URL(target).host]
+      : options.shopId;
+  if (shopId !== undefined && shopId !== null) {
+    headers.set("x-shop-id", shopId);
   }
   const origin =
     options.origin === undefined ? new URL(target).origin : options.origin;
@@ -493,6 +517,77 @@ describe("tenant-admin catalogue authorization", () => {
         .bind(product.productId)
         .first<{ name: string }>(),
     ).resolves.toEqual({ name: "Tenant A Only" });
+  });
+
+  it("takes the active shop from X-Shop-Id and ignores the hostname", async () => {
+    // Admin A, on tenant B's hostname, naming shop A: the guard never looks at
+    // the host, so the product lands in shop A.
+    const response = await exports.default.fetch(
+      adminRequest(`${HOST_B}/v1/admin/products`, "POST", {
+        body: {
+          currency: "SEK",
+          name: "Header Decides",
+          priceMinor: 2_500,
+          sku: "SKU-HEADER-DECIDES",
+        },
+        cookie: adminA.cookie,
+        shopId: TENANT_A,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    const { product } = await response.json<AdminProductBody>();
+    await expect(
+      env.DB.prepare("SELECT tenant_id FROM products WHERE product_id = ?")
+        .bind(product.productId)
+        .first<{ tenant_id: string }>(),
+    ).resolves.toEqual({ tenant_id: TENANT_A });
+  });
+
+  it.each([
+    ["missing", null],
+    ["malformed", "Tenant A!"],
+    ["unknown", "tenant-admin-nowhere"],
+    ["another admin's", TENANT_B],
+  ])("answers the opaque 404 for a %s X-Shop-Id", async (label, shopId) => {
+    const before = await countProducts(TENANT_A);
+    const response = await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products`, "POST", {
+        body: {
+          currency: "SEK",
+          name: `Shop header ${label}`,
+          priceMinor: 1_000,
+          sku: `SKU-SHOP-HEADER-${label.replace(/\W/g, "")}`,
+        },
+        cookie: adminA.cookie,
+        shopId,
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "not_found", message: "Route not found" },
+    });
+    await expect(countProducts(TENANT_A)).resolves.toBe(before);
+  });
+
+  it("refuses tenant B's admin naming shop A, even on shop A's hostname", async () => {
+    const before = await countProducts(TENANT_A);
+    const response = await exports.default.fetch(
+      adminRequest(`${HOST_A}/v1/admin/products`, "POST", {
+        body: {
+          currency: "SEK",
+          name: "Borrowed Header",
+          priceMinor: 1_000,
+          sku: "SKU-BORROWED-HEADER",
+        },
+        cookie: adminB.cookie,
+        shopId: TENANT_A,
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(countProducts(TENANT_A)).resolves.toBe(before);
   });
 
   it("hides the surface after the session is revoked", async () => {

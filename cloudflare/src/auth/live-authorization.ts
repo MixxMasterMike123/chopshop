@@ -5,9 +5,38 @@ export interface PlatformPrincipal {
 
 export interface TenantAdminPrincipal {
   accountType: "tenant_admin";
+  /**
+   * Present only when a PLATFORM user reached this shop through an acting-as
+   * grant (PLAN §2.1) rather than a membership. `userId` is then the platform
+   * user's own id — never an impersonated admin — and every mutation that
+   * audits records the grant beside it (see auditMetadataJson).
+   */
+  actingAs?: { grantId: string };
   role: "admin";
   tenantId: string;
   userId: string;
+}
+
+/**
+ * The `metadata_json` a tenant-admin mutation writes to `audit_events`.
+ *
+ * Unchanged for a member admin. Under an acting-as grant the grant id is added,
+ * so every change a platform user makes inside a shop is traceable to the
+ * audited grant that allowed it — the actor column alone would only say WHO,
+ * not under which time-boxed permission.
+ */
+export function auditMetadataJson(
+  principal: TenantAdminPrincipal,
+  metadata: Record<string, unknown> | null,
+): string | null {
+  if (principal.actingAs === undefined) {
+    return metadata === null ? null : JSON.stringify(metadata);
+  }
+
+  return JSON.stringify({
+    ...(metadata ?? {}),
+    actingAsGrantId: principal.actingAs.grantId,
+  });
 }
 
 export interface PrintPrincipal {

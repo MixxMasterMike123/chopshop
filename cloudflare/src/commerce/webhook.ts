@@ -1,3 +1,4 @@
+import { mintReceiptCapability } from "./receipts";
 import type { StripeWebhookVerifier, VerifiedStripeEvent } from "./stripe-client";
 
 /**
@@ -548,9 +549,17 @@ export async function handleStripeWebhookEvent(
   const orderId = crypto.randomUUID();
   const orderNumber = generateOrderNumber(now);
 
+  // The buyer's receipt capability (src/commerce/receipts.ts): its hash and
+  // expiry ride on the order row, and the raw token is parked for exactly one
+  // hand-off to the confirmation poll. Minted here, in the order's own batch,
+  // so there is never an order without a capability or a capability without
+  // an order — and a rolled-back delivery leaves neither behind.
+  const receipt = await mintReceiptCapability(now);
+
   // ── ONE BATCH, OR NOTHING ────────────────────────────────────────────────
-  // Order, lines, status history, the checkout transition, the discount burn,
-  // the audit row and the event ledger row all commit together.
+  // Order, receipt hand-off, lines, status history, the checkout transition,
+  // the discount burn, the audit row and the event ledger row all commit
+  // together.
   //
   // This is the checkpoint's central correctness claim and the one place it
   // beats production outright. There, `orderRef.create()` is followed by four
@@ -567,8 +576,9 @@ export async function handleStripeWebhookEvent(
           status, customer_email, currency, delivery_method, shipping_country,
           subtotal_minor, shipping_minor, vat_minor, vat_rate_bp,
           discount_minor, discount_code_id, total_minor, captured_minor,
-          refunded_total_minor, stripe_event_id, paid_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+          refunded_total_minor, stripe_event_id, paid_at, created_at, updated_at,
+          receipt_token_hash, receipt_token_expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         orderId,
@@ -597,6 +607,22 @@ export async function handleStripeWebhookEvent(
         now,
         now,
         now,
+        receipt.tokenHash,
+        receipt.expiresAt,
+      ),
+    db
+      .prepare(
+        `INSERT INTO order_receipt_handoffs (
+          checkout_id, tenant_id, order_id, receipt_token, expires_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        checkout.checkout_id,
+        checkout.tenant_id,
+        orderId,
+        receipt.token,
+        receipt.handoffExpiresAt,
+        receipt.handoffCreatedAt,
       ),
   ];
 

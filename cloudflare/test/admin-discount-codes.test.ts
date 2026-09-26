@@ -130,14 +130,38 @@ async function seedMembership(
     .run();
 }
 
+/**
+ * Admin routes take the active shop from `X-Shop-Id` (PLAN §2.1), never from
+ * the hostname. Each fixture host stands for one shop, so by default the helper
+ * names the shop its host stands for; `shopId` overrides that, and `null`
+ * omits the header. The host itself no longer reaches the guard — pinned by the
+ * "active shop" cases in this file.
+ */
+const SHOP_BY_HOST: Record<string, string> = {
+  [new URL(HOST_A).host]: TENANT_A,
+  [new URL(HOST_B).host]: TENANT_B,
+};
+
 function adminRequest(
   target: string,
   method: string,
-  options: { body?: unknown; cookie?: string; origin?: string | null } = {},
+  options: {
+    body?: unknown;
+    cookie?: string;
+    origin?: string | null;
+    shopId?: string | null;
+  } = {},
 ): Request {
   const headers = new Headers();
   if (options.cookie !== undefined) {
     headers.set("cookie", options.cookie);
+  }
+  const shopId =
+    options.shopId === undefined
+      ? SHOP_BY_HOST[new URL(target).host]
+      : options.shopId;
+  if (shopId !== undefined && shopId !== null) {
+    headers.set("x-shop-id", shopId);
   }
   const origin =
     options.origin === undefined ? new URL(target).origin : options.origin;

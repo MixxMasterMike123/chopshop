@@ -487,7 +487,19 @@ interface RequestOptions {
   host?: string;
   method?: string;
   origin?: string | null;
+  shopId?: string | null;
 }
+
+/**
+ * Admin routes take the active shop from `X-Shop-Id` (PLAN §2.1), never from
+ * the hostname. Each fixture host stands for one shop, so the helper names the
+ * shop its host stands for; `shopId` overrides that and `null` omits it.
+ * Platform routes ignore the header entirely.
+ */
+const SHOP_BY_HOST: Record<string, string> = {
+  [new URL(HOST_A).host]: TENANT_A,
+  [new URL(HOST_B).host]: TENANT_B,
+};
 
 function podRequest(path: string, options: RequestOptions = {}): Request {
   const {
@@ -497,10 +509,15 @@ function podRequest(path: string, options: RequestOptions = {}): Request {
     method = "GET",
     origin = host,
   } = options;
+  const shopId =
+    options.shopId === undefined ? SHOP_BY_HOST[new URL(host).host] : options.shopId;
 
   const headers: Record<string, string> = {};
   if (cookie !== undefined) {
     headers.cookie = cookie;
+  }
+  if (shopId !== undefined && shopId !== null) {
+    headers["x-shop-id"] = shopId;
   }
   if (origin !== null) {
     headers.origin = origin;
@@ -1504,6 +1521,7 @@ describe("the rate limiter", () => {
           "content-type": "application/json",
           cookie: adminA.cookie,
           origin: HOST_A,
+          "x-shop-id": TENANT_A,
         },
         method: "POST",
       });
@@ -1529,6 +1547,7 @@ describe("the rate limiter", () => {
             "content-type": "application/json",
             cookie: adminA.cookie,
             origin: HOST_A,
+            "x-shop-id": TENANT_A,
           },
           method: "POST",
         }),
@@ -1544,6 +1563,7 @@ describe("the rate limiter", () => {
           "content-type": "application/json",
           cookie: adminA.cookie,
           origin: HOST_A,
+          "x-shop-id": TENANT_A,
         },
         method: "POST",
       }),
@@ -1562,6 +1582,7 @@ describe("the rate limiter", () => {
           headers: {
             "cf-connecting-ip": "203.0.113.11",
             cookie: adminA.cookie,
+            "x-shop-id": TENANT_A,
           },
           method: "GET",
         }),
@@ -2033,8 +2054,10 @@ describe("the real presigner (aws4fetch)", () => {
     const url = new URL(await presigner.presignGet("pod/t/print/x.png"));
 
     expect(url.protocol).toBe("https:");
+    // EU-jurisdiction buckets (R2_JURISDICTION="eu" in the test bindings, as
+    // deployed) are only reachable through the .eu. host.
     expect(url.hostname).toBe(
-      `${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      `${env.R2_ACCOUNT_ID}.eu.r2.cloudflarestorage.com`,
     );
     expect(url.pathname).toBe(
       `/${env.R2_PRIVATE_BUCKET_NAME}/pod/t/print/x.png`,
@@ -2043,6 +2066,36 @@ describe("the real presigner (aws4fetch)", () => {
     expect(url.searchParams.get("X-Amz-Signature")).not.toBeNull();
     // The credential scope must name the region and service R2 documents.
     expect(url.searchParams.get("X-Amz-Credential")).toContain("/auto/s3/");
+  });
+
+  it("signs against the default host when no jurisdiction is configured", async () => {
+    const { createR2Presigner } = await import("../src/pod/render-farm-client");
+    const presigner = createR2Presigner({
+      ...env,
+      R2_JURISDICTION: undefined,
+    } as unknown as Env);
+    const url = new URL(await presigner.presignGet("pod/t/print/x.png"));
+
+    expect(url.hostname).toBe(`${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`);
+    expect(url.pathname).toBe(
+      `/${env.R2_PRIVATE_BUCKET_NAME}/pod/t/print/x.png`,
+    );
+    expect(url.searchParams.get("X-Amz-Signature")).not.toBeNull();
+  });
+
+  it("darkens the POD surface for a jurisdiction it does not know", async () => {
+    const { isPodConfigured } = await import("../src/pod/render-farm-client");
+
+    expect(isPodConfigured(env as unknown as Env)).toBe(true);
+    expect(
+      isPodConfigured({ ...env, R2_JURISDICTION: undefined } as unknown as Env),
+    ).toBe(true);
+    for (const value of ["EU", "fedramp", "eu ", "us"]) {
+      expect(
+        isPodConfigured({ ...env, R2_JURISDICTION: value } as unknown as Env),
+        value,
+      ).toBe(false);
+    }
   });
 
   it("signs the content type into a PUT url so R2 pins the media type", async () => {

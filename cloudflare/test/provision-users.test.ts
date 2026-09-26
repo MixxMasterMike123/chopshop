@@ -99,11 +99,21 @@ async function seedAccess(
 function platformRequest(
   target: string,
   method: string,
-  options: { body?: unknown; cookie?: string; origin?: string | null } = {},
+  options: {
+    body?: unknown;
+    cookie?: string;
+    origin?: string | null;
+    // The active shop for a tenant-admin route (PLAN §2.1). Platform routes
+    // never read it.
+    shopId?: string;
+  } = {},
 ): Request {
   const headers = new Headers();
   if (options.cookie !== undefined) {
     headers.set("cookie", options.cookie);
+  }
+  if (options.shopId !== undefined) {
+    headers.set("x-shop-id", options.shopId);
   }
   const origin =
     options.origin === undefined ? new URL(target).origin : options.origin;
@@ -303,6 +313,7 @@ describe("platform user provisioning: full live loop", () => {
           sku: "PROVISION-EARLY",
         },
         cookie: earlyCookie,
+        shopId: SHOP_TENANT,
       }),
     );
     expect(beforeGrant.status).toBe(404);
@@ -349,6 +360,7 @@ describe("platform user provisioning: full live loop", () => {
           sku: "PROVISION-001",
         },
         cookie,
+        shopId: SHOP_TENANT,
       }),
     );
 

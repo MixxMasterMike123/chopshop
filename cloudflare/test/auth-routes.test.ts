@@ -187,10 +187,20 @@ describe("auth route rejection", () => {
 });
 
 describe("unmounted auth routes", () => {
+  // CONTRACT CHANGE (CP1): POST /api/auth/reset-password, POST
+  // /api/auth/request-password-reset and GET /api/auth/reset-password/:token
+  // are now MOUNTED (test/password-reset.test.ts). What stays unmounted around
+  // them is pinned here instead: the legacy /forget-password name, the wrong
+  // methods, a token-less or implausibly short link, and trailing slashes.
   it.each([
     ["POST", "/api/auth/sign-up/email"],
     ["POST", "/api/auth/forget-password"],
-    ["POST", "/api/auth/reset-password"],
+    ["GET", "/api/auth/reset-password"],
+    ["GET", "/api/auth/reset-password/short"],
+    ["GET", "/api/auth/reset-password/abcdefghijklmnopqrstuvwx/extra"],
+    ["POST", "/api/auth/reset-password/abcdefghijklmnopqrstuvwx"],
+    ["GET", "/api/auth/request-password-reset"],
+    ["POST", "/api/auth/request-password-reset/"],
     ["GET", "/api/auth/verify-email"],
     ["GET", "/api/auth/sign-in/social"],
     ["GET", "/api/auth/whatever"],

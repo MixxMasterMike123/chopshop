@@ -1,4 +1,5 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
+import { auditMetadataJson } from "../auth/live-authorization";
 import type {
   ShippingRates,
   ShippingRatesWire,
@@ -437,7 +438,7 @@ function auditStatement(
   action: string,
   productId: string,
   now: number,
-  metadata: unknown,
+  metadata: Record<string, unknown> | null,
 ): D1PreparedStatement {
   return db
     .prepare(
@@ -453,7 +454,7 @@ function auditStatement(
       action,
       productId,
       crypto.randomUUID(),
-      metadata === null ? null : JSON.stringify(metadata),
+      auditMetadataJson(principal, metadata),
       now,
     );
 }
