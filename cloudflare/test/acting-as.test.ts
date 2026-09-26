@@ -571,6 +571,23 @@ describe("revoke audit correlation (Codex 7908e83)", () => {
   });
 });
 
+describe("revocation id is final (Codex 694e559)", () => {
+  it("refuses erasing or reassigning a revoked grant's revocation_id", async () => {
+    const row = await env.DB.prepare(
+      `SELECT id FROM acting_as_grants WHERE revoked_at IS NOT NULL AND revocation_id IS NOT NULL LIMIT 1`,
+    ).first<{ id: string }>();
+    expect(row).not.toBeNull();
+    await expect(
+      env.DB.prepare(`UPDATE acting_as_grants SET revocation_id = NULL WHERE id = ?`).bind(row?.id).run(),
+    ).rejects.toThrow(/final/);
+    await expect(
+      env.DB.prepare(`UPDATE acting_as_grants SET revocation_id = ? WHERE id = ?`)
+        .bind(crypto.randomUUID(), row?.id)
+        .run(),
+    ).rejects.toThrow(/final/);
+  });
+});
+
 describe("grant ledger integrity (schema)", () => {
   async function anyGrantId(): Promise<string> {
     const row = await env.DB.prepare(
