@@ -116,6 +116,7 @@ import {
   handleRenderJobsRoute,
   RENDER_API_PATH_PREFIX,
 } from "./routes/render-jobs";
+import { isRenderJobsConfigured } from "./pod/render-jobs";
 import { handleFakePrinterRoute } from "./routes/fake-printer";
 import { FAKE_PRINTER_JOBS_PATH } from "./dispatch/fake-printer";
 
@@ -1206,13 +1207,32 @@ function podArtworkIdFromPath(pathname: string): string | null {
  * — the second of which is a fact about this worker's own correctness that no
  * client needs.
  */
+/**
+ * The admin POD surface exists only when the creation path in use can finish.
+ *
+ * Asynchronous creation (SYNC_RENDER_FALLBACK = false) queues a job that only
+ * the /v1/render pull surface can hand to a farm, so it needs that surface's
+ * configuration (isRenderJobsConfigured: a ≥ 32-character RENDER_FARM_TOKEN,
+ * the presigner, the private bucket). Gating on isPodConfigured alone (a token
+ * of ≥ 16) left a window: a 16–31-character token accepted artworks whose jobs
+ * no farm could ever acquire, so they sat 'processing' forever. The
+ * synchronous fallback keeps its own gate. Same all-or-nothing rule as before:
+ * a partially configured surface is dark, not degraded.
+ */
+function isAdminPodSurfaceConfigured(env: Env): boolean {
+  return (
+    isPodConfigured(env) &&
+    (SYNC_RENDER_FALLBACK || isRenderJobsConfigured(env))
+  );
+}
+
 async function handleAdminPodRoute(
   env: Env,
   request: Request,
   url: URL,
 ): Promise<Response> {
   // The unconfigured gate, first and before everything.
-  if (!isPodConfigured(env)) {
+  if (!isAdminPodSurfaceConfigured(env)) {
     return adminNotFoundResponse();
   }
 

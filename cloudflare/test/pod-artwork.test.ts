@@ -795,6 +795,58 @@ describe("the dark surface", () => {
     expect(await authed.json()).toStrictEqual(await anonymous.json());
   });
 
+  // Codex CP1-C P2: the admin surface used to need only a ≥16-character farm
+  // token while the pull surface needs ≥32, so a 16–31-character token queued
+  // artworks no farm could ever acquire — 'processing' forever.
+  it("a farm token the pull surface refuses (16–31 chars) darkens creation: 404, nothing queued", async () => {
+    await seedProfile("apparel_dtg");
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const twentyCharToken = { ...podEnv(), RENDER_FARM_TOKEN: "t".repeat(20) } as unknown as Env;
+
+    const created = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { objectId, profileId: "apparel_dtg" },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      twentyCharToken,
+    );
+    expect(created.status).toBe(404);
+    expect(await renderJobCount()).toBe(0);
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM pod_artwork").first<{
+      n: number;
+    }>();
+    expect(rows?.n).toBe(0);
+
+    // The same configuration really cannot serve a farm: the pull surface is dark.
+    const acquire = await worker.fetch(
+      new Request(`${HOST_A}/v1/render/jobs/acquire`, {
+        headers: { authorization: `Bearer ${"t".repeat(20)}` },
+        method: "POST",
+      }),
+      twentyCharToken,
+    );
+    expect(acquire.status).toBe(404);
+  });
+
+  it("creation is dark while the private bucket is unbound (completion could never promote)", async () => {
+    await seedProfile("apparel_dtg");
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+
+    const created = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { objectId, profileId: "apparel_dtg" },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      { ...podEnv(), PRIVATE_BUCKET: undefined } as unknown as Env,
+    );
+    expect(created.status).toBe(404);
+    expect(await renderJobCount()).toBe(0);
+  });
+
   it("a too-short secret counts as absent", async () => {
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/profiles", { cookie: adminA.cookie }),

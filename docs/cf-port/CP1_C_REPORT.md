@@ -305,3 +305,66 @@ After adding the vars, run `npm run types` (regenerate `worker-configuration.d.t
 7. **Versions.** Only version 1 is produced, and canonical keys are unversioned. A future reprocess (version 2) must version the keys; until then it would hit `canonical_conflict` and fail closed.
 8. **The SnapWear wire shape is provisional** (C5/C6, `items[]` wrapper, artworks↔layouts pairing, shipping address; orders currently carry no address). The fake stores unknown fields verbatim, so CP2 can add an address without touching it.
 9. **Audit parity.** The `pod.artwork.ready` audit on completion is conditioned on the job completing, not on the artwork row actually changing. This is the same as the synchronous path, whose audit was unconditional beside a guarded UPDATE.
+
+---
+
+## Codex fixes (on top of 7024f91)
+
+Only `src/pod/render-jobs.ts`, `src/app.ts`, `test/render-jobs.test.ts` and `test/pod-artwork.test.ts` changed; the CP1-D files were not touched. `npm run check` is green at **1235 tests / 33 files**, which is 1229 plus 6 new tests: render-jobs 64 → 68, pod-artwork 109 → 111. The guard passes and the forbidden-string scan is clean. The `package.json` / `package-lock.json` changes in the working tree (`@cloudflare/containers`) are CP1-D's, not mine.
+
+```
+ Test Files  33 passed (33)
+      Tests  1235 passed (1235)
+```
+
+**Each fix is load-bearing.** Reverting it makes its regression test fail:
+- unconditional put: 2 failing tests;
+- a refused write treated as promoted: 1;
+- a random audit id: 1;
+- the admin gate back on `isPodConfigured`: 2.
+
+After each revert the sources were restored byte-identical.
+
+### P1 — the canonical write is create-if-absent (`promote()`)
+The `put` to the canonical key now carries `onlyIf: new Headers({ "If-None-Match": "*" })`.
+
+**Why this form.** The R2 Workers API reference says that alongside `R2Conditional` "you can pass a Headers object containing conditional headers … All conditional headers aside from If-Range are supported", and "If the condition check for put() fails, null will be returned instead of the R2Object". A `*` wildcard for `R2Conditional.etagDoesNotMatch` is not documented, so the documented Headers form is used.
+
+**Verified in miniflare.** Both forms were probed:
+- an absent key is written;
+- a present key → `null`, and the stored bytes are unchanged;
+- the `sha256` verification still applies alongside the precondition.
+
+Production R2 proves it on the staging smoke.
+
+**When the write is refused**, the object that won is re-verified (sha256 + size): the same bytes mean `present` (this output), anything else means `conflict`. It is never overwritten.
+
+**The stale attempt's conflict path is fenced like everything else.** In Codex's race, the job has already been completed by the newer attempt, so the terminal-failure batch matches nothing and the stale request simply gets `409 lease_lost`. No alert is raised and the newer verdict stands.
+
+Tests:
+- **The race itself.** Attempt 1 has read its bytes and stalls right before the canonical `put`. Meanwhile its lease runs out, attempt 2 is leased, renders *different* bytes and completes (200). Attempt 1 then writes and gets **409**. The canonical print's sha256 is still attempt 2's, the artwork is `ready` with attempt 2's hash, the job is completed at attempt 2, attempt 1's outputs are gone, and no alert was raised.
+- Different bytes appearing between `head()` and `put()` give `canonical_conflict`, and the other bytes are kept.
+- Identical bytes appearing in that window are accepted: 200, `ready`.
+
+Residual, documented: an attempt that stalls and still wins the create (nothing there yet) fixes the canonical bytes for that artwork version. A later attempt producing *different* bytes then gets `canonical_conflict` and the job fails with an alert, rather than silently replacing the print. Normally the pipeline is deterministic (same bytes), and this needs a stall longer than the 10-minute lease.
+
+### P2 — exactly one completion audit (`commitVerdict()`)
+The `pod.artwork.ready` / `pod.artwork.rejected` audit row now has the deterministic id `render-job-completed:{jobId}` (`completionAuditEventId`) and is inserted with `ON CONFLICT(event_id) DO NOTHING`.
+
+A job completes at most once (the terminal trigger), so the job id alone is the key. An overlapping duplicate completion whose batch loses the transition can no longer write a second row. The terminal-failure audit and alert already used deterministic ids and a fenced `SELECT`.
+
+Test: the farm resends while its first completion is mid-promotion. Both pass the fence-and-extend, the duplicate commits first, then the original commits. Both answer 200, and there is exactly one audit row, `render-job-completed:{jobId}`.
+
+### P3 — admin creation gated on the pull surface's configuration (`app.ts`)
+`handleAdminPodRoute`'s first gate is now `isAdminPodSurfaceConfigured`:
+- `isPodConfigured(env)` still applies;
+- plus, while `SYNC_RENDER_FALLBACK` is false, `isRenderJobsConfigured(env)`: a ≥ 32-character token, the presigner, and the private bucket;
+- the synchronous fallback keeps only its own gate.
+
+It stays all-or-nothing, as before: a partially configured admin POD surface is dark, not degraded. The platform profile route is unchanged.
+
+Tests:
+- A 20-character token: creation 404, no `render_jobs` row, no artwork row, and `/v1/render/jobs/acquire` also 404.
+- An unbound `PRIVATE_BUCKET`: creation 404, nothing queued.
+
+Since the reviewer sets `RENDER_FARM_TOKEN` at ≥ 32 characters, nothing changes for a correctly configured environment.

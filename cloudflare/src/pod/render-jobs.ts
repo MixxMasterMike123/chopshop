@@ -41,8 +41,10 @@ import {
  * no other attempt can be leased for RENDER_JOB_PROMOTION_MS, so nothing else
  * can write the canonical keys while this request copies to them. The commit
  * batch re-checks the fence against the clock at commit time. Canonical keys
- * are immutable: an existing object with a different sha256 is a conflict that
- * ends the job (alert), never an overwrite.
+ * are immutable, and the lease is NOT what enforces that: a promotion can stall
+ * past its lease, so the canonical write itself is create-if-absent
+ * (`If-None-Match: *`, see promote). An existing object with a different
+ * sha256 is a conflict that ends the job (alert), never an overwrite.
  *
  * ── WHAT THE FARM IS TOLD ───────────────────────────────────────────────────
  * Nothing the farm reports is echoed back, and nothing about a job is visible
@@ -741,7 +743,27 @@ type PromotionOutcome = "conflict" | "present" | "promoted" | "unverified";
  * verifies the bytes it stores against the hash the farm claimed: a mismatch
  * is rejected by R2 (10037) and nothing is written. The synchronous path could
  * only compare sizes; promotion verifies the content for free.
+ *
+ * THE WRITE IS CREATE-IF-ABSENT (`If-None-Match: *`), not a check-then-write.
+ * The head() below is only a shortcut; between it and the put a promotion can
+ * stall — past its lease, while a NEWER attempt is leased, completes and writes
+ * the canonical object. An unconditional put would then overwrite the newer
+ * attempt's bytes, and the D1 fence that later refuses the stale commit could
+ * not undo that. With the precondition R2 refuses the write (put() → null) and
+ * the object that won is re-verified instead: the same sha256 and size is this
+ * output, anything else is a conflict. The form is the documented one — "a
+ * Headers object containing conditional headers … all conditional headers
+ * aside from If-Range are supported", put() returning null when the condition
+ * fails (R2 Workers API reference) — and was verified under miniflare in
+ * test/render-jobs.test.ts; R2 itself proves it on the staging smoke.
  */
+function sameOutput(object: R2Object, report: JobOutputReport): boolean {
+  return (
+    object.checksums.toJSON().sha256 === report.sha256 &&
+    object.size === report.bytes
+  );
+}
+
 async function promote(
   bucket: R2Bucket,
   fromKey: string,
@@ -751,10 +773,7 @@ async function promote(
 ): Promise<PromotionOutcome> {
   const existing = await bucket.head(toKey);
   if (existing !== null) {
-    return existing.checksums.toJSON().sha256 === report.sha256 &&
-      existing.size === report.bytes
-      ? "present"
-      : "conflict";
+    return sameOutput(existing, report) ? "present" : "conflict";
   }
 
   const source = await bucket.get(fromKey);
@@ -766,13 +785,22 @@ async function promote(
     return "unverified";
   }
 
+  let written: R2Object | null;
   try {
-    await bucket.put(toKey, source.body, {
+    written = await bucket.put(toKey, source.body, {
       httpMetadata: { contentType },
+      onlyIf: new Headers({ "If-None-Match": "*" }),
       sha256: report.sha256,
     });
   } catch {
     return "unverified";
+  }
+
+  if (written === null) {
+    // Someone created the canonical object after the head() above. Never
+    // overwrite it: re-verify it.
+    const winner = await bucket.head(toKey);
+    return winner !== null && sameOutput(winner, report) ? "present" : "conflict";
   }
 
   return "promoted";
@@ -988,10 +1016,25 @@ async function attemptFailedResult(
 }
 
 /**
+ * The completion's audit event id — DETERMINISTIC, one per job. Two completion
+ * requests for the same attempt (a farm resending after a lost response) can
+ * both pass the fence-and-extend and both reach the commit; the second batch's
+ * job UPDATE changes nothing, but "this attempt completed the job" is true for
+ * it as well, so a random id would audit the verdict twice. With a fixed id and
+ * ON CONFLICT DO NOTHING the second insert is a no-op. A job completes at most
+ * once (the terminal trigger), so the job id alone is the right key.
+ */
+export function completionAuditEventId(jobId: string): string {
+  return `render-job-completed:${jobId}`;
+}
+
+/**
  * The commit: job → 'completed', the artwork's verdict, and its audit row, in
  * ONE batch. The job update is fenced at commit time; the artwork update and
  * the audit insert are conditioned on "this attempt completed the job", so if
- * the fence fails the batch changes nothing at all.
+ * the fence fails the batch changes nothing at all — and the audit insert is
+ * also idempotent by id (completionAuditEventId), so an overlapping duplicate
+ * completion cannot write a second row.
  *
  * The artwork update keeps the synchronous path's `status = 'processing'`
  * guard: a verdict that somehow already exists stands and is not overwritten.
@@ -1045,10 +1088,11 @@ async function commitVerdict(
            resource_id, request_id, metadata_json, created_at
          )
          SELECT ?, ?, NULL, ?, 'pod_artwork', ?, ?, ?, ?
-         WHERE ${completedByThisAttempt}`,
+         WHERE ${completedByThisAttempt}
+         ON CONFLICT(event_id) DO NOTHING`,
       )
       .bind(
-        crypto.randomUUID(),
+        completionAuditEventId(job.id),
         job.tenant_id,
         verdict.action,
         job.artwork_id,

@@ -849,6 +849,179 @@ describe("fencing", () => {
     expect((await artworkRow(seeded.artworkId))?.status).toBe("processing");
   });
 
+  /**
+   * Holds the canonical `put` for `key`: the promoter has already checked
+   * head() (absent) and read its source, and stalls right before writing — the
+   * window Codex CP1-C P1 names. `whileStalled` runs in that window; then the
+   * held bytes are written with the ORIGINAL options (incl. the precondition).
+   */
+  function bucketStallingPut(key: string, whileStalled: () => Promise<void>): R2Bucket {
+    const real = env.PRIVATE_BUCKET;
+    let fired = false;
+    return {
+      delete: real.delete.bind(real),
+      get: real.get.bind(real),
+      head: real.head.bind(real),
+      list: real.list.bind(real),
+      async put(target: string, value: unknown, options?: R2PutOptions) {
+        if (target !== key || fired) {
+          return real.put(target, value as ArrayBuffer, options);
+        }
+        fired = true;
+        const held = await new Response(value as ReadableStream).arrayBuffer();
+        await whileStalled();
+        return real.put(target, held, options);
+      },
+    } as unknown as R2Bucket;
+  }
+
+  it("a promotion stalled past its lease cannot overwrite the NEWER attempt's canonical bytes (Codex P1)", async () => {
+    const seeded = await seedJob();
+    const first = await acquire();
+    if (first === null) {
+      throw new Error("expected a lease");
+    }
+    const firstOut = await upload(first, { fill: 1 });
+    const canonical = canonicalOutputKeys(TENANT_A, seeded.artworkId);
+    const later = Date.now() + RENDER_JOB_LEASE_MS + 60_000;
+    let secondOut: Uploaded | null = null;
+    let secondStatus = 0;
+
+    const response = await complete(
+      seeded.jobId,
+      okBody(first, firstOut),
+      renderEnv({
+        PRIVATE_BUCKET: bucketStallingPut(canonical.printKey, async () => {
+          // Attempt 1's lease runs out; attempt 2 is leased, renders
+          // DIFFERENT bytes and completes, all before attempt 1 writes.
+          vi.spyOn(Date, "now").mockReturnValue(later);
+          const second = await acquire();
+          if (second === null) {
+            throw new Error("expected attempt 2");
+          }
+          expect(second.attempt).toBe(2);
+          secondOut = await upload(second, { fill: 2 });
+          secondStatus = (await complete(seeded.jobId, okBody(second, secondOut))).status;
+        }),
+      }),
+    );
+
+    const winner = secondOut as Uploaded | null;
+    expect(secondStatus).toBe(200);
+    // The stale attempt is refused…
+    expect(response.status).toBe(409);
+    // …and the canonical bytes are still attempt 2's.
+    const print = await env.PRIVATE_BUCKET.head(canonical.printKey);
+    expect(print?.checksums.toJSON().sha256).toBe(winner?.print.sha256);
+    expect(print?.checksums.toJSON().sha256).not.toBe(firstOut.print.sha256);
+    const artwork = await artworkRow(seeded.artworkId);
+    expect(artwork?.status).toBe("ready");
+    expect(artwork?.print_sha256).toBe(winner?.print.sha256);
+    const row = await jobRow(seeded.jobId);
+    expect(row?.state).toBe("completed");
+    expect(row?.attempt).toBe(2);
+    // The dead attempt left nothing behind (attempt 2's acquire swept its
+    // prefix), and no alert was raised for it.
+    expect(await objectExists(firstOut.print.key)).toBe(false);
+    expect(await objectExists(firstOut.preview.key)).toBe(false);
+    const alerts = await env.DB.prepare("SELECT COUNT(*) AS n FROM alerts WHERE resource_id = ?")
+      .bind(seeded.jobId)
+      .first<{ n: number }>();
+    expect(alerts?.n).toBe(0);
+  });
+
+  it("different bytes created between head() and put() are a conflict, never overwritten", async () => {
+    const seeded = await seedJob();
+    const lease = await acquire();
+    if (lease === null) {
+      throw new Error("expected a lease");
+    }
+    const uploaded = await upload(lease, { fill: 7 });
+    const canonical = canonicalOutputKeys(TENANT_A, seeded.artworkId);
+    const squatter = new Uint8Array(50_000).fill(42);
+
+    const response = await complete(
+      seeded.jobId,
+      okBody(lease, uploaded),
+      renderEnv({
+        PRIVATE_BUCKET: bucketStallingPut(canonical.printKey, async () => {
+          await env.PRIVATE_BUCKET.put(canonical.printKey, squatter, {
+            sha256: await sha256Hex(squatter),
+          });
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    expect((await response.json<{ error: { code: string } }>()).error.code).toBe(
+      "canonical_conflict",
+    );
+    const kept = await env.PRIVATE_BUCKET.head(canonical.printKey);
+    expect(kept?.checksums.toJSON().sha256).toBe(await sha256Hex(squatter));
+    expect((await jobRow(seeded.jobId))?.state).toBe("failed");
+  });
+
+  it("identical bytes created between head() and put() are accepted as this output", async () => {
+    const seeded = await seedJob();
+    const lease = await acquire();
+    if (lease === null) {
+      throw new Error("expected a lease");
+    }
+    const uploaded = await upload(lease, { fill: 7 });
+    const canonical = canonicalOutputKeys(TENANT_A, seeded.artworkId);
+
+    const response = await complete(
+      seeded.jobId,
+      okBody(lease, uploaded),
+      renderEnv({
+        PRIVATE_BUCKET: bucketStallingPut(canonical.printKey, async () => {
+          const same = new Uint8Array(50_000).fill(7);
+          await env.PRIVATE_BUCKET.put(canonical.printKey, same, {
+            sha256: await sha256Hex(same),
+          });
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await artworkRow(seeded.artworkId))?.status).toBe("ready");
+  });
+
+  it("two overlapping completions of one attempt write exactly ONE audit row (Codex P2)", async () => {
+    const seeded = await seedJob();
+    const lease = await acquire();
+    if (lease === null) {
+      throw new Error("expected a lease");
+    }
+    const body = okBody(lease, await upload(lease));
+    let innerStatus = 0;
+
+    // The farm resends while its first request is mid-promotion: both pass the
+    // fence-and-extend, the duplicate commits first, then the original commits.
+    const outer = await complete(
+      seeded.jobId,
+      body,
+      renderEnv({
+        PRIVATE_BUCKET: bucketHookedOnFirstPut(async () => {
+          innerStatus = (await complete(seeded.jobId, body)).status;
+        }),
+      }),
+    );
+
+    expect(innerStatus).toBe(200);
+    expect(outer.status).toBe(200);
+    const audits = await env.DB.prepare(
+      `SELECT event_id FROM audit_events
+       WHERE action = 'pod.artwork.ready' AND resource_id = ?`,
+    )
+      .bind(seeded.artworkId)
+      .all<{ event_id: string }>();
+    expect(audits.results.map((row) => row.event_id)).toStrictEqual([
+      `render-job-completed:${seeded.jobId}`,
+    ]);
+    expect((await artworkRow(seeded.artworkId))?.status).toBe("ready");
+  });
+
   it("deleting the artwork mid-render ends the job; the farm's report is refused and swept", async () => {
     const seeded = await seedJob();
     const lease = await acquire();
