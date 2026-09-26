@@ -201,15 +201,20 @@ docker run --rm --platform linux/amd64 --cpus=0.5 --memory=4g --memory-swap=4g \
 - #2 fails: rerun on `standard-2` (6 GiB).
 - Anything fails on `standard-4`: Cloud Run, per D6.
 
-## 7. Staging results (fill in)
+## 7. Staging results — 2026-09-27 00:50–01:00 CEST, `chopshop-api-stg` version `2b45fd0f`, `standard-1`
 
-| Scenario | Instance | Cold / warm | Cold start → first acquire | DO startMs | wallMs (min/med/max) | peakRssMb | Drain | Running s this wake | $ this wake | Pass? |
-|---|---|---|---|---|---|---|---|---|---|---|
-| A 1×largest | standard-1 | cold | | | | | | | | |
-| A 1×largest | standard-1 | warm | | | | | | | | |
-| B 3×largest | standard-1 | cold | | | | | | | | |
-| C 10×largest | standard-1 | cold | | | | | | | | |
-| D 10×typical | standard-1 | cold | | | | | | | | |
+Measured from the API's `render job metrics` log (the container's own numbers as the API received them), `T0`/`T3` from the submitting script, correctness from D1. Container/DO console lines did not surface in `wrangler tail` (only the API's did), so "cold start → first acquire" is derived: `(T3 − T0) − wallMs` includes queue batching (≤ 5 s), the 3 s poll interval and the DO's `startAndWaitForPorts`.
 
-**Decision:** _(instance type, `MAX_CONCURRENT_JOBS`, `sleepAfter` / `IDLE_EXIT_SECONDS`
-kept or changed, and Mikael's approval, per PLAN §11.2)_
+| Scenario | Instance | Cold / warm | T3 − T0 | wallMs (fetch / pipeline / upload) | peakRssMb (peakIsPerJob=1) | Derived cold start → first acquire | Pass? |
+|---|---|---|---|---|---|---|---|
+| A 1×largest (45.5 MB, 10 000² px) | standard-1 | **cold** (process uptime at job end 35.1 s ⇒ 0.65 s before the job) | 46.8 s | **34.5 s** (1.2 / 31.4 / 1.7) | **563 MB** | ≈ 12 s | ✅ |
+| A 1×largest | standard-1 | warm (same process, job #2) | 51.1 s | 43.7 s (1.6 / 40.1 / 1.9) | **661 MB** (rss after: 352 MB, up from 283) | ≈ 7 s (poll + batching) | ✅ |
+| D 10×typical (0.23 MB, 3 600² px) | standard-1 | warm | 10.6 / 11.7 / 17.0 / 20.4 / 23.8 s (serial) | 3.9–4.2 s each (≈ 3.3 pipeline) | 326–354 MB | — | ✅ (#4 ≤ 15 s) |
+| B 3×largest, C 10×largest | — | not run tonight | | | | | ⏳ |
+
+- **Correctness:** `render_jobs` in the window: `completed / attempt 1 / NULL` × 7; `alerts` empty; `pod_artwork` all `ready`. No `lease_expired`, no `fail` report.
+- **Rate limit observed:** `POST /v1/admin/pod/artwork` is 5 / min / IP (`POD_DISPATCH_IP_LIMIT`), so scenario D got 5 of 10 through; the rest answered 429. By design for CP1 (flood shield); a bulk-upload UX (CP6) needs either a per-session allowance or client pacing. Scenarios B/C need pacing to 5 / min or a temporary raise — run them at CP2 with the failure-injection suite.
+- **Wall time vs local:** 31–40 s pipeline on ½ vCPU vs 10.7 s on the M1 Pro = **3–4×**, exactly the §2 estimate. The warm job was slower than the cold one (40 s vs 31 s) and peaked 100 MB higher — consistent with glibc fragmentation after a 45 MB PNG encode (§6 caveat); watch `rssMb` over more jobs before adding jemalloc.
+- **Cost:** running seconds for the cold wake ≈ 0.65 + 34.5 + idle tail (`IDLE_EXIT_SECONDS` 120 → then the DO's `sleepAfter` 5 min) ⇒ ≈ 6 min at standard-1 list price ≈ **$0.004 per isolated upload** (§4), under the $0.01 threshold. The idle tail, not the render, is the cost.
+
+**Decision (D6, numbers):** **Cloudflare Containers, `standard-1`, `MAX_CONCURRENT_JOBS=1`, `sleepAfter` 5 m / `IDLE_EXIT_SECONDS` 120 kept.** `basic` (1 GiB) is **rejected**: 661 MB peak on the second largest job leaves < 8 % headroom against its 717 MB rule and the run showed growth between jobs. Thresholds #1–#5 and #7 pass; #6 (10× largest drain) is extrapolated at ≈ 6–7 min from 35–44 s per job and must be measured at CP2. Mikael approves per PLAN §11.2 (recorded in DECISIONS D6).
