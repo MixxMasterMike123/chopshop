@@ -2,6 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 
 import { createApp } from "./app";
 import { stripTenantHeaders } from "./lib/tenant-headers";
+import { handleScheduled } from "./outbox/scheduled";
 import { handleQueueBatch } from "./queues";
 
 // The Container-backed Durable Object class wrangler.jsonc binds as RENDER_CONTAINER.
@@ -58,6 +59,13 @@ export default {
   // batch.queue, never by the environment-specific full name.
   queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
     return handleQueueBatch(batch, env);
+  },
+
+  // Cron triggers (wrangler.jsonc `triggers.crons`), routed by the expression:
+  // the 15-minute outbox sweeper, then CP2-A's reconciliation and retention
+  // (src/outbox/scheduled.ts).
+  scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    return handleScheduled(controller, env);
   },
 } satisfies ExportedHandler<Env>;
 

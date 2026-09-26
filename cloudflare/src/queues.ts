@@ -1,4 +1,5 @@
 import { handleEmailQueueBatch } from "./email/email-queue-consumer";
+import { handleOutboxQueueBatch } from "./outbox/consumer";
 import { handleRenderJobsQueueBatch } from "./pod/render-jobs-queue";
 
 /**
@@ -13,7 +14,9 @@ import { handleRenderJobsQueueBatch } from "./pod/render-jobs-queue";
  *   -render-jobs  → the render-job nudge consumer (src/pod/render-jobs-queue.ts):
  *                   the row is the truth and the container pulls, so a nudge
  *                   only wakes the render container (src/render/wake.ts)
- *   -outbox       → no consumer yet (CP2): held, retried later
+ *   -outbox       → the outbox nudge consumer (src/outbox/consumer.ts): the
+ *                   message is `{ outboxId }`, the outbox_events row is the
+ *                   truth; the 15-minute sweeper is the backstop
  *   anything else → held, retried later — including the legacy
  *                   `…-email-auth` queue and any dead-letter queue
  *
@@ -28,11 +31,14 @@ export const QUEUE_SUFFIX_RENDER_JOBS = "-render-jobs";
 
 export const HELD_QUEUE_RETRY_SECONDS = 300;
 
-export type QueueRoute = "email" | "held" | "render_jobs";
+export type QueueRoute = "email" | "held" | "outbox" | "render_jobs";
 
 export function routeQueue(queueName: string): QueueRoute {
   if (queueName.endsWith(QUEUE_SUFFIX_EMAIL)) {
     return "email";
+  }
+  if (queueName.endsWith(QUEUE_SUFFIX_OUTBOX)) {
+    return "outbox";
   }
   return queueName.endsWith(QUEUE_SUFFIX_RENDER_JOBS) ? "render_jobs" : "held";
 }
@@ -64,8 +70,8 @@ export async function handleQueueBatch(
     return;
   }
 
-  if (batch.queue.endsWith(QUEUE_SUFFIX_OUTBOX)) {
-    holdBatch(batch, "consumer_not_built");
+  if (route === "outbox") {
+    await handleOutboxQueueBatch(batch, env);
     return;
   }
 

@@ -1,17 +1,70 @@
-export type AuthEmailKind = "email_verification" | "password_reset";
+export type AuthEmailKind =
+  | "email_verification"
+  | "order_confirmation"
+  | "password_reset";
 export type AuthEmailLocale = "en" | "sv";
 
-export interface AuthEmailJob {
-  actionUrl: string;
+/** The two kinds that carry an action link (verify / reset). */
+export type AuthActionEmailKind = "email_verification" | "password_reset";
+
+interface EmailJobBase {
   createdAt: number;
   deliveryId: string;
   expiresAt: number;
-  kind: AuthEmailKind;
   locale: AuthEmailLocale;
   recipient: string;
   tenantId?: string;
   version: 1;
 }
+
+export interface AuthActionEmailJob extends EmailJobBase {
+  actionUrl: string;
+  kind: AuthActionEmailKind;
+  order?: undefined;
+}
+
+/**
+ * One order line as the confirmation shows it. Copied from the order's own
+ * frozen rows (orders / order_items, 0011) by the outbox email effect
+ * (src/outbox/email-effect.ts) — never from the catalogue.
+ */
+export interface OrderConfirmationLine {
+  lineTotalMinor: number;
+  name: string;
+  quantity: number;
+}
+
+export interface OrderConfirmationContent {
+  currency: string;
+  deliveryMethod: "pickup" | "shipping";
+  discountMinor: number;
+  items: OrderConfirmationLine[];
+  orderNumber: string;
+  shippingCountry: string | null;
+  shippingMinor: number;
+  shopName: string | null;
+  subtotalMinor: number;
+  totalMinor: number;
+  vatMinor: number;
+}
+
+/**
+ * The order confirmation (PLAN §2.3: `outbox(email)` in the order batch). It
+ * carries NO link — `actionUrl` is always the empty string: the guest receipt
+ * capability is returned once at checkout and stored only hashed (§2.1), so
+ * there is nothing a mail could safely point at. (Empty rather than absent so
+ * every job keeps one shape for the ledger's fingerprint and existing readers.)
+ * Its delivery id is DERIVED from the outbox dedupe key, so every retry of the
+ * effect produces the same job and the ledger sends it at most once.
+ */
+export interface OrderConfirmationEmailJob extends EmailJobBase {
+  actionUrl: "";
+  kind: "order_confirmation";
+  order: OrderConfirmationContent;
+  tenantId: string;
+}
+
+export type AuthEmailJob = AuthActionEmailJob | OrderConfirmationEmailJob;
 
 export interface AuthEmailMessage {
   html: string;
@@ -33,7 +86,7 @@ function normalizedEmail(value: string): string {
 
 function validatedActionUrl(
   value: string,
-  kind: AuthEmailKind,
+  kind: AuthActionEmailKind,
   expectedBaseUrl: string,
 ): string {
   const url = new URL(value);
@@ -59,13 +112,13 @@ function validatedActionUrl(
 
 export function createAuthEmailJob(
   input: Omit<
-    AuthEmailJob,
-    "createdAt" | "deliveryId" | "recipient" | "version"
+    AuthActionEmailJob,
+    "createdAt" | "deliveryId" | "order" | "recipient" | "version"
   > & {
     recipient: string;
   },
   expectedBaseUrl: string,
-): AuthEmailJob {
+): AuthActionEmailJob {
   const createdAt = Date.now();
   if (
     !Number.isSafeInteger(input.expiresAt) ||
@@ -100,7 +153,11 @@ export function parseAuthEmailJob(
     throw new Error("Invalid auth email job");
   }
 
-  const job = value as Partial<AuthEmailJob>;
+  if ((value as { kind?: unknown }).kind === "order_confirmation") {
+    return parseOrderConfirmationEmailJob(value);
+  }
+
+  const job = value as Partial<AuthActionEmailJob>;
   if (
     job.version !== 1 ||
     !DELIVERY_ID_PATTERN.test(job.deliveryId ?? "") ||
@@ -167,6 +224,10 @@ function escapeHtml(value: string): string {
 }
 
 export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
+  if (job.kind === "order_confirmation") {
+    return renderOrderConfirmationEmail(job);
+  }
+
   const copy =
     job.locale === "sv"
       ? job.kind === "email_verification"
@@ -197,5 +258,251 @@ export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
     html: `<p>${copy.intro}</p><p><a href="${safeUrl}">${copy.action}</a></p>`,
     subject: copy.subject,
     text: `${copy.intro}\n\n${copy.action}: ${job.actionUrl}`,
+  };
+}
+
+// ── order confirmation (CP2, PLAN §2.3 `outbox(email)`) ──────────────────────
+
+const MAX_ORDER_LINES = 100;
+const MAX_LINE_NAME_LENGTH = 200;
+const MAX_ORDER_NUMBER_LENGTH = 64;
+const MAX_SHOP_NAME_LENGTH = 200;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isMinor(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isBoundedText(value: unknown, max: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= max &&
+    // No control characters: the text lands in a subject line and in HTML.
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function validatedOrderContent(value: unknown): OrderConfirmationContent {
+  if (!isPlainRecord(value)) {
+    throw new Error("Invalid order confirmation content");
+  }
+  const items = value.items;
+  if (
+    !isBoundedText(value.orderNumber, MAX_ORDER_NUMBER_LENGTH) ||
+    typeof value.currency !== "string" ||
+    !/^[A-Z]{3}$/.test(value.currency) ||
+    (value.deliveryMethod !== "pickup" && value.deliveryMethod !== "shipping") ||
+    (value.deliveryMethod === "pickup"
+      ? value.shippingCountry !== null
+      : typeof value.shippingCountry !== "string" ||
+        !/^[A-Z]{2}$/.test(value.shippingCountry)) ||
+    (value.shopName !== null && !isBoundedText(value.shopName, MAX_SHOP_NAME_LENGTH)) ||
+    !isMinor(value.subtotalMinor) ||
+    !isMinor(value.shippingMinor) ||
+    !isMinor(value.discountMinor) ||
+    !isMinor(value.vatMinor) ||
+    !isMinor(value.totalMinor) ||
+    // The order's own arithmetic (0011): VAT is contained in the total.
+    value.totalMinor !== value.subtotalMinor + value.shippingMinor - value.discountMinor ||
+    value.vatMinor > value.totalMinor ||
+    !Array.isArray(items) ||
+    items.length === 0 ||
+    items.length > MAX_ORDER_LINES
+  ) {
+    throw new Error("Invalid order confirmation content");
+  }
+
+  const lines = items.map((item: unknown): OrderConfirmationLine => {
+    if (
+      !isPlainRecord(item) ||
+      !isBoundedText(item.name, MAX_LINE_NAME_LENGTH) ||
+      typeof item.quantity !== "number" ||
+      !Number.isSafeInteger(item.quantity) ||
+      item.quantity < 1 ||
+      item.quantity > 999 ||
+      !isMinor(item.lineTotalMinor)
+    ) {
+      throw new Error("Invalid order confirmation content");
+    }
+    return {
+      lineTotalMinor: item.lineTotalMinor,
+      name: item.name,
+      quantity: item.quantity,
+    };
+  });
+
+  return {
+    currency: value.currency,
+    deliveryMethod: value.deliveryMethod,
+    discountMinor: value.discountMinor,
+    items: lines,
+    orderNumber: value.orderNumber,
+    shippingCountry: value.shippingCountry as string | null,
+    shippingMinor: value.shippingMinor,
+    shopName: value.shopName as string | null,
+    subtotalMinor: value.subtotalMinor,
+    totalMinor: value.totalMinor,
+    vatMinor: value.vatMinor,
+  };
+}
+
+/**
+ * A v4-shaped UUID derived from a stable key (the outbox row's dedupe key),
+ * so the ledger's delivery id — and Resend's Idempotency-Key — is the same on
+ * every retry of the same effect. SHA-256, first 16 bytes, version and variant
+ * bits set as RFC 9562 requires for the shape DELIVERY_ID_PATTERN accepts.
+ */
+export async function deliveryIdFromKey(key: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key)),
+  ).slice(0, 16);
+  digest[6] = ((digest[6] as number) & 0x0f) | 0x40;
+  digest[8] = ((digest[8] as number) & 0x3f) | 0x80;
+  const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function validatedOrderJobFrame(
+  input: Record<string, unknown>,
+  now: number,
+): Omit<OrderConfirmationEmailJob, "actionUrl" | "kind" | "order"> {
+  if (
+    input.version !== 1 ||
+    typeof input.deliveryId !== "string" ||
+    !DELIVERY_ID_PATTERN.test(input.deliveryId) ||
+    input.locale !== "sv" ||
+    !Number.isSafeInteger(input.createdAt) ||
+    !Number.isSafeInteger(input.expiresAt) ||
+    (input.createdAt as number) > now + 5 * 60 * 1000 ||
+    (input.expiresAt as number) <= (input.createdAt as number) ||
+    (input.expiresAt as number) - (input.createdAt as number) > MAX_JOB_LIFETIME_MS ||
+    typeof input.tenantId !== "string" ||
+    input.tenantId.length === 0
+  ) {
+    throw new Error("Invalid auth email job");
+  }
+
+  return {
+    createdAt: input.createdAt as number,
+    deliveryId: input.deliveryId,
+    expiresAt: input.expiresAt as number,
+    locale: "sv",
+    recipient: normalizedEmail(String(input.recipient ?? "")),
+    tenantId: input.tenantId,
+    version: 1,
+  };
+}
+
+/**
+ * Builds the job the outbox email effect hands to EMAIL_QUEUE. Every field is
+ * supplied by the caller (none is minted here), so the same inputs always
+ * produce the same job — the property the ledger's fingerprint relies on.
+ */
+export function createOrderConfirmationEmailJob(input: {
+  createdAt: number;
+  deliveryId: string;
+  expiresAt: number;
+  order: OrderConfirmationContent;
+  recipient: string;
+  tenantId: string;
+}): OrderConfirmationEmailJob {
+  const frame = validatedOrderJobFrame(
+    { ...input, locale: "sv", version: 1 },
+    Date.now(),
+  );
+  return {
+    ...frame,
+    actionUrl: "",
+    kind: "order_confirmation",
+    order: validatedOrderContent(input.order),
+  };
+}
+
+function parseOrderConfirmationEmailJob(value: unknown): OrderConfirmationEmailJob {
+  const job = value as Record<string, unknown>;
+  if (job.actionUrl !== "") {
+    throw new Error("Invalid auth email job");
+  }
+  const frame = validatedOrderJobFrame(job, Date.now());
+  return {
+    ...frame,
+    actionUrl: "",
+    kind: "order_confirmation",
+    order: validatedOrderContent(job.order),
+  };
+}
+
+/** Minor units → "1 234,50 kr" (sv-SE), the way the storefront shows money. */
+export function formatOrderMoney(minor: number, currency: string): string {
+  return new Intl.NumberFormat("sv-SE", { currency, style: "currency" }).format(minor / 100);
+}
+
+const COUNTRY_NAMES_SV: Record<string, string> = {
+  DK: "Danmark",
+  FI: "Finland",
+  NO: "Norge",
+  SE: "Sverige",
+};
+
+function renderOrderConfirmationEmail(job: OrderConfirmationEmailJob): AuthEmailMessage {
+  const { order } = job;
+  const money = (minor: number) => formatOrderMoney(minor, order.currency);
+  const thanks =
+    order.shopName === null
+      ? "Tack för din beställning!"
+      : `Tack för din beställning hos ${order.shopName}!`;
+  const intro = "Vi har tagit emot din beställning och börjar behandla den direkt.";
+  const delivery =
+    order.deliveryMethod === "pickup"
+      ? "Upphämtning i butiken"
+      : `Leverans till ${COUNTRY_NAMES_SV[order.shippingCountry ?? ""] ?? order.shippingCountry}`;
+
+  const lines = order.items.map((item) => ({
+    amount: money(item.lineTotalMinor),
+    label: `${item.quantity} st ${item.name}`,
+  }));
+  const totals: Array<{ label: string; value: string }> = [
+    { label: "Delsumma", value: money(order.subtotalMinor) },
+    {
+      label: order.deliveryMethod === "pickup" ? "Upphämtning" : "Frakt",
+      value: money(order.shippingMinor),
+    },
+    ...(order.discountMinor > 0
+      ? [{ label: "Rabatt", value: `-${money(order.discountMinor)}` }]
+      : []),
+    { label: "Totalt", value: money(order.totalMinor) },
+    { label: "varav moms", value: money(order.vatMinor) },
+  ];
+
+  const text = [
+    thanks,
+    "",
+    intro,
+    "",
+    `Ordernummer: ${order.orderNumber}`,
+    `Leverans: ${delivery}`,
+    "",
+    ...lines.map((line) => `${line.label}: ${line.amount}`),
+    "",
+    ...totals.map((row) => `${row.label}: ${row.value}`),
+  ].join("\n");
+
+  const cell = (value: string) => `<td>${escapeHtml(value)}</td>`;
+  const html = [
+    `<p>${escapeHtml(thanks)}</p>`,
+    `<p>${escapeHtml(intro)}</p>`,
+    `<p>Ordernummer: <strong>${escapeHtml(order.orderNumber)}</strong><br>Leverans: ${escapeHtml(delivery)}</p>`,
+    `<table>${lines.map((line) => `<tr>${cell(line.label)}${cell(line.amount)}</tr>`).join("")}</table>`,
+    `<table>${totals.map((row) => `<tr>${cell(row.label)}${cell(row.value)}</tr>`).join("")}</table>`,
+  ].join("");
+
+  return {
+    html,
+    subject: `Orderbekräftelse ${order.orderNumber}`,
+    text,
   };
 }

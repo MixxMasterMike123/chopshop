@@ -10,6 +10,11 @@ import {
 /**
  * The `-email` queue consumer: auth email jobs → Resend.
  *
+ * Since CP2 it also carries `order_confirmation` jobs, enqueued by the outbox
+ * email effect (src/outbox/email-effect.ts) with a delivery id DERIVED from the
+ * outbox dedupe key. They take the same path — parse, ledger claim, one send —
+ * through the same functions; only the template differs (auth-email-job.ts).
+ *
  * ── EXACTLY-ONCE ON TOP OF AT-LEAST-ONCE ─────────────────────────────────────
  * Queues deliver at least once, so every message first CLAIMS its ledger row
  * (email_deliveries, lease-guarded — src/email/email-delivery-store.ts). Only

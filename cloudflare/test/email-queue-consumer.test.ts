@@ -444,7 +444,10 @@ describe("queue dispatch by suffix", () => {
     ["chopshop-stg-email", "email"],
     ["chopshop-prod-email", "email"],
     ["chopshop-test-email", "email"],
-    ["chopshop-stg-outbox", "held"],
+    // CP2-B: the outbox has its nudge consumer; see test/outbox.test.ts.
+    ["chopshop-stg-outbox", "outbox"],
+    ["chopshop-prod-outbox", "outbox"],
+    ["chopshop-stg-outbox-dlq", "held"],
     // CP1-C: the render-jobs queue has its (nudge-only) consumer; see
     // test/render-jobs.test.ts for what it does with a batch.
     ["chopshop-prod-render-jobs", "render_jobs"],
@@ -458,7 +461,6 @@ describe("queue dispatch by suffix", () => {
   });
 
   it.each([
-    "chopshop-stg-outbox",
     "chopshop-stg-render-jobs-dlq",
     "meteorshop-stg-email-auth",
     "chopshop-stg-email-dlq",
