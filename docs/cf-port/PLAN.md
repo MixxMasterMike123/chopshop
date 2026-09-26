@@ -81,11 +81,10 @@ From `INVENTORY_FUNCTIONS.md` (29 exports) plus the client surfaces that use the
 | Legal | platform terms + acceptance evidence + checkout gate, withdrawal (ångerrätt) | PlatformTermsGate, legal pages |
 
 ### 3.2 PORT-LATER (real add-ons; not needed for melodie-mc's first live sale)
-Reviews (6), abandoned-checkout reminder emails (2), discount-code admin (1), content studio (3, ffmpeg), B2B wholesale (2), Shopify/Woo migrators (2), DAC7 (8), print portal (7 — SnapWear never logs in; revisit if a second printer returns), B2C customer accounts (guest checkout + guest withdrawal already work), marketing materials, custom-domain admin UI (CF makes the mechanism trivial; the UI can wait). Each gets its own later checkpoint; none is deleted.
+Reviews (6), abandoned-checkout reminder emails (2), discount-code admin (1), content studio (3, ffmpeg), B2B wholesale (2), Shopify/Woo migrators (2), DAC7 (8), print portal (7 — SnapWear never logs in; revisit if a second printer returns), B2C customer accounts (guest checkout + guest withdrawal already work), marketing materials, custom-domain admin UI (CF makes the mechanism trivial; the UI can wait), **affiliate program (5 functions, 5 collections — Mikael 2026-09-26: will be REINSTATED later, so before its Firebase code is retired CP0 writes `docs/cf-port/specs/AFFILIATE.md`: data model, commission/reversal/payout rules, click attribution + consent (MFL), admin + storefront surfaces, and what was dead (campaign revenue-share) vs live — the CF rebuild is designed from that spec, not from the b8shield-era code).** Each gets its own later checkpoint; none is deleted.
 
 ### 3.3 DELETE (needs Mikael's sign-off, §11)
 - **Pre-pivot CRM wagons:** dining, ambassador, campaign, writers (`enabled` flags, 9 listeners, 8 private collections, `scrapeWebsiteMetaV2`, two callables that don't even exist).
-- **Affiliate program** (5 functions, 5 collections; B8shield ambassador heritage; campaign codes already cover creator codes).
 - `deleteCustomerAccountV2` / `toggleCustomerActiveStatusV2` (the delete wipes every order of the user — replaced by a proper deactivate in the new users API), `getGeoDataV2`, `createAdminUserV2`, `syncAdminClaims`, `aggregateDac7Year`, the V1 `confirmPasswordReset`, the three dead email callables, `processB2COrderCompletionHttpV2`, the DAC7 duplicate.
 - Everything in `OBSOLETE/` and every b8shield-era doc/image (§8).
 - The untracked root clutter: `cloudflare/` (355 MB node_modules dump), three image dumps (174 MB), `worker-startup.cpuprofile`.
@@ -167,7 +166,7 @@ Rough size: CP0–2 ≈ 1.5 weeks, CP3–5 ≈ 3 weeks, CP6–7 ≈ 2–3 weeks,
 1. **Kent's account: personal or company (Meteor PR AB) — and is it on Workers Paid?** Needed for D1 limits, Queues and Containers. Mikael must be invited as admin; today `wrangler whoami` cannot see it. *(blocks CP1)*
 2. **Render service:** Cloudflare Containers on that account (if the plan allows) vs one Cloud Run container in a **new** GCP project. Recommendation: Containers if available (one account, one bill), else Cloud Run. *(blocks CP7)*
 3. **Domains at cutover:** real domains (melodiemc.com for Kent's shop, a platform domain for admin/platform) vs keep temporary hostnames. Recommendation: real. *(blocks CP8)*
-4. **DELETE sign-off** for §3.3 — especially the CRM wagons and the affiliate program. *(blocks CP0's quarantine of their code)*
+4. **DELETE sign-off** for §3.3 — especially the CRM wagons (affiliate is NOT deleted: spec-then-retire, §3.2). *(blocks CP0's quarantine of their code)*
 5. **Docs UNSURE (7)** in `INVENTORY_DOCS.md`: the two July legal `.docx` drafts, `juridik.md`, `stripe-review-export/`, `METEOR_PAKETERING_KENT.pdf`. *(CP0)*
 6. **Storefront SEO:** keep the SPA shell for the port (design-identical) and do SSR as a later checkpoint — or fold SSR in now? Recommendation: later; it is not a data-layer change.
 
