@@ -1,0 +1,16 @@
+# guard/permanent-exemptions.txt — PERMANENT exemptions from the "reseller" pattern ONLY.
+#
+# Kept apart from guard/allowlist.txt on purpose (Codex): the allowlist is legacy debt that
+# must shrink to EMPTY by CP7, while the paths below use "reseller" as a live legal/business
+# term and keep it after CP7. An exemption covers the reseller pattern and nothing else: the
+# same file is still checked for b8shield / b8s- / b8s_ and firebase imports.
+#
+# Format: <repo-relative path>  # <reason>      (the reason is mandatory)
+# guard/guards.test.mjs fails on an entry without a reason, and on an entry that no longer
+# contains "reseller" (stale — remove it). A new line is a scope decision (PLAN §0/§8), not
+# a way around the allowlist.
+#
+# Checked 2026-09-26: docs/legal-template-files/*, src/config/platformTerms.js and
+# src/config/legalTemplates.js contain no "reseller", so they need no entry.
+
+docs/SnapWearDocs/LAUNCH_TODO.md  # launch gate: records the signed-off "Reseller model" (platform resells production to the shop, D 2026-09-25) and SnapWear question C9 "agent/reseller-of-record" — commercial/VAT terms, not the retired B2B reseller portal

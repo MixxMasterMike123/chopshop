@@ -1,0 +1,20 @@
+{
+  "cloudflareAccountId": "ee213082783ec86585150e876edb6107",
+  "cloudflareAccountName": "Kent@meteorpr.se's Account",
+  "workerName": "chopshop-api",
+  "d1": { "name": "chopshop-prod", "id": null },
+  "r2": {
+    "public": "chopshop-prod-public",
+    "private": "chopshop-prod-private",
+    "production": "chopshop-prod-production"
+  },
+  "queues": {
+    "outbox": "chopshop-prod-outbox",
+    "email": "chopshop-prod-email",
+    "renderJobs": "chopshop-prod-render-jobs"
+  },
+  "stripeAccountId": null,
+  "stripeMode": "live",
+  "stripeWebhookEndpointId": null,
+  "dispatchTarget": "snapwear"
+}
