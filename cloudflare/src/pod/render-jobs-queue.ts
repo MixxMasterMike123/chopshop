@@ -20,9 +20,11 @@ import { wakeRenderContainer } from "../render/wake";
  *                        the RENDER_CONTAINER binding behaves as before CP1-D
  *     not_configured     acked + `render_not_configured` — /v1/render is dark
  *                        here, a container could only be refused
- *     wake threw         each nudge retried after WAKE_RETRY_DELAY_SECONDS; if
- *                        the queue's retries run out the row stays `queued` and
- *                        the next nudge (or the CP2 sweeper) wakes it
+ *     wake threw         (start failed, or the container is draining and
+ *                        answered /wake with polling:false) each nudge retried
+ *                        after WAKE_RETRY_DELAY_SECONDS; if the queue's retries
+ *                        run out the row stays `queued` and the next nudge (or
+ *                        the CP2 15-minute sweeper, PLAN §2.2) wakes it
  *
  * The queue consumer reads no D1 row: a wake for a job already done costs one
  * empty acquire and the container's idle window.

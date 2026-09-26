@@ -60,6 +60,7 @@ describe("the control surface", () => {
         inFlight: 0,
         jobsCompleted: 2,
         jobsFailed: 1,
+        leaseHoldMs: 0,
         polling: false,
         stopping: false,
         uptimeMs: 5,
@@ -73,8 +74,15 @@ describe("the control surface", () => {
 
   it("GET /healthz reports what the Durable Object needs to decide on sleep", () => {
     expect(handleControl("GET", "/healthz", fakeWorker({ inFlight: 1, polling: true }))).toStrictEqual({
-      body: { inFlight: 1, jobsCompleted: 2, jobsFailed: 1, ok: true, polling: true, uptimeMs: 5 },
+      body: { inFlight: 1, jobsCompleted: 2, jobsFailed: 1, leaseHoldMs: 0, ok: true, polling: true, uptimeMs: 5 },
       status: 200,
+    });
+  });
+
+  it("GET /healthz carries the lease hold (Codex P1: the DO must keep a holding container)", () => {
+    expect(handleControl("GET", "/healthz", fakeWorker({ leaseHoldMs: 42_000, polling: true })).body).toMatchObject({
+      leaseHoldMs: 42_000,
+      polling: true,
     });
   });
 

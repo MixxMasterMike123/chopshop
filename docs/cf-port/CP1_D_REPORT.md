@@ -463,3 +463,186 @@ Cost, estimated:
    (CP1-C open question 7). A re-render of an old artwork on 0.35.4 would produce
    different bytes and hit `canonical_conflict`. That only matters if version-2
    reprocessing is ever built.
+
+---
+
+## Codex fixes (after `dfe7269`)
+
+All four findings are fixed in my files, each with regression tests.
+- Nothing was committed and no `wrangler` command reached Cloudflare.
+- `wrangler.jsonc` and `src/pod/render-jobs.ts` are untouched.
+- Where this section contradicts the text above, this section wins: `/healthz` now also
+  carries `leaseHoldMs`, and a report is retried until the lease runs short, not three
+  times.
+
+**Counts:**
+
+| Suite | Before | After |
+|---|---|---|
+| Worker | 1246 / 34 files | **1262 / 34**. All +16 in `test/render-container.test.ts` (11 → 27). |
+| Container | 88 / 5 files | **121 / 6**. New `test/api.test.ts` has 25; `worker.test.ts` 14 → 21; `config-control.test.ts` 17 → 18. |
+
+```
+worker:  ✨ Types at worker-configuration.d.ts are up to date.
+          Test Files  34 passed (34)
+               Tests  1262 passed (1262)
+            Start at  23:26:45
+            Duration  34.77s (transform 24.81s, setup 236.32s, import 2.10s, tests 28.90s, environment 1ms)
+render:   Test Files  6 passed (6)
+               Tests  121 passed (121)
+            Start at  23:27:22
+            Duration  16.25s (transform 430ms, setup 0ms, import 1.29s, tests 22.21s, environment 1ms)
+```
+
+**Mutation checks.** Each fix was reverted in the source, its suite run, and the source
+restored and verified byte-identical by sha256. **5 of 5 were killed:**
+
+| Mutation | Tests that failed |
+|---|---|
+| The stale-observation guard ignored | 2 |
+| `polling:false` accepted as a wake | 3 |
+| `leaseHoldMs` not counted as busy | 1 |
+| The loop disarms despite the hold | 4 |
+| Retry-After ignored, with three fixed attempts | 4 |
+
+The timing-based worker suite passed 5 of 5 back-to-back runs.
+
+### 1. [P1] A job leased to the container but not held by it
+
+`render/src/worker.ts` (THE LEASE HOLD), `render/src/api.ts`, `render/src/control.ts`.
+
+The container now records a **lease horizon** whenever a job may be leased to it without
+being worked on:
+- **An acquire that may have leased:** no answer after the request was sent, an
+  unreadable 200, or a 5xx (it may come after the lease batch committed). The horizon is
+  the send time + `API_LEASE_MS`.
+- **An envelope with no claim to report against:** the same assumed end.
+- **A crashed runner:** the same assumed end.
+- **A `complete` or `fail` report ultimately abandoned:** the lease's own `leaseUntil`.
+
+The loop does **not disarm** before horizon + `LEASE_HOLD_MARGIN_MS` (60 s, for clock skew
+and a few polls after expiry). It keeps polling, and the first acquire after expiry
+re-leases the job as attempt+1, or ends it after attempt 3.
+
+`/healthz` carries `leaseHoldMs`, and the Durable Object counts `leaseHoldMs > 0` as busy
+(`classifyHealth`). So the instance is kept through the hold even if the loop state ever
+said otherwise.
+
+Supporting pieces:
+- `API_LEASE_MS` (`render/src/contract.ts`) is pinned equal to `RENDER_JOB_LEASE_MS` by a
+  Worker test.
+- `AcquireResult.unavailable` gained `mayHaveLeased`. 429, 404 and other 4xx are decided
+  before acquire writes D1, so they hold nothing.
+
+One refinement beyond the finding:
+- A failure while **connecting** never sent the request, so it cannot have leased. Such
+  failures are logged as `acquire_unreachable` and hold nothing: `ECONNREFUSED` (also on
+  the dual-stack `AggregateError`), `ENOTFOUND`, `EAI_AGAIN`, unreachable network or
+  host, a rejected TLS certificate, and undici's connect timeout.
+- Without this, a container pointed at a wrong or down API would extend its hold
+  forever.
+- The codes were probed against Node's fetch. A socket dropped after sending
+  (`UND_ERR_SOCKET`) or a timeout still holds.
+- A live smoke confirmed it: an unreachable API gives `acquire_unreachable`, then
+  `polling_idle_exit` at 10 s, with `leaseHoldMs` 0.
+- ⚠️ **For the unreachable-API smoke, use an ordinary closed port** (e.g.
+  `https://127.0.0.1:54329`), not `:9`. Port 9 is on fetch's blocked-port list and fails
+  without a connect code. It therefore counts as possibly sent, and the container would
+  hold.
+
+Tests (`worker.test.ts` "the lease hold", 7; `api.test.ts` acquire table, 10; the
+`classifyHealth` case):
+- **The finding's scenario:** a lost acquire answer, then 204s until the lease expires,
+  then the same job re-leased as **attempt 2** and completed. The test asserts the loop is
+  still polling past the idle window.
+- A refused acquire still disarms on the idle clock.
+- An abandoned completion holds until lease end + margin, and no earlier.
+- An abandoned fail holds.
+- An unusable envelope holds for the assumed lease.
+- A settled 409 holds nothing.
+- The report deadline equals `leaseUntil − REPORT_DEADLINE_MARGIN_MS`.
+
+**The durable backstop is not this hold.** It covers a container that stays up; a
+container that is stopped, crashes or is redeployed mid-hold leaves the job `leased`
+until the next nudge. The backstop is the **CP2 15-minute sweeper re-nudging
+expired-lease (and long-`queued`) jobs** (PLAN §2.2). Until CP2, the next upload's nudge
+is the only other wake.
+
+### 2. [P2] A stale health observation stopped a container a wake had just re-armed
+
+New `src/render/lifecycle.ts` (`RenderLifecycle`); `src/render/render-container.ts`
+delegates to it.
+
+- `wake()` bumps a **generation** and counts itself **in flight** until it returns.
+- `onActivityExpired` snapshots both before asking `/healthz`. Any overlap discards the
+  answer as stale (`keep`; the timer renews and asks again next expiry): a wake running
+  before, a wake running after, or a changed generation.
+- From that check to the signal there is **no `await`**. `Container.stop()` and
+  `destroy()` send the signal synchronously (read in `@cloudflare/containers` 0.3.7), so
+  nothing can interleave with the decision.
+- The logic lives outside the Durable Object because a Container DO cannot be
+  constructed without the Containers runtime. `RenderContainer` is now a thin adapter
+  (`startAndWaitForPorts`, `containerFetch`, `stop`, `destroy`).
+
+Tests use a **fake container whose `/healthz` answer is observed when asked but delivered
+only after a wake has re-armed it**:
+- the result is `keep`, with 0 stops and the container still armed;
+- a wake still in flight when the answer arrives → `keep`;
+- the control case (no wake) → `stop`;
+- busy → `keep`; two unanswered checks → `stop`, then `destroy`.
+
+### 3. [P2] `/wake` answering `polling: false` was reported as woken
+
+`src/render/lifecycle.ts`.
+
+Only `200` with `polling: true` is a wake. Anything else throws a `RenderWakeError`:
+- `polling: false`, from a container draining after SIGTERM → `render_wake_not_polling`;
+- a non-200 → `render_wake_status_*`;
+- an unreadable body → `render_wake_bad_body`.
+
+`wakeRenderContainer` therefore throws, and the consumer **retries the nudges** after 30 s
+instead of acking them. By then the draining instance has exited, and the retry starts a
+replacement.
+
+Tests:
+- the draining case, plus 3 other failure shapes;
+- **end to end**: the consumer with a fake namespace backed by `RenderLifecycle` and a
+  draining fake container → both nudges retried with 30 s delay, none acked.
+
+### 4. [P2] Report retries ignored Retry-After and gave up after ~7 s
+
+`render/src/api.ts`.
+
+`report(jobId, action, body, deadlineMs)`:
+- **Always one attempt.** Then it retries on no answer, 429 or 5xx.
+- **A 429 waits its Retry-After**, capped at 60 s (the API's window).
+- **Otherwise it waits** 2 s, 5 s, then 10 s repeatedly.
+- **It keeps going while each wait still ends before the deadline.** The deadline is the
+  lease end minus `REPORT_DEADLINE_MARGIN_MS` (10 s), which the worker passes in. This
+  replaces three fixed attempts.
+- 200, 400, 404, 409 and 422 return at once.
+- An exhausted report returns its last unsettled status. The worker then holds the lease
+  (fix 1).
+
+Tests (fake clock, `api.test.ts`):
+- two 429s with Retry-After 40 s and 25 s, then 200 → exactly those waits;
+- Retry-After 3600 → 60 s;
+- a 429 without Retry-After → the back-off;
+- five no-answer and 5xx failures, then 200 → past three attempts;
+- 5xx until the deadline → stops with the last wait still inside the deadline, and
+  returns 503;
+- an expired deadline → exactly one attempt;
+- settled statuses → no retry.
+
+### Files touched in this round
+
+| Package | Files |
+|---|---|
+| Container | `render/src/{api,worker,control,contract}.ts`; `render/test/{api (new),worker,config-control}.test.ts` |
+| Worker | `src/render/lifecycle.ts` (new); `src/render/{render-container,wake}.ts`; `src/pod/render-jobs-queue.ts` (doc comment only); `test/render-container.test.ts` |
+| Docs | this section |
+
+Nothing else changed:
+- No dependency changed.
+- `worker-configuration.d.ts` is unchanged (types:check green).
+- The forbidden-string scan over every touched file is clean.

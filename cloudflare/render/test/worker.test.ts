@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AcquireResult, ReportStatus } from "../src/api.ts";
 import type { Logger, LogValue } from "../src/log.ts";
 import type { runArtworkPipeline } from "../src/pipeline.ts";
-import { RenderWorker } from "../src/worker.ts";
+import { RenderWorker, REPORT_DEADLINE_MARGIN_MS } from "../src/worker.ts";
 import { leaseBody, PROFILE, transparentPng } from "./fixtures.ts";
 
 /**
@@ -19,8 +19,17 @@ const TOKEN = "never-log-this-render-farm-token-0123456789";
 interface Report {
   action: "complete" | "fail";
   body: Record<string, unknown>;
+  deadlineMs: number;
   jobId: string;
 }
+
+/**
+ * `leases` are served in order; an entry that is a function is an ACQUIRE SCRIPT
+ * step instead — it returns the AcquireResult itself (or undefined to serve the
+ * next entry), and stays at the head of the queue until it returns something
+ * other than `{ kind: "empty" }`.
+ */
+type Step = (acquireNumber: number) => AcquireResult | undefined;
 
 function fakeApi(leases: unknown[], statusFor: (report: Report) => ReportStatus = () => 200) {
   const reports: Report[] = [];
@@ -29,11 +38,27 @@ function fakeApi(leases: unknown[], statusFor: (report: Report) => ReportStatus 
     api: {
       async acquire(): Promise<AcquireResult> {
         acquires += 1;
-        const next = leases.shift();
-        return next === undefined ? { kind: "empty" } : { body: next, kind: "lease" };
+        const next = leases[0];
+        if (typeof next === "function") {
+          const result = (next as Step)(acquires);
+          if (result !== undefined && result.kind !== "empty") {
+            leases.shift();
+          }
+          if (result !== undefined) {
+            return result;
+          }
+          leases.shift();
+        }
+        const lease = leases.shift();
+        return lease === undefined ? { kind: "empty" } : { body: lease, kind: "lease" };
       },
-      async report(jobId: string, action: "complete" | "fail", body: unknown): Promise<ReportStatus> {
-        const report = { action, body: body as Record<string, unknown>, jobId };
+      async report(
+        jobId: string,
+        action: "complete" | "fail",
+        body: unknown,
+        deadlineMs: number,
+      ): Promise<ReportStatus> {
+        const report = { action, body: body as Record<string, unknown>, deadlineMs, jobId };
         reports.push(report);
         return statusFor(report);
       },
@@ -87,15 +112,26 @@ afterEach(async () => {
 function start(
   api: ReturnType<typeof fakeApi>["api"],
   r2: { fetch: (url: string, init?: RequestInit) => Promise<Response> },
-  options: { idleExitMs?: number; log?: Logger; maxConcurrentJobs?: number; runPipeline?: typeof runArtworkPipeline } = {},
+  options: {
+    assumedLeaseMs?: number;
+    idleExitMs?: number;
+    leaseHoldMarginMs?: number;
+    log?: Logger;
+    maxConcurrentJobs?: number;
+    reportMarginMs?: number;
+    runPipeline?: typeof runArtworkPipeline;
+  } = {},
 ): RenderWorker {
   const worker = new RenderWorker({
     api,
+    ...(options.assumedLeaseMs === undefined ? {} : { assumedLeaseMs: options.assumedLeaseMs }),
     fetch: r2.fetch,
     idleExitMs: options.idleExitMs ?? 60_000,
+    ...(options.leaseHoldMarginMs === undefined ? {} : { leaseHoldMarginMs: options.leaseHoldMarginMs }),
     log: options.log ?? (() => undefined),
     maxConcurrentJobs: options.maxConcurrentJobs ?? 1,
     pollIntervalMs: 2,
+    ...(options.reportMarginMs === undefined ? {} : { reportMarginMs: options.reportMarginMs }),
     ...(options.runPipeline === undefined ? {} : { runPipeline: options.runPipeline }),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
   });
@@ -217,6 +253,7 @@ describe("failures are reported as codes", () => {
     expect(api.reports[0]).toStrictEqual({
       action: "fail",
       body: { attempt: 1, error: code, leaseToken: lease.leaseToken },
+      deadlineMs: Date.parse(lease.leaseUntil as string) - REPORT_DEADLINE_MARGIN_MS,
       jobId: lease.jobId,
     });
   });
@@ -321,5 +358,140 @@ describe("the loop", () => {
     await stopped;
     expect(api.reports).toHaveLength(1);
     expect(worker.status().polling).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Codex P1 — a job leased to this container but not held by it must not be
+// stranded by the idle exit.
+describe("the lease hold", () => {
+  const quickRejection: typeof runArtworkPipeline = async () => ({
+    ok: false,
+    reasons: [{ code: "resolution_too_low", message: "x" }],
+  });
+  const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("a LOST acquire answer keeps the loop polling until that lease expires, then re-leases the job as attempt 2", async () => {
+    const assumedLeaseMs = 150;
+    let sentAt = 0;
+    const api = fakeApi([
+      // 1st acquire: the API leased a job but the answer never arrived.
+      (): AcquireResult => {
+        sentAt = Date.now();
+        return { code: "acquire_network", kind: "unavailable", mayHaveLeased: true, retryAfterMs: 5 };
+      },
+      // Then 204s until that lease has expired; the next acquire re-leases it.
+      (): AcquireResult | undefined =>
+        Date.now() - sentAt < assumedLeaseMs ? { kind: "empty" } : undefined,
+      leaseBody({ attempt: 2 }),
+    ]);
+    const { lines, log } = recorder();
+    const worker = start(api.api, fakeR2(Buffer.alloc(10)), {
+      assumedLeaseMs,
+      idleExitMs: 30,
+      leaseHoldMarginMs: 40,
+      log,
+      runPipeline: quickRejection,
+    });
+
+    // Well past the idle window, and still polling: the hold is on.
+    await sleepMs(80);
+    expect(worker.status().polling).toBe(true);
+    expect(worker.status().leaseHoldMs).toBeGreaterThan(0);
+    expect(lines.some((line) => line.includes('"lease_hold"') && line.includes("acquire_network"))).toBe(true);
+
+    await until(() => api.reports.length === 1);
+    expect(api.reports[0]?.action).toBe("complete");
+    expect(api.reports[0]?.body.attempt).toBe(2);
+
+    // Once the hold has passed and the loop idles, it disarms as before.
+    await until(() => !worker.status().polling);
+    expect(worker.status().leaseHoldMs).toBe(0);
+  });
+
+  it("WITHOUT a possible lease (a refused acquire) the idle exit is unchanged", async () => {
+    const api = fakeApi([
+      (): AcquireResult => ({
+        code: "acquire_status_404",
+        kind: "unavailable",
+        mayHaveLeased: false,
+        retryAfterMs: 5,
+      }),
+    ]);
+    const worker = start(api.api, fakeR2(Buffer.alloc(0)), {
+      assumedLeaseMs: 10_000,
+      idleExitMs: 30,
+      leaseHoldMarginMs: 40,
+    });
+    await until(() => !worker.status().polling, 2_000);
+    expect(worker.status().leaseHoldMs).toBe(0);
+  });
+
+  it("an ABANDONED completion holds until its lease end + margin", async () => {
+    const leaseUntil = new Date(Date.now() + 120).toISOString();
+    const api = fakeApi([leaseBody({ leaseUntil })], () => "network");
+    const { lines, log } = recorder();
+    const worker = start(api.api, fakeR2(Buffer.alloc(10)), {
+      idleExitMs: 20,
+      leaseHoldMarginMs: 40,
+      log,
+      runPipeline: quickRejection,
+    });
+
+    await until(() => api.reports.length === 1);
+    await sleepMs(50);
+    expect(worker.status().polling).toBe(true);
+    expect(lines.some((line) => line.includes("report_complete_abandoned"))).toBe(true);
+
+    await until(() => !worker.status().polling, 2_000);
+    // Not before the lease end + the margin.
+    expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(leaseUntil) + 40);
+  });
+
+  it("an abandoned FAIL report holds too", async () => {
+    const leaseUntil = new Date(Date.now() + 100).toISOString();
+    const api = fakeApi([leaseBody({ leaseUntil })], () => 503);
+    const worker = start(api.api, fakeR2(Buffer.alloc(10), { getStatus: 403 }), {
+      idleExitMs: 20,
+      leaseHoldMarginMs: 40,
+    });
+    await until(() => api.reports.length === 1);
+    expect(api.reports[0]?.body.error).toBe("input_fetch_failed");
+    await sleepMs(40);
+    expect(worker.status().leaseHoldMs).toBeGreaterThan(0);
+    expect(worker.status().polling).toBe(true);
+  });
+
+  it("an envelope too broken to report against holds for the assumed lease", async () => {
+    const api = fakeApi([{ jobId: "nope" }]);
+    const worker = start(api.api, fakeR2(Buffer.alloc(0)), {
+      assumedLeaseMs: 150,
+      idleExitMs: 20,
+      leaseHoldMarginMs: 40,
+    });
+    await sleepMs(60);
+    expect(worker.status().polling).toBe(true);
+    expect(worker.status().leaseHoldMs).toBeGreaterThan(0);
+    await until(() => !worker.status().polling, 2_000);
+  });
+
+  it("a settled report (409) holds nothing", async () => {
+    const api = fakeApi([leaseBody()], () => 409);
+    const worker = start(api.api, fakeR2(Buffer.alloc(10)), {
+      idleExitMs: 20,
+      leaseHoldMarginMs: 40,
+      runPipeline: quickRejection,
+    });
+    await until(() => api.reports.length === 1);
+    expect(worker.status().leaseHoldMs).toBe(0);
+    await until(() => !worker.status().polling, 2_000);
+  });
+
+  it("reports carry the lease's end less the report margin as their retry deadline", async () => {
+    const leaseUntil = new Date(Date.now() + 600_000).toISOString();
+    const api = fakeApi([leaseBody({ leaseUntil })]);
+    start(api.api, fakeR2(Buffer.alloc(10)), { reportMarginMs: 10_000, runPipeline: quickRejection });
+    await until(() => api.reports.length === 1);
+    expect(api.reports[0]?.deadlineMs).toBe(Date.parse(leaseUntil) - 10_000);
   });
 });

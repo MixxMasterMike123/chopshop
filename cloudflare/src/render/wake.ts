@@ -11,8 +11,10 @@ import { RENDER_CONTAINER_INSTANCE } from "./render-container";
  *                   a started container could only be refused; not started.
  *   woken           the container is running and polling.
  *
- * Throws when the wake itself fails (start timeout, no instance available): the
- * caller retries the nudge later. One singleton instance, so a whole batch of
+ * Throws when the wake itself fails (start timeout, no instance available, or a
+ * container that answers /wake with `polling: false` because it is draining after
+ * SIGTERM — src/render/lifecycle.ts): the caller retries the nudge later, and the
+ * retry starts a replacement once the draining instance has exited. One singleton instance, so a whole batch of
  * nudges is one wake.
  */
 export type WakeOutcome = "not_bound" | "not_configured" | "woken";

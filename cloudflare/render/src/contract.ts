@@ -41,6 +41,14 @@ export const ALLOWED_STORAGE_HOST_SUFFIX = ".r2.cloudflarestorage.com";
 /** RENDER_JOB_MAX_ATTEMPTS in the API. */
 export const MAX_ATTEMPTS = 3;
 
+/**
+ * RENDER_JOB_LEASE_MS in the API (src/pod/render-jobs.ts): how long one attempt
+ * owns a job. The container needs it only when it does NOT know a lease's end — an
+ * acquire whose answer was lost may still have leased a job to it, for this long
+ * from the moment it asked. The Worker's suite pins the two values equal.
+ */
+export const API_LEASE_MS = 10 * 60 * 1_000;
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const LEASE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;

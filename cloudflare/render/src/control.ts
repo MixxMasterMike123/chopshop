@@ -2,9 +2,10 @@
  * The container's own HTTP surface, reachable ONLY from its Durable Object (a
  * Container has no public ingress; the Worker never forwards requests to it):
  *
- *   GET  /healthz → 200 { ok, polling, inFlight, jobsCompleted, jobsFailed, uptimeMs }
+ *   GET  /healthz → 200 { ok, polling, inFlight, leaseHoldMs, jobsCompleted, jobsFailed, uptimeMs }
  *                   The Durable Object reads it before letting `sleepAfter` stop the
- *                   instance: busy (polling or a job in flight) ⇒ keep running.
+ *                   instance: busy (polling, a job in flight, or a lease possibly
+ *                   still held — leaseHoldMs > 0) ⇒ keep running.
  *   POST /wake    → 200 { ok, polling } — re-arm polling (sent on every queue nudge).
  *   anything else → 404 (the DO's start probe hits "/" and only needs AN answer).
  *
@@ -29,6 +30,7 @@ export function handleControl(
         inFlight: status.inFlight,
         jobsCompleted: status.jobsCompleted,
         jobsFailed: status.jobsFailed,
+        leaseHoldMs: status.leaseHoldMs,
         ok: !status.stopping,
         polling: status.polling,
         uptimeMs: status.uptimeMs,

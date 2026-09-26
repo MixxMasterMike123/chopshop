@@ -19,6 +19,22 @@
  *   lives in the API; this side never decides whether its lease still holds — it
  *   reports, and a 409 means someone else owns the job now.
  *
+ * ── THE LEASE HOLD ──────────────────────────────────────────────────────────
+ * A job can be leased to this container without it holding the job: an acquire
+ * whose answer was lost (or unreadable, or a 5xx after the lease committed), a
+ * complete/fail report abandoned when the lease ran short, an envelope too broken
+ * to report against, a runner that crashed. Every later acquire then answers 204
+ * until that lease expires, and the nudge that woke the container was already
+ * acked — so disarming on the idle clock would strand the artwork in
+ * `processing` until some other upload woke the container. Each such event
+ * records the lease's end (known, or assumed: acquire time + API_LEASE_MS), and
+ * the loop does NOT disarm before that end + LEASE_HOLD_MARGIN_MS: it keeps
+ * polling, and the first acquire after expiry re-leases the job as attempt+1 (or
+ * ends it after attempt 3). /healthz reports the hold (`leaseHoldMs`) so the
+ * Durable Object keeps the instance alive through it. This covers a container
+ * that stays up; the durable backstop, for one that does not, is the CP2
+ * 15-minute sweeper re-nudging expired-lease jobs (PLAN §2.2).
+ *
  * Logs are JSON lines: job id, attempt, codes, sizes, timings. Never the token,
  * never a URL, never a response body.
  */
@@ -26,8 +42,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AcquireResult, RenderApi, ReportStatus } from "./api.ts";
+import { type AcquireResult, isUnsettled, type RenderApi, type ReportStatus } from "./api.ts";
 import {
+  API_LEASE_MS,
   completionBody,
   failureBody,
   type FailureCode,
@@ -43,15 +60,34 @@ import { downloadToFile, type FetchLike, putFile, TransferError } from "./transf
 
 export const POLL_INTERVAL_MS = 3_000;
 
+/**
+ * Past a lease's end before the hold lets the loop disarm: covers the clock skew
+ * between this container and the API (the lease end is the API's clock) and leaves
+ * room for many polls after the expiry, the first of which re-leases the job.
+ */
+export const LEASE_HOLD_MARGIN_MS = 60_000;
+
+/**
+ * Report retries stop this long before the lease ends: a report arriving after
+ * the end is refused (409) whatever it says, and the margin absorbs clock skew.
+ */
+export const REPORT_DEADLINE_MARGIN_MS = 10_000;
+
 export interface RenderWorkerOptions {
   api: Pick<RenderApi, "acquire" | "report">;
+  /** The lease length to assume when a lease's end is unknown (default API_LEASE_MS). */
+  assumedLeaseMs?: number;
   /** For the two R2 transfers (the API calls go through `api`). */
   fetch: FetchLike;
   idleExitMs: number;
+  /** Default LEASE_HOLD_MARGIN_MS. */
+  leaseHoldMarginMs?: number;
   log: Logger;
   maxConcurrentJobs: number;
   now?: () => number;
   pollIntervalMs?: number;
+  /** Default REPORT_DEADLINE_MARGIN_MS. */
+  reportMarginMs?: number;
   /** Swappable for tests; the pipeline is the real one by default. */
   runPipeline?: typeof runArtworkPipeline;
   sleep?: (ms: number) => Promise<void>;
@@ -61,6 +97,8 @@ export interface WorkerStatus {
   inFlight: number;
   jobsCompleted: number;
   jobsFailed: number;
+  /** > 0 while a job may still be leased to this container (see THE LEASE HOLD). */
+  leaseHoldMs: number;
   polling: boolean;
   stopping: boolean;
   uptimeMs: number;
@@ -72,12 +110,15 @@ function realSleep(ms: number): Promise<void> {
 
 export class RenderWorker {
   readonly #api: Pick<RenderApi, "acquire" | "report">;
+  readonly #assumedLeaseMs: number;
   readonly #fetch: FetchLike;
   readonly #idleExitMs: number;
+  readonly #leaseHoldMarginMs: number;
   readonly #log: Logger;
   readonly #maxConcurrentJobs: number;
   readonly #now: () => number;
   readonly #pollIntervalMs: number;
+  readonly #reportMarginMs: number;
   readonly #runPipeline: typeof runArtworkPipeline;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #startedAt: number;
@@ -88,6 +129,8 @@ export class RenderWorker {
   #jobsCompleted = 0;
   #jobsFailed = 0;
   #lastActivityAt: number;
+  // Container clock; the loop does not disarm before it (THE LEASE HOLD).
+  #leaseHoldUntil = 0;
   #loop: Promise<void> | null = null;
   #stopping = false;
   // Resolved to wake a loop parked on "disarmed" or "no free slot".
@@ -95,12 +138,15 @@ export class RenderWorker {
 
   constructor(options: RenderWorkerOptions) {
     this.#api = options.api;
+    this.#assumedLeaseMs = options.assumedLeaseMs ?? API_LEASE_MS;
     this.#fetch = options.fetch;
     this.#idleExitMs = options.idleExitMs;
+    this.#leaseHoldMarginMs = options.leaseHoldMarginMs ?? LEASE_HOLD_MARGIN_MS;
     this.#log = options.log;
     this.#maxConcurrentJobs = options.maxConcurrentJobs;
     this.#now = options.now ?? Date.now;
     this.#pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
+    this.#reportMarginMs = options.reportMarginMs ?? REPORT_DEADLINE_MARGIN_MS;
     this.#runPipeline = options.runPipeline ?? runArtworkPipeline;
     this.#sleep = options.sleep ?? realSleep;
     this.#startedAt = this.#now();
@@ -112,6 +158,7 @@ export class RenderWorker {
       inFlight: this.#inFlight.size,
       jobsCompleted: this.#jobsCompleted,
       jobsFailed: this.#jobsFailed,
+      leaseHoldMs: Math.max(0, this.#leaseHoldUntil - this.#now()),
       polling: this.#armed,
       stopping: this.#stopping,
       uptimeMs: this.#now() - this.#startedAt,
@@ -147,6 +194,22 @@ export class RenderWorker {
     nudge?.();
   }
 
+  /**
+   * A job may stay leased to this container until `leaseEndMs` (container clock)
+   * without being worked on here: do not disarm before it has expired.
+   */
+  #holdForLease(leaseEndMs: number, reason: string, ids: Record<string, number | string> = {}): void {
+    const until = leaseEndMs + this.#leaseHoldMarginMs;
+    if (until > this.#leaseHoldUntil) {
+      this.#leaseHoldUntil = until;
+    }
+    this.#log("warn", "lease_hold", {
+      ...ids,
+      holdMs: Math.max(0, this.#leaseHoldUntil - this.#now()),
+      reason,
+    });
+  }
+
   #parked(): Promise<void> {
     return new Promise((resolve) => {
       this.#nudge = resolve;
@@ -179,11 +242,12 @@ export class RenderWorker {
         const job = this.#runJob(result.body, started)
           .catch((error: unknown) => {
             // Only the unforeseen reaches here (every report path catches its own
-            // failures); the job goes unreported and its lease expiry takes over.
+            // failures); the job goes unreported, so hold until its lease expires.
             this.#jobsFailed += 1;
             this.#log("error", "job_crashed", {
               error: error instanceof Error ? error.name : "unknown",
             });
+            this.#holdForLease(started + this.#assumedLeaseMs, "job_crashed");
           })
           .finally(() => {
             this.#inFlight.delete(job);
@@ -199,14 +263,21 @@ export class RenderWorker {
           code: result.code,
           retryAfterMs: result.retryAfterMs,
         });
+        if (result.mayHaveLeased) {
+          // Measured from when this acquire was SENT: a lease it may have made
+          // cannot outlive that + the API's lease length.
+          this.#holdForLease(started + this.#assumedLeaseMs, result.code);
+        }
       }
 
-      // Idle = no lease acquired and nothing running for the whole window. An
-      // acquire that keeps failing counts as idle too, so a misconfigured
-      // container stops polling instead of hammering a dark surface forever.
+      // Idle = no lease acquired and nothing running for the whole window, and no
+      // lease possibly still held (THE LEASE HOLD). An acquire that keeps being
+      // refused counts as idle, so a misconfigured container stops polling
+      // instead of hammering a dark surface forever.
       if (
         this.#inFlight.size === 0 &&
-        this.#now() - this.#lastActivityAt >= this.#idleExitMs
+        this.#now() - this.#lastActivityAt >= this.#idleExitMs &&
+        this.#now() >= this.#leaseHoldUntil
       ) {
         this.#armed = false;
         this.#log("info", "polling_idle_exit", {
@@ -227,22 +298,27 @@ export class RenderWorker {
 
   async #runJob(body: unknown, acquiredAt: number): Promise<void> {
     const parsed = parseLease(body);
+    // Without a readable lease end, the longest a lease made by this acquire can
+    // last (acquiredAt is when the acquire was sent).
+    const assumedLeaseEnd = acquiredAt + this.#assumedLeaseMs;
     if (!parsed.ok) {
       this.#jobsFailed += 1;
       if (parsed.claim === null) {
         // Nothing to report against; the lease expires and the API re-leases.
         this.#log("error", "job_envelope_unusable", {});
+        this.#holdForLease(assumedLeaseEnd, "envelope_unusable");
         return;
       }
       this.#log("error", "job_envelope_invalid", {
         attempt: parsed.claim.attempt,
         jobId: parsed.claim.jobId,
       });
-      await this.#fail(parsed.claim, "invalid_envelope");
+      await this.#fail(parsed.claim, "invalid_envelope", assumedLeaseEnd);
       return;
     }
 
     const lease = parsed.lease;
+    const leaseEnd = Date.parse(lease.leaseUntil);
     const ids = { attempt: lease.attempt, jobId: lease.jobId };
     const alone = this.#inFlight.size === 0;
     // The resident high-water mark is per process; reset it only when this job is
@@ -277,7 +353,7 @@ export class RenderWorker {
           paths.input,
         );
       } catch (error) {
-        await this.#failTransfer(lease, error, "input_fetch_failed");
+        await this.#failTransfer(lease, error, "input_fetch_failed", leaseEnd);
         return;
       }
       mark("fetchMs", stage);
@@ -296,7 +372,7 @@ export class RenderWorker {
           error: error instanceof Error ? error.name : "unknown",
           inputBytes,
         });
-        await this.#fail(lease, "pipeline_crashed");
+        await this.#fail(lease, "pipeline_crashed", leaseEnd);
         return;
       }
       mark("pipelineMs", stage);
@@ -308,7 +384,7 @@ export class RenderWorker {
           ...metrics,
           reasonCodes: result.reasons.map((reason) => reason.code),
         });
-        await this.#complete(lease, completionBody(lease, result, metrics));
+        await this.#complete(lease, completionBody(lease, result, metrics), leaseEnd);
         return;
       }
 
@@ -319,7 +395,7 @@ export class RenderWorker {
         printPng = await putFile(this.#fetch, lease.printPutUrl, paths.print, "image/png");
         previewWebp = await putFile(this.#fetch, lease.previewPutUrl, paths.preview, "image/webp");
       } catch (error) {
-        await this.#failTransfer(lease, error, "output_put_failed");
+        await this.#failTransfer(lease, error, "output_put_failed", leaseEnd);
         return;
       }
       mark("uploadMs", stage);
@@ -343,6 +419,7 @@ export class RenderWorker {
           { meta: result.meta, notices: result.notices, ok: true, outputs: { previewWebp, printPng } },
           metrics,
         ),
+        leaseEnd,
       );
     } finally {
       await rm(dir, { force: true, recursive: true }).catch(() => undefined);
@@ -368,29 +445,60 @@ export class RenderWorker {
     };
   }
 
-  async #complete(lease: RenderLease, body: Record<string, unknown>): Promise<void> {
-    const status = await this.#api.report(lease.jobId, "complete", body);
-    this.#logReport("complete", lease, status);
+  async #complete(
+    lease: RenderLease,
+    body: Record<string, unknown>,
+    leaseEndMs: number,
+  ): Promise<void> {
+    const status = await this.#report(lease, "complete", body, leaseEndMs);
     if (status === 200) {
       this.#jobsCompleted += 1;
       return;
     }
     this.#jobsFailed += 1;
     // 400: the API refused the body and left the lease alone — give the job back
-    // now rather than letting the lease run out. Everything else is already
-    // settled by the API (404 gone, 409 someone else's, 422 recorded as a failed
-    // attempt) or unreachable (the lease expiry takes over).
+    // now rather than letting the lease run out. 404 / 409 / 422 are settled by
+    // the API (gone, someone else's, recorded as a failed attempt); an unsettled
+    // status was abandoned and is held in #report.
     if (status === 400) {
-      await this.#fail(lease, "completion_invalid");
+      await this.#fail(lease, "completion_invalid", leaseEndMs);
     }
   }
 
-  async #fail(claim: LeaseClaim, code: FailureCode): Promise<void> {
-    const status = await this.#api.report(claim.jobId, "fail", failureBody(claim, code));
-    this.#logReport("fail", claim, status, code);
+  async #fail(claim: LeaseClaim, code: FailureCode, leaseEndMs: number): Promise<void> {
+    await this.#report(claim, "fail", failureBody(claim, code), leaseEndMs, code);
   }
 
-  async #failTransfer(lease: RenderLease, error: unknown, fallback: FailureCode): Promise<void> {
+  /** One report, retried until the lease runs short; an abandoned one is held. */
+  async #report(
+    claim: LeaseClaim,
+    action: "complete" | "fail",
+    body: unknown,
+    leaseEndMs: number,
+    code?: FailureCode,
+  ): Promise<ReportStatus> {
+    const status = await this.#api.report(
+      claim.jobId,
+      action,
+      body,
+      leaseEndMs - this.#reportMarginMs,
+    );
+    this.#logReport(action, claim, status, code);
+    if (isUnsettled(status)) {
+      this.#holdForLease(leaseEndMs, `report_${action}_abandoned`, {
+        attempt: claim.attempt,
+        jobId: claim.jobId,
+      });
+    }
+    return status;
+  }
+
+  async #failTransfer(
+    lease: RenderLease,
+    error: unknown,
+    fallback: FailureCode,
+    leaseEndMs: number,
+  ): Promise<void> {
     this.#jobsFailed += 1;
     const code = error instanceof TransferError ? error.code : fallback;
     this.#log("error", "job_transfer_failed", {
@@ -399,7 +507,7 @@ export class RenderWorker {
       detail: error instanceof TransferError ? error.detail : "unknown",
       jobId: lease.jobId,
     });
-    await this.#fail(lease, code);
+    await this.#fail(lease, code, leaseEndMs);
   }
 
   #logReport(

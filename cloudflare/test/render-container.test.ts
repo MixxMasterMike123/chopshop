@@ -2,13 +2,19 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
-import { insertRenderJobStatement } from "../src/pod/render-jobs";
+import { insertRenderJobStatement, RENDER_JOB_LEASE_MS } from "../src/pod/render-jobs";
 import { WAKE_RETRY_DELAY_SECONDS } from "../src/pod/render-jobs-queue";
+import {
+  classifyHealth,
+  type ContainerHealth,
+  RenderLifecycle,
+} from "../src/render/lifecycle";
 import {
   RENDER_CONTAINER_INSTANCE,
   renderContainerEnvVars,
 } from "../src/render/render-container";
 import {
+  API_LEASE_MS,
   completionBody,
   failureBody,
   outputKeys,
@@ -335,5 +341,177 @@ describe("the container's wire module against the real /v1/render routes", () =>
         .bind(jobId)
         .run();
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Codex fixes. The Durable Object's wake / sleep decisions (src/render/lifecycle.ts),
+// against a FAKE container: the pool has no Containers runtime.
+
+interface FakeContainer {
+  armed: boolean;
+  destroys: number;
+  draining: boolean;
+  starts: number;
+  stops: number;
+}
+
+function newFakeContainer(): FakeContainer {
+  return { armed: false, destroys: 0, draining: false, starts: 0, stops: 0 };
+}
+
+function wakeOps(container: FakeContainer, options: { startGate?: Promise<void> } = {}) {
+  return {
+    async postWake(): Promise<Response> {
+      if (!container.draining) {
+        container.armed = true;
+      }
+      return Response.json({ ok: !container.draining, polling: container.armed });
+    },
+    async start(): Promise<void> {
+      container.starts += 1;
+      await options.startGate;
+    },
+  };
+}
+
+/**
+ * /healthz whose answer is OBSERVED when asked but DELIVERED only when the gate
+ * opens — the stale answer Codex described.
+ */
+function expiryOps(container: FakeContainer, gate?: Promise<void>) {
+  return {
+    async destroy(): Promise<void> {
+      container.destroys += 1;
+    },
+    async health(): Promise<ContainerHealth> {
+      const observed: ContainerHealth = container.armed ? "busy" : "idle";
+      await gate;
+      return observed;
+    },
+    async stop(): Promise<void> {
+      container.stops += 1;
+      container.armed = false;
+      container.draining = true;
+    },
+  };
+}
+
+function gate(): { open: () => void; promise: Promise<void> } {
+  let open: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { open, promise };
+}
+
+describe("the sleep decision (Codex P2: a stale health answer must not stop)", () => {
+  it("a health answer delayed ACROSS a wake is discarded: the re-armed container keeps running", async () => {
+    const lifecycle = new RenderLifecycle();
+    const container = newFakeContainer();
+    const healthGate = gate();
+
+    // /healthz is asked while the loop is idle (it will answer "idle")...
+    const expiring = lifecycle.expire(expiryOps(container, healthGate.promise));
+    // ...a nudge wakes and re-arms it before that answer arrives...
+    await expect(lifecycle.wake(wakeOps(container))).resolves.toMatchObject({ polling: true });
+    expect(container.armed).toBe(true);
+    // ...then the stale "idle" is delivered.
+    healthGate.open();
+
+    await expect(expiring).resolves.toBe("keep");
+    expect(container.stops).toBe(0);
+    expect(container.armed).toBe(true);
+  });
+
+  it("a wake still in flight when the answer arrives also keeps it", async () => {
+    const lifecycle = new RenderLifecycle();
+    const container = newFakeContainer();
+    const startGate = gate();
+    const waking = lifecycle.wake(wakeOps(container, { startGate: startGate.promise }));
+
+    await expect(lifecycle.expire(expiryOps(container))).resolves.toBe("keep");
+    expect(container.stops).toBe(0);
+
+    startGate.open();
+    await waking;
+    expect(container.armed).toBe(true);
+  });
+
+  it("with no wake in between, an idle container is stopped (the control case)", async () => {
+    const lifecycle = new RenderLifecycle();
+    const container = newFakeContainer();
+    await expect(lifecycle.expire(expiryOps(container))).resolves.toBe("stop");
+    expect(container.stops).toBe(1);
+  });
+
+  it("a busy container is kept; two unanswered checks in a row destroy it", async () => {
+    const lifecycle = new RenderLifecycle();
+    const container = newFakeContainer();
+    container.armed = true;
+    await expect(lifecycle.expire(expiryOps(container))).resolves.toBe("keep");
+
+    const unanswered = {
+      ...expiryOps(container),
+      health: async (): Promise<ContainerHealth> => "unanswered",
+    };
+    await expect(lifecycle.expire(unanswered)).resolves.toBe("stop");
+    await expect(lifecycle.expire(unanswered)).resolves.toBe("destroy");
+    expect(container.destroys).toBe(1);
+  });
+
+  it.each<[string, boolean, unknown, ContainerHealth]>([
+    ["polling", true, { inFlight: 0, leaseHoldMs: 0, polling: true }, "busy"],
+    ["a job in flight", true, { inFlight: 1, leaseHoldMs: 0, polling: false }, "busy"],
+    // Codex P1: a container holding for a possibly-leased job is busy.
+    ["a lease hold", true, { inFlight: 0, leaseHoldMs: 30_000, polling: false }, "busy"],
+    ["nothing", true, { inFlight: 0, leaseHoldMs: 0, polling: false }, "idle"],
+    ["a non-200", false, { polling: true }, "unanswered"],
+    ["a non-object", true, "yes", "unanswered"],
+  ])("classifies /healthz with %s as %s", (_label, ok, body, expected) => {
+    expect(classifyHealth(ok, body)).toBe(expected);
+  });
+});
+
+describe("a draining container is not woken (Codex P2)", () => {
+  it("/wake answering 200 with polling:false is a wake FAILURE", async () => {
+    const lifecycle = new RenderLifecycle();
+    const container = newFakeContainer();
+    container.draining = true;
+    await expect(lifecycle.wake(wakeOps(container))).rejects.toThrow("render_wake_not_polling");
+  });
+
+  it.each<[string, () => Response]>([
+    ["a non-200", () => new Response("no", { status: 503 })],
+    ["an unreadable body", () => new Response("{", { status: 200 })],
+    ["no polling field", () => Response.json({ ok: true })],
+  ])("%s is a wake failure too", async (_label, answer) => {
+    const lifecycle = new RenderLifecycle();
+    await expect(
+      lifecycle.wake({ postWake: async () => answer(), start: async () => undefined }),
+    ).rejects.toThrow(/render_wake_/);
+  });
+
+  it("so the consumer RETRIES the nudges instead of acking them", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const lifecycle = new RenderLifecycle();
+    const container = newFakeContainer();
+    container.draining = true;
+    const { namespace } = fakeNamespace(() => lifecycle.wake(wakeOps(container)));
+
+    const result = await deliver(
+      [{ body: nudge(), id: "a" }, { body: nudge(), id: "b" }],
+      envWith({ RENDER_CONTAINER: namespace }),
+    );
+    expect(result.acks).toStrictEqual([]);
+    expect(result.retries.map((retry) => retry.id).sort()).toStrictEqual(["a", "b"]);
+    expect(result.retries.every((retry) => retry.delaySeconds === WAKE_RETRY_DELAY_SECONDS)).toBe(true);
+    error.mockRestore();
+  });
+});
+
+describe("the container's assumed lease matches the API's", () => {
+  it("API_LEASE_MS (render/src/contract.ts) === RENDER_JOB_LEASE_MS (src/pod/render-jobs.ts)", () => {
+    expect(API_LEASE_MS).toBe(RENDER_JOB_LEASE_MS);
   });
 });
