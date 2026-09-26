@@ -14,7 +14,6 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 
 | # | Decision | Recommended default |
 |---|---|---|
-| D6 | Render host: Cloudflare Containers vs one Cloud Run container in a **new** GCP project. | Decided by the CP1 benchmark; you approve the numbers. Default if equal: Containers. |
 
 ## Blocks CP2 (vertical slice)
 
@@ -74,4 +73,5 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 | D1 | approveAffiliate hotfix deployed to Firebase (`f807625`) | ✅ 2026-09-26 — Mikael: "You do it"; `Successful update operation` |
 | D5 | Workers Paid on Kent's account | ✅ 2026-09-26 — "Paid plan activated" |
 | D5b | Token scopes R2 Edit + DNS Edit added | ✅ 2026-09-26 — verified via whoami --json |
+| D6 | Render host = **Cloudflare Containers** on Kent's account (one account, one bill, private binding, no OIDC). Benchmark runs on Containers alone against the largest allowed artwork; Cloud Run only if it fails the memory/time limits. | ✅ 2026-09-26 — Mikael: "Cloudflare Containers sounds like the best choice" |
 | D7 | Domains: **CF dev domains (`*.kent-ee2.workers.dev`) for CP1–CP6**; the real platform domain comes later (CP7). Hostname-based tenant resolution uses `<shop>.…workers.dev` until then; custom domains / CF for SaaS need a zone and wait for CP7. | ✅ 2026-09-26 — Mikael |
