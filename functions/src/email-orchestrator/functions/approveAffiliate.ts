@@ -110,12 +110,16 @@ export const approveAffiliate = onCall<AffiliateApprovalRequest>(
         console.log(`✅ Created new Firebase Auth user for ${appData.email}`);
       } catch (error: any) {
         if (error.code === 'auth/email-already-exists') {
-          authUser = await auth.getUserByEmail(appData.email);
-          await auth.updateUser(authUser.uid, {
-            password: tempPassword
-          });
-          wasExistingAuthUser = true;
-          console.log(`✅ Updated existing user password for ${appData.email}`);
+          // HOTFIX 2026-09-26 (account takeover): NEVER reset an existing
+          // account's password here. affiliateApplications can be created by
+          // anyone with any email + shopId, so approving one used to hand the
+          // approving shop admin a fresh password for ANY existing account —
+          // including a platform super-admin's — and store it in plaintext on
+          // the affiliate doc. Same deny-by-default guard as createShopUser:
+          // an affiliate needs a fresh email.
+          throw new Error(
+            `${appData.email} tillhör redan ett konto och kan inte godkännas som affiliate. Be sökanden använda en annan e-postadress.`
+          );
         } else {
           throw error;
         }
@@ -157,7 +161,9 @@ export const approveAffiliate = onCall<AffiliateApprovalRequest>(
         credentialsSent: false,
         credentialsSentAt: null,
         credentialsSentBy: null,
-        temporaryPassword: tempPassword,
+        // HOTFIX 2026-09-26: the temporary password is delivered by the welcome
+        // email only — never persisted (it was stored in plaintext, readable by
+        // the shop's admins).
         requiresPasswordChange: true,
         createdAt: new Date(),
         updatedAt: new Date()
