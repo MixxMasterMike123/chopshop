@@ -138,3 +138,7 @@ Block order is a list in config so shops can omit/reorder modules (e.g. no trust
 - Keep it light: no animation libraries — CSS only; no UI framework beyond existing Tailwind (map tokens into the Tailwind theme).
 - Affiliate system is unaffected and stays.
 - Pricing stays server-side; nothing in this design implies client-side price math.
+
+## Port contract (2026-09-26)
+
+For the Cloudflare port, the pixel-parity reference for all three surfaces (the NORD storefront, the Admin-Neutral admin and the dark platform console) is **[docs/cf-port/DESIGN_CONTRACT.md](docs/cf-port/DESIGN_CONTRACT.md)**. It holds the token inventory with `file:line` sources, the component vocabulary, the recorded drift, the impeccable audit and the diff protocol. Where this document and the rendered code differ (for example the type scale, or the product grid rendering 2 columns at desktop), the contract records what actually renders. Drift is fixed only after cutover, with a re-baseline.
