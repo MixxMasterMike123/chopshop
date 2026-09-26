@@ -84,6 +84,7 @@ import {
 } from "./pod/pod-profiles";
 import {
   isPodConfigured,
+  isR2PresignerConfigured,
   resolveR2Presigner,
   resolveRenderFarmClient,
 } from "./pod/render-farm-client";
@@ -1220,10 +1221,13 @@ function podArtworkIdFromPath(pathname: string): string | null {
  * a partially configured surface is dark, not degraded.
  */
 function isAdminPodSurfaceConfigured(env: Env): boolean {
-  return (
-    isPodConfigured(env) &&
-    (SYNC_RENDER_FALLBACK || isRenderJobsConfigured(env))
-  );
+  // The async path (CP1-C/D) never calls a farm URL: the container PULLS from
+  // /v1/render, so RENDER_FARM_URL is only a requirement of the synchronous
+  // fallback. Requiring it here would keep the whole admin POD surface dark on
+  // a deployment that is correctly configured for the pull model.
+  return SYNC_RENDER_FALLBACK
+    ? isPodConfigured(env)
+    : isR2PresignerConfigured(env) && isRenderJobsConfigured(env);
 }
 
 async function handleAdminPodRoute(
@@ -1419,7 +1423,7 @@ async function handlePlatformPodProfilesRoute(
   env: Env,
   request: Request,
 ): Promise<Response> {
-  if (!isPodConfigured(env)) {
+  if (!isAdminPodSurfaceConfigured(env)) {
     return adminNotFoundResponse();
   }
 

@@ -733,8 +733,10 @@ describe("the dark surface", () => {
   // Every one of the six values, individually. The gate is all-or-nothing, and
   // a test per value is what proves it rather than one test proving the
   // easiest case.
+  // RENDER_FARM_URL is NOT in this list any more: the async pull model
+  // (CP1-C/D) never calls a farm URL, so its absence must not darken the
+  // surface — pinned by the test after this loop.
   const CONFIG_KEYS = [
-    "RENDER_FARM_URL",
     "RENDER_FARM_TOKEN",
     "R2_ACCESS_KEY_ID",
     "R2_SECRET_ACCESS_KEY",
@@ -750,6 +752,14 @@ describe("the dark surface", () => {
     ["DELETE", "/v1/admin/pod/artwork/some-id"],
     ["PUT", "/v1/platform/pod/profiles"],
   ];
+
+  it("stays UP without RENDER_FARM_URL (the pull model needs no farm URL)", async () => {
+    const response = await worker.fetch(
+      podRequest("/v1/admin/pod/profiles", { cookie: adminA.cookie, method: "GET" }),
+      envMissing("RENDER_FARM_URL"),
+    );
+    expect(response.status).toBe(200);
+  });
 
   for (const key of CONFIG_KEYS) {
     for (const [method, path] of ROUTES) {

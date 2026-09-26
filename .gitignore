@@ -162,3 +162,6 @@ functions/merchant-service-account.json
 OBSOLETE/
 .claude/skills/impeccable/
 .context/
+
+# render benchmark scratch fixtures (docs/cf-port/RENDER_BENCHMARK.md)
+.bench/
