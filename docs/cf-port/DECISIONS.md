@@ -14,10 +14,7 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 
 | # | Decision | Recommended default |
 |---|---|---|
-| D5 | **Workers Paid** on Kent's account (`ee2130…`)? Needed for Queues, D1 10 GB, Containers. | Enable it (USD 5/mo base). |
-| D5b | **Token scopes:** the `chopshop-cf-port` token has Workers/D1/Queues/Containers but **no R2 and no DNS edit**. | Edit the token: add `Account · Workers R2 Storage: Edit` and `Zone · DNS: Edit` (zone: melodiemc.com + the platform domain). Nothing else changes; the stored token value stays the same. |
 | D6 | Render host: Cloudflare Containers vs one Cloud Run container in a **new** GCP project. | Decided by the CP1 benchmark; you approve the numbers. Default if equal: Containers. |
-| D7 | Platform domain name (admin/platform/print hostnames + `<shop>.<domain>` storefronts). melodiemc.com is Kent's shop domain. | Propose `chopshop.se` (or whatever you own); tell me the zone to add to the token. |
 
 ## Blocks CP2 (vertical slice)
 
@@ -66,3 +63,6 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 ## Answered
 
 | D1 | approveAffiliate hotfix deployed to Firebase (`f807625`) | ✅ 2026-09-26 — Mikael: "You do it"; `Successful update operation` |
+| D5 | Workers Paid on Kent's account | ✅ 2026-09-26 — "Paid plan activated" |
+| D5b | Token scopes R2 Edit + DNS Edit added | ✅ 2026-09-26 — verified via whoami --json |
+| D7 | Domains: **CF dev domains (`*.kent-ee2.workers.dev`) for CP1–CP6**; the real platform domain comes later (CP7). Hostname-based tenant resolution uses `<shop>.…workers.dev` until then; custom domains / CF for SaaS need a zone and wait for CP7. | ✅ 2026-09-26 — Mikael |
