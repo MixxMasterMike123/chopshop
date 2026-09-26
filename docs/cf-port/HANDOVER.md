@@ -19,6 +19,8 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 **Live contract smoke (staging, 21:14):** tenant `smoke-cp1` created (hostname = the worker host, so `/v1/storefront` resolves it) 201 · `POST /v1/admin/products` without `X-Shop-Id` 404 · with `X-Shop-Id: smoke-cp1` but no grant 404 · `POST …/smoke-cp1/acting-as` 201 (60 min) · product create with grant 201 (`SMOKE-1`, draft) · `/v1/storefront` 200 by hostname · `DELETE …/acting-as` 204 · product create after revoke 404. `smoke-cp1` is throwaway staging data (archive/drop at CP3 import).
 
+**D1 backup + restore drill (staging, 21:16–21:19):** export (55 KB, 31 tables, 38 rows) → Time Travel restore to 19:13Z (smoke tenant gone, admin + migrations intact, `/ready` 200) → restore forward to the printed undo bookmark (tenant, product, revoked grant all back). Runbook + gotchas (`--remote` only on export/execute; confirmation on stdin): `D1_BACKUP_RESTORE.md`. Weekly export-to-R2 cron + 5 GB alert deferred to CP2/3.
+
 **Codex (6 runs, gpt-6-astra, high):** `65f610c` 4×P1 + 2×P2 → fixed `9b02e24` (+ P2 → `9aadb15`, re-reviewed clean); `6f68d10` 3×P1 all supplied by `db66555`; `db66555` 1×P2 → `7908e83` → P2 → `694e559` → P2 → `29412a5` (5-line trigger, Fable-reviewed). Verdict at HEAD: no open findings.
 
 **Verification (at `29412a5`):** `bash guard/preflight.test.sh` 70/70 · `node guard/guards.test.mjs` PASS · `cd cloudflare && npm run check` types up to date, tsc 0, vitest 1097/1097 (31 files).
