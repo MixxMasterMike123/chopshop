@@ -27,6 +27,18 @@ const CONNECT_AFFILIATE_ORDER = {
   subtotal: 469.76, vat: 117.44, total: 587.2,
   connect: { ...CONNECT_ORDER.connect, applicationFeeAmount: 29870 },
 };
+// Refunds (F5): Stripe reverses the transfer in proportion to each refund, so
+// the payout follows payment.refundedTotalSek — 299 of 647 refunded keeps
+// (647 − 310.42) × 348/647 = 181.04 kr; a full refund pays out 0.
+const CONNECT_PARTIAL_REFUND_ORDER = {
+  ...CONNECT_ORDER, status: 'partially_refunded',
+  payment: { amount: 647, refundedTotalSek: 299, refundIds: ['re_x'] },
+};
+const CONNECT_FULL_REFUND_ORDER = {
+  ...CONNECT_ORDER, status: 'refunded',
+  payment: { amount: 647, refundedTotalSek: 647, refundIds: ['re_x', 're_y'] },
+  connect: { ...CONNECT_ORDER.connect, transferReversed: true },
+};
 // Legacy single-account / B2B invoice: no connect → no fee lines at all.
 const PLAIN_ORDER = { source: 'b2c', subtotal: 239.2, vat: 59.8, total: 299, shipping: 0 };
 
@@ -55,6 +67,8 @@ createRoot(document.getElementById('root')).render(
   <div>
     <Row order={CONNECT_ORDER} name="Connect-order (avgift + utbetalning)" />
     <Row order={CONNECT_AFFILIATE_ORDER} name="Connect-order med affiliate-rabatt" />
+    <Row order={CONNECT_PARTIAL_REFUND_ORDER} name="Connect-order, delvis återbetald (299 av 647)" />
+    <Row order={CONNECT_FULL_REFUND_ORDER} name="Connect-order, helt återbetald (utbetalning 0)" />
     <Row order={PLAIN_ORDER} name="utan Connect (inga avgiftsrader)" />
   </div>
 );

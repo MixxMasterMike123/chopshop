@@ -26,7 +26,30 @@
  * Settings: settings/contentScreening = { blocklist: [{ term, kind, note,
  * hardBlock? }], reviewFirstProducts: 2, hardBlock?: boolean }. A missing doc
  * means no terms — only the new-shop review rule applies.
+ *
+ * Artwork names (F4): a POD product's screened text includes the fileName/
+ * label of the artwork its podMappings point at, but the mapping editor and
+ * replaceArtworkFile write podMappings/podArtwork WITHOUT touching the product.
+ * rescreenProductsOnMappingWrite / rescreenProductsOnArtworkWrite below close
+ * that gap by running the same screenProductNow on every affected live product.
  */
+type AnyDoc = Record<string, any>;
+/**
+ * Screen one product now: read it and, when LIVE, stamp the decision. The
+ * products trigger passes its event payload as `known` (already checked live)
+ * so its reads stay exactly as they were; the rescreen triggers below omit it
+ * and the product is read fresh.
+ */
+export declare function screenProductNow(productId: string, known?: AnyDoc): Promise<void>;
 export declare const screenProductOnWrite: import("firebase-functions/core").CloudFunction<import("firebase-functions/v2/firestore").FirestoreEvent<import("firebase-functions/v2/firestore").Change<import("firebase-functions/v2/firestore").DocumentSnapshot> | undefined, {
     productId: string;
 }>>;
+/** podMappings write (setMapping / deleteMapping) → re-screen what the old AND new row fed. */
+export declare const rescreenProductsOnMappingWrite: import("firebase-functions/core").CloudFunction<import("firebase-functions/v2/firestore").FirestoreEvent<import("firebase-functions/v2/firestore").Change<import("firebase-functions/v2/firestore").DocumentSnapshot> | undefined, {
+    mappingId: string;
+}>>;
+/** podArtwork fileName/label change (rename, replaceArtworkFile) → re-screen its products. */
+export declare const rescreenProductsOnArtworkWrite: import("firebase-functions/core").CloudFunction<import("firebase-functions/v2/firestore").FirestoreEvent<import("firebase-functions/v2/firestore").Change<import("firebase-functions/v2/firestore").DocumentSnapshot> | undefined, {
+    artworkId: string;
+}>>;
+export {};

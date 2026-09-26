@@ -8,7 +8,8 @@
  * src/, no bundler): this suite runs one fixture table through BOTH and fails
  * on any divergence — a seller must never be told "clean" while the server
  * flags, or vice versa. Also unit-tests the server's decideScreening state
- * machine (loop convergence, cleared stickiness, new-shop review, hard block).
+ * machine (loop convergence, cleared stickiness, new-shop review, hard block)
+ * and productUsesMappingSku (which products the F4 rescreen triggers pick).
  *
  * RUN: npm --prefix functions run build && node rules-tests/content-screening-parity.test.cjs
  */
@@ -139,6 +140,32 @@ const TABLE = [
   ok(r.screening === null && !r.deactivate, 'taken_down is the platform\'s state — trigger leaves it');
   r = d({ ...base, prev: { status: 'taken_down', hits: ['nike'] }, terms: ['nike', 'kent'] });
   ok(r.screening?.status === 'taken_down', 'taken_down sticks even when hits change');
+
+  // F4: a cleared, clean product whose mapping switches to artwork named
+  // "nike_…png" — the rescreen trigger re-runs this with the new file name.
+  r = d({ ...base, prev: { status: 'cleared', hits: [] }, terms: ['nike'] });
+  ok(r.screening?.status === 'flagged' && eq(r.screening.hits, ['nike']) && !r.deactivate, 'F4: cleared + clean → new artwork name hits → flagged');
+  r = d({ ...base, prev: { status: 'cleared', hits: [] }, terms: ['nike'], hardBlock: true });
+  ok(r.screening?.status === 'blocked' && r.deactivate === true, 'F4: same with a hard-blocked term → blocked + deactivate');
+
+  console.log('\n=== productUsesMappingSku (which products a podMappings row feeds) ===');
+  const u = server.productUsesMappingSku;
+  const tee = { sku: 'TEE-1', variantGroups: [{ sku: 'TEE-1-BLK' }, { sku: 'TEE-1-WHT' }] };
+  ok(u(tee, 'TEE-1') === true, 'parent sku matches');
+  ok(u(tee, 'TEE-1-WHT') === true, 'variantGroups sku matches');
+  ok(u(tee, 'TEE-2') === false, 'other sku → no match');
+  ok(u(tee, 'TEE') === false && u(tee, 'tee-1') === false, 'exact match only (no prefix, case-sensitive)');
+  ok(u({ sku: 'A' }, 'A') === true && u({ sku: 'A' }, 'B') === false, 'missing variantGroups → parent only');
+  ok(u({ sku: 'A', variantGroups: 'garbage' }, 'A') === true, 'non-array variantGroups ignored');
+  ok(u({ sku: 'A', variantGroups: [null, 5, {}, { sku: null }] }, 'null') === false, 'garbage groups dropped, not stringified');
+  ok(u(tee, null) === false && u(tee, undefined) === false && u(tee, '') === false, 'sku null/undefined/empty → false');
+  ok(u({ variantGroups: [{ sku: 'V' }] }, 'V') === false, 'no parent sku → no lookup → false (mirrors artworkFileNames)');
+  ok(u(null, 'A') === false, 'null product → false');
+  ok(u({ sku: 123 }, '123') === true && u(tee, 42) === false, 'product sku stringified like the lookup; non-string mapping sku never matches');
+  const many = { sku: 'P', variantGroups: Array.from({ length: 40 }, (_, i) => ({ sku: `V${i}` })) };
+  ok(server.productMappingSkus(many).length === 30 && u(many, 'V28') === true && u(many, 'V29') === false,
+    'capped at 30 like the `in` lookup');
+  ok(eq(server.productMappingSkus({ sku: 'A', variantGroups: [{ sku: 'A' }, { sku: 'B' }] }), ['A', 'B']), 'deduped, parent first');
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   process.exit(fail === 0 ? 0 : 1);

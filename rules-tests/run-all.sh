@@ -36,6 +36,10 @@
 #                                        studio template from the ROUTED printer's
 #                                        frames (sleeves dropped, px/mm kept) and
 #                                        placementFits guards publish.
+#   - audit-2026-09-26.test.mjs       } CODEX audit 2026-09-26: F3 (an offered
+#                                        garment with every frame cleared stays an
+#                                        explicit {} → gated, never "no data") and
+#                                        F5 (shop payout follows refunds).
 #   - one-number-pure.test.cjs        } A13 "seller sees ONE number": the
 #                                        printersPublic projection, the server
 #                                        cost quote (== the frozen itemCostSek),
@@ -110,6 +114,8 @@ echo "==> [1/3] production-withholding (pure unit test — POD production cost h
 node rules-tests/production-withholding.test.cjs
 echo "==> [1/3] printer-areas (pure unit test, ESM — routed printer's frames in the studio + publish fit check)"
 node rules-tests/printer-areas.test.mjs
+echo "==> [1/3] audit-2026-09-26 (pure unit test, ESM — F3 explicit empty frame map + F5 payout after refunds)"
+node rules-tests/audit-2026-09-26.test.mjs
 echo "==> [1/3] content-screening-parity (pure unit test — brand-screening matcher twins agree)"
 node rules-tests/content-screening-parity.test.cjs
 echo "==> [1/3] one-number-pure (pure unit test — A13 money stays server-side)"

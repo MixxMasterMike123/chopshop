@@ -96,6 +96,7 @@ const TABLE = [
       hoodie: { front: { w: 390, h: 280 } },            // no pocket key → rides on front
       cap: { front: { w: 70, h: 50 } },
       broken: { front: { w: 0, h: 50 }, back: { w: '390', h: 490 } }, // unusable frames
+      bare: {}, // offered, every frame cleared (PrinterRow keeps the key — F3)
     },
   };
   const SLOT_TABLE = [
@@ -116,6 +117,12 @@ const TABLE = [
     ['zero-width frame is no frame',    SNAP, 'broken', 'front', false],
     ['string mm is no frame',           SNAP, 'broken', 'back', false],
     ['pocket via an unusable front',    SNAP, 'broken', 'pocket', false],
+    // F3 (CODEX audit 2026-09-26): an EXPLICIT empty map is "printable
+    // nowhere", not "no capability data" — the two must never be conflated.
+    ['explicit {} → front gated',       SNAP, 'bare', 'front', false],
+    ['explicit {} → sleeve gated',      SNAP, 'bare', 'left_sleeve', false],
+    ['explicit {} → pocket gated',      SNAP, 'bare', 'pocket', false],
+    ["explicit {} → 'other' still open", SNAP, 'bare', 'other', true],
   ];
   for (const [name, tier, garment, slot, expected] of SLOT_TABLE) {
     const c = client.isSlotPrintable(tier, garment, slot);

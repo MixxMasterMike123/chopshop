@@ -69,12 +69,13 @@ export const setMapping = async ({ shopId, sku, artworkId, profileId, placement,
     // to the shared label when absent (older rows).
     slotLabel: String(slotLabel || '').trim().slice(0, 40) || null,
     // Garment type ('tee' | 'hoodie' | 'longsleeve' | …) — the PRINT-ROUTING
-    // key. Comes from the studio template (garmentOfTemplate); a mapping made
-    // by hand in the POD admin has no template, so it stays null. null =
-    // "unknown garment" and routes to the default printer — never a hard fail.
-    // A caller WITHOUT a garment (the hand-made mapping form) must not wipe the
-    // garment the studio already stamped on this row — that would silently
-    // un-route a product. Keep the existing value; only a real value replaces it.
+    // key. Comes from the studio template (garmentOfTemplate), or from the
+    // seller's pick in the hand-made mapping form (required there). null =
+    // "unknown garment": since SnapWear A4 it routes to NO printer and checkout
+    // refuses the line (409 no-printer-for-garment) — never write it on purpose.
+    // A caller WITHOUT a garment must not wipe the garment the studio already
+    // stamped on this row — that would silently un-route a product. Keep the
+    // existing value; only a real value replaces it.
     garment: String(garment || '').trim().slice(0, 40) || existing?.garment || null,
     updatedAt: serverTimestamp(),
   };

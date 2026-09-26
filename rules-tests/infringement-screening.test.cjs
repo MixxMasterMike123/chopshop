@@ -76,6 +76,15 @@ async function seed() {
       shopId: 'shopA', name: 'Nike tee', sku: 'NIKE', isActive: false, availability: { b2c: true },
       takedown: { reportId: 'rep1', by: 'mikael', note: 'befogad' },
     });
+    // A second taken-down product for the delete checks (F1) — 'down' is
+    // reinstated further down and must still exist then.
+    await setDoc(doc(db, 'products/down2'), {
+      shopId: 'shopA', name: 'Adidas tee', sku: 'ADIDAS', isActive: false, availability: { b2c: true },
+      takedown: { reportId: null, by: 'mikael', note: 'screening' },
+    });
+    await setDoc(doc(db, 'products/deletable'), {
+      shopId: 'shopA', name: 'Gammal tee', sku: 'OLD', isActive: false, availability: { b2c: true },
+    });
     await setDoc(doc(db, 'settings/contentScreening'), { blocklist: [{ term: 'kent', kind: 'band' }], reviewFirstProducts: 2 });
   });
 }
@@ -135,6 +144,22 @@ async function run() {
     updateDoc(doc(shopAAdminDb(), 'products/down'), { isActive: true })));
   await check('shop admin CANNOT remove the takedown stamp', assertFails(
     updateDoc(doc(shopAAdminDb(), 'products/down'), { takedown: deleteField(), isActive: true })));
+
+  // F1 (CODEX audit 2026-09-26): the delete → re-create-same-id bypass. The
+  // takedown must survive every seller-side route to a fresh, stamp-free doc.
+  await check('F1: shop admin CANNOT delete a taken-down product', assertFails(
+    deleteDoc(doc(shopAAdminDb(), 'products/down2'))));
+  await check('F1: shop admin CANNOT overwrite a taken-down product wholesale (setDoc without the stamp)', assertFails(
+    setDoc(doc(shopAAdminDb(), 'products/down2'), { shopId: 'shopA', name: 'Adidas tee', sku: 'ADIDAS', isActive: true, availability: { b2c: true } })));
+  await check('F1: the taken-down product is still there afterwards', (async () => {
+    let snap = null;
+    await env.withSecurityRulesDisabled(async (ctx) => { snap = await getDoc(doc(ctx.firestore(), 'products/down2')); });
+    if (!snap?.exists() || snap.data().isActive !== false || !snap.data().takedown) throw new Error('doc changed');
+  })());
+  await check('F1: shop admin still deletes a product WITHOUT a takedown', assertSucceeds(
+    deleteDoc(doc(shopAAdminDb(), 'products/deletable'))));
+  await check('F1: platform may delete a taken-down product', assertSucceeds(
+    deleteDoc(doc(platformDb(), 'products/down2'))));
 
   // Lockout guards — the ordinary seller paths keep working.
   await check('shop admin still edits a flagged product (name/price) — screening untouched', assertSucceeds(

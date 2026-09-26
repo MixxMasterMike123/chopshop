@@ -13,6 +13,7 @@ import { db } from '../../../firebase/config';
 import { setMapping, deleteMapping } from '../../../utils/podMappings';
 import { getProfileById } from '../../../config/podProfiles';
 import { POD_SLOTS, slotOf, slotLabel } from '../../../config/podSlots';
+import { POD_GARMENTS, garmentLabel } from '../../../config/podGarments';
 import { tierTone, tierLabel } from './podTier';
 import PodProductPicker from './PodProductPicker';
 
@@ -41,6 +42,7 @@ const ProductMapping = ({
   const [artworkId, setArtworkId] = useState('');
   const [placementSlot, setPlacementSlot] = useState('front'); // default Bröst
   const [placement, setPlacement] = useState('');
+  const [garment, setGarment] = useState(''); // print-routing key — required
   const [manualSku, setManualSku] = useState(false); // freetext escape hatch (variant SKUs)
 
   const refresh = () => onChanged?.();
@@ -67,18 +69,21 @@ const ProductMapping = ({
     const cleanSku = sku.trim();
     if (!cleanSku) { toast.error('Ange en SKU.'); return; }
     if (!artworkId) { toast.error('Välj ett original.'); return; }
+    if (!garment) { toast.error('Välj plagg.'); return; }
     setSaving(true);
     try {
       const art = artworkById(artworkId);
       const { replaced } = await setMapping({
         shopId, sku: cleanSku, artworkId, profileId: art?.purpose || null, placement, placementSlot,
-        // A hand-made mapping has no studio template, so the garment type is
-        // unknown. Explicit null (not "absent") = route to the default printer.
-        garment: null,
+        // The garment is the print-routing key. A hand-made mapping has no studio
+        // template to read it from, so the seller picks it. Since SnapWear A4 a
+        // mapping without one routes NOWHERE and checkout refuses the line — so
+        // the form requires it.
+        garment,
       });
       // Same product+slot replaces that slot's artwork — say so explicitly.
       toast.success(replaced ? `Ersatte tidigare koppling för ${slotLabel(placementSlot)}` : 'Koppling sparad');
-      setSku(''); setArtworkId(''); setPlacement(''); setPlacementSlot('front');
+      setSku(''); setArtworkId(''); setPlacement(''); setPlacementSlot('front'); setGarment('');
       refresh();
     } catch (e) {
       toast.error(e?.message || 'Kunde inte spara kopplingen.');
@@ -139,7 +144,7 @@ const ProductMapping = ({
       {/* Add-row form. A product can carry SEVERAL originals — one per placering
           (Bröst/Rygg/ärm). Adding the same product+placering replaces that slot's
           artwork; a different placering is a new coupling. */}
-      <div className="mb-4 grid gap-3 rounded-[var(--radius-admin)] border border-admin-border-soft bg-admin-surface-2 p-3 sm:grid-cols-5">
+      <div className="mb-4 grid gap-3 rounded-[var(--radius-admin)] border border-admin-border-soft bg-admin-surface-2 p-3 sm:grid-cols-6">
         <Field label="Produkt" htmlFor="map-pick-product">
           <PodProductPicker
             products={products}
@@ -157,6 +162,14 @@ const ProductMapping = ({
               <option key={a.id} value={a.id}>
                 {(a.label || a.fileName)} {a.validation?.tier ? `· ${tierLabel(a.validation.tier)}` : ''}
               </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Plagg" htmlFor="map-garment">
+          <Select id="map-garment" value={garment} onChange={(e) => setGarment(e.target.value)}>
+            <option value="">Välj plagg…</option>
+            {POD_GARMENTS.map((g) => (
+              <option key={g.id} value={g.id}>{g.label}</option>
             ))}
           </Select>
         </Field>
@@ -223,9 +236,16 @@ const ProductMapping = ({
                         <ExclamationTriangleIcon className="h-3.5 w-3.5" /> Originalet saknas
                       </span>
                     )}
+                    {/* No garment = no printer (SnapWear A4) — checkout refuses the line. */}
+                    {!m.garment && (
+                      <span className="inline-flex items-center gap-1 text-[12px] text-admin-caution-text">
+                        <ExclamationTriangleIcon className="h-3.5 w-3.5" /> Plagg saknas – lägg till kopplingen igen med plagg valt, annars kan den inte skickas till tryckeri
+                      </span>
+                    )}
                   </div>
                   <div className="truncate text-[12px] text-admin-text-faint">
                     {art ? (art.label || art.fileName) : '—'}
+                    {m.garment ? ` · ${garmentLabel(m.garment)}` : ''}
                     {m.profileId ? ` · ${purposeLabel(m.profileId)}` : ''}
                     {m.placement ? ` · ${m.placement}` : ''}
                   </div>

@@ -11,8 +11,14 @@
 // withheld production cost, baked together at checkout). No tooltip, no
 // breakdown — and there is nothing to break it down WITH: the split is not on
 // the order doc at all (it lives in the server-only orderProduction/{id}).
+//
+// Refunds (F5, CODEX audit 2026-09-26): Y follows payment.refundedTotalSek —
+// Stripe reverses the transfer in proportion to each refund (shopPayout.js),
+// so a fully refunded order pays out 0 and a partial one its remaining share.
+// The refunded amount gets its own line so the number is explainable.
 import React from 'react';
 import { Card, StatusPill } from './ui';
+import { shopPayoutSek } from '../../utils/shopPayout';
 
 /** "1 234,50 kr" — the order page's money format. */
 export const formatSek = (n) =>
@@ -37,6 +43,10 @@ export const connectFeeSekOf = (order) =>
 
 const OrderPaymentCard = ({ order, subtotal, vat, total, paid, isB2C, affiliateCode, affiliatePct }) => {
   const feeSek = connectFeeSekOf(order);
+  const refundedSek = Number(order?.payment?.refundedTotalSek) || 0;
+  const payoutSek = feeSek == null
+    ? null
+    : shopPayoutSek({ total, feeSek, chargedSek: order?.payment?.amount, refundedSek });
   return (
     <Card>
       <div className="flex items-center gap-2 border-b border-admin-border px-4 py-3">
@@ -60,7 +70,8 @@ const OrderPaymentCard = ({ order, subtotal, vat, total, paid, isB2C, affiliateC
         {feeSek != null && (
           <div className="mt-1 border-t border-admin-border-soft pt-2">
             <SummaryRow label="Avgift (plattform & produktion)" value={`- ${formatSek(feeSek)}`} />
-            <SummaryRow label="Utbetalning till butiken" value={formatSek((Number(total) || 0) - feeSek)} strong />
+            {refundedSek > 0 && <SummaryRow label="Återbetalat till kund" value={formatSek(refundedSek)} />}
+            <SummaryRow label="Utbetalning till butiken" value={formatSek(payoutSek)} strong />
           </div>
         )}
       </div>

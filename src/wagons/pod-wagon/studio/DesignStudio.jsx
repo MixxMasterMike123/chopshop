@@ -93,9 +93,17 @@ const GarmentThumb = ({ template, colorway }) => (
 // before the SnapWear seed. Once any printer exists, a garment nobody makes
 // (flat mössa at SnapWear) is simply not offered: checkout would refuse it
 // (409 no-printer-for-garment), so letting a seller design it is a trap.
-const templateOffered = (template, routing, printersById) =>
-  Object.keys(printersById || {}).length === 0 ||
-  resolvePrinterUid(garmentOfTemplate(template), routing, printersById) != null;
+// Nor is a garment that IS routed but printable nowhere on it: the printer's
+// frame map for it is explicitly empty (PrinterRow saves {} for an offered
+// garment whose every frame was cleared), so applyPrinterAreas leaves no slot
+// to place a motif on.
+const templateOffered = (template, routing, printersById) => {
+  if (Object.keys(printersById || {}).length === 0) return true;
+  const garment = garmentOfTemplate(template);
+  const uid = resolvePrinterUid(garment, routing, printersById);
+  if (uid == null) return false;
+  return templateSlots(applyPrinterAreas(template, printersById[uid]?.printAreasMm?.[garment])).length > 0;
+};
 
 // `showUnofferedTemplates` (dev harness / a platform view only): list the
 // garments no printer makes, dimmed and unselectable, with a note — sellers

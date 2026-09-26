@@ -152,6 +152,13 @@ const AdminProducts = () => {
       toast.error('Fel: Produkt-ID saknas.');
       return;
     }
+    // A product the platform took down (notice & takedown) stays until the
+    // platform reinstates or removes it — firestore.rules deny the delete, so
+    // say why up front instead of surfacing a permission error.
+    if (products.find((p) => p.id === productId)?.takedown) {
+      toast.error('Produkten är avpublicerad av plattformen efter en anmälan och kan inte tas bort.');
+      return;
+    }
     if (!window.confirm('Är du säker på att du vill ta bort denna produkt? Denna åtgärd kan inte ångras.')) return;
     try {
       setLoading(true);

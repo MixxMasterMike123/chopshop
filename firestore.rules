@@ -185,6 +185,9 @@ service cloud.firestore {
     // admin also cannot flip isActive — otherwise a takedown would be one
     // checkbox away from undone. Reinstating is the platform's call (the
     // product form clears the stamp when a platform user re-activates).
+    // A taken-down product is also NOT seller-deletable (CODEX audit
+    // 2026-09-26 F1): delete + re-create under the same id would otherwise
+    // shed the stamp and pass every checkout gate again. Platform only.
     function sellerUntouchedModeration() {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['screening', 'takedown'])
         && (resource.data.get('takedown', null) == null
@@ -196,7 +199,8 @@ service cloud.firestore {
                     && (isPlatform() || !request.resource.data.keys().hasAny(['screening', 'takedown']));
       allow update: if isAdminOfShop(resource.data.shopId) && tenantUnchanged()
                     && (isPlatform() || sellerUntouchedModeration());
-      allow delete: if isAdminOfShop(resource.data.shopId);
+      allow delete: if isAdminOfShop(resource.data.shopId)
+                    && (isPlatform() || resource.data.get('takedown', null) == null);
     }
 
     // Server-maintained public catalogue projection (syncProductsPublicOnWrite

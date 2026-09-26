@@ -24,13 +24,15 @@
  *       bag_dtg → bag · cap_dtg → cap · beanie_dtg → beanie · flatcap_dtg → flatcap
  *   `apparel_dtg` is AMBIGUOUS — tee, longsleeve, hoodie and sweatshirt all use
  *   it — so apparel rows are left ALONE (no field written). null/absent means
- *   "unknown garment" and routes to the default printer, which is the correct,
- *   safe outcome; guessing 'tee' would silently route hoodies to the wrong
- *   printer at a wrong cost.
+ *   "unknown garment". Guessing 'tee' would silently route hoodies to the wrong
+ *   printer at a wrong cost, so the script does not guess.
  *
- *   Consequence: expect most rows to come out UNKNOWN. That is not a failure.
- *   The real fix for those is the seller re-publishing from the studio (which
- *   rewrites the mapping with the right garment), or a manual per-shop review.
+ *   ⚠️ Since SnapWear A4 an unknown garment routes to NO printer: checkout
+ *   refuses the line (409 no-printer-for-garment). Every UNKNOWN row this
+ *   script reports is a product that cannot be bought until the seller either
+ *   re-publishes it from the studio (which rewrites the mapping with the right
+ *   garment) or re-adds the mapping in the manual mapping form (POD admin →
+ *   Avancerat) with a plagg chosen.
  *
  * SAFETY: DRY RUN by default — prints exactly what it would write and exits.
  * Pass `--apply` to write. Only ever ADDS the `garment` field via a dot-path
@@ -156,7 +158,7 @@ async function main() {
   log(`      scanned              : ${rows.length}`);
   log(`      already-set          : ${counts[OUTCOME.ALREADY]}  (untouched)`);
   log(`      derived-from-profile : ${counts[OUTCOME.DERIVED]}  (${APPLY ? 'written' : 'would be written'})`);
-  log(`      unknown-left-null    : ${counts[OUTCOME.UNKNOWN]}  (apparel_dtg or no profile — left as-is, routes to default printer)`);
+  log(`      unknown-left-null    : ${counts[OUTCOME.UNKNOWN]}  (apparel_dtg or no profile — left as-is; checkout REFUSES these (409 no-printer-for-garment) until re-published from the studio or re-added in the manual mapping form with a plagg chosen)`);
 
   if (!APPLY) {
     log('\n    DRY RUN — nothing written. Re-run with --apply to write.\n');

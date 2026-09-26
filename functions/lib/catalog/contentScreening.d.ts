@@ -7,7 +7,8 @@
  * rules-tests/content-screening-parity.test.cjs. Change one, change both.
  *
  * Plus decideScreening(): the PURE state machine the screenProductOnWrite
- * trigger runs, kept here (no firebase imports) so it is unit-testable too.
+ * trigger runs, and productUsesMappingSku(): which products a podMappings row
+ * feeds — both kept here (no firebase imports) so they are unit-testable too.
  */
 export interface BlocklistEntry {
     term: string;
@@ -21,6 +22,20 @@ export declare const productScreeningTexts: (product: AnyDoc | null | undefined,
 export declare const normalizeBlocklist: (raw: unknown) => BlocklistEntry[];
 export declare const findScreeningHits: (texts: unknown, blocklist: unknown) => BlocklistEntry[];
 export declare const screenProduct: (product: AnyDoc | null | undefined, blocklist: unknown, artworkFileNames?: unknown[]) => string[];
+/**
+ * The podMappings SKUs whose artwork prints on this product: the parent sku +
+ * every variantGroups[].sku, stringified, blanks dropped, deduped, capped at
+ * 30 (the Firestore `in` limit the lookup runs into). No parent sku → none.
+ * screenProductOnWrite's artwork lookup queries exactly this list.
+ */
+export declare const productMappingSkus: (product: AnyDoc | null | undefined) => string[];
+/**
+ * Does a podMappings row with this `sku` feed this product's screened artwork
+ * names? Same list as the lookup (productMappingSkus), exact string match —
+ * a Firestore `in` is type-strict, so a non-string sku never matches. The
+ * mapping/artwork rescreen triggers use it to find the products to re-screen.
+ */
+export declare const productUsesMappingSku: (product: AnyDoc | null | undefined, sku: unknown) => boolean;
 /** Statuses on products/{id}.screening. Queue = flagged | review | blocked. */
 export type ScreeningStatus = 'ok' | 'review' | 'flagged' | 'blocked' | 'cleared' | 'taken_down';
 export interface ScreeningState {

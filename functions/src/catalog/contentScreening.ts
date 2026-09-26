@@ -7,7 +7,8 @@
  * rules-tests/content-screening-parity.test.cjs. Change one, change both.
  *
  * Plus decideScreening(): the PURE state machine the screenProductOnWrite
- * trigger runs, kept here (no firebase imports) so it is unit-testable too.
+ * trigger runs, and productUsesMappingSku(): which products a podMappings row
+ * feeds — both kept here (no firebase imports) so they are unit-testable too.
  */
 
 export interface BlocklistEntry {
@@ -94,6 +95,31 @@ export const findScreeningHits = (texts: unknown, blocklist: unknown): Blocklist
 
 export const screenProduct = (product: AnyDoc | null | undefined, blocklist: unknown, artworkFileNames: unknown[] = []): string[] =>
   findScreeningHits(productScreeningTexts(product, artworkFileNames), blocklist).map((h) => h.term);
+
+// ── POD mapping membership (server only — no client twin) ─────────────────
+
+/**
+ * The podMappings SKUs whose artwork prints on this product: the parent sku +
+ * every variantGroups[].sku, stringified, blanks dropped, deduped, capped at
+ * 30 (the Firestore `in` limit the lookup runs into). No parent sku → none.
+ * screenProductOnWrite's artwork lookup queries exactly this list.
+ */
+export const productMappingSkus = (product: AnyDoc | null | undefined): string[] => {
+  const p = (product || {}) as AnyDoc;
+  if (!p.sku) return [];
+  const groups = Array.isArray(p.variantGroups) ? p.variantGroups : [];
+  const skus = [String(p.sku), ...groups.map((g) => String((g as AnyDoc | null)?.sku || ''))].filter(Boolean);
+  return [...new Set(skus)].slice(0, 30);
+};
+
+/**
+ * Does a podMappings row with this `sku` feed this product's screened artwork
+ * names? Same list as the lookup (productMappingSkus), exact string match —
+ * a Firestore `in` is type-strict, so a non-string sku never matches. The
+ * mapping/artwork rescreen triggers use it to find the products to re-screen.
+ */
+export const productUsesMappingSku = (product: AnyDoc | null | undefined, sku: unknown): boolean =>
+  typeof sku === 'string' && productMappingSkus(product).includes(sku);
 
 // ── Trigger state machine ──────────────────────────────────────────────────
 

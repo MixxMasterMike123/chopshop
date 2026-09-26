@@ -36,7 +36,7 @@ export { takedownProduct } from './infringement/takedownProduct';
 export { sweepAbandonedCheckouts } from './checkout-recovery/sweep';
 export { resolveCheckoutRecovery, unsubscribeCheckout } from './checkout-recovery/callables';
 export { syncProductsPublicOnWrite } from './catalog/syncProductsPublic';
-export { screenProductOnWrite } from './catalog/screenProductOnWrite';
+export { screenProductOnWrite, rescreenProductsOnMappingWrite, rescreenProductsOnArtworkWrite, } from './catalog/screenProductOnWrite';
 export { onOrderReviewQualify } from './product-reviews/writeReviewRequest';
 export { sweepReviewRequests } from './product-reviews/sweep';
 export { resolveReviewRequest, submitReview, unsubscribeReviews, moderateReview, } from './product-reviews/callables';

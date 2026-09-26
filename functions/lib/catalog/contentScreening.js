@@ -8,10 +8,11 @@
  * rules-tests/content-screening-parity.test.cjs. Change one, change both.
  *
  * Plus decideScreening(): the PURE state machine the screenProductOnWrite
- * trigger runs, kept here (no firebase imports) so it is unit-testable too.
+ * trigger runs, and productUsesMappingSku(): which products a podMappings row
+ * feeds — both kept here (no firebase imports) so they are unit-testable too.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.decideScreening = exports.screenProduct = exports.findScreeningHits = exports.normalizeBlocklist = exports.productScreeningTexts = exports.tokenize = exports.foldText = void 0;
+exports.decideScreening = exports.productUsesMappingSku = exports.productMappingSkus = exports.screenProduct = exports.findScreeningHits = exports.normalizeBlocklist = exports.productScreeningTexts = exports.tokenize = exports.foldText = void 0;
 const EXTRA_FOLDS = {
     'ø': 'o', 'æ': 'ae', 'œ': 'oe', 'ß': 'ss', 'ð': 'd', 'þ': 'th', 'ł': 'l', 'đ': 'd', 'ı': 'i',
 };
@@ -83,6 +84,30 @@ const findScreeningHits = (texts, blocklist) => {
 exports.findScreeningHits = findScreeningHits;
 const screenProduct = (product, blocklist, artworkFileNames = []) => (0, exports.findScreeningHits)((0, exports.productScreeningTexts)(product, artworkFileNames), blocklist).map((h) => h.term);
 exports.screenProduct = screenProduct;
+// ── POD mapping membership (server only — no client twin) ─────────────────
+/**
+ * The podMappings SKUs whose artwork prints on this product: the parent sku +
+ * every variantGroups[].sku, stringified, blanks dropped, deduped, capped at
+ * 30 (the Firestore `in` limit the lookup runs into). No parent sku → none.
+ * screenProductOnWrite's artwork lookup queries exactly this list.
+ */
+const productMappingSkus = (product) => {
+    const p = (product || {});
+    if (!p.sku)
+        return [];
+    const groups = Array.isArray(p.variantGroups) ? p.variantGroups : [];
+    const skus = [String(p.sku), ...groups.map((g) => String(g?.sku || ''))].filter(Boolean);
+    return [...new Set(skus)].slice(0, 30);
+};
+exports.productMappingSkus = productMappingSkus;
+/**
+ * Does a podMappings row with this `sku` feed this product's screened artwork
+ * names? Same list as the lookup (productMappingSkus), exact string match —
+ * a Firestore `in` is type-strict, so a non-string sku never matches. The
+ * mapping/artwork rescreen triggers use it to find the products to re-screen.
+ */
+const productUsesMappingSku = (product, sku) => typeof sku === 'string' && (0, exports.productMappingSkus)(product).includes(sku);
+exports.productUsesMappingSku = productUsesMappingSku;
 const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 const union = (...lists) => [...new Set(lists.flatMap((l) => (Array.isArray(l) ? l : [])))];
 /**

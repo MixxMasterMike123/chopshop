@@ -254,8 +254,14 @@ export { resolveCheckoutRecovery, unsubscribeCheckout } from './checkout-recover
 // so the raw collection (b2bPrice/podCostSek/drafts) can be admin-read-only.
 export { syncProductsPublicOnWrite } from './catalog/syncProductsPublic';
 // Pre-publish brand screening (SnapWear A11): stamps products/{id}.screening
-// (blocklist hits / new-shop review) for the platform's Granskning queue.
-export { screenProductOnWrite } from './catalog/screenProductOnWrite';
+// (blocklist hits / new-shop review) for the platform's Granskning queue. The
+// two rescreen triggers re-run it when a POD product's artwork names change
+// through podMappings/podArtwork without a product write (F4).
+export {
+  screenProductOnWrite,
+  rescreenProductsOnMappingWrite,
+  rescreenProductsOnArtworkWrite,
+} from './catalog/screenProductOnWrite';
 
 // Native product reviews ("Recensioner" add-on): an order trigger that schedules
 // a review request when a B2C order is fulfilled, a scheduled sweep that emails

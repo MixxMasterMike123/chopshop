@@ -372,7 +372,8 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   const podEnabled = isEnabled('pod');
 
   // ── POD live-gate state ────────────────────────────────────────────────────
-  // The SKUs that have a print connection (podMappings). null = not loaded yet.
+  // The SKUs that have a ROUTABLE print connection (a podMappings row with a
+  // garment — routableMappingSkus below). null = not loaded yet.
   // Connection is checked against the SAVED product's SKUs (mappings key on what
   // is in the database, not on unsaved form edits).
   const [podMappingSkus, setPodMappingSkus] = useState(null);
@@ -380,7 +381,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
     if (!podEnabled || !shopId) return;
     let alive = true;
     listMappings(shopId)
-      .then((ms) => { if (alive) setPodMappingSkus(new Set(ms.map((m) => m.sku).filter(Boolean))); })
+      .then((ms) => { if (alive) setPodMappingSkus(routableMappingSkus(ms)); })
       .catch(() => { if (alive) setPodMappingSkus(new Set()); });
     return () => { alive = false; };
   }, [podEnabled, shopId]);
@@ -394,6 +395,11 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
     const groups = (groupSkus || []).filter(Boolean);
     return groups.length > 0 && groups.every((sku) => mappingSkus.has(sku));
   };
+  // Only a mapping WITH a garment covers a sku: since SnapWear A4 a garment-less
+  // row routes to no printer and checkout refuses the line (409), so counting
+  // it would put a product live that can never be bought.
+  const routableMappingSkus = (mappings) =>
+    new Set(mappings.filter((m) => m.garment).map((m) => m.sku).filter(Boolean));
   const podConnected = product
     ? podCoverage(
         product.sku,
@@ -901,7 +907,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
         let mappingSkus = podMappingSkus;
         if (mappingSkus === null) {
           try {
-            mappingSkus = new Set((await listMappings(shopId)).map((m) => m.sku).filter(Boolean));
+            mappingSkus = routableMappingSkus(await listMappings(shopId));
           } catch {
             mappingSkus = new Set(); // unreadable → fail closed (draft)
           }
@@ -997,7 +1003,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
       }
 
       if (formData.availability.b2c !== false && podEnabled && formData.isPodProduct === true && !podConnectedFinal) {
-        toast('Sparad som utkast — produkten visas i webbshoppen först när tryckkopplingen finns.', { icon: '🔒' });
+        toast('Sparad som utkast — produkten visas i webbshoppen först när tryckkopplingen (med plagg valt) finns.', { icon: '🔒' });
       }
 
       // Brand screening notice (SnapWear A11) for a product that is going
@@ -1526,7 +1532,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                     Print on demand-produkt
                   </label>
                   <p className={helpCls}>
-                    Trycks per beställning. Kräver en tryckkoppling (motiv + placering) innan produkten kan visas i webbshoppen.
+                    Trycks per beställning. Kräver en tryckkoppling (motiv + placering + plagg) innan produkten kan visas i webbshoppen.
                   </p>
                 </>
               )}
@@ -1536,11 +1542,11 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
               {podGateActive && (
                 <div className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2.5">
                   <p className="text-[13px] font-semibold text-admin-caution-text">
-                    Produkten kan inte visas i webbshoppen än — tryckkoppling saknas.
+                    Produkten kan inte visas i webbshoppen än — tryckkoppling saknas (eller kopplingen saknar plagg).
                   </p>
                   <p className="mt-1 text-[12px] text-admin-caution-text">
-                    Utan koppling vet tryckeriet inte vilket motiv och vilken placering som ska tryckas,
-                    så beställningar skulle fastna. Produkten går bra att spara som utkast.
+                    Utan koppling vet tryckeriet inte vilket motiv och vilken placering som ska tryckas, och utan
+                    plagg hittas inget tryckeri — så beställningar skulle fastna. Produkten går bra att spara som utkast.
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {product && (product.documentId || product.id) && (
@@ -1578,7 +1584,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
               </label>
               <p className={helpCls}>
                 {podGateActive
-                  ? 'Låst tills produkten har en tryckkoppling — se rutan ovan.'
+                  ? 'Låst tills produkten har en tryckkoppling med plagg valt — se rutan ovan.'
                   : 'Avmarkera för att dölja produkten i webbshoppen utan att inaktivera den.'}
               </p>
               {/* B2B-availability gate — only for shops with the B2B add-on. Lets

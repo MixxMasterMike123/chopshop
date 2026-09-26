@@ -27,6 +27,12 @@
  * Settings: settings/contentScreening = { blocklist: [{ term, kind, note,
  * hardBlock? }], reviewFirstProducts: 2, hardBlock?: boolean }. A missing doc
  * means no terms — only the new-shop review rule applies.
+ *
+ * Artwork names (F4): a POD product's screened text includes the fileName/
+ * label of the artwork its podMappings point at, but the mapping editor and
+ * replaceArtworkFile write podMappings/podArtwork WITHOUT touching the product.
+ * rescreenProductsOnMappingWrite / rescreenProductsOnArtworkWrite below close
+ * that gap by running the same screenProductNow on every affected live product.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -52,7 +58,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.screenProductOnWrite = void 0;
+exports.rescreenProductsOnArtworkWrite = exports.rescreenProductsOnMappingWrite = exports.screenProductOnWrite = exports.screenProductNow = void 0;
 const firestore_1 = require("firebase-functions/v2/firestore");
 const logger = __importStar(require("firebase-functions/logger"));
 const firestore_2 = require("firebase-admin/firestore");
@@ -64,11 +70,9 @@ const DEFAULT_REVIEW_FIRST = 2;
 async function artworkFileNames(p) {
     if (p.isPodProduct !== true || !p.shopId || !p.sku)
         return [];
-    const skus = [
-        String(p.sku),
-        ...(Array.isArray(p.variantGroups) ? p.variantGroups.map((g) => String(g?.sku || '')) : []),
-    ].filter(Boolean);
-    const uniqueSkus = [...new Set(skus)].slice(0, 30); // Firestore `in` cap
+    // sku + variantGroups skus, capped at the Firestore `in` limit. Shared with
+    // productUsesMappingSku, so the rescreen triggers pick exactly these products.
+    const uniqueSkus = (0, contentScreening_1.productMappingSkus)(p);
     // Two equality filters (== + in) → served by index merging, no composite index.
     const maps = await database_1.db.collection('podMappings')
         .where('shopId', '==', p.shopId)
@@ -88,20 +92,17 @@ async function otherLiveCount(shopId, selfId, cap) {
     const snap = await database_1.db.collection('productsPublic').where('shopId', '==', shopId).limit(cap + 1).get();
     return snap.docs.filter((d) => d.id !== selfId).length;
 }
-exports.screenProductOnWrite = (0, firestore_1.onDocumentWritten)({
-    document: 'products/{productId}',
-    database: 'b8s-reseller-db',
-    region: 'us-central1',
-    memory: '256MiB',
-}, async (event) => {
-    const after = event.data?.after;
-    if (!after?.exists)
-        return;
-    const current = after.data();
-    if (!isLive(current))
-        return;
-    const productId = event.params.productId;
+/**
+ * Screen one product now: read it and, when LIVE, stamp the decision. The
+ * products trigger passes its event payload as `known` (already checked live)
+ * so its reads stay exactly as they were; the rescreen triggers below omit it
+ * and the product is read fresh.
+ */
+async function screenProductNow(productId, known) {
     const ref = database_1.db.collection('products').doc(productId);
+    const current = known ?? (await ref.get()).data();
+    if (!current || !isLive(current))
+        return;
     const settingsSnap = await database_1.db.collection('settings').doc('contentScreening').get();
     const settings = (settingsSnap.exists ? settingsSnap.data() : {});
     const reviewFirst = Number.isFinite(settings.reviewFirstProducts)
@@ -147,5 +148,107 @@ exports.screenProductOnWrite = (0, firestore_1.onDocumentWritten)({
         logger.info(`screenProductOnWrite: ${productId} (${p.shopId}) → ${decision.screening?.status ?? prev?.status}` +
             `${terms.length ? ` hits=[${terms.join(', ')}]` : ''}${decision.deactivate ? ' · HARD BLOCK → inactive' : ''}`);
     });
+}
+exports.screenProductNow = screenProductNow;
+exports.screenProductOnWrite = (0, firestore_1.onDocumentWritten)({
+    document: 'products/{productId}',
+    database: 'b8s-reseller-db',
+    region: 'us-central1',
+    memory: '256MiB',
+}, async (event) => {
+    const after = event.data?.after;
+    if (!after?.exists)
+        return;
+    const current = after.data();
+    if (!isLive(current))
+        return;
+    await screenProductNow(event.params.productId, current);
+});
+// ── F4: artwork names changed without a product write ────────────────────
+//
+// Loop safety: the two triggers below only ever write products (through
+// screenProductNow), never podMappings/podArtwork, so they cannot re-fire
+// themselves; the product write re-fires screenProductOnWrite, which
+// converges as described at the top.
+/**
+ * Re-screen this shop's LIVE POD products fed by any of `skus`
+ * (productUsesMappingSku — the same membership the artwork lookup uses).
+ * One failing product is logged and skipped, not fatal to the rest.
+ */
+async function rescreenProductsForSkus(shopId, skus, why) {
+    const wanted = [...new Set(skus)];
+    if (!shopId || wanted.length === 0)
+        return;
+    // Two equality filters → served by index merging, no composite index.
+    const snap = await database_1.db.collection('products')
+        .where('shopId', '==', shopId)
+        .where('isPodProduct', '==', true)
+        .get();
+    // A query returns each doc once, so the ids are already deduped.
+    const ids = snap.docs
+        .filter((d) => isLive(d.data()) && wanted.some((sku) => (0, contentScreening_1.productUsesMappingSku)(d.data(), sku)))
+        .map((d) => d.id);
+    for (const id of ids) {
+        try {
+            await screenProductNow(id);
+        }
+        catch (e) {
+            logger.warn(`${why}: rescreen failed for ${id} (${shopId})`, e);
+        }
+    }
+}
+/** podMappings write (setMapping / deleteMapping) → re-screen what the old AND new row fed. */
+exports.rescreenProductsOnMappingWrite = (0, firestore_1.onDocumentWritten)({
+    document: 'podMappings/{mappingId}',
+    database: 'b8s-reseller-db',
+    region: 'us-central1',
+    memory: '256MiB',
+}, async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    // The artwork lookup reads only shopId/sku/artworkId off a mapping — a
+    // placement/garment/updatedAt edit cannot change any product's names.
+    if (before && after && before.shopId === after.shopId && before.sku === after.sku &&
+        before.artworkId === after.artworkId)
+        return;
+    // Create, delete and a sku change all matter: collect both sides.
+    const skusByShop = new Map();
+    for (const m of [before, after]) {
+        if (!m || typeof m.shopId !== 'string' || typeof m.sku !== 'string')
+            continue;
+        skusByShop.set(m.shopId, [...(skusByShop.get(m.shopId) || []), m.sku]);
+    }
+    for (const [shopId, skus] of skusByShop) {
+        await rescreenProductsForSkus(shopId, skus, `rescreenProductsOnMappingWrite ${event.params.mappingId}`);
+    }
+});
+/** podArtwork fileName/label change (rename, replaceArtworkFile) → re-screen its products. */
+exports.rescreenProductsOnArtworkWrite = (0, firestore_1.onDocumentWritten)({
+    document: 'podArtwork/{artworkId}',
+    database: 'b8s-reseller-db',
+    region: 'us-central1',
+    memory: '256MiB',
+}, async (event) => {
+    const after = event.data?.after;
+    if (!after?.exists)
+        return; // a delete only drops names — nothing new to flag
+    const art = after.data();
+    const before = event.data?.before?.data();
+    // Uploads/validation rewrite other fields constantly; only the screened two matter.
+    if (before?.fileName === art.fileName && before?.label === art.label)
+        return;
+    const shopId = typeof art.shopId === 'string' ? art.shopId : '';
+    if (!shopId)
+        return;
+    const artworkId = event.params.artworkId;
+    // Two equality filters → served by index merging, no composite index.
+    const maps = await database_1.db.collection('podMappings')
+        .where('shopId', '==', shopId)
+        .where('artworkId', '==', artworkId)
+        .get();
+    const skus = maps.docs
+        .map((d) => d.data().sku)
+        .filter((s) => typeof s === 'string' && s !== '');
+    await rescreenProductsForSkus(shopId, skus, `rescreenProductsOnArtworkWrite ${artworkId}`);
 });
 //# sourceMappingURL=screenProductOnWrite.js.map
