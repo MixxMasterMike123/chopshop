@@ -32,6 +32,21 @@
   "env": {
     "staging": {
       "name": "chopshop-api-stg",
+      // The render service (DECISIONS D6): one Container-backed Durable Object per env,
+      // EU placement, image built from render/Dockerfile at deploy (Docker must run locally).
+      "containers": [
+        {
+          "class_name": "RenderContainer",
+          "image": "./render/Dockerfile",
+          "instance_type": "standard-1",
+          "max_instances": 1,
+          "constraints": { "jurisdiction": "eu" }
+        }
+      ],
+      "durable_objects": {
+        "bindings": [{ "name": "RENDER_CONTAINER", "class_name": "RenderContainer" }]
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RenderContainer"] }],
       "workers_dev": true,
       "preview_urls": true,
       "vars": {
@@ -97,6 +112,21 @@
     },
     "production": {
       "name": "chopshop-api",
+      // The render service (DECISIONS D6): one Container-backed Durable Object per env,
+      // EU placement, image built from render/Dockerfile at deploy (Docker must run locally).
+      "containers": [
+        {
+          "class_name": "RenderContainer",
+          "image": "./render/Dockerfile",
+          "instance_type": "standard-1",
+          "max_instances": 1,
+          "constraints": { "jurisdiction": "eu" }
+        }
+      ],
+      "durable_objects": {
+        "bindings": [{ "name": "RENDER_CONTAINER", "class_name": "RenderContainer" }]
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RenderContainer"] }],
       "workers_dev": false,
       "preview_urls": false,
       "vars": {

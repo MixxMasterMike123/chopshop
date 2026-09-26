@@ -18,7 +18,8 @@
 #      and wrangler.jsonc has env.<env> whose name (or wrangler's effective `<top>-<env>`) ==
 #      pinned workerName, whose APP_ENV is <env>, whose bindings are EXACTLY DB / PUBLIC_BUCKET /
 #      PRIVATE_BUCKET / PRODUCTION_BUCKET / OUTBOX_QUEUE / EMAIL_QUEUE / RENDER_JOBS_QUEUE (+ the
-#      three consumers), each on its own pinned resource (every R2 binding in "eu"), whose vars.CANONICAL_ORIGINS deep-equals pinned
+#      three consumers) each on its own pinned resource (every R2 binding in "eu"), one container
+#      RenderContainer (./render/Dockerfile, max_instances 1, EU) bound as RENDER_CONTAINER, whose vars.CANONICAL_ORIGINS deep-equals pinned
 #      origins, AUTH_BASE_URL == origins.api, AUTH_TRUSTED_ORIGINS == exactly the set
 #      {origins.api, origins.web}, SERVICE_NAME == pinned workerName, R2_PRIVATE_BUCKET_NAME
 #      == pinned r2.private, R2_JURISDICTION == "eu" and DISPATCH_TARGET == pinned dispatchTarget (without that section wrangler silently deploys the top-level config);
@@ -315,6 +316,17 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     for b, queue in want_q.items():
         if producers[b] != queue:
             refuse(f"{jsonc} env.{env} queue producer {b} -> {producers[b]!r} is not its pinned queue {queue!r}")
+    # The render container (D6): exactly one container class bound as RENDER_CONTAINER, one
+    # instance, EU-placed, built from the repo's Dockerfile.
+    containers = e.get("containers") or []
+    if [c.get("class_name") for c in containers] != ["RenderContainer"]:
+        refuse(f"{jsonc} env.{env} containers are {[c.get('class_name') for c in containers]}, expected exactly ['RenderContainer']")
+    c = containers[0]
+    if c.get("image") != "./render/Dockerfile" or c.get("max_instances") != 1 or (c.get("constraints") or {}).get("jurisdiction") != "eu":
+        refuse(f"{jsonc} env.{env} container RenderContainer must be image ./render/Dockerfile, max_instances 1, constraints.jurisdiction 'eu' (got {json.dumps(c, sort_keys=True)})")
+    do = bindings((e.get("durable_objects") or {}).get("bindings"), "name", "class_name")
+    if do != {"RENDER_CONTAINER": "RenderContainer"}:
+        refuse(f"{jsonc} env.{env} durable_objects bindings are {do}, expected exactly {{'RENDER_CONTAINER': 'RenderContainer'}}")
     consumers = sorted(item.get("queue") for item in (q.get("consumers") or []))
     if consumers != sorted(want_q.values()):
         refuse(f"{jsonc} env.{env} queue consumers are {consumers}, expected exactly the pinned {sorted(want_q.values())}")

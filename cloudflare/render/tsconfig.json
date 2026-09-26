@@ -1,0 +1,24 @@
+{
+  // Type-checking only. The container runs these .ts files directly with Node 22's
+  // type stripping (--experimental-strip-types), so there is no emit and no build
+  // stage: every construct must be erasable (no enums, namespaces or parameter
+  // properties) and relative imports carry their `.ts` extension.
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "forceConsistentCasingInFileNames": true,
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2023",
+    "types": ["node"],
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "bench/**/*.ts", "vitest.config.ts"]
+}

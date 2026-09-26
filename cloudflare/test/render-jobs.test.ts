@@ -1396,6 +1396,9 @@ describe("the rate limiter", () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe("the -render-jobs queue", () => {
+  // CP1-D: a valid nudge now wakes the render container; with no
+  // RENDER_CONTAINER binding (this env) it is acked with container_not_bound.
+  // The waking itself is covered in test/render-container.test.ts.
   it("acks every nudge, valid or malformed, and never logs a body", async () => {
     const acks: string[] = [];
     const retries: string[] = [];
@@ -1423,11 +1426,15 @@ describe("the -render-jobs queue", () => {
       },
     } as unknown as MessageBatch<unknown>;
 
-    await worker.queue(batch, env);
+    // Explicitly unbound, whatever wrangler.jsonc binds.
+    await worker.queue(batch, { ...env, RENDER_CONTAINER: undefined } as unknown as Env);
 
-    expect(acks).toStrictEqual(["valid", "malformed", "string"]);
+    // Malformed messages are acked as they are read; the valid ones after the
+    // (single) wake decision for the batch.
+    expect([...acks].sort()).toStrictEqual(["malformed", "string", "valid"]);
     expect(retries).toStrictEqual([]);
     const logged = warn.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(logged).toContain("container_not_bound");
     expect(logged).not.toContain("should-not-appear");
   });
 });

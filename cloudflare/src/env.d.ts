@@ -139,6 +139,16 @@ interface Env {
   // holds its work (src/dispatch/printer-client.ts).
   DISPATCH_TARGET: string | undefined;
 
+  // ── THE RENDER CONTAINER (CP1-D, DECISIONS D6) ────────────────────────────
+  // Durable Object namespace of the Container-enabled class RenderContainer
+  // (src/render/render-container.ts; the image is cloudflare/render/). The
+  // `-render-jobs` queue consumer wakes it on every nudge. Absent (no
+  // `containers` + `durable_objects` entry for this environment) ⇒ the consumer
+  // acks and logs `container_not_bound`; nothing else depends on it.
+  RENDER_CONTAINER:
+    | DurableObjectNamespace<import("./render/render-container").RenderContainer>
+    | undefined;
+
   // Worker SECRET, staging only: the bearer the staging fake printer route
   // (/v1/staging/fake-printer/jobs) requires, and the dispatcher presents. The
   // route is a 404 unless APP_ENV="staging", DISPATCH_TARGET="fake-printer"

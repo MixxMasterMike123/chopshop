@@ -2,7 +2,7 @@ import {
   cloudflareTest,
   readD1Migrations,
 } from "@cloudflare/vitest-pool-workers";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [
@@ -94,10 +94,16 @@ export default defineConfig({
             OUTBOX_QUEUE: { queueName: "chopshop-test-outbox" },
             RENDER_JOBS_QUEUE: { queueName: "chopshop-test-render-jobs" },
           },
+          // No consumer for chopshop-test-render-jobs, deliberately (CP1-D): a
+          // delivered nudge wakes the RenderContainer Durable Object, and the pool
+          // has no Containers runtime — once wrangler.jsonc binds RENDER_CONTAINER,
+          // every artwork created in a suite would construct a Container the pool
+          // cannot run. Nudges are still SENT (and asserted where it matters); the
+          // consumer itself is driven directly through worker.queue() with
+          // hand-built batches (test/render-container.test.ts, render-jobs.test.ts).
           queueConsumers: {
             "chopshop-test-email": { maxBatchSize: 10, maxRetries: 8 },
             "chopshop-test-outbox": { maxBatchSize: 10, maxRetries: 8 },
-            "chopshop-test-render-jobs": { maxBatchSize: 10, maxRetries: 8 },
           },
           // No test reaches the network. Every third-party client (Stripe, the
           // render farm, Resend) is replaced by a fake through its seam; this
@@ -113,6 +119,9 @@ export default defineConfig({
     }),
   ],
   test: {
+    // render/ is the render CONTAINER's own Node package (sharp, node:fs): its
+    // suites run under plain Node with `npm test` in render/, never in workerd.
+    exclude: [...configDefaults.exclude, "render/**"],
     setupFiles: ["./test/apply-migrations.ts"],
   },
 });

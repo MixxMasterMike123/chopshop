@@ -1,0 +1,8 @@
+# Only package.json, package-lock.json and src/ reach the image.
+node_modules
+test
+bench
+*.md
+vitest.config.ts
+tsconfig.json
+.DS_Store

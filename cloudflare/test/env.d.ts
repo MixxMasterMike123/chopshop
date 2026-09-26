@@ -27,6 +27,11 @@ declare global {
       // Provided by the miniflare test config only; the deploy config has no
       // R2 binding until the buckets are provisioned.
       PRIVATE_BUCKET: R2Bucket;
+      // Not bound in tests: the -render-jobs consumer suite injects a fake
+      // namespace (test/render-container.test.ts) and otherwise it is absent.
+      RENDER_CONTAINER:
+        | DurableObjectNamespace<import("../src/render/render-container").RenderContainer>
+        | undefined;
       // Not bound in tests: nothing reads them yet.
       PRODUCTION_BUCKET: R2Bucket | undefined;
       PUBLIC_BUCKET: R2Bucket | undefined;

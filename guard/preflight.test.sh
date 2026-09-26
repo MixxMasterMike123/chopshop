@@ -42,6 +42,9 @@ e = {"name": p["workerName"],
      "r2_buckets": [{"binding": "PUBLIC_BUCKET", "bucket_name": p["r2"]["public"], "jurisdiction": "eu"},
                     {"binding": "PRIVATE_BUCKET", "bucket_name": p["r2"]["private"], "jurisdiction": "eu"},
                     {"binding": "PRODUCTION_BUCKET", "bucket_name": p["r2"]["production"], "jurisdiction": "eu"}],
+     "containers": [{"class_name": "RenderContainer", "image": "./render/Dockerfile", "instance_type": "standard-1",
+                     "max_instances": 1, "constraints": {"jurisdiction": "eu"}}],
+     "durable_objects": {"bindings": [{"name": "RENDER_CONTAINER", "class_name": "RenderContainer"}]},
      "queues": {"producers": [{"binding": "OUTBOX_QUEUE", "queue": p["queues"]["outbox"]},
                               {"binding": "EMAIL_QUEUE", "queue": p["queues"]["email"]},
                               {"binding": "RENDER_JOBS_QUEUE", "queue": p["queues"]["renderJobs"]}],
@@ -338,6 +341,14 @@ expect_refused "a binding declared twice → refused" "declares binding 'PUBLIC_
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['DISPATCH_TARGET'] = 'snapwear'")"; run staging -- deploy
 expect_refused "DISPATCH_TARGET != pinned dispatchTarget → refused" "env.staging.vars.DISPATCH_TARGET is 'snapwear', pinned dispatchTarget is 'fake-printer'"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['containers'][0]['max_instances'] = 3")"; run staging -- deploy
+expect_refused "container max_instances != 1 → refused" "container RenderContainer must be image ./render/Dockerfile, max_instances 1"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['durable_objects']")"; run staging -- deploy
+expect_refused "RENDER_CONTAINER binding missing → refused" "durable_objects bindings are {}, expected exactly {'RENDER_CONTAINER': 'RenderContainer'}"
 
 # --- bootstrap can never deploy; the worker name cannot be overridden ---------------------
 new_tree; run staging --bootstrap -- deploy

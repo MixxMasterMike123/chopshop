@@ -11,7 +11,8 @@ import { handleRenderJobsQueueBatch } from "./pod/render-jobs-queue";
  *
  *   -email        → the auth email consumer (src/email/email-queue-consumer.ts)
  *   -render-jobs  → the render-job nudge consumer (src/pod/render-jobs-queue.ts):
- *                   the row is the truth and the farm pulls, so it acks
+ *                   the row is the truth and the container pulls, so a nudge
+ *                   only wakes the render container (src/render/wake.ts)
  *   -outbox       → no consumer yet (CP2): held, retried later
  *   anything else → held, retried later — including the legacy
  *                   `…-email-auth` queue and any dead-letter queue
@@ -59,7 +60,7 @@ export async function handleQueueBatch(
   }
 
   if (route === "render_jobs") {
-    handleRenderJobsQueueBatch(batch);
+    await handleRenderJobsQueueBatch(batch, env);
     return;
   }
 

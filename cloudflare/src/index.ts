@@ -4,6 +4,9 @@ import { createApp } from "./app";
 import { stripTenantHeaders } from "./lib/tenant-headers";
 import { handleQueueBatch } from "./queues";
 
+// The Container-backed Durable Object class wrangler.jsonc binds as RENDER_CONTAINER.
+export { RenderContainer } from "./render/render-container";
+
 // The rate-limit contract constants are part of this module's public surface:
 // suites import them from here to assert against the same numbers the routes
 // enforce, so they stay re-exported from the entry module.

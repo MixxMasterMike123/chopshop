@@ -1,0 +1,25 @@
+{
+  "name": "chopshop-render",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The render container (DECISIONS D6): pulls pod.process_artwork jobs from the API's /v1/render surface and runs the 300-DPI artwork pipeline with sharp.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "start": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "bench": "node --experimental-strip-types --disable-warning=ExperimentalWarning bench/bench.ts"
+  },
+  "dependencies": {
+    "sharp": "0.35.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}
