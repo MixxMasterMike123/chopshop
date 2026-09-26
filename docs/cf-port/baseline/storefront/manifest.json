@@ -1,0 +1,422 @@
+[
+  {
+    "page": "home",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/",
+    "title": "Melodie MC - Quality products, delivered.",
+    "h1": "Merchandise",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "home-mobile.png",
+      "tablet": "home-tablet.png",
+      "desktop": "home-desktop.png"
+    },
+    "sha256": {
+      "mobile": "134bd91b44e3184fd4954419cff876ed050e8f3705ab580cc8ad523f0776e194",
+      "tablet": "602bd283a1da31becaf651a3a8b4af4f8ce2f631501f5acfc6108445a3304b06",
+      "desktop": "45a7334ce1d9e3cf904cc1be810898cda159942c97dc96dbce7c8f02003c845f"
+    },
+    "dimensions": {
+      "mobile": "375x4668",
+      "tablet": "768x3204",
+      "desktop": "1440x2990"
+    },
+    "capturedAt": "2026-09-26T09:30:52.885Z",
+    "bundle": "index-EybuBb5L.js"
+  },
+  {
+    "page": "produkter",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/produkter",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/produkter",
+    "title": "Alla produkter | Melodie MC",
+    "h1": "Alla produkter",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "produkter-mobile.png",
+      "tablet": "produkter-tablet.png",
+      "desktop": "produkter-desktop.png"
+    },
+    "sha256": {
+      "mobile": "5c92997072168118205675275bc3ab7edd9eb052ab1bef11964a9126ac9d8969",
+      "tablet": "4589bed9a9f7f5a30f43765be5cf281893c0de6d306d5fa82119b43d931cc877",
+      "desktop": "ed1368752918cc849404c8474e46d9f81510c2cd5b2909df866096349ec427f0"
+    },
+    "dimensions": {
+      "mobile": "375x7205",
+      "tablet": "768x3896",
+      "desktop": "1440x5198"
+    },
+    "capturedAt": "2026-09-26T09:31:13.076Z",
+    "bundle": "index-EybuBb5L.js"
+  },
+  {
+    "page": "kategori",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/kategori/melodie-mc-90s-cover-art",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/kategori/melodie-mc-90s-cover-art",
+    "title": "Melodie MC 90s Cover Art | Melodie MC",
+    "h1": "Melodie MC 90s Cover Art",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "kategori-mobile.png",
+      "tablet": "kategori-tablet.png",
+      "desktop": "kategori-desktop.png"
+    },
+    "sha256": {
+      "mobile": "b83cabfca1c56c6687ec2a8b55fea3886c5b65246cc46d36cde5925d69f22602",
+      "tablet": "423bc9c96d48f5b1037ad4a67f12ccfbca04bfbafe7c2276f4d49a036dbc5aec",
+      "desktop": "ffe776f22660e11a86301ae5163e8ac9f46a88b32cbf2413be92124cd7edc095"
+    },
+    "dimensions": {
+      "mobile": "375x2174",
+      "tablet": "768x1322",
+      "desktop": "1440x1384"
+    },
+    "capturedAt": "2026-09-26T09:31:29.009Z",
+    "bundle": "index-EybuBb5L.js"
+  },
+  {
+    "page": "product",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/product/anyone-out-there_anyone-out-there",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/product/anyone-out-there_anyone-out-there?v=anyone-out-there-original-s",
+    "title": "Anyone Out There | My Shop",
+    "h1": "Anyone Out There ",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "product-mobile.png",
+      "tablet": "product-tablet.png",
+      "desktop": "product-desktop.png"
+    },
+    "sha256": {
+      "mobile": "541992888dac278ccf8a94e19a96b6ba2fe1565d1b9c094b0342875831ae5c27",
+      "tablet": "d8bf789600500acae5b8f13e3a8d2a41ce1995adf353c98087907c6334b36414",
+      "desktop": "050eacee720aa23181af98efc31e358ca579485be6e32e1cd630fcbfeb22d2a4"
+    },
+    "dimensions": {
+      "mobile": "375x2096",
+      "tablet": "768x2066",
+      "desktop": "1440x1529"
+    },
+    "capturedAt": "2026-09-26T09:31:45.164Z",
+    "bundle": "index-EybuBb5L.js",
+    "h1All": [
+      "Anyone Out There",
+      "Anyone Out There"
+    ]
+  },
+  {
+    "page": "cart",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/cart",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/cart",
+    "title": "Varukorg | My Shop",
+    "h1": "Din Varukorg",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "cart-mobile.png",
+      "tablet": "cart-tablet.png",
+      "desktop": "cart-desktop.png"
+    },
+    "sha256": {
+      "mobile": "153aa06f2597d584d9b570188c5ad916518c0a9e29215d927b3a39eda138d4b1",
+      "tablet": "09ecb0b8794acd95a0e319bc5fa17830603150d9d6939e7548fd12c89db35343",
+      "desktop": "ed20b5c6a890701fa44f018af310e82050c0a003f0b9f910135990e248cc4078"
+    },
+    "dimensions": {
+      "mobile": "375x1310",
+      "tablet": "768x1031",
+      "desktop": "1440x900"
+    },
+    "capturedAt": "2026-09-26T09:32:00.383Z",
+    "bundle": "index-EybuBb5L.js"
+  },
+  {
+    "page": "checkout",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/checkout",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/checkout",
+    "title": "Melodie MC",
+    "h1": "Din varukorg är tom",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "checkout-mobile.png",
+      "tablet": "checkout-tablet.png",
+      "desktop": "checkout-desktop.png"
+    },
+    "sha256": {
+      "mobile": "a91673e8f9efa55a16df5e0ac3205e1ff9a28b97b6a5ffff1e9f3a211e836cd6",
+      "tablet": "70d613ec5630bb3707d7e86462424f28e378d4497387cfb8746ac4fa3031a75b",
+      "desktop": "d4e32f751d179ddee99ff4fef49025103f76d7353edf011bdf126d0763449163"
+    },
+    "dimensions": {
+      "mobile": "375x812",
+      "tablet": "768x1024",
+      "desktop": "1440x900"
+    },
+    "capturedAt": "2026-09-26T09:32:15.493Z",
+    "bundle": "index-EybuBb5L.js"
+  },
+  {
+    "page": "legal-kopvillkor",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/legal/kopvillkor",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/legal/kopvillkor",
+    "title": "Köpvillkor | My Shop",
+    "h1": "Köpvillkor",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "legal-kopvillkor-mobile.png",
+      "tablet": "legal-kopvillkor-tablet.png",
+      "desktop": "legal-kopvillkor-desktop.png"
+    },
+    "sha256": {
+      "mobile": "0474e7c02b225ce762a988baf0432aa89fa7905fd9caa031ca546e9608732d37",
+      "tablet": "3a30310660d6beab81b24cf96baa23499b19a742292080caadc54a3303753e62",
+      "desktop": "86765173648d37c0862f766f8d786e012f5356de4bbe6d2be3c0147756977250"
+    },
+    "dimensions": {
+      "mobile": "375x6171",
+      "tablet": "768x3737",
+      "desktop": "1440x3317"
+    },
+    "capturedAt": "2026-09-26T09:32:40.486Z",
+    "bundle": "index-EybuBb5L.js",
+    "h1All": [
+      "Köpvillkor",
+      "Köpvillkor – Melodie MC"
+    ]
+  },
+  {
+    "page": "legal-angerratt",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/legal/angerratt-och-returer",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/legal/angerratt-och-returer",
+    "title": "Returpolicy | My Shop",
+    "h1": "Ångerrätt & returer",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "legal-angerratt-mobile.png",
+      "tablet": "legal-angerratt-tablet.png",
+      "desktop": "legal-angerratt-desktop.png"
+    },
+    "sha256": {
+      "mobile": "20c648601d308d4a27c268b38a5e13ee17b019a5a52d2cac1661aced568a1a83",
+      "tablet": "79d367076f3d62a67cc50ea34e0e5bc0c37fae292f0a97aaf93e6e9e0c802d5a",
+      "desktop": "dd51bc239f16fb83f1e451e57d7d82936235461665392e8b5a43b6c464006559"
+    },
+    "dimensions": {
+      "mobile": "375x4073",
+      "tablet": "768x2629",
+      "desktop": "1440x2259"
+    },
+    "capturedAt": "2026-09-26T09:32:57.553Z",
+    "bundle": "index-EybuBb5L.js",
+    "h1All": [
+      "Ångerrätt & returer",
+      "Ångerrätt & returer – Melodie MC"
+    ]
+  },
+  {
+    "page": "legal-integritetspolicy",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/legal/integritetspolicy",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/legal/integritetspolicy",
+    "title": "Integritetspolicy | My Shop",
+    "h1": "Integritetspolicy",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "legal-integritetspolicy-mobile.png",
+      "tablet": "legal-integritetspolicy-tablet.png",
+      "desktop": "legal-integritetspolicy-desktop.png"
+    },
+    "sha256": {
+      "mobile": "ff51290259cfdd34e4bb965092b1f4cf7f59194c5a04009090ad7afbdd7bfa55",
+      "tablet": "d28beb7c765bbfd6b87bba57ec65bc2d6c69bbe409606f479bee4e8658ce6750",
+      "desktop": "d3b6ca345ea5ea55b64c988b918a1207f90658d32cfcf24cfb283298433e0038"
+    },
+    "dimensions": {
+      "mobile": "375x4929",
+      "tablet": "768x3123",
+      "desktop": "1440x2777"
+    },
+    "capturedAt": "2026-09-26T09:33:15.211Z",
+    "bundle": "index-EybuBb5L.js",
+    "h1All": [
+      "Integritetspolicy",
+      "Integritetspolicy – Melodie MC"
+    ]
+  },
+  {
+    "page": "legal-plattformsvillkor",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/legal/plattformsvillkor",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/legal/plattformsvillkor",
+    "title": "Plattformsvillkor",
+    "h1": "Plattformsvillkor",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "legal-plattformsvillkor-mobile.png",
+      "tablet": "legal-plattformsvillkor-tablet.png",
+      "desktop": "legal-plattformsvillkor-desktop.png"
+    },
+    "sha256": {
+      "mobile": "a957af34e161e9e6a959b3c70e29e18edf9fead7d1f7e8b627872812bbe5c36d",
+      "tablet": "592809bff3ecf803109377112f4c65cd4e4a0550c5a412f5b07faa32194bb78a",
+      "desktop": "558eed6214b7078b071f7abe642e27bc1db696f2e859321a1d436e4ff3b3f977"
+    },
+    "dimensions": {
+      "mobile": "375x19056",
+      "tablet": "768x10487",
+      "desktop": "1440x9206"
+    },
+    "capturedAt": "2026-09-26T09:33:40.292Z",
+    "bundle": "index-EybuBb5L.js",
+    "layoutWarnings": [
+      "mobile: document 437px wide in a 375px viewport (horizontal overflow; capture is clipped to the viewport width)"
+    ]
+  },
+  {
+    "page": "rapportera-intrang",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/rapportera-intrang",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/rapportera-intrang",
+    "title": "Rapportera intrång",
+    "h1": "Rapportera intrång",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "rapportera-intrang-mobile.png",
+      "tablet": "rapportera-intrang-tablet.png",
+      "desktop": "rapportera-intrang-desktop.png"
+    },
+    "sha256": {
+      "mobile": "26adff28ef2375d783eb135be5d387f84cd9688725c69fbc9a5e1ff5e5969d8a",
+      "tablet": "462a8487ad1018adfbb72ff779d0b1e09ecf2d37dbe517e4a25f646c62e23f45",
+      "desktop": "18f580b0adfe50610373a9277a7aca39c4cd6e6b7f55cce710ee7cd09bdfb1ed"
+    },
+    "dimensions": {
+      "mobile": "375x2658",
+      "tablet": "768x2049",
+      "desktop": "1440x1827"
+    },
+    "capturedAt": "2026-09-26T09:33:56.859Z",
+    "bundle": "index-EybuBb5L.js",
+    "titleByViewport": {
+      "mobile": "Melodie MC",
+      "tablet": "Rapportera intrång",
+      "desktop": "Rapportera intrång"
+    }
+  },
+  {
+    "page": "angra",
+    "url": "https://shop-meteorpr.web.app/melodie-mc/angra",
+    "finalUrl": "https://shop-meteorpr.web.app/melodie-mc/angra",
+    "title": "Ångra avtalet här",
+    "h1": "Ångra avtalet här",
+    "consoleErrors": [
+      "[error] Failed to load resource: the server responded with a status of 404 ()",
+      "[warning] Error: The domain SHOP-METEORPR.WEB.APP is not authorized to show the cookie banner for domain group ID 51150c10-e895-4814-b11b-04512c3782ed. Please add it to the domain group in the Cookiebot Manager to authorize the domain.",
+      "[error] Failed to load resource: the server responded with a status of 404 ()"
+    ],
+    "consoleErrorsAllKnownNoise": true,
+    "failedRequests": [
+      "GET https://consentcdn.cookiebot.com/consentconfig/51150c10-e895-4814-b11b-04512c3782ed/shop-meteorpr.web.app/configuration.js → 404"
+    ],
+    "files": {
+      "mobile": "angra-mobile.png",
+      "tablet": "angra-tablet.png",
+      "desktop": "angra-desktop.png"
+    },
+    "sha256": {
+      "mobile": "91c9b70cc97aa27193a7b2653ccdc11c069d2f0a190bd7aaacf0031a4bfa4889",
+      "tablet": "a74886771d7be11bd5c6f1ea92efac965eb5d34036dc5bbb64ff22ad49377540",
+      "desktop": "818f820e153df63fc0e2ca28d17c30f75230270a469bf3b03c3bdcbf13b368f1"
+    },
+    "dimensions": {
+      "mobile": "375x1866",
+      "tablet": "768x1394",
+      "desktop": "1440x1172"
+    },
+    "capturedAt": "2026-09-26T09:34:12.541Z",
+    "bundle": "index-EybuBb5L.js"
+  }
+]
