@@ -313,21 +313,19 @@ export async function applyFeeRefundFact(
     return { result: "unchanged", tenantId: release.tenant_id };
   }
 
-  if (release.amount_minor !== fact.amount || release.state === "failed") {
-    // Asked for exactly amount_minor under an idempotency key, or already
-    // given up on (refused, or out of attempts): a fee refund that disagrees
-    // is outside this design. No money is recorded on a guess; a human
-    // reconciles. A late fact on a FAILED release gets its own alert kind, so
-    // the release's open `withholding_release_failed` alert cannot hide that
-    // Stripe did make it after all.
-    const late = release.state === "failed" && release.amount_minor === fact.amount;
+  if (release.state === "failed") {
+    // Already given up on (refused, out of attempts, or a mismatch): a fact
+    // for it is recorded nowhere automatically. It gets its own alert kind,
+    // so the release's open `withholding_release_failed` alert cannot hide
+    // that Stripe did move money for it after all.
     await raiseAlertStatement(
       db,
       {
-        kind: late ? "withholding_release_unmatched" : "withholding_release_failed",
-        message: late
-          ? `withholding release ${release.id} was marked failed, but Stripe reports fee refund ${fact.id} for it: the shop HAS received it — record it by hand`
-          : `withholding release ${release.id}: Stripe fee refund ${fact.id} does not match it (${release.state === "failed" ? "the release had failed" : "different amount"}); reconcile by hand`,
+        kind: "withholding_release_unmatched",
+        message:
+          release.amount_minor === fact.amount
+            ? `withholding release ${release.id} was marked failed, but Stripe reports fee refund ${fact.id} for it: the shop HAS received it — record it by hand`
+            : `withholding release ${release.id} was marked failed, and Stripe reports fee refund ${fact.id} for it with a different amount — reconcile by hand`,
         resourceId: release.id,
         resourceType: "withholding_release",
         severity: "critical",
@@ -335,6 +333,25 @@ export async function applyFeeRefundFact(
       },
       nowMs,
     ).run();
+    return { result: "amount_mismatch", tenantId: release.tenant_id };
+  }
+
+  if (release.amount_minor !== fact.amount) {
+    // Stripe was asked for exactly amount_minor under an idempotency key: a
+    // fee refund carrying this release's id with another amount means money
+    // moved that this system did not ask for. Nothing is recorded on a guess
+    // and nothing is ever retried: the release FAILS (last_error
+    // 'amount_mismatch') with a critical alert, in one batch — whichever
+    // path saw it (webhook, the executor's listing, the create response).
+    // (Codex CP2-D2 P2: it used to stay open and be listed/created forever.)
+    await markFailed(
+      db,
+      release,
+      fact.feeId,
+      "amount_mismatch",
+      `withholding release ${release.id} for order ${release.order_id}: Stripe fee refund ${fact.id} carries this release's id with a DIFFERENT amount than was requested — money moved that the platform did not ask for; nothing was recorded, reconcile by hand`,
+      nowMs,
+    );
     return { result: "amount_mismatch", tenantId: release.tenant_id };
   }
 
@@ -567,7 +584,7 @@ async function markSubmitted(
  */
 async function markFailed(
   db: D1Database,
-  row: ExecutableRow,
+  row: Pick<ReleaseRow, "id" | "order_id" | "tenant_id">,
   feeId: string | null,
   error: string,
   message: string,
@@ -621,8 +638,27 @@ async function markFailed(
 type AttemptOutcome =
   | { kind: "failed" }
   | { kind: "released" }
-  | { kind: "retry"; error: string }
+  | {
+      /**
+       * THIS attempt sent a create call whose result is not known (lost or
+       * unreadable answer): Stripe may hold the fee refund now, whatever
+       * state the row was selected in (Codex CP2-D2 P2).
+       */
+      createSent: boolean;
+      error: string;
+      /** The fee, when this attempt resolved it (recorded on give-up). */
+      feeId: string | null;
+      kind: "retry";
+    }
   | { kind: "skipped" };
+
+/** A fact's settlement as an attempt outcome: a mismatch has failed the row. */
+function settledOutcome(result: FeeRefundFactResult): AttemptOutcome {
+  if (result.result === "applied") {
+    return { kind: "released" };
+  }
+  return result.result === "amount_mismatch" ? { kind: "failed" } : { kind: "skipped" };
+}
 
 /** One attempt at one (already stamped) release. Never throws on Stripe. */
 async function attemptRelease(
@@ -640,13 +676,13 @@ async function attemptRelease(
         paymentIntentId: row.payment_intent_id,
       });
     } catch {
-      return { error: "fee_lookup_failed", kind: "retry" };
+      return { createSent: false, error: "fee_lookup_failed", feeId: null, kind: "retry" };
     }
     if (feeId === null || !/^[A-Za-z0-9_]{3,255}$/.test(feeId)) {
       // A charge with an application_fee_amount always carries a fee; its
       // absence is not Stripe refusing, so it is retried — and given up with
       // an alert after the last attempt.
-      return { error: "fee_not_found", kind: "retry" };
+      return { createSent: false, error: "fee_not_found", feeId: null, kind: "retry" };
     }
   }
 
@@ -656,21 +692,20 @@ async function attemptRelease(
     try {
       listing = await gateway.listApplicationFeeRefunds(feeId);
     } catch {
-      return { error: "fee_refund_listing_failed", kind: "retry" };
+      return { createSent: false, error: "fee_refund_listing_failed", feeId, kind: "retry" };
     }
     const made = listing.data.find((refund) => refund.metadata.withholding_release_id === row.id);
     if (made !== undefined) {
       const fact = viewFact(made);
       if (fact === null) {
-        return { error: "fee_refund_unreadable", kind: "retry" };
+        return { createSent: false, error: "fee_refund_unreadable", feeId, kind: "retry" };
       }
-      const applied = await applyFeeRefundFact(db, { ...fact, feeId, releaseId: row.id }, nowMs);
-      return applied.result === "applied" ? { kind: "released" } : { kind: "skipped" };
+      return settledOutcome(await applyFeeRefundFact(db, { ...fact, feeId, releaseId: row.id }, nowMs));
     }
     if (!listing.complete) {
       // Cannot rule out a refund past the page bound; creating one blind
       // could release twice once the idempotency key has expired.
-      return { error: "fee_refund_listing_incomplete", kind: "retry" };
+      return { createSent: false, error: "fee_refund_listing_incomplete", feeId, kind: "retry" };
     }
   }
 
@@ -706,15 +741,16 @@ async function attemptRelease(
         : { kind: "skipped" };
     }
     // Unknown outcome: stays `submitted`; the next attempt lists first.
-    return { error: "fee_refund_outcome_unknown", kind: "retry" };
+    return { createSent: true, error: "fee_refund_outcome_unknown", feeId, kind: "retry" };
   }
 
   const fact = viewFact(refund);
   if (fact === null) {
-    return { error: "fee_refund_unreadable", kind: "retry" };
+    // Stripe answered 2xx with something unreadable: the refund most likely
+    // exists.
+    return { createSent: true, error: "fee_refund_unreadable", feeId, kind: "retry" };
   }
-  const applied = await applyFeeRefundFact(db, { ...fact, feeId, releaseId: row.id }, nowMs);
-  return applied.result === "applied" ? { kind: "released" } : { kind: "skipped" };
+  return settledOutcome(await applyFeeRefundFact(db, { ...fact, feeId, releaseId: row.id }, nowMs));
 }
 
 /**
@@ -769,12 +805,24 @@ export async function executeWithholdingReleases(
 
     summary.errors += 1;
     if (attempt >= MAX_RELEASE_ATTEMPTS) {
+      // Whether Stripe may hold the refund comes from what happened, not from
+      // the state the row was SELECTED in: an earlier attempt's create
+      // (selected 'submitted') or THIS attempt's (a 'reserved' row whose
+      // final create lost its answer). The uncertainty is kept on the row
+      // (last_error 'attempts_exhausted_uncertain' + the fee id) and the
+      // alert tells the human to list the fee's refunds before paying
+      // anything by hand — a second, manual payment is the failure it
+      // prevents.
+      const uncertain = outcome.createSent || row.state === "submitted";
+      const feeId = outcome.feeId ?? row.stripe_application_fee_id;
       const gaveUp = await markFailed(
         db,
         row,
-        null,
-        "attempts_exhausted",
-        `withholding release ${row.id} for order ${row.order_id}: given up after ${attempt} attempts (last: ${outcome.error}); the shop has not received it${row.state === "submitted" ? " unless Stripe holds a fee refund made by an earlier attempt — check the application fee" : ""} — reconcile by hand`,
+        outcome.feeId,
+        uncertain ? "attempts_exhausted_uncertain" : "attempts_exhausted",
+        uncertain
+          ? `withholding release ${row.id} for order ${row.order_id}: given up after ${attempt} attempts (last: ${outcome.error}). A create call was sent and its result is UNKNOWN: Stripe may already have refunded the fee to the shop. BEFORE any manual payment, list the refunds of application fee ${feeId ?? "(unresolved — see the order's charge)"} for metadata withholding_release_id=${row.id}`
+          : `withholding release ${row.id} for order ${row.order_id}: given up after ${attempt} attempts (last: ${outcome.error}); no create call ever reached Stripe, so the shop has not received it — reconcile by hand`,
         nowMs,
       );
       if (gaveUp) {

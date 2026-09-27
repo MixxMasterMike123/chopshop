@@ -90,6 +90,8 @@ class FakeFeeStripe extends FakeMoneyStripe implements StripeFeeRefundGateway {
   private readonly feeRefundsByKey = new Map<string, ApplicationFeeRefundView>();
   feeRefundBehaviour: Behaviour = "ok";
   loseFeeRefundResponse = false;
+  /** Stripe "makes" the refund with this much more than was asked. */
+  feeRefundAmountDelta = 0;
 
   addFee(chargeId: string, feeId: string, amount: number): void {
     this.feeByCharge.set(chargeId, feeId);
@@ -129,7 +131,7 @@ class FakeFeeStripe extends FakeMoneyStripe implements StripeFeeRefundGateway {
       throw new StripeGatewayError(true);
     }
     const refund: ApplicationFeeRefundView = {
-      amount: params.amount,
+      amount: params.amount + this.feeRefundAmountDelta,
       fee: params.applicationFeeId,
       id: `fr_${params.idempotencyKey.replace(/[^A-Za-z0-9]/g, "")}`,
       metadata: params.metadata,
@@ -630,7 +632,7 @@ describe("D36: settlement by webhook (application_fee.refunded / application_fee
     expect(callsFor(order.orderId)).toHaveLength(0);
   });
 
-  it("a fee refund with a different amount is not recorded (critical alert)", async () => {
+  it("a fee refund with a different amount is not recorded: the release FAILS (amount_mismatch) with a critical alert", async () => {
     const order = await paidPodOrder();
     await refund(order.orderId, PRICE);
     const release = await releaseOf(order.orderId);
@@ -644,8 +646,16 @@ describe("D36: settlement by webhook (application_fee.refunded / application_fee
       .bind(eventId)
       .first<{ outcome: string; reason_code: string | null }>();
     expect(ledger).toEqual({ outcome: "rejected", reason_code: "refund_amount_mismatch" });
-    await expect(releaseOf(order.orderId)).resolves.toMatchObject({ state: "reserved" });
+    // Money moved that was not asked for: never executed or retried after this.
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({
+      last_error: "amount_mismatch",
+      state: "failed",
+      stripe_fee_refund_id: null,
+    });
     expect(await openAlerts("withholding_release_failed", release?.id)).toHaveLength(1);
+    await runReconciliation(quietMoneyEnv(), Date.now());
+    expect(callsFor(order.orderId)).toHaveLength(0);
+    await expect(orderMoney(order.orderId)).resolves.toMatchObject({ withholding_released_minor: 0 } as Record<string, unknown>);
   });
 
   it("a fee refund nobody here made (the dashboard) on one of our orders raises a warning", async () => {
@@ -1247,5 +1257,131 @@ describe("Codex P2: releases that keep failing never starve the others (0030)", 
     expect(late).toHaveLength(1);
     expect(late[0]?.message).toContain("HAS received it");
     await expect(releaseOf(order.orderId)).resolves.toMatchObject({ state: "failed" });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Codex CP2-D2 P2 (round 2) — uncertainty on the final attempt; mismatches
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Codex P2: the final attempt's uncertainty is reported, and a mismatch is never retried", () => {
+  async function releaseOnLastAttempt(): Promise<{ order: PaidOrder; releaseId: string }> {
+    const order = await paidPodOrder();
+    await refund(order.orderId, PRICE);
+    const release = await releaseOf(order.orderId);
+    await env.DB.prepare("UPDATE withholding_releases SET attempts = ? WHERE id = ?")
+      .bind(MAX_RELEASE_ATTEMPTS - 1, release?.id)
+      .run();
+    return { order, releaseId: release?.id ?? "" };
+  }
+
+  it("a RESERVED row whose final create loses its answer: failed as UNCERTAIN, the alert says list the fee's refunds first", async () => {
+    const { order, releaseId } = await releaseOnLastAttempt();
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({ state: "reserved" });
+    stripe.loseFeeRefundResponse = true;
+
+    const summary = await runReconciliation(quietMoneyEnv(), Date.now());
+
+    expect(summary.withholding).toMatchObject({ gaveUp: 1 });
+    // Stripe DID make it — which is exactly why the text matters.
+    expect(stripe.feeRefunds.get(order.feeId)?.map((r) => r.amount)).toEqual([WITHHELD]);
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({
+      attempts: MAX_RELEASE_ATTEMPTS,
+      last_error: "attempts_exhausted_uncertain",
+      state: "failed",
+      stripe_application_fee_id: order.feeId,
+    });
+    const alerts = await openAlerts("withholding_release_failed", releaseId);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.severity).toBe("critical");
+    expect(alerts[0]?.message).toContain("result is UNKNOWN");
+    expect(alerts[0]?.message).toContain(`list the refunds of application fee ${order.feeId}`);
+    expect(alerts[0]?.message).toContain(`withholding_release_id=${releaseId}`);
+    expect(alerts[0]?.message).not.toContain("has not received");
+    expect(alerts[0]?.message).not.toContain(String(WITHHELD));
+
+    // When Stripe's own fact arrives, the human is told the shop HAS it.
+    const made = stripe.feeRefunds.get(order.feeId)?.[0];
+    await postEvent("application_fee.refund.updated", {
+      amount: made?.amount,
+      fee: order.feeId,
+      id: made?.id,
+      metadata: made?.metadata,
+      object: "fee_refund",
+    });
+    const late = await openAlerts("withholding_release_unmatched", releaseId);
+    expect(late).toHaveLength(1);
+    expect(late[0]?.message).toContain("HAS received it");
+  });
+
+  it("a RESERVED row whose final attempt never reached a create: failed as certain (no Stripe warning)", async () => {
+    const { order, releaseId } = await releaseOnLastAttempt();
+    stripe.brokenCharges.add(order.chargeId);
+
+    await runReconciliation(quietMoneyEnv(), Date.now());
+
+    expect(callsFor(order.orderId)).toHaveLength(0);
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({
+      last_error: "attempts_exhausted",
+      state: "failed",
+    });
+    const alerts = await openAlerts("withholding_release_failed", releaseId);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.message).toContain("no create call ever reached Stripe");
+    expect(alerts[0]?.message).not.toContain("UNKNOWN");
+  });
+
+  it("a listed refund with this release's id but a DIFFERENT amount fails the release once — never listed or created again", async () => {
+    const order = await paidPodOrder();
+    await refund(order.orderId, PRICE);
+    const release = await releaseOf(order.orderId);
+    // An earlier create whose answer was lost; Stripe holds a refund with
+    // our id and another amount.
+    await env.DB.prepare("UPDATE withholding_releases SET state = 'submitted' WHERE id = ?")
+      .bind(release?.id)
+      .run();
+    stripe.feeRefunds.set(order.feeId, [
+      { amount: WITHHELD - 100, fee: order.feeId, id: next("fr_odd"), metadata: { withholding_release_id: release?.id ?? "" } },
+    ]);
+
+    const summary = await runReconciliation(quietMoneyEnv(), Date.now());
+
+    expect(summary.withholding).toMatchObject({ failed: 1, released: 0 });
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({
+      attempts: 1,
+      last_error: "amount_mismatch",
+      state: "failed",
+      stripe_fee_refund_id: null,
+    });
+    const alerts = await openAlerts("withholding_release_failed", release?.id);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.severity).toBe("critical");
+
+    for (let run = 1; run <= 3; run += 1) {
+      await runReconciliation(quietMoneyEnv(), Date.now() + run * (RELEASE_RETRY_CAP_MS + MIN));
+    }
+    expect(stripe.listFeeRefundCalls.filter((id) => id === order.feeId)).toHaveLength(1);
+    expect(callsFor(order.orderId)).toHaveLength(0);
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({ attempts: 1, state: "failed" });
+    await expect(orderMoney(order.orderId)).resolves.toMatchObject({ withholding_released_minor: 0 } as Record<string, unknown>);
+    expect(await openAlerts("withholding_release_failed", release?.id)).toHaveLength(1);
+  });
+
+  it("a create RESPONSE with a different amount fails the release once — never created again", async () => {
+    const order = await paidPodOrder();
+    await refund(order.orderId, PRICE);
+    const release = await releaseOf(order.orderId);
+    stripe.feeRefundAmountDelta = -1;
+
+    await runReconciliation(quietMoneyEnv(), Date.now());
+
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({ last_error: "amount_mismatch", state: "failed" });
+    expect(await openAlerts("withholding_release_failed", release?.id)).toHaveLength(1);
+    for (let run = 1; run <= 3; run += 1) {
+      await runReconciliation(quietMoneyEnv(), Date.now() + run * (RELEASE_RETRY_CAP_MS + MIN));
+    }
+    expect(callsFor(order.orderId)).toHaveLength(1);
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({ attempts: 1, state: "failed" });
+    await expect(orderMoney(order.orderId)).resolves.toMatchObject({ withholding_released_minor: 0 } as Record<string, unknown>);
   });
 });

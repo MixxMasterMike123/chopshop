@@ -152,3 +152,30 @@ Both regression tests were verified to FAIL with the fix reverted.
 `npm run check`: **50 files / 1741 tests passing** (1738 → 1741: +3 here; CP2-D1's `test/slice*` in the tree, unchanged).
 
 Files: `cloudflare/migrations/0030_withholding_release_backoff.sql` (new), `cloudflare/src/commerce/withholding-release.ts`, `cloudflare/test/money-followups.test.ts`, this report. Nothing else touched.
+
+## 10. Codex fixes on 27190ca — round 2 (two P2s, `withholding-release.ts`)
+
+**P2-1 · The final attempt's uncertainty was misreported.** On its last attempt, a row selected as `reserved` could send the create and lose Stripe's answer. `markSubmitted` updated the DB but not the in-memory row, so the give-up alert said "the shop has not received it" with no warning to check Stripe. That risked a duplicate manual payment.
+- The attempt outcome now carries `createSent`: THIS attempt sent a create whose result is unknown (a lost answer, or a 2xx that could not be read).
+- `uncertain = outcome.createSent || row.state === "submitted"`, where the second term covers an earlier attempt's create.
+- An uncertain give-up is recorded as `last_error = 'attempts_exhausted_uncertain'`. The application fee id resolved in the attempt is kept on the row. The critical alert reads: "A create call was sent and its result is UNKNOWN … BEFORE any manual payment, list the refunds of application fee `fee_…` for metadata `withholding_release_id=<id>`".
+- A certain give-up keeps `attempts_exhausted`, and its alert says "no create call ever reached Stripe".
+- If Stripe's own fact arrives later, the existing `withholding_release_unmatched` alert says "the shop HAS received it".
+
+**P2-2 · An amount mismatch was retried forever.** A listed refund carrying this release's id with a different amount returned `amount_mismatch`, which the executor treated as `skipped`. That bypassed the attempt limit, so the row was listed and created again on every run.
+- A mismatch is now handled in ONE place, `applyFeeRefundFact`. For an open (reserved/submitted) release it runs the bounded failure path: `failed`, `last_error = 'amount_mismatch'`, one critical alert in the same batch (money moved that the platform did not ask for; nothing is recorded).
+- This holds whichever path saw it: the webhook, the executor's listing, or the create response. The executor maps the result to `failed`, never `skipped`, so the row is never retried.
+- A fact for an already-`failed` release always raises the separate `withholding_release_unmatched` alert, with the amount matching or not.
+
+**Tests** (`test/money-followups.test.ts`, +4; one updated):
+- **Reserved row, create answer lost on the final attempt:** the row fails `attempts_exhausted_uncertain` with the fee id kept. The alert contains "UNKNOWN" and the list-first instruction, and never "has not received". Stripe's later fact raises the "HAS received it" alert.
+- **Reserved row, fee lookup failing on the final attempt:** fails `attempts_exhausted`, and the alert says "no create call ever reached Stripe".
+- **Listed refund with our id and another amount:** the release fails once as `amount_mismatch` with one critical alert. Three later runs (past the 6 h cap) make no further list or create calls.
+- **Create response with another amount:** the same; exactly one create call in total.
+- **Updated:** the webhook-mismatch test now expects `failed / amount_mismatch` rather than `reserved`, and no create call afterwards.
+
+The three new behaviour tests FAIL when the fixes are reverted; the certain give-up test is a contrast case. The regression tests ran in isolation and passed.
+
+`npm run check`: **50 files / 1745 tests passing** (1741 → 1745: +4 here). The first full run had one failure in `test/checkout.test.ts` ("counts replays against the limit…"). That is a fixed-window rate limiter whose 11 requests straddled a window boundary under load. It is unrelated to this change (neither checkout nor the limiter was touched); the file passes alone (195/195) and the full rerun was green.
+
+Files: `cloudflare/src/commerce/withholding-release.ts`, `cloudflare/test/money-followups.test.ts`, this report. No migration (the new `last_error` codes fit 0028's code-shape CHECK); no change to `REQUIRED_MIGRATION`.
