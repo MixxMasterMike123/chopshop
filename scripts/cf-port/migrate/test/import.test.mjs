@@ -508,3 +508,45 @@ test('fix 6: a shop that is already in the target (--target-state) counts as kno
     },
   );
 });
+
+test('a commission above the cap: reported on staging, refuses the plan on production (D75)', async () => {
+  await withFixture(
+    async (bundleDir, base) => {
+      const staging = runImport({ bundleDir, emailMapPath: writeEmailMap(base), env: 'staging' });
+      assert.equal(staging.ok, true, JSON.stringify(staging.problems));
+      assert.ok(staging.reportLines.some((l) => l.includes('shops/test-shop-a: payments.commissionBps is 5000')));
+      const production = runImport({ bundleDir, env: 'production' });
+      assert.equal(production.ok, false);
+      assert.ok(production.problems.some((p) => p.startsWith('REFUSED: shops/test-shop-a: payments.commissionBps is 5000')));
+    },
+    { schemaPatch: (schema) => { schema.shops['test-shop-a'].data.payments.commissionBps = 5000; } },
+  );
+});
+
+test('a commission or a VAT rate that is not a usable number is never written', async () => {
+  for (const [patch, expected] of [
+    [(shop) => { shop.payments.commissionBps = 12.5; }, /commissionBps is 12\.5/],
+    [(shop) => { shop.payments.commissionBps = -1; }, /commissionBps is -1/],
+    [(shop) => { shop.payments.commissionBps = '500'; }, /commissionBps is "500"/],
+  ]) {
+    await withFixture(
+      async (bundleDir, base) => {
+        const result = runImport({ bundleDir, emailMapPath: writeEmailMap(base), env: 'staging' });
+        assert.equal(result.ok, true, JSON.stringify(result.problems));
+        assert.ok(result.reportLines.some((l) => expected.test(l)), JSON.stringify(result.reportLines.slice(0, 6)));
+        assert.equal(result.planJson.expected.tenants['test-shop-a'].commissionBps, null);
+      },
+      { schemaPatch: (schema) => patch(schema.shops['test-shop-a'].data) },
+    );
+  }
+  for (const vatRate of [25, 0.123456, -0.1, '0.25']) {
+    await withFixture(
+      async (bundleDir, base) => {
+        const result = runImport({ bundleDir, emailMapPath: writeEmailMap(base), env: 'staging' });
+        assert.equal(result.ok, false, `vatRate ${JSON.stringify(vatRate)} must refuse`);
+        assert.ok(result.problems.some((p) => p.includes('storeIdentity.vatRate')));
+      },
+      { schemaPatch: (schema) => { schema.shops['test-shop-a'].data.storeIdentity.vatRate = vatRate; } },
+    );
+  }
+});

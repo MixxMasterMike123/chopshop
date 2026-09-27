@@ -278,3 +278,46 @@ test('a value with line breaks is stored byte for byte by the executed plan', { 
     { schemaPatch: (schema) => { schema.shops['test-shop-a'].data.storeIdentity.returnAddress = address; } },
   );
 });
+
+test('published, commission and VAT rate: what the executed plan stores for each shape of the source', { skip: !sqliteAvailable && 'node:sqlite unavailable' }, async () => {
+  await withFixture(
+    async (bundleDir, base) => {
+      const emailMapPath = path.join(base, 'e.json');
+      writeFileSync(emailMapPath, JSON.stringify(FIXED_EMAIL_MAP));
+      const result = runImport({ bundleDir, emailMapPath, env: 'staging' });
+      assert.equal(result.ok, true, JSON.stringify(result.problems));
+      const { db } = freshDb();
+      db.exec(result.planText);
+      const rows = Object.fromEntries(
+        db.prepare('SELECT tenant_id, published, commission_bps, vat_rate_bp FROM tenants').all().map((r) => [r.tenant_id, r]),
+      );
+      // No `published` field at all: published, as Firebase reads it.
+      assert.equal(rows['test-shop-a'].published, 1);
+      assert.equal(rows['test-shop-b'].published, 0, 'an explicit false stays unpublished');
+      assert.equal(rows['test-shop-c'].published, 1, 'an explicit true');
+      // Commission: carried within the cap, NULL when absent or above it.
+      assert.equal(rows['test-shop-a'].commission_bps, 500);
+      assert.equal(rows['test-shop-b'].commission_bps, null);
+      assert.equal(rows['test-shop-c'].commission_bps, null);
+      // VAT rate: the source's fraction in basis points, the default when absent.
+      assert.equal(rows['test-shop-a'].vat_rate_bp, 1200);
+      assert.equal(rows['test-shop-b'].vat_rate_bp, 2500);
+      assert.equal(rows['test-shop-c'].vat_rate_bp, 0);
+
+      assert.ok(result.reportLines.some((l) => l.startsWith('shops/test-shop-c: payments.commissionBps is 5000, outside 0–800')));
+      assert.equal(result.planJson.expected.tenants['test-shop-a'].commissionBps, 500);
+      assert.equal(result.planJson.expected.tenants['test-shop-c'].commissionBps, null);
+      assert.equal(result.planJson.expected.tenants['test-shop-a'].vatRateBp, 1200);
+    },
+    {
+      schemaPatch: (schema) => {
+        delete schema.shops['test-shop-a'].data.published;
+        schema.shops['test-shop-a'].data.payments.commissionBps = 500;
+        schema.shops['test-shop-a'].data.storeIdentity.vatRate = 0.12;
+        schema.shops['test-shop-c'] = {
+          data: { name: 'Test Shop C', payments: { commissionBps: 5000 }, published: true, status: 'active', storeIdentity: { vatRate: 0 } },
+        };
+      },
+    },
+  );
+});

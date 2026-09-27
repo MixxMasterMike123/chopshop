@@ -53,8 +53,8 @@ const TARGET_FILES = {
 
 const ACTUAL_FILES = {
   connect_facts: [
-    { connect_enabled: 1, payout_delay_days: 7, stripe_account_id: 'acct_sandbox_a', stripe_charges_enabled: 1, stripe_payouts_enabled: 0, tenant_id: 'shop-a' },
-    { connect_enabled: 0, payout_delay_days: null, stripe_account_id: null, stripe_charges_enabled: 0, stripe_payouts_enabled: 0, tenant_id: 'shop-b' },
+    { commission_bps: 500, connect_enabled: 1, payout_delay_days: 7, stripe_account_id: 'acct_sandbox_a', stripe_charges_enabled: 1, stripe_payouts_enabled: 0, tenant_id: 'shop-a', vat_rate_bp: 1200 },
+    { commission_bps: null, connect_enabled: 0, payout_delay_days: null, stripe_account_id: null, stripe_charges_enabled: 0, stripe_payouts_enabled: 0, tenant_id: 'shop-b', vat_rate_bp: 2500 },
   ],
   identity_counts: [
     { account_type: 'platform_admin', n: 3, status: 'active' },
@@ -118,8 +118,8 @@ test('buildActualState: holds the queried values and nothing to compare them wit
       printers: [{ id: 'snapwear', status: 'inactive', type: 'api' }],
       tenantFeaturesPod: { 'shop-a': true, 'shop-b': false },
       tenants: {
-        'shop-a': { chargesEnabled: true, connectEnabled: true, payoutDelayDays: 7, payoutsEnabled: false, published: true, status: 'active', stripeAccountId: 'acct_sandbox_a' },
-        'shop-b': { chargesEnabled: false, connectEnabled: false, payoutDelayDays: null, payoutsEnabled: false, published: false, status: 'suspended', stripeAccountId: null },
+        'shop-a': { chargesEnabled: true, commissionBps: 500, connectEnabled: true, payoutDelayDays: 7, payoutsEnabled: false, published: true, status: 'active', stripeAccountId: 'acct_sandbox_a', vatRateBp: 1200 },
+        'shop-b': { chargesEnabled: false, commissionBps: null, connectEnabled: false, payoutDelayDays: null, payoutsEnabled: false, published: false, status: 'suspended', stripeAccountId: null, vatRateBp: 2500 },
       },
       terms: ['kent', 'nike'],
     });

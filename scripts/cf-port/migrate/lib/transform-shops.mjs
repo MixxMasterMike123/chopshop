@@ -7,7 +7,20 @@
  * the exclusion is visible in one place and tested).
  *
  * Status maps `active` → `active`, `disabled` → `suspended` (D59).
- * `published` is carried verbatim (D57).
+ * `published` keeps its Firebase meaning (D57): only an EXPLICIT `false` is
+ * unpublished (ShopGate.jsx reads `published === false`; 0025 defaults the
+ * column to 1). A shop with no `published` field is published.
+ *
+ * Money facts of the shop, both refused in the store identity and owned by
+ * `tenants`:
+ *   payments.commissionBps → commission_bps, when it is an integer within the
+ *     cap every Cloudflare route enforces (MAX_COMMISSION_BPS, D45/D71). NULL
+ *     = the platform default. A value above the cap is NOT carried and is
+ *     reported; on production it refuses the plan (D75), so no shop goes live
+ *     on a rate that was changed without a decision.
+ *   storeIdentity.vatRate (a fraction, 0.25) → vat_rate_bp (2500). Absent =
+ *     the column's own default, 2500. A value that is not a whole number of
+ *     basis points in 0..10000 refuses the plan.
  *
  * D7b: every imported shop gets a placeholder hostname
  * `<tenantId>.import.invalid` (no shop may hold the shared staging API host).
@@ -45,6 +58,12 @@ import { parseSourceTimestampMillis, clampForward } from './timestamps.mjs';
 export const ARCHIVED_SHOP_IDS = new Set(['robowatz']);
 
 const STATUS_MAP = { active: 'active', disabled: 'suspended' };
+
+/** Must equal cloudflare/src/platform/platform-settings.ts MAX_DEFAULT_COMMISSION_BPS
+ * (pinned by test/tenant-config-keys-pin.test.mjs). */
+export const MAX_COMMISSION_BPS = 800;
+/** 0009: `vat_rate_bp INTEGER NOT NULL DEFAULT 2500`. */
+export const DEFAULT_VAT_RATE_BP = 2500;
 
 /** Must equal cloudflare/src/platform/tenant-config.ts REFUSED_STORE_IDENTITY_KEYS
  * top-level keys, and REFUSED_LEGAL_KEYS for the nested `legal.*` keys.
@@ -142,7 +161,7 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
 
   const data = doc.data ?? {};
   const status = STATUS_MAP[data.status] ?? 'provisioning';
-  const published = data.published === true ? 1 : 0;
+  const published = data.published === false ? 0 : 1;
   const createdAtMillis = parseSourceTimestampMillis(data.createdAt, nowMillis);
   const updatedAtRawMillis = parseSourceTimestampMillis(data.updatedAt, createdAtMillis);
   // tenants CHECK (updated_at >= created_at): the source's own updatedAt can
@@ -154,6 +173,32 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
   // when it does not.
   const updatedAtMillis = clampForward(updatedAtRawMillis, createdAtMillis);
 
+  const refusals = [];
+  const moneyLines = [];
+
+  const commissionSource = data.payments?.commissionBps;
+  let commissionBps = null;
+  if (commissionSource !== undefined && commissionSource !== null) {
+    if (Number.isInteger(commissionSource) && commissionSource >= 0 && commissionSource <= MAX_COMMISSION_BPS) {
+      commissionBps = commissionSource;
+    } else {
+      const line = `payments.commissionBps is ${JSON.stringify(commissionSource)}, outside 0–${MAX_COMMISSION_BPS} (D71): NOT carried, the platform default applies to this shop (D75)`;
+      moneyLines.push(line);
+      if (env === 'production') refusals.push(line);
+    }
+  }
+
+  const vatRateSource = data.storeIdentity?.vatRate;
+  let vatRateBp = DEFAULT_VAT_RATE_BP;
+  if (vatRateSource !== undefined && vatRateSource !== null) {
+    const bp = typeof vatRateSource === 'number' ? Math.round(vatRateSource * 10_000) : Number.NaN;
+    if (Number.isInteger(bp) && bp >= 0 && bp <= 10_000 && Math.abs(vatRateSource * 10_000 - bp) < 1e-6) {
+      vatRateBp = bp;
+    } else {
+      refusals.push(`storeIdentity.vatRate is ${JSON.stringify(vatRateSource)}: not a fraction that is a whole number of basis points in 0–10000`);
+    }
+  }
+
   const collisions = [];
   if (targetState?.tenantIds?.has(tenantId)) {
     collisions.push(`tenant id ${tenantId} already exists in the target`);
@@ -164,7 +209,7 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
   }
 
   const rows = [];
-  const reportLines = [];
+  const reportLines = [...moneyLines];
 
   // ── tenants ──
   const supportEmailRaw = data.storeIdentity?.supportEmail ?? null;
@@ -184,6 +229,7 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
   // Connect-map resolution produced.
   const hasAccount = connectFacts.stripeAccountId !== null && connectFacts.stripeAccountId !== undefined;
   const tenantsRow = {
+    commission_bps: commissionBps,
     connect_enabled: connectFacts.connectEnabled ? 1 : 0,
     created_at: formatTime('tenants', 'created_at', createdAtMillis),
     default_currency: 'SEK',
@@ -202,6 +248,7 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
     support_email: emptyToNull(supportEmail),
     tenant_id: tenantId,
     updated_at: formatTime('tenants', 'updated_at', updatedAtMillis),
+    vat_rate_bp: vatRateBp,
   };
   const tenantsColumns = [
     'tenant_id',
@@ -222,6 +269,8 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
     'stripe_requirements_due_json',
     'stripe_disabled_reason',
     'payout_delay_days',
+    'commission_bps',
+    'vat_rate_bp',
   ];
   rows.push(
     carriedRow(
@@ -349,6 +398,7 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
   // the rows written above, never recomputed.
   const expected = {
     chargesEnabled: tenantsRow.stripe_charges_enabled === 1,
+    commissionBps: tenantsRow.commission_bps,
     connectEnabled: tenantsRow.connect_enabled === 1,
     payoutDelayDays: tenantsRow.payout_delay_days,
     payoutsEnabled: tenantsRow.stripe_payouts_enabled === 1,
@@ -356,10 +406,11 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
     published: published === 1,
     status,
     stripeAccountId: tenantsRow.stripe_account_id ?? null,
+    vatRateBp: tenantsRow.vat_rate_bp,
   };
 
   return {
-    report: { collisions, expected, hostname, lines: reportLines, published, status, tenantId },
+    report: { collisions, expected, hostname, lines: reportLines, published, refusals, status, tenantId },
     rows,
     skipped: collisions.length > 0 ? 'collision' : null,
     tenantId,

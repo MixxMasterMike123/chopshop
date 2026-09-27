@@ -6,7 +6,7 @@ import { runChecks, KNOWN_NON_MANIFEST_TENANTS, CP3_ITEMS } from '../verify.mjs'
 import { runImport } from '../import.mjs';
 import { tmpDir, rmDir, buildFixtureBundle, FIXED_EMAIL_MAP } from './fixtures.mjs';
 
-const NO_CONNECT = { chargesEnabled: false, connectEnabled: false, payoutDelayDays: null, payoutsEnabled: false, stripeAccountId: null };
+const NO_CONNECT = { chargesEnabled: false, commissionBps: null, connectEnabled: false, payoutDelayDays: null, payoutsEnabled: false, stripeAccountId: null, vatRateBp: 2500 };
 
 function plan() {
   return {
@@ -70,7 +70,7 @@ test('runChecks: reverse_dispute_on_created mismatch breaks item 3 only', () => 
 });
 
 test('runChecks: item 4 — each Connect fact that differs from the plan fails, named by tenant and field', () => {
-  for (const [field, value] of [['connectEnabled', false], ['stripeAccountId', 'acct_other'], ['chargesEnabled', true], ['payoutsEnabled', true], ['payoutDelayDays', 7]]) {
+  for (const [field, value] of [['connectEnabled', false], ['stripeAccountId', 'acct_other'], ['chargesEnabled', true], ['payoutsEnabled', true], ['payoutDelayDays', 7], ['commissionBps', 5000], ['vatRateBp', 1200]]) {
     const state = matchingState();
     state.tenants['shop-a'][field] = value;
     const failed = failing({ actualState: state });

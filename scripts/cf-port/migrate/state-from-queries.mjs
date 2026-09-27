@@ -83,7 +83,7 @@ const ACTUAL_QUERIES = [
   { file: 'tenant_features_pod', sql: `SELECT tenant_id, enabled FROM tenant_features WHERE feature_key = 'pod';` },
   {
     file: 'connect_facts',
-    sql: `SELECT tenant_id, connect_enabled, stripe_account_id, stripe_charges_enabled, stripe_payouts_enabled, payout_delay_days FROM tenants ORDER BY tenant_id;`,
+    sql: `SELECT tenant_id, connect_enabled, stripe_account_id, stripe_charges_enabled, stripe_payouts_enabled, payout_delay_days, commission_bps, vat_rate_bp FROM tenants ORDER BY tenant_id;`,
   },
   {
     file: 'identity_counts',
@@ -217,10 +217,12 @@ function buildActualState(fromDir) {
     tenants[row.tenant_id] = {
       ...tenants[row.tenant_id],
       chargesEnabled: row.stripe_charges_enabled === 1,
+      commissionBps: row.commission_bps ?? null,
       connectEnabled: row.connect_enabled === 1,
       payoutDelayDays: row.payout_delay_days ?? null,
       payoutsEnabled: row.stripe_payouts_enabled === 1,
       stripeAccountId: row.stripe_account_id ?? null,
+      vatRateBp: row.vat_rate_bp ?? null,
     };
   }
   const tenantFeaturesPod = {};

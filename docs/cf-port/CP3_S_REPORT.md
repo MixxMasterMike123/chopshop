@@ -320,3 +320,23 @@ The write-call scan (`no-write-calls.test.mjs`) is unchanged and passes: the cod
 5. **D73, D74**: on their recommended defaults until Mikael says otherwise.
 6. `verify.mjs` checks ten of the nineteen items of manifest (e); the other nine are printed as DEFERRED with their checkpoint.
 
+### 10.7 Rehearsal through the command line (2026-09-27, after `416b3bb1`)
+
+The whole path was run as an operator will run it: five read-only queries on staging through the preflight, `state-from-queries.mjs`, `import.mjs --env staging --scrub-unmapped --target-state`, the plan written outside the repo, and the plan then executed against `node:sqlite` with every migration applied and a pre-state like staging's (its two tenants, its own `apparel_dtg`). Nothing was written to staging.
+
+Result: 862 statements applied, none refused by a CHECK, a trigger or a foreign key. Two platform admins and one shop admin (melodie-mc), the manifest's figure. No address and no Storage host in `plan.sql` or `plan.json`. A second run gave the same bytes.
+
+It found three more defects, fixed in the commit after `416b3bb1`:
+
+| Finding | Effect before | Now |
+|---|---|---|
+| `published` was read as `=== true`. melodie-mc has **no** `published` field, which Firebase reads as published (`ShopGate.jsx`: only an explicit `false` hides) | melodie-mc would have been imported unpublished, its catalogue hidden | only an explicit `false` is unpublished |
+| The shop's own commission (`payments.commissionBps`) was not carried and not reported. melodie-mc holds 5000 | the rate would have changed from 50 % to the default without a word | carried within the cap; above it, not carried, reported, and refused on production (D75) |
+| The shop's VAT rate (`storeIdentity.vatRate`) was dropped with the refused keys | every shop got 25 % whatever its own rate (today all three that state one are at 25 %) | carried as basis points; a value that is not a whole number of basis points refuses the plan |
+
+`verify.mjs` item 4 now also compares the commission and the VAT rate with the plan.
+
+**Seen, not changed:** staging holds `apparel_dtg` at 250 × 350 mm with png/jpg, the export at 300 × 400 mm with png/jpg/tiff/webp (`docs/POD_PRINT_SPEC.md`: the largest area is the back, 300 × 400). The importer does not overwrite an existing profile and reports the difference. The staging row is the old one; it is corrected through `PUT /v1/platform/pod/profiles`, not by the import.
+
+Tests: 343.
+

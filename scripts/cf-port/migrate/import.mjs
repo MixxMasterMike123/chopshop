@@ -260,6 +260,7 @@ function runImportUnsafe({ bundleDir, connectMapPath, emailMapPath, env, now, sc
       continue;
     }
     for (const line of result.report.lines ?? []) reportLines.push(`shops/${doc.id}: ${line}`);
+    for (const refusal of result.report.refusals ?? []) problems.push(`REFUSED: shops/${doc.id}: ${refusal}`);
     shopRows.push(...result.rows);
     importedTenantIds.push(doc.id);
     expectedTenants[doc.id] = result.report.expected;

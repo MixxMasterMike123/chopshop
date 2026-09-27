@@ -172,6 +172,8 @@ function runRestoreUnsafe({ bundleDir, collection, connectMapPath = null, emailM
       };
       const resolved = resolveConnectFacts(connectFacts, connectMap, env);
       const result = transformShop({ connectFacts: { ...connectFacts, ...resolved }, doc, emailMap, env, nowMillis, scrubUnmapped, targetState: null });
+      for (const refusal of result.report.refusals ?? []) problems.push(`REFUSED: shops/${doc.id}: ${refusal}`);
+      for (const line of result.report.lines ?? []) reportLines.push(`shops/${doc.id}: ${line}`);
       rows.push(...result.rows);
     }
   } else if (collection === 'users') {

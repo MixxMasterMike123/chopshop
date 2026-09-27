@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { REFUSED_STORE_IDENTITY_KEYS, REFUSED_LEGAL_KEYS, FEATURE_KEYS, OPT_IN_FEATURE_KEYS, FEATURE_DEFAULTS } from '../lib/transform-shops.mjs';
+import { REFUSED_STORE_IDENTITY_KEYS, REFUSED_LEGAL_KEYS, FEATURE_KEYS, OPT_IN_FEATURE_KEYS, FEATURE_DEFAULTS, MAX_COMMISSION_BPS } from '../lib/transform-shops.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const TENANT_CONFIG_PATH = path.join(REPO_ROOT, 'cloudflare', 'src', 'platform', 'tenant-config.ts');
@@ -58,4 +58,14 @@ test('FEATURE_DEFAULTS: opt-in keys default false, every other allowed key defau
     const expected = !OPT_IN_FEATURE_KEYS.has(key);
     assert.equal(FEATURE_DEFAULTS[key], expected, `default for ${key}`);
   }
+});
+
+test('MAX_COMMISSION_BPS equals the cap the Worker enforces on every commission it accepts', () => {
+  // platform-settings.ts: MAX_DEFAULT_COMMISSION_BPS = FEE_RATE_BP; pod-quote.ts holds the number.
+  const settings = readFileSync(path.join(REPO_ROOT, 'cloudflare', 'src', 'platform', 'platform-settings.ts'), 'utf8');
+  assert.match(settings, /export const MAX_DEFAULT_COMMISSION_BPS\s*=\s*FEE_RATE_BP;/, 'the cap is no longer FEE_RATE_BP: re-read platform-settings.ts');
+  const quote = readFileSync(path.join(REPO_ROOT, 'cloudflare', 'src', 'pod', 'pod-quote.ts'), 'utf8');
+  const match = quote.match(/export const FEE_RATE_BP\s*=\s*([0-9_]+);/);
+  assert.ok(match, 'could not find FEE_RATE_BP in pod-quote.ts — has it been renamed?');
+  assert.equal(MAX_COMMISSION_BPS, Number(match[1].replaceAll('_', '')));
 });

@@ -41,7 +41,7 @@ const ALL_ITEM_NAMES = {
   1: 'platform_settings.refund_application_fee = false',
   2: 'platform_settings.default_commission_bps = 500',
   3: 'platform_settings.reverse_dispute_on_created = true',
-  4: 'per-tenant Connect facts equal the plan',
+  4: 'per-tenant Connect facts, commission and VAT rate equal the plan',
   5: 'production Stripe webhook endpoint pinned (out of scope: no network)',
   6: 'routing: default_printer_id + printer_sku status',
   7: 'screening: terms, review_first_products, hard_block',
@@ -61,7 +61,7 @@ const ALL_ITEM_NAMES = {
 
 /** Manifest (e) 14, the production go-live figure. */
 const PRODUCTION_ACTIVE_IDENTITIES = { platform_admin: 2, tenant_admin: 1 };
-const CONNECT_FACTS = ['connectEnabled', 'stripeAccountId', 'chargesEnabled', 'payoutsEnabled', 'payoutDelayDays'];
+const CONNECT_FACTS = ['connectEnabled', 'stripeAccountId', 'chargesEnabled', 'payoutsEnabled', 'payoutDelayDays', 'commissionBps', 'vatRateBp'];
 
 function die(message) {
   console.error(`VERIFY REFUSED: ${message}`);
