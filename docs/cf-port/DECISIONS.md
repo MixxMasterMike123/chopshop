@@ -51,6 +51,16 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 | D34 | ~~Staging Stripe key file~~ ✅ 2026-09-26 Mikael created it (`sk_test_`, verified against the pinned account); first staging deploy done the same evening. Still owed for the email + POD smoke: `RESEND_API_KEY`, `EMAIL_FROM`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` in `~/.config/chopshop/secrets.staging.env`. | — |
 | D35 | **Containers blocked on Kent's account (2026-09-26 23:55).** First deploy with the render container: the image built locally (92 MB) but every Containers API call (`/accounts/…/containers/me`, `/registries`, `/applications`) answers HTTP 403 `code 10000 Authentication error`, although the project token carries `containers:write` + `cloudchamber:write` (whoami). This is the signature of Containers not being enabled/onboarded on the account (dashboard one-time step) or the token missing the *Containers* permission group in the dashboard's newer naming. The Worker was NOT touched (deploy aborted before upload; staging still on version `f2c91794`). | ✅ 2026-09-27 00:05 — it was the token: Mikael added the Containers permission; `/containers/me` 200; deploy rerun succeeded (image pushed to registry.cloudflare.com, version `14a78c8e`). |
 
+## Surfaced by CP2 (answer before the CP2 deploy)
+
+| # | Decision | Recommended default |
+|---|---|---|
+| D36 | **Withholding after a pre-production refund (D9 side effect, CP2-A Q1).** The platform withholds the frozen production cost inside the application fee at charge time. If the order is fully refunded BEFORE dispatch (production never happened), `refund_application_fee=false` means the platform keeps money it never paid a printer and the shop's payout goes negative. | **Release the withholding when dispatch is superseded/cancelled before submission:** refund the `withheldMinor` part of the application fee (a second Stripe call: `refund_application_fee` on a partial amount, or a platform→shop transfer of `withheldMinor`) in the same reserve-first pattern; commission stays non-refundable (D9). Build in CP2-D together with the failure-injection suite. |
+| D37 | Connect `on_behalf_of` OFF (CP2-A deviation 1): the platform remains VAT merchant of record, as in the locked Firebase Marknadsplats model. | **Yes, OFF** (matches Firebase; changing it moves VAT liability to each shop — a legal decision, not a technical one). |
+| D38 | Dispute money moves run in the 15-min reconciliation cron, not inline in the webhook (CP2-A deviation 2); `warning_closed`/`prevented` disputes return the reversal to the shop (deviation 4). | **Accept for CP2**; inline handling is a one-line route change later if the 15-min delay ever matters. |
+| D39 | Stripe webhook endpoint must be created with `connect: true` for `account.updated` to arrive (CP2-A Q2); staging endpoint `we_1UK0jh…` was created without it. | **Recreate the staging endpoint with `connect: true`** at the CP2 deploy (re-pin id + secret); production endpoint created with it at CP7. |
+| D40 | Alerts are D1 rows only (no ops email yet) — CP2-A Q8, CP2-B Q5. | **CP2-D adds an alert digest email** through EMAIL_QUEUE to a platform address (needs Resend). |
+
 ## Affiliate rebuild (PORT-LATER — answer before that checkpoint, not now)
 
 | # | Decision | Recommended default |
