@@ -1119,6 +1119,31 @@ const STATEMENTS_PER_LINE = 3;
 // Suspended rows first; beyond this many rows the one-per-slot invariant broke.
 const PRODUCTION_PAGE_SIZE = 2 * MAX_SCOPE_MAPPINGS;
 
+/**
+ * The freeze's tier read — MAPPING-FIRST (Codex CP2 P2, performance). The
+ * line's few active scope mappings are found through
+ * `pod_mappings_tenant_product_status_idx`, and each one looks up its tier by
+ * the `(printer_id, sku)` primary key. `CROSS JOIN` pins that loop order
+ * (SQLite never reorders the left operand of a CROSS JOIN out of the outer
+ * loop), so the planner can never fall back to scanning every tier of the
+ * printer and re-searching the product's mappings per tier — the correlated
+ * `EXISTS` this replaces did exactly that, once per checkout line.
+ *
+ * Binds (tenant_id, product_id, variant_id) — the same as the line's other two
+ * reads, and it runs inside the same D1 batch, so the one-snapshot guarantee is
+ * unchanged. Exported so a test can pin its query plan.
+ */
+export const PRODUCTION_TIER_READ_SQL = `SELECT tier.printer_id, tier.sku,
+       tier.blank_cost_minor, tier.print_costs_json
+FROM pod_mappings AS mapping
+CROSS JOIN printer_sku_tiers AS tier
+  ON tier.printer_id = mapping.printer_id
+ AND tier.sku = mapping.sku
+WHERE mapping.tenant_id = ?
+  AND mapping.product_id = ?
+  AND mapping.status = 'active'
+  AND (mapping.variant_id IS ? OR mapping.variant_id IS NULL)`;
+
 function productionReadStatements(
   db: D1Database,
   tenantId: string,
@@ -1173,19 +1198,7 @@ function productionReadStatements(
          )`,
       )
       .bind(...scopeBinds),
-    db
-      .prepare(
-        `SELECT tier.printer_id, tier.sku, tier.blank_cost_minor, tier.print_costs_json
-         FROM printer_sku_tiers AS tier
-         WHERE EXISTS (
-           SELECT 1 FROM pod_mappings AS mapping
-           WHERE ${scope}
-             AND mapping.status = 'active'
-             AND mapping.printer_id = tier.printer_id
-             AND mapping.sku = tier.sku
-         )`,
-      )
-      .bind(...scopeBinds),
+    db.prepare(PRODUCTION_TIER_READ_SQL).bind(...scopeBinds),
   ];
 }
 

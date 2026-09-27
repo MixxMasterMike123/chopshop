@@ -294,3 +294,16 @@ The same rule applies at publish, on a PATCH of the base price, and when a mappi
 **Counts:**
 - CP2-C tests: 104 → **108** (pod-publish 25 → 29; screening 53, with one assertion added; pod-mappings 26).
 - `npm run check`: **green**. Types are up to date, `tsc` is clean, and the suite reports `Test Files 46 passed (46)`, `Tests 1660 passed (1660)`.
+
+### Codex (after 0f92394): the freeze's tier read scanned every tier
+
+**[P2, performance]** File: `src/pod/pod-mappings.ts`.
+- **Bug:** the transactional tier read in the freeze batch used a correlated `EXISTS`. SQLite ran it as `SCAN tier` plus a correlated subquery re-searching the product's mappings for every tier, once per checkout line (with 323 SnapWear SKUs, roughly 843 000 VM instructions vs roughly 1 400).
+- **Fix:** the read is now `PRODUCTION_TIER_READ_SQL` (exported so a test can pin its plan). It is mapping-first: `FROM pod_mappings AS mapping CROSS JOIN printer_sku_tiers AS tier ON (printer_id, sku)`.
+  - `CROSS JOIN` pins the loop order (SQLite keeps the left operand as the outer loop).
+  - The line's active scope mappings are found through `pod_mappings_tenant_product_status_idx`, and each looks up its tier by the `(printer_id, sku)` primary key.
+- Same binds, and still inside the same D1 batch as the line's other two reads, so the one-snapshot guarantee and the interleaving tests are unchanged.
+- **Tests** (`test/pod-publish.test.ts`):
+  - `EXPLAIN QUERY PLAN` of that exact statement has no `SCAN` step, searches the mapping via the index and the tier via `sqlite_autoindex_printer_sku_tiers_1 (printer_id=? AND sku=?)`, with the mapping search as the outer loop. Mutation-checked: the old `EXISTS` form fails with `SCAN tier | CORRELATED SCALAR SUBQUERY 1 | …`.
+  - The statement returns exactly the tiers of the line's active scope: the product-level SKU for a product line, the variant's own SKU for a variant line.
+- **Counts:** CP2-C tests 108 → **110** (pod-publish 29 → 31). `npm run check`: **green**, types up to date, `tsc` clean, `Test Files 47 passed (47)`, `Tests 1683 passed (1683)`.

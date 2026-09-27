@@ -10,7 +10,13 @@ import { getPublicProduct } from "../src/catalog/public-catalog";
 import { decideByPlatform } from "../src/catalog/screening";
 import { createCheckout } from "../src/commerce/checkout";
 import type { CreateCheckoutInput } from "../src/commerce/checkout";
-import { createMapping, deleteMapping, listMappings, MAX_GATE_VARIANTS } from "../src/pod/pod-mappings";
+import {
+  createMapping,
+  deleteMapping,
+  listMappings,
+  MAX_GATE_VARIANTS,
+  PRODUCTION_TIER_READ_SQL,
+} from "../src/pod/pod-mappings";
 import { replacePrinters } from "../src/pod/printers";
 import {
   handlePublicProductRequest,
@@ -1000,5 +1006,38 @@ describe("a tier-only routing edit at ANY point of a two-line checkout never mix
     expect(seen).toContain("old");
     expect(seen).toContain("new");
     await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
+  });
+});
+
+// ── Codex P2 (performance): the freeze's tier read is mapping-first ────────
+
+describe("the freeze's tier read never scans the tier table", () => {
+  it("EXPLAIN QUERY PLAN: mappings searched by index, each tier by its primary key — no SCAN", async () => {
+    const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${PRODUCTION_TIER_READ_SQL}`)
+      .bind(TENANT, "snap-tee", null)
+      .all<{ detail: string }>();
+    const details = plan.results.map((row) => row.detail);
+
+    // The regression: a full pass over printer_sku_tiers (323 SnapWear SKUs)
+    // re-searching the product's mappings per tier, once per checkout line.
+    expect(details.filter((detail) => /^SCAN /.test(detail)), details.join(" | ")).toEqual([]);
+    expect(details.some((detail) => /^SEARCH mapping USING INDEX pod_mappings_tenant_product_status_idx/.test(detail))).toBe(true);
+    expect(details.some((detail) => /^SEARCH tier USING INDEX sqlite_autoindex_printer_sku_tiers_1 \(printer_id=\? AND sku=\?\)/.test(detail))).toBe(true);
+    // Mapping-first: the mapping search is the outer loop.
+    const mappingAt = details.findIndex((detail) => detail.startsWith("SEARCH mapping"));
+    const tierAt = details.findIndex((detail) => detail.startsWith("SEARCH tier"));
+    expect(mappingAt).toBeLessThan(tierAt);
+  });
+
+  it("returns exactly the tiers of the line's active scope mappings", async () => {
+    const rows = await env.DB.prepare(PRODUCTION_TIER_READ_SQL)
+      .bind(TENANT, "snap-tee", null)
+      .all<{ printer_id: string; sku: string }>();
+    expect([...new Set(rows.results.map((row) => `${row.printer_id}/${row.sku}`))]).toEqual([`fake-printer/${TEE_S}`]);
+    // A variant line reads its own set's SKU (and the product-level one).
+    const sized = await env.DB.prepare(PRODUCTION_TIER_READ_SQL)
+      .bind(TENANT, "snap-sized", "snap-sized-m")
+      .all<{ sku: string }>();
+    expect(sized.results.map((row) => row.sku)).toEqual([TEE_M]);
   });
 });
