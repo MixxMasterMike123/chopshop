@@ -102,7 +102,13 @@ import {
   authorizeTenantAdminRequest,
 } from "./auth/request-authorization";
 import { handleAuthRoute } from "./auth/auth-routes";
+import { dispatchTargetOf } from "./pod/printers";
 import { getPublicStorefront } from "./storefront/public-storefront";
+import {
+  handlePublicProductRequest,
+  handlePublicProductsRequest,
+  handlePublicStorefrontRequest,
+} from "./storefront/public-routes";
 import { isSameOriginRequest } from "./lib/same-origin";
 import { resolveRequestTenant } from "./tenancy/resolve-tenant";
 import { hasTenantHeader } from "./lib/tenant-headers";
@@ -187,7 +193,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0018_fake_printer.sql";
+const REQUIRED_MIGRATION = "0025_takedown_catalog_version.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -314,6 +320,14 @@ function adminResultResponse(
 ): Response {
   if (result.status === "ok") {
     return jsonResponse({ product: result.product }, successStatus);
+  }
+  if (result.status === "refused") {
+    // A publish/price edit the POD gate refuses (no active mapping, price
+    // below the PRISGOLV floor, …): the code tells the admin UI what to fix.
+    return jsonResponse(
+      { error: { code: result.code, message: "Product cannot be published" } },
+      422,
+    );
   }
   if (result.status === "conflict") {
     return conflictResponse();
@@ -883,7 +897,9 @@ async function handleCheckoutRoute(
     return rateLimitedResponse(byEmail.retryAfterSeconds);
   }
 
-  const result = await createCheckout(env.DB, tenant, input, now);
+  const result = await createCheckout(env.DB, tenant, input, now, {
+    dispatchTarget: dispatchTargetOf(env),
+  });
   if (result.status === "ok") {
     // A replay answers 200 rather than 201: the checkout already existed, and
     // the status code is the only honest way to say so without changing body.
@@ -1437,6 +1453,12 @@ async function handleAdminPodRoute(
 
   const deleted = await deleteArtwork(env, env.DB, principal, artworkId, now);
 
+  if (deleted.status === "conflict") {
+    return jsonResponse(
+      { error: { code: "conflict", message: "Artwork is used by a POD mapping" } },
+      409,
+    );
+  }
   return deleted.status === "ok"
     ? new Response(null, { status: 204 })
     : adminNotFoundResponse();
@@ -1838,50 +1860,28 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     getOnly((c) => readinessResponse(c.env)),
   );
 
+  // Public reads answer through the ETag/304 handlers (src/storefront/public-routes.ts):
+  // bodies are byte-identical to the plain handlers, plus `ETag: "<catalog_version>"` and
+  // If-None-Match → 304 (PLAN §2.4 catalog_version caching).
   app.all(
     STOREFRONT_PATH,
-    getOnly(storefront(async (c) => {
-      const tenant = await resolveRequestTenant(c.env.DB, c.req.raw);
-      if (tenant !== null) {
-        const storefront = await getPublicStorefront(c.env.DB, tenant);
-        if (storefront !== null) {
-          return jsonResponse({ storefront });
-        }
-      }
-
-      return notFoundResponse("Storefront not found");
-    })),
+    getOnly(storefront((c) => handlePublicStorefrontRequest(c.env, c.req.raw))),
   );
 
   app.all(
     PRODUCTS_PATH,
-    getOnly(storefront(async (c) => {
-      const tenant = await resolveRequestTenant(c.env.DB, c.req.raw);
-      if (tenant === null) {
-        return notFoundResponse("Products not found");
-      }
-
-      const products = await listPublicProducts(c.env.DB, tenant);
-      return jsonResponse({ products });
-    })),
+    getOnly(storefront((c) => handlePublicProductsRequest(c.env, c.req.raw))),
   );
 
   app.all(
     `${PRODUCT_PATH_PREFIX}*`,
-    getOnly(storefront(async (c) => {
-      const productId = productIdFromPath(new URL(c.req.url).pathname);
-      if (productId !== null) {
-        const tenant = await resolveRequestTenant(c.env.DB, c.req.raw);
-        if (tenant !== null) {
-          const product = await getPublicProduct(c.env.DB, tenant, productId);
-          if (product !== null) {
-            return jsonResponse({ product });
-          }
-        }
-      }
-
-      return notFoundResponse("Product not found");
-    })),
+    getOnly(storefront((c) =>
+      handlePublicProductRequest(
+        c.env,
+        c.req.raw,
+        productIdFromPath(new URL(c.req.url).pathname),
+      ),
+    )),
   );
 
   // Exact match only: no prefix, no sub-paths, so a probe for

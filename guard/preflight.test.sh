@@ -42,6 +42,7 @@ e = {"name": p["workerName"],
      "r2_buckets": [{"binding": "PUBLIC_BUCKET", "bucket_name": p["r2"]["public"], "jurisdiction": "eu"},
                     {"binding": "PRIVATE_BUCKET", "bucket_name": p["r2"]["private"], "jurisdiction": "eu"},
                     {"binding": "PRODUCTION_BUCKET", "bucket_name": p["r2"]["production"], "jurisdiction": "eu"}],
+     "triggers": {"crons": ["*/15 * * * *"]},
      "containers": [{"class_name": "RenderContainer", "image": "./render/Dockerfile", "instance_type": "standard-1",
                      "max_instances": 1, "constraints": {"jurisdiction": "eu"}}],
      "durable_objects": {"bindings": [{"name": "RENDER_CONTAINER", "class_name": "RenderContainer"}]},
@@ -349,6 +350,10 @@ expect_refused "container max_instances != 1 → refused" "container RenderConta
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['durable_objects']")"; run staging -- deploy
 expect_refused "RENDER_CONTAINER binding missing → refused" "durable_objects bindings are {}, expected exactly {'RENDER_CONTAINER': 'RenderContainer'}"
+
+new_tree; pin "$T" staging "$PIN_STG"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['triggers']")"; run staging -- deploy
+expect_refused "cron trigger missing → refused" "triggers.crons is None, expected exactly ['*/15 * * * *']"
 
 # --- bootstrap can never deploy; the worker name cannot be overridden ---------------------
 new_tree; run staging --bootstrap -- deploy

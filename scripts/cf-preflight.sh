@@ -327,6 +327,9 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     do = bindings((e.get("durable_objects") or {}).get("bindings"), "name", "class_name")
     if do != {"RENDER_CONTAINER": "RenderContainer"}:
         refuse(f"{jsonc} env.{env} durable_objects bindings are {do}, expected exactly {{'RENDER_CONTAINER': 'RenderContainer'}}")
+    crons = (e.get("triggers") or {}).get("crons")
+    if crons != ["*/15 * * * *"]:
+        refuse(f"{jsonc} env.{env}.triggers.crons is {crons!r}, expected exactly ['*/15 * * * *'] (the sweeper/reconciliation schedule the 30-min alert SLA depends on)")
     consumers = sorted(item.get("queue") for item in (q.get("consumers") or []))
     if consumers != sorted(want_q.values()):
         refuse(f"{jsonc} env.{env} queue consumers are {consumers}, expected exactly the pinned {sorted(want_q.values())}")

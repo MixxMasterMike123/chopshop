@@ -32,6 +32,8 @@
   "env": {
     "staging": {
       "name": "chopshop-api-stg",
+      // 15-minute outbox sweeper + reconciliation + retention (PLAN §2.2/§2.3; src/outbox/scheduled.ts).
+      "triggers": { "crons": ["*/15 * * * *"] },
       // The render service (DECISIONS D6): one Container-backed Durable Object per env,
       // EU placement, image built from render/Dockerfile at deploy (Docker must run locally).
       "containers": [
@@ -112,6 +114,8 @@
     },
     "production": {
       "name": "chopshop-api",
+      // 15-minute outbox sweeper + reconciliation + retention (PLAN §2.2/§2.3; src/outbox/scheduled.ts).
+      "triggers": { "crons": ["*/15 * * * *"] },
       // The render service (DECISIONS D6): one Container-backed Durable Object per env,
       // EU placement, image built from render/Dockerfile at deploy (Docker must run locally).
       "containers": [
