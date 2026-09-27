@@ -182,7 +182,9 @@ function replayResponse(
  * network error, a double click) answers with the FIRST operation — same
  * refundId, its current state, header `Idempotent-Replayed: true` — and never
  * creates a second real refund. Two concurrent requests with one key: one
- * reservation commits, the other's batch aborts on the index and replays it.
+ * reservation commits; the other either aborts on the index or is refused by
+ * the balance the first one reserved — both paths re-read the key and replay
+ * the winner, so neither caller ever sees a refusal of an accepted refund.
  *   404                                                everything else,
  *       including an unconfigured Stripe key (the surface is dark)
  */
@@ -250,6 +252,19 @@ export async function handleAdminOrderRefundsRoute(
       throw error;
     }
     return replayResponse(winner, orderId, input);
+  }
+
+  // Not ours to answer yet: a concurrent request with the SAME key may have
+  // reserved first — e.g. the full remainder, so this one was refused
+  // (`not_allowed`, at once or after losing the version race) before its
+  // insert could ever hit the unique index. Whenever the key now names an
+  // operation, the caller's refund WAS accepted: replay it (Codex P2 on
+  // CP2-E). A key that names nothing keeps the refusal.
+  if (outcome.status !== "created" && outcome.status !== "pending") {
+    const accepted = await findClientRefund(env.DB, principal.tenantId, clientKey);
+    if (accepted !== null) {
+      return replayResponse(accepted, orderId, input);
+    }
   }
 
   // A full refund of a job the printer already accepted queued a

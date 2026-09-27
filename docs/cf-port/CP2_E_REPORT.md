@@ -256,3 +256,34 @@ With the nudge in place, suites that post success webhooks through the pool's re
 9. **Mixed carts.** `withdrawal.waived` on the receipt is order-level (Firebase parity). The personalised item indexes are in `consent_json`, but the buyer receipt does not name the lines that keep the right. This is for the CP6 UI.
 10. **`GET /v1/platform/orders` requires `tenantId`** to stay on the tenant-first index. A cross-tenant list would need an index on `orders(created_at, order_id)`.
 11. **For the reviewer:** move `REQUIRED_MIGRATION` to `0031_legal_consent.sql`, and consider DECISIONS entries for §4 (the personalisation predicate) and question 2 (the version-bump policy).
+
+## Codex fix on fee54bd: a same-key refund refused by its own twin (P2)
+
+**The bug.** `POST /v1/admin/orders/:id/refunds` looked the key up once, before `requestRefund`. When two requests with the same `Idempotency-Key` both passed that lookup and the first reserved the whole remaining balance, the second never reached its insert. It was refused by the balance, either at once or after losing the version race and re-reading the order. So the unique-index replay path never ran, and the caller got `409 refund_not_allowed` for a refund that had in fact been accepted.
+
+**The fix** is in `src/routes/money-orders.ts` only. On every outcome that is neither `created` nor `pending` (`not_allowed`, `not_found`), the route re-reads the key. If the key now names an operation, the caller's refund was accepted, so the route replays it through the same `replayResponse`:
+- the same `refundId`;
+- the operation as it stands (202 `reserved` while the winner still waits for Stripe, else 201);
+- the `Idempotent-Replayed: true` header;
+- the different-body 409 `conflict` still applies.
+
+A key that names nothing keeps the original refusal. `src/commerce/refunds.ts` is unchanged.
+
+**Tests** (`test/slice/failure-injection.test.ts` §4b, +4, all through the real route with the fake Stripe):
+1. **Deterministic: the second request reads the order after the first reserved everything.** An instrumented D1 holds the second request at its order read until the first request has completed. Both callers get `201 { refund: { amountMinor: full, refundId: <the one op>, state: "succeeded" } }`; the second also gets `Idempotent-Replayed: true`. Stripe sees exactly one refund, the order is `refunded`, and the ledger balances.
+2. **Deterministic: the second request loses the version race.** The second request is held at its reservation batch. It loses the compare-and-set, re-reads, is refused, and replays the first. The outcome is the same as test 1.
+3. **The real race (`Promise.all`, two full refunds, one key).** Both answers name the one operation, as 201 `succeeded` or 202 `reserved` depending on timing. There is exactly one Stripe refund, and the ledger balances.
+4. **Control: a different refund (its own key) took the whole balance.** The refusal stands (`409 refund_not_allowed`), the key stays unused, and Stripe sees one refund.
+
+With the fix temporarily removed, tests 1–3 fail: the second caller gets 409 `refund_not_allowed`, and test 1 also lacks the replay header. Test 4 passes either way. With the fix, all pass.
+
+**Counts.** 1772 → **1776 tests** (+4), still **51 files**. `npm run check`:
+
+```
+✨ Types at worker-configuration.d.ts are up to date.
+ Test Files  51 passed (51)
+      Tests  1776 passed (1776)
+   Duration  55.91s
+```
+
+`failure-injection.test.ts` alone ran green three times in a row (39/39), and a further full `vitest run` was green (1776/1776).

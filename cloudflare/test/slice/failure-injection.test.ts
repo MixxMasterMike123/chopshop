@@ -927,6 +927,137 @@ describe("4b. a refund retried after a lost response (Idempotency-Key)", () => {
     await assertLedgerBalanced(env.DB, order.orderId, { stripe: world.stripe });
   });
 
+  // Codex P2 on CP2-E: the second request of a pair passed the key lookup
+  // before the first committed, then was refused by the balance the first
+  // reserved (no insert → no unique-index replay) and answered 409
+  // refund_not_allowed for a refund that WAS accepted. Deterministic
+  // interleavings of both refusal paths, then the real race.
+  function sameKeyRacedAt(sqlPattern: RegExp, interleave: () => Promise<unknown>): Env {
+    let raced = false;
+    const racing = instrumentedDb(async (op) => {
+      if (!raced && op.sql.some((sql) => sqlPattern.test(sql))) {
+        raced = true;
+        await interleave();
+      }
+    });
+    return world.with({ DB: racing.db });
+  }
+
+  async function expectOneAcceptedFullRefund(
+    order: { orderId: string; totalMinor: number },
+    answers: Response[],
+    labels: string[],
+  ): Promise<void> {
+    const ops = await refundOps(order.orderId);
+    expect(ops, "one operation").toHaveLength(1);
+    for (const [index, answer] of answers.entries()) {
+      expect(await expectJson(answer, 201, labels[index] ?? "answer")).toEqual({
+        refund: { amountMinor: order.totalMinor, refundId: ops[0]?.id, state: "succeeded" },
+      });
+    }
+    expect(world.stripe.refundCalls, "exactly one refund at Stripe").toHaveLength(1);
+    const read = await adminOrder(world, shopA, order.orderId);
+    expect(read.status).toBe("refunded");
+    await assertLedgerBalanced(env.DB, order.orderId, { payoutMinor: read.payout.amountMinor, stripe: world.stripe });
+  }
+
+  it("same key, full refund: the second request reads the order AFTER the first reserved everything → it replays the first (never 409)", async () => {
+    const order = await buyProduct(world, shopA, teeA);
+    await drain(order.orderId);
+    const key = crypto.randomUUID();
+    let first: Response | null = null;
+
+    // The second request has passed the key lookup (nothing yet); before it
+    // reads the order, the first request runs to completion.
+    const second = await refundCall(
+      world,
+      shopA,
+      order.orderId,
+      order.totalMinor,
+      sameKeyRacedAt(/SELECT charged_minor, refund_succeeded_minor, refund_reserved_minor/, async () => {
+        first = await refundCall(world, shopA, order.orderId, order.totalMinor, undefined, key);
+      }),
+      key,
+    );
+
+    expect(first).not.toBeNull();
+    expect(second.headers.get("idempotent-replayed")).toBe("true");
+    await expectOneAcceptedFullRefund(order, [first!, second], ["first", "second"]);
+  });
+
+  it("same key, full refund: the second request LOSES the version race to the first → re-reads, is refused, replays the first (never 409)", async () => {
+    const order = await buyProduct(world, shopA, teeA);
+    await drain(order.orderId);
+    const key = crypto.randomUUID();
+    let first: Response | null = null;
+
+    // The second request has read the order (the full balance was free) and
+    // is about to reserve it when the first request runs to completion.
+    const second = await refundCall(
+      world,
+      shopA,
+      order.orderId,
+      order.totalMinor,
+      sameKeyRacedAt(/refund_reserved_minor = refund_reserved_minor \+/, async () => {
+        first = await refundCall(world, shopA, order.orderId, order.totalMinor, undefined, key);
+      }),
+      key,
+    );
+
+    expect(first).not.toBeNull();
+    await expectOneAcceptedFullRefund(order, [first!, second], ["first", "second"]);
+  });
+
+  it("same key, full refund, two requests at once (Promise.all) → both answers name the one accepted operation", async () => {
+    const order = await buyProduct(world, shopA, teeA);
+    await drain(order.orderId);
+    const key = crypto.randomUUID();
+
+    const answers = await Promise.all([
+      refundCall(world, shopA, order.orderId, order.totalMinor, undefined, key),
+      refundCall(world, shopA, order.orderId, order.totalMinor, undefined, key),
+    ]);
+
+    // The loser replays the winner's operation AS IT STANDS: 202 'reserved'
+    // when the winner has not heard back from Stripe yet, else 201.
+    const [op] = await refundOps(order.orderId);
+    for (const answer of answers) {
+      const body = await answer.json<{ refund: { amountMinor: number; refundId: string; state: string } }>();
+      expect([201, 202], JSON.stringify(body)).toContain(answer.status);
+      expect(body.refund).toEqual({
+        amountMinor: order.totalMinor,
+        refundId: op?.id,
+        state: answer.status === 202 ? "reserved" : "succeeded",
+      });
+    }
+    await expectOneAcceptedFullRefund(order, [], []);
+  });
+
+  it("a DIFFERENT refund took the whole balance first: the refusal stands (409 refund_not_allowed), the key stays unused", async () => {
+    const order = await buyProduct(world, shopA, teeA);
+    await drain(order.orderId);
+    const key = crypto.randomUUID();
+
+    const refused = await refundCall(
+      world,
+      shopA,
+      order.orderId,
+      order.totalMinor,
+      sameKeyRacedAt(/SELECT charged_minor, refund_succeeded_minor, refund_reserved_minor/, async () => {
+        // Another admin action, under its own key.
+        await expectJson(await refundCall(world, shopA, order.orderId, order.totalMinor), 201, "the other refund");
+      }),
+      key,
+    );
+
+    expect(await expectJson(refused, 409, "refused")).toMatchObject({ error: { code: "refund_not_allowed" } });
+    const unused = await env.DB.prepare("SELECT COUNT(*) AS n FROM refund_operations WHERE client_key = ?")
+      .bind(key)
+      .first<{ n: number }>();
+    expect(unused?.n).toBe(0);
+    expect(world.stripe.refundCalls).toHaveLength(1);
+  });
+
   it("a key reused for a different amount → 409; no key or a malformed one → 400; nothing reserved", async () => {
     const order = await buyProduct(world, shopA, teeA);
     await drain(order.orderId);
