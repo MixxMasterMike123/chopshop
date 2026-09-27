@@ -28,3 +28,15 @@ test('clampForward: keeps a value already >= the floor', () => {
 test('clampForward: clamps a value below the floor up to the floor', () => {
   assert.equal(clampForward(10, 50), 50);
 });
+
+test('parseSourceTimestampMillis: a Timestamp that was written back as a plain map', () => {
+  assert.equal(parseSourceTimestampMillis({ _nanoseconds: 123_000_000, _seconds: 1_735_689_600 }, 7), 1_735_689_600_123);
+  assert.equal(parseSourceTimestampMillis({ nanoseconds: 999_999_999, seconds: 1_735_689_600 }, 7), 1_735_689_600_999);
+  assert.equal(parseSourceTimestampMillis({ _seconds: 1_735_689_600 }, 7), 1_735_689_600_000);
+});
+
+test('parseSourceTimestampMillis: a map that is not a time falls back, it is never guessed', () => {
+  for (const value of [{}, { seconds: '1735689600' }, { _seconds: Number.NaN }, { _seconds: -5 }, { _seconds: 1, _nanoseconds: 2_000_000_000 }, { _seconds: 9e15 }, { iso: '2025-01-01' }, [1735689600], 1735689600]) {
+    assert.equal(parseSourceTimestampMillis(value, 7), 7, JSON.stringify(value));
+  }
+});

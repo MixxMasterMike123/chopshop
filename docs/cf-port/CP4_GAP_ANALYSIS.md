@@ -1,6 +1,6 @@
 # CP4 gap analysis — what exists, what is missing, how the work is split
 
-Status: read-only investigation at HEAD `2fff0aca` (2026-09-27), before any CP4 code and before Mikael's "CP4 go". Staging serves the CP3 Worker (`f0db7a72`, migrations 0001–0038). Input for the CP4 builders and the reviewer. The open questions are in `DECISIONS.md` as D77–D82, on recommended defaults.
+Status: read-only investigation at HEAD `2fff0aca` (2026-09-27), before any CP4 code and before Mikael's "CP4 go". Staging serves the CP3 Worker (`f0db7a72`, migrations 0001–0038). Input for the CP4 builders and the reviewer. The open questions are in `DECISIONS.md` as D77–D84, on recommended defaults.
 
 `$CF` = `cloudflare/`. Symbols are named instead of line numbers where the file is long: search for the symbol.
 
@@ -109,6 +109,31 @@ Rows moved into CP4 by D53, D72 and D76. The importer of CP3 prints each as defe
 - The plan must stay under D1's 100 000 bytes per statement: a product description or a page's HTML can exceed it. The importer refuses such a row today; CP4 needs an answer for it (split the write, or a loader route).
 - None of the six rows has been rehearsed on the real bundle. CP3's rehearsal found six defects that invented data could not show.
 
+### 3.1 What the real bundle holds (profile of 2026-09-27, shapes and counts only)
+
+Read from the bundle in memory. No content was printed and nothing was written.
+
+| Collection | Count | What matters |
+|---|---|---|
+| products | 217 (gif-sundsvall 123, ninetone 58, sillmans 24, melodie-mc 12) | 205 active and available = the public projection. Every product has a sku; none repeats within a shop. Every price is a whole number of öre. 4 products cost 0 (one of them active): the column allows it. 181 came from the two catalogue migrators. |
+| variants | 971 on 98 products | Embedded. Keys: `sku, label, group, size, price, image, images[]`. No sku repeats within a shop, and none equals a product's sku. 187 `variantGroups` entries hold the rail (`label, sku, price, image, images[], sizes[]`). |
+| image references | 3 445, all on the legacy Storage hosts | In `imageUrl`, `b2cImageUrl`, `b2cImageGallery[]`, `variants[].image`, `variants[].images[]`, `variantGroups[].image`, `variantGroups[].images[]`. No Shopify or other outside host is left. |
+| collections | 19 (melodie-mc 7, gif-sundsvall 6, ninetone 6) | 18 manual, 1 by tag. Every handle is set and unique in its shop. 86 product references, all resolve. 12 cover images. |
+| pages | 2 (ninetone) | `title` and `content` are **objects keyed by language** (`sv-SE`), not strings. No attachment, no URL. |
+| podArtwork | 20 (melodie-mc 15, sillmans 4, gif-sundsvall 1) | Status: 13 ready, 2 rejected, **5 with none**. 7 without a print master. `rightsConfirmed` and `sha256` on 5 of 20. |
+| podMappings | 18 (melodie-mc 15, sillmans 3) | See below. |
+| infringementReports | 0 | The collection is not in the bundle. |
+
+Sizes: the largest product document is 49.9 KB, the longest description 631 bytes. No document of any of these collections is near D1's 100 000 bytes per statement, as long as a product's variants are written one row each.
+
+**Three findings that change the work:**
+
+1. **The POD mappings cannot be imported as they are (D83).** Cloudflare's mapping says "this product prints this artwork on these slots of this PRINTER SKU" and needs a product id, a printer and the printer's own SKU. The source row holds the SHOP's product sku, a free-text placement, a slot, and nothing else: **no garment on any of the 18** (the manifest required it on every row and noted that the backfill was still pending), no product id, no printer SKU. Which SnapWear article a product is printed on is written nowhere in the data. Of the 18, 9 belong to products flagged POD, 8 to products that are not (5 in melodie-mc, 3 in sillmans), and 1 to no product at all. Two have no slot.
+2. **Dates stored as plain maps.** 21 products hold `createdAt` as `{ _seconds, _nanoseconds }` (13 also `updatedAt`), written back by the migrators. The importer's parser knew Timestamps and ISO strings and sent anything else to its fallback, the run's clock, without a word. No row of CP3 has this shape. Fixed in `lib/timestamps.mjs` with this analysis.
+3. **No product has a manual order.** `productSorting.js` sorts by `sortOrder`, and no product of the bundle holds one; 8 are `featured`. The storefront order today is: featured, then by name. Tags: 3 distinct, 26 uses.
+
+`productGroups` (1 document, sillmans) holds product texts (`howItsMade`, `sizeAndFit`, `sizeGuide`, `shippingReturns`) and is archived by the manifest (row 49) as having no reader. Not verified whether the product page still shows these texts from somewhere else.
+
 ---
 
 ## 4. The split
@@ -128,7 +153,7 @@ P first, or its interface fixed first. A, B, C and D then run in one tree with d
 
 ---
 
-## 5. Open questions (D77–D82 in `DECISIONS.md`)
+## 5. Open questions (D77–D84 in `DECISIONS.md`)
 
 | # | Question | Recommended default |
 |---|---|---|
@@ -138,6 +163,8 @@ P first, or its interface fixed first. A, B, C and D then run in one tree with d
 | D80 | Page attachments: PLAN §2.5 lists them as private, the manifest (§b row 12) as public. | Public, as Firebase serves them today and as the manifest decided later. Production holds none. |
 | D81 | What does the storefront show for a feature that is not ported (reviews, discount codes, recovery)? | Nothing: the public response reports such a feature as off whatever the stored row says. The 16 pages of not-ported features and the 5 customer-account pages leave the Cloudflare build; a visitor buys as a guest. |
 | D82 | Product fields with no column (`podPrinterUid`, `podCostSek`, dimensions, B2B price). | Typed columns for what Cloudflare reads; the B2B fields are not carried (B2B is PORT-LATER) and stay in the bundle. |
+| D83 | The 18 POD mappings name no printer SKU, no garment and no product id (§3.1). | Not imported. The 6 POD products of melodie-mc are mapped again on Cloudflare, by a person who knows which garment each one is: in the admin once CP5/CP6 have the mapping page, or before that by a small hand-written table (product sku → printer SKU, slots) that the importer reads. The artwork is imported either way. Until a product is mapped it cannot be published as POD. |
+| D84 | Pages hold their title and content per language; products do not. | `pages` stores content per language, as the source does. One language exists today (`sv-SE`). |
 
 ---
 
@@ -146,7 +173,7 @@ P first, or its interface fixed first. A, B, C and D then run in one tree with d
 1. **Public delivery sits under four builders.** Branding already slipped out of CP3 for this reason (D76). If P is not first, it slips again inside CP4.
 2. **The shop in the path** (finding 3) blocks every page at once if it is met during the swap and not before it.
 3. **The storage copy is an order of magnitude larger** than anything moved so far, and it writes to R2: the permission rules that make Mikael run the D1 writes will apply to it.
-4. **No row of CP4 has met the real bundle.** Rehearse each transform as CP3 did, before its builder is called done.
-5. **A statement over 100 000 bytes** is likely among 217 product descriptions and the pages' HTML.
+4. **No transform of CP4 has met the real bundle.** Its shapes are profiled (§3.1); each transform is rehearsed as CP3's were, before its builder is called done.
+5. **A statement over 100 000 bytes** is unlikely on today's data (§3.1) and stays refused when the plan is built.
 6. **D68 is open** and `infringement_reports` is imported here: a reporter's name and address go into permanent evidence.
 7. **CP4 is the first checkpoint a person looks at.** The exit is a visual diff, page by page, and the 21 removed pages change what a visitor can reach: no login, no account, no review form.

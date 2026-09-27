@@ -13,6 +13,11 @@
  *   - a decoded Firestore Timestamp (an object with `.toDate()`, per
  *     lib/typed-json.mjs's DecodedTimestamp)
  *   - an ISO-8601 string
+ *   - a plain map `{ _seconds, _nanoseconds }` or `{ seconds, nanoseconds }`:
+ *     what a Timestamp becomes when a script serialises it and writes the
+ *     result back as a map (the two catalogue migrators did, on 21 products
+ *     of the real bundle). Without this case such a value fell through to
+ *     the fallback, and the row was dated by the run's clock.
  *   - null/undefined
  */
 export function parseSourceTimestampMillis(value, fallbackMillis) {
@@ -25,6 +30,15 @@ export function parseSourceTimestampMillis(value, fallbackMillis) {
   }
   if (typeof value?.toDate === 'function') {
     return value.toDate().getTime();
+  }
+  if (typeof value === 'object') {
+    const seconds = value._seconds ?? value.seconds;
+    const nanoseconds = value._nanoseconds ?? value.nanoseconds ?? 0;
+    if (Number.isFinite(seconds) && Number.isFinite(nanoseconds) && nanoseconds >= 0 && nanoseconds < 1_000_000_000) {
+      const millis = seconds * 1000 + Math.floor(nanoseconds / 1_000_000);
+      // Outside what a Date can hold, or before 1970: not a time this system wrote.
+      return millis >= 0 && millis <= 8.64e15 ? millis : fallbackMillis;
+    }
   }
   return fallbackMillis;
 }
