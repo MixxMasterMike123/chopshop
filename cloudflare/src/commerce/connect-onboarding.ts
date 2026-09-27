@@ -698,9 +698,11 @@ async function attemptCreate(
 
 /**
  * The key is too old to retry: find what Stripe holds for this tenant by its
- * metadata. One account ⇒ adopt it (whichever operation made it). More than
- * one ⇒ a human decides (alert). None, from a COMPLETE listing ⇒ nothing was
- * ever created: `abandoned`, and the caller starts a new operation.
+ * metadata. One account, from a COMPLETE listing ⇒ adopt it (whichever
+ * operation made it). More than one ⇒ a human decides (alert). None, from a
+ * COMPLETE listing ⇒ nothing was ever created: `abandoned`, and the caller
+ * starts a new operation. An incomplete listing with fewer than two matches
+ * decides nothing: the operation stays reserved (`recovery_incomplete`).
  */
 async function recoverByListing(
   db: D1Database,
@@ -719,7 +721,12 @@ async function recoverByListing(
   }
 
   const found = listing.accounts.filter((account) => account.metadata.tenant_id === op.tenant_id);
-  if (found.length === 1) {
+  // "Exactly one" is only known from a COMPLETE listing (Codex P2 on CP3-F):
+  // when the scan stopped at its limit, a second account carrying this shop's
+  // metadata may sit on a page that was never read, and adopting the visible
+  // one would skip the duplicate alert. Two or more are a duplicate whatever
+  // else the unread pages hold.
+  if (found.length === 1 && listing.complete) {
     return settleSucceeded(db, principal, op, (found[0] as ConnectAccountFacts).accountId, clock());
   }
   if (found.length > 1) {
@@ -1067,7 +1074,21 @@ export async function refreshConnectStatus(
            stripe_account_resync_needed = 0,
            updated_at = MAX(updated_at, ?)
        WHERE tenant_id = ? AND stripe_account_id = ?
-         AND stripe_account_synced_at IS ?`,
+         -- COMPARE-AND-SET ON EVERYTHING THIS REQUEST READ (Codex P1 on CP3-F).
+         -- The watermark alone has second resolution: an account.updated that
+         -- arrives while this request waits for Stripe and shares the stored
+         -- watermark changes the flags (fail-closed) and marks the shop for
+         -- the resync WITHOUT moving the watermark. Guarded on the watermark
+         -- only, this stale read would then switch charges back on and clear
+         -- the marker. Any intervening change of the account's state makes
+         -- this statement match nothing; the resync settles it.
+         AND stripe_account_synced_at IS ?
+         AND stripe_account_resync_needed = ?
+         AND stripe_charges_enabled = ?
+         AND stripe_payouts_enabled = ?
+         AND stripe_details_submitted = ?
+         AND stripe_requirements_due_json IS ?
+         AND stripe_disabled_reason IS ?`,
     )
     .bind(
       facts.chargesEnabled ? 1 : 0,
@@ -1080,13 +1101,20 @@ export async function refreshConnectStatus(
       tenant.tenant_id,
       tenant.stripe_account_id,
       tenant.stripe_account_synced_at,
+      tenant.stripe_account_resync_needed,
+      tenant.stripe_charges_enabled,
+      tenant.stripe_payouts_enabled,
+      tenant.stripe_details_submitted,
+      tenant.stripe_requirements_due_json,
+      tenant.stripe_disabled_reason,
     )
     .run();
 
   const row = await readTenantConnect(db, tenantId);
+  // "Matched" is changes > 0: D1 also counts rows a trigger wrote.
   return row === null
     ? { status: "not_found" }
-    : { applied: result.meta.changes === 1, row, status: "ok" };
+    : { applied: result.meta.changes > 0, row, status: "ok" };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

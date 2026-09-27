@@ -115,12 +115,20 @@ ALTER TABLE content_screening_terms ADD COLUMN note TEXT CHECK (
   note IS NULL OR length(note) <= 500
 );
 
+-- SIZE (Codex P2 on CP3-D). The stored text is everything the matcher reads of
+-- one product: its own fields plus the file name and label of every mapped
+-- artwork. The largest product the publish gate supports has 1 005 mappings
+-- (src/pod/pod-mappings.ts MAX_PRODUCT_MAPPINGS), each adding up to a few
+-- hundred characters, so the text can reach a few hundred thousand characters.
+-- 524 288 characters per column covers that with room; two such columns stay
+-- inside D1's 2 MB row limit also when the raw text is not ASCII. The text is
+-- never truncated: a truncated haystack could miss a blocked term.
 ALTER TABLE product_screening ADD COLUMN screened_tokens TEXT CHECK (
-  screened_tokens IS NULL OR length(screened_tokens) <= 65536
+  screened_tokens IS NULL OR length(screened_tokens) <= 524288
 );
 
 ALTER TABLE product_screening ADD COLUMN screened_raw TEXT CHECK (
-  screened_raw IS NULL OR length(screened_raw) <= 65536
+  screened_raw IS NULL OR length(screened_raw) <= 524288
 );
 
 ALTER TABLE product_screening ADD COLUMN terms_version INTEGER CHECK (

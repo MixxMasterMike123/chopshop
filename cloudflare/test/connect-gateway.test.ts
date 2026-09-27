@@ -91,8 +91,10 @@ describe("adapter selection (CONNECT_ACCOUNTS_API, optional)", () => {
 describe("error mapping: only a real refusal is 'rejected'", () => {
   it.each([
     [{ code: "parameter_unknown", rawType: "invalid_request_error", statusCode: 400 }, true, "parameter_unknown"],
-    [{ statusCode: 401 }, true, null],
-    [{ statusCode: 403, code: "platform_api_key_expired" }, true, "platform_api_key_expired"],
+    // A credential failure is not a refusal of the request (Codex P1): the
+    // outcome of an earlier attempt under the same key stays unknown.
+    [{ statusCode: 401 }, false, null],
+    [{ statusCode: 403, code: "platform_api_key_expired" }, false, "platform_api_key_expired"],
     [{ statusCode: 404, code: "resource_missing" }, true, "resource_missing"],
     // A key already used with other parameters: the FIRST request stands — unknown.
     [{ rawType: "idempotency_error", statusCode: 400 }, false, null],

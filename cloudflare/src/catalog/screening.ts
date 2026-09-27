@@ -1298,8 +1298,17 @@ export async function addScreeningTerm(
 }
 
 /**
- * kind / note only: a plain audited update (nothing the matcher reads moved).
- * hardBlock: a screening-input change (steps 1–4).
+ * Only the fields the request NAMES are written (Codex P1 on CP3-D): a
+ * note-only edit computed from a read that a concurrent `hardBlock` change
+ * overtook must not write the old flag back — that would undo a blocking-policy
+ * change, or restore blocking, without a version bump and without the safety
+ * statement.
+ *
+ *   kind / note only   a plain audited update of those columns; `hard_block` is
+ *                      not in the statement at all.
+ *   hardBlock named    ALWAYS a screening-input change (steps 1–4), decided
+ *                      from the term list commitTermChange reads under its
+ *                      version fence, never from the read above.
  */
 export async function updateScreeningTerm(
   db: D1Database,
@@ -1312,18 +1321,40 @@ export async function updateScreeningTerm(
   if (current === null) {
     return { status: "not_found" };
   }
-  const kind = input.kind ?? current.kind;
-  const note = input.note === undefined ? current.note : input.note;
-  const hardBlock = input.hardBlock ?? current.hard_block === 1;
+
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  if (input.kind !== undefined) {
+    sets.push("kind = ?");
+    binds.push(input.kind);
+  }
+  if (input.note !== undefined) {
+    sets.push("note = ?");
+    binds.push(input.note);
+  }
+  if (input.hardBlock !== undefined) {
+    sets.push("hard_block = ?");
+    binds.push(input.hardBlock ? 1 : 0);
+  }
+  if (sets.length === 0) {
+    return { rescreen: { blockedNow: 0, ...(await readRescreenBacklog(db)) }, status: "ok", term: termView(current) };
+  }
+  const update = db
+    .prepare(`UPDATE content_screening_terms SET ${sets.join(", ")} WHERE term = ?`)
+    .bind(...binds, term);
+  // The fields the request named, with what this request read before them
+  // (informational: the write itself never depends on the read).
+  const named = {
+    ...(input.hardBlock === undefined ? {} : { hardBlock: input.hardBlock }),
+    ...(input.kind === undefined ? {} : { kind: input.kind }),
+    ...(input.note === undefined ? {} : { note: input.note }),
+  };
   const metadata = {
-    after: { hardBlock, kind, note },
+    after: named,
     before: { hardBlock: current.hard_block === 1, kind: current.kind, note: current.note },
   };
-  const update = db
-    .prepare("UPDATE content_screening_terms SET kind = ?, hard_block = ?, note = ? WHERE term = ?")
-    .bind(kind, hardBlock ? 1 : 0, note, term);
 
-  if (hardBlock === (current.hard_block === 1)) {
+  if (input.hardBlock === undefined) {
     await db.batch([
       update,
       db
@@ -1331,18 +1362,25 @@ export async function updateScreeningTerm(
           `INSERT INTO audit_events (
              event_id, tenant_id, actor_user_id, action, resource_type,
              resource_id, request_id, metadata_json, created_at
-           ) VALUES (?, NULL, ?, 'screening.term_update', 'screening_term', ?, ?, ?, ?)`,
+           )
+           SELECT ?, NULL, ?, 'screening.term_update', 'screening_term', ?, ?, ?, ?
+           WHERE EXISTS (SELECT 1 FROM content_screening_terms WHERE term = ?)`,
         )
-        .bind(crypto.randomUUID(), principal.userId, term, crypto.randomUUID(), JSON.stringify(metadata), now),
+        .bind(crypto.randomUUID(), principal.userId, term, crypto.randomUUID(), JSON.stringify(metadata), now, term),
     ]);
     const row = await loadTerm(db, term);
+    if (row === null) {
+      // Deleted by a concurrent request: nothing was written, nothing audited.
+      return { status: "not_found" };
+    }
     return {
       rescreen: { blockedNow: 0, ...(await readRescreenBacklog(db)) },
       status: "ok",
-      term: row === null ? null : termView(row),
+      term: termView(row),
     };
   }
 
+  const hardBlock = input.hardBlock;
   return commitTermChange(
     db,
     principal,
@@ -1354,7 +1392,9 @@ export async function updateScreeningTerm(
       return {
         audit: { action: "screening.term_update", metadata, term },
         blocklist: config.blocklist.map((entry) =>
-          entry.term === term ? { ...entry, hardBlock } : entry,
+          entry.term === term
+            ? { ...entry, hardBlock, ...(input.kind === undefined ? {} : { kind: input.kind }) }
+            : entry,
         ),
         statements: [update],
       };

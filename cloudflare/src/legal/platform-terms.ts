@@ -691,7 +691,11 @@ export async function readTermsText(
     publishedAt: row.published_at,
     sha256: row.sha256,
     status: "ok",
-    text: new TextDecoder().decode(bytes),
+    // `ignoreBOM: true` KEEPS a leading U+FEFF (the option's name means "do
+    // not treat it as a byte-order mark"). The default decoder strips it, and
+    // the text returned would then no longer hash to the `sha256` returned
+    // beside it, although the archive itself is intact (Codex P2 on CP3-E).
+    text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
     version: row.version,
   };
 }

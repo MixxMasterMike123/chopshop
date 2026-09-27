@@ -277,6 +277,22 @@ describe("import_row_hashes", () => {
       env.DB.prepare("SELECT run_id FROM import_row_hashes WHERE row_pk = 'shop-one'").first(),
     ).resolves.toEqual({ run_id: "run-check" });
 
+    // Codex P2 on CP3-B: the same content under ANY conflict clause leaves the
+    // first run's record alone. INSERT OR REPLACE would otherwise delete the
+    // row without firing the delete trigger and rewrite who imported it first.
+    for (const verb of ["INSERT OR REPLACE", "INSERT"]) {
+      await hashInsert(verb, "shop-one", SHA_A, "run-later");
+      await expect(
+        env.DB.prepare(
+          "SELECT content_sha, run_id FROM import_row_hashes WHERE row_pk = 'shop-one'",
+        ).first(),
+        verb,
+      ).resolves.toEqual({ content_sha: SHA_A, run_id: "run-check" });
+    }
+    expect(
+      await count("SELECT COUNT(*) AS total FROM import_row_hashes WHERE row_pk = 'shop-one'"),
+    ).toBe(1);
+
     await expect(hashInsert("INSERT OR IGNORE", "shop-one", SHA_C, "run-later")).rejects.toThrow(
       /hash mismatch/,
     );

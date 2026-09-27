@@ -620,6 +620,29 @@ describe("POST …/catalog/apply — the seed, as a route", () => {
     expect(await snapshot()).toEqual(before);
   });
 
+  it("SEK-producing pricing is refused on a printer priced in another currency; `keep` is not (Codex P2)", async () => {
+    const iso = new Date(SEED_NOW).toISOString();
+    await env.DB.prepare(
+      `INSERT INTO printers (id, tenant_id, type, name, status, currency, shipping_cost_minor, capabilities_json, created_at, updated_at)
+       VALUES ('pc-euro', NULL, 'manual', 'Euro printer', 'inactive', 'EUR', 0, '{"models":{},"skus":{}}', ?, ?)`,
+    ).bind(iso, iso).run();
+    expect((await call("platform", "/v1/platform/printers/pc-euro/catalog", "PUT", { catalog: catalogFile })).status).toBe(200);
+
+    for (const body of [SLICE_APPLY, { ...SLICE_APPLY, apply: true }, { ...FULL_EUR_APPLY, apply: true }]) {
+      const refused = await call("platform", "/v1/platform/printers/pc-euro/catalog/apply", "POST", body);
+      expect(refused.status, JSON.stringify(body.pricing).slice(0, 40)).toBe(400);
+      await expect(refused.json()).resolves.toMatchObject({ error: { code: "invalid_selection" } });
+    }
+    const tiers = await env.DB.prepare("SELECT COUNT(*) AS n FROM printer_sku_tiers WHERE printer_id = 'pc-euro'").first<{ n: number }>();
+    expect(tiers?.n, "no SEK amount was stored as euro cents").toBe(0);
+
+    const kept = await call("platform", "/v1/platform/printers/pc-euro/catalog/apply", "POST", {
+      ...SLICE_APPLY,
+      pricing: { basis: "keep" },
+    });
+    expect(kept.status, "keep writes no price").toBe(200);
+  });
+
   it("no stored catalogue is a 409, an unknown printer the opaque 404", async () => {
     const iso = new Date(SEED_NOW).toISOString();
     await env.DB.prepare(

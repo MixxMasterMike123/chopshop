@@ -163,6 +163,8 @@ export interface CallOptions {
   headers?: Record<string, string>;
   /** Defaults to the URL's own origin on state changes, none on GET. */
   origin?: string | null;
+  /** Sent as it is, unparsed (a truncated or malformed body). Wins over `body`. */
+  rawBody?: string;
   shopId?: string;
 }
 
@@ -189,7 +191,9 @@ export function call(
     headers.set("origin", origin);
   }
   let body: string | undefined;
-  if (options.body !== undefined) {
+  if (options.rawBody !== undefined) {
+    body = options.rawBody;
+  } else if (options.body !== undefined) {
     headers.set("content-type", "application/json");
     body = JSON.stringify(options.body);
   }

@@ -49,7 +49,7 @@ import {
  *   PATCH  /v1/platform/tenants/:tenantId                   shopName, supportEmail, vatRateBp, commissionBps
  *   POST   /v1/platform/tenants/:tenantId/publish           go-live gate on
  *   POST   /v1/platform/tenants/:tenantId/unpublish         go-live gate off
- *   POST   /v1/platform/tenants/:tenantId/close             final; 409 tenant_has_refundable_orders
+ *   POST   /v1/platform/tenants/:tenantId/close             final; 409 tenant_has_refundable_orders | tenant_has_open_payments
  *                                                           while any order can still be refunded
  *                                                           (a shop with live orders is SUSPENDED)
  *   GET    /v1/platform/tenants/:tenantId/features          every allowed key, effective value
@@ -182,20 +182,41 @@ export async function handlePlatformTenantActionRoute(
 
   const now = Date.now();
   if (action === "close") {
-    const input = parseCloseInput(await readJsonBody(request));
+    // Closing is FINAL, so a body that cannot be read is never taken for "no
+    // body" (Codex P2): a truncated `{ "reason": …` must not close the shop
+    // without its reason. Empty (or whitespace) = no body; anything else must
+    // parse as JSON.
+    const text = await request.text();
+    let body: unknown;
+    if (text.trim().length > 0) {
+      try {
+        body = JSON.parse(text) as unknown;
+      } catch {
+        return invalidRequestResponse();
+      }
+    }
+    const input = parseCloseInput(body);
     if (input === null) {
       return invalidRequestResponse();
     }
     const result = await closeTenant(env.DB, principal, tenantId, input, now);
     // Closing is final and would strand a buyer's refund (no seller session
-    // after close, no platform refund route): a shop with live orders is
-    // SUSPENDED instead, and closed once every order is settled.
-    return result.status === "refundable_orders"
-      ? conflictResponse(
-          "tenant_has_refundable_orders",
-          "The shop has orders that can still be refunded; suspend it instead",
-        )
-      : writeResponse(result);
+    // after close, no platform refund route): a shop with live orders or with
+    // a payment that can still become one is SUSPENDED instead, and closed
+    // once every order is settled and every open payment is paid or cancelled.
+    if (result.status === "refundable_orders") {
+      return conflictResponse(
+        "tenant_has_refundable_orders",
+        "The shop has orders that can still be refunded; suspend it instead",
+      );
+    }
+    if (result.status === "open_payments") {
+      return conflictResponse(
+        "tenant_has_open_payments",
+        "The shop has payments that can still become orders; suspend it and close it once they are paid or cancelled",
+      );
+    }
+    return writeResponse(result);
   }
 
   return writeResponse(

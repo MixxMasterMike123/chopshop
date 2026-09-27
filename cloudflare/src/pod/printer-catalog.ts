@@ -815,6 +815,9 @@ export function buildFromCatalog(
 
 // ── apply ───────────────────────────────────────────────────────────────────
 
+/** The currency both pricing bases (`sek`, `eur`) produce amounts in. */
+export const CATALOG_PRICING_CURRENCY = "SEK";
+
 export type ApplyCatalogResult =
   | (Extract<EditPrinterResult, { status: "ok" }> & { catalogSha256: string })
   | Exclude<EditPrinterResult, { status: "ok" }>
@@ -838,13 +841,13 @@ export async function applyCatalog(
 ): Promise<ApplyCatalogResult> {
   const row = await db
     .prepare(
-      `SELECT p.id, c.catalog_json, c.content_sha256
+      `SELECT p.id, p.currency, c.catalog_json, c.content_sha256
        FROM printers AS p
        LEFT JOIN printer_catalog AS c ON c.printer_id = p.id
        WHERE p.id = ?`,
     )
     .bind(printerId)
-    .first<{ catalog_json: string | null; content_sha256: string | null; id: string }>();
+    .first<{ catalog_json: string | null; content_sha256: string | null; currency: string; id: string }>();
   if (row === null) {
     return { status: "not_found" };
   }
@@ -853,6 +856,20 @@ export async function applyCatalog(
   }
   if (input.expectedCatalogSha256 !== undefined && input.expectedCatalogSha256 !== row.content_sha256) {
     return { code: "catalog_changed", status: "conflict" };
+  }
+  // Both pricing bases produce amounts in SEK öre (`sek` by definition, `eur`
+  // by converting to SEK), and the edit keeps the printer's own currency. On a
+  // printer priced in anything else they would be stored as that currency's
+  // minor units and corrupt every quote and price floor after it (Codex P2 on
+  // CP3-C). `keep` writes no price and stays currency-independent.
+  if (input.pricing.basis !== "keep" && row.currency !== CATALOG_PRICING_CURRENCY) {
+    return {
+      code: "invalid_selection",
+      problems: [
+        `pricing basis "${input.pricing.basis}" produces ${CATALOG_PRICING_CURRENCY} amounts, but the printer is priced in ${row.currency}`,
+      ],
+      status: "invalid",
+    };
   }
   const built = buildFromCatalog(JSON.parse(row.catalog_json) as unknown, input);
   if (built.status === "invalid") {

@@ -8,8 +8,11 @@ import {
   call,
   createPlainProduct,
   instrumentedDb,
+  openCheckout,
+  payCheckout,
   publishProduct,
   refundCall,
+  succeedPayment,
 } from "./slice-harness";
 import { postEvent } from "./money-fixtures";
 import {
@@ -86,15 +89,20 @@ let shopD: Tenant;
 let shopE: Tenant;
 /** Close vs a reserved refund that has not settled. */
 let shopF: Tenant;
+/** The open-payment close tests (Codex P1 on CP3-A). */
+let shopG: Tenant;
+let shopH: Tenant;
 /** A shop the authorization matrix may change freely. */
 const MATRIX = "pt-matrix";
 let matrixDomainToDelete = "";
 let matrixDomainToToggle = "";
 
 beforeAll(async () => {
-  const setup = await tenantWorld("pt", 6);
+  const setup = await tenantWorld("pt", 8);
   world = setup.world;
-  [shopA, shopB, shopC, shopD, shopE, shopF] = setup.tenants as [Tenant, Tenant, Tenant, Tenant, Tenant, Tenant];
+  [shopA, shopB, shopC, shopD, shopE, shopF, shopG, shopH] = setup.tenants as [
+    Tenant, Tenant, Tenant, Tenant, Tenant, Tenant, Tenant, Tenant,
+  ];
 
   await bareTenant(world, MATRIX);
   for (const hostname of ["delete.pt-matrix.cp3a.test", "toggle.pt-matrix.cp3a.test"]) {
@@ -687,7 +695,12 @@ describe("close refuses while a buyer could still be refunded", () => {
    * swaps the DB; with it, other audit rows may appear meanwhile (the race
    * test buys an order mid-close), so only the close's own row is checked.
    */
-  async function expectCloseRefused(tenant: Tenant, label: string, env?: Env): Promise<void> {
+  async function expectCloseRefused(
+    tenant: Tenant,
+    label: string,
+    env?: Env,
+    code = "tenant_has_refundable_orders",
+  ): Promise<void> {
     const status = (await tenantRow(tenant.tenantId))?.status;
     const audits = await auditCount();
     const body = await expectJson<{ error: { code: string } }>(
@@ -695,7 +708,7 @@ describe("close refuses while a buyer could still be refunded", () => {
       409,
       label,
     );
-    expect(body.error.code, label).toBe("tenant_has_refundable_orders");
+    expect(body.error.code, label).toBe(code);
     expect((await tenantRow(tenant.tenantId))?.status, `${label}: status unchanged`).toBe(status);
     if (env === undefined) {
       expect(await auditCount(), `${label}: no audit row`).toBe(audits);
@@ -831,5 +844,71 @@ describe("close refuses while a buyer could still be refunded", () => {
       "close after a lost dispute",
     );
     expect(closed.tenant.status).toBe("closed");
+  });
+
+  it("a payment that can still become an order blocks close; once the intent is cancelled the shop closes", async () => {
+    const productId = await sellingProduct(shopG, "PT-OPENPAY-TEE");
+    // A checkout alone (no intent) is nothing a buyer can pay after close:
+    // the payment route needs the shop's storefront, which close takes away.
+    const browsing = await openCheckout(world, shopG, [{ productId, quantity: 1 }]);
+    expect(browsing.checkoutId).toBeTruthy();
+
+    const checkout = await openCheckout(world, shopG, [{ productId, quantity: 1 }]);
+    const paymentIntentId = await payCheckout(world, shopG, checkout.checkoutId);
+    // The buyer holds a client secret; no order exists yet.
+    await expectCloseRefused(shopG, "payable intent", undefined, "tenant_has_open_payments");
+
+    // Suspension does not make it closable either.
+    await expectJson(await platform(world, "POST", `/v1/platform/tenants/${shopG.tenantId}/suspend`), 200, "suspend");
+    await expectCloseRefused(shopG, "payable intent, shop suspended", undefined, "tenant_has_open_payments");
+
+    // Stripe-terminal: the intent can never be paid.
+    const cancelled = await postEvent(
+      "payment_intent.canceled",
+      { id: paymentIntentId, status: "canceled" },
+      { env: world.env },
+    );
+    expect(cancelled.response.status).toBe(200);
+    const closed = await expectJson<TenantDetailBody>(
+      await platform(world, "POST", `/v1/platform/tenants/${shopG.tenantId}/close`),
+      200,
+      "close after the intent was cancelled",
+    );
+    expect(closed.tenant.status).toBe("closed");
+  });
+
+  it("a paid intent whose order has not arrived yet blocks close; the order then blocks as a refundable order", async () => {
+    const productId = await sellingProduct(shopH, "PT-LATEHOOK-TEE");
+    const checkout = await openCheckout(world, shopH, [{ productId, quantity: 1 }]);
+    const paymentIntentId = await payCheckout(world, shopH, checkout.checkoutId);
+    await expectCloseRefused(shopH, "paid, webhook not delivered yet", undefined, "tenant_has_open_payments");
+
+    // The success webhook arrives late and makes the order.
+    const { orderId } = await succeedPayment(world, shopH, {
+      checkoutId: checkout.checkoutId,
+      paymentIntentId,
+      totalMinor: checkout.totalMinor,
+    });
+    expect(orderId).not.toBeNull();
+    await expectCloseRefused(shopH, "the late order is refundable");
+  });
+
+  it("a close body that cannot be read is refused, never taken for no body", async () => {
+    await bareTenant(world, "pt-close-truncated");
+    const response = await call(world, "POST", "https://platform.slice.test/v1/platform/tenants/pt-close-truncated/close", {
+      cookie: world.platformCookie,
+      headers: { "content-type": "application/json" },
+      rawBody: '{ "reason": "stängs på säljarens begär',
+    });
+    expect(response.status).toBe(400);
+    expect((await tenantRow("pt-close-truncated"))?.status).toBe("active");
+    expect(await auditRows("pt-close-truncated", "tenant.close")).toEqual([]);
+
+    // Whitespace only is still "no body".
+    const blank = await call(world, "POST", "https://platform.slice.test/v1/platform/tenants/pt-close-truncated/close", {
+      cookie: world.platformCookie,
+      rawBody: "  \n",
+    });
+    expect(blank.status).toBe(200);
   });
 });

@@ -236,6 +236,26 @@ BEGIN
   SELECT RAISE(ABORT, 'import row hash mismatch: same id, different content');
 END;
 
+-- The FIRST run keeps the row (Codex P2 on CP3-B). The same id with the same
+-- content is skipped here, silently and whatever the statement's own conflict
+-- clause says: an `INSERT OR REPLACE` from a later run would otherwise delete
+-- the row (without firing the delete trigger) and write itself in its place,
+-- rewriting which run first imported it. RAISE(IGNORE) abandons the insert of
+-- this one row and lets the statement and its batch continue, which is exactly
+-- what INSERT OR IGNORE does for a retry.
+CREATE TRIGGER import_row_hashes_keep_first
+BEFORE INSERT ON import_row_hashes
+FOR EACH ROW
+WHEN EXISTS (
+  SELECT 1 FROM import_row_hashes
+  WHERE table_name = NEW.table_name
+    AND row_pk = NEW.row_pk
+    AND content_sha IS NEW.content_sha
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+
 -- Hashes are recorded only inside a run that is still in flight.
 CREATE TRIGGER import_row_hashes_running_run
 BEFORE INSERT ON import_row_hashes

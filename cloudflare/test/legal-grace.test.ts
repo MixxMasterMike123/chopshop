@@ -642,3 +642,29 @@ describe("publishing a platform-terms version (platform only)", () => {
     expect(versionsAfter?.n, "nothing was published").toBe(versionsBefore?.n);
   });
 });
+
+// Last in the file: it schedules a version far in the future, after which no
+// earlier publish time is accepted.
+describe("the archived text is returned byte for byte", () => {
+  it("a leading byte-order mark survives the round trip, so the text still hashes to its sha256 (Codex P2)", async () => {
+    const text = "﻿# Plattformsvillkor\n\nText som lästs in från en fil med BOM.";
+    const published = await expectJson<{ version: { sha256: string; version: string } }>(
+      await platformCall(world, "POST", VERSIONS_PATH, {
+        publishedAt: "2090-01-01T00:00:00.000Z",
+        text,
+        version: "2090-bom",
+      }),
+      201,
+      "publish a text with a BOM",
+    );
+    const read = await expectJson<{ sha256: string; text: string }>(
+      await platformCall(world, "GET", `${VERSIONS_PATH}/2090-bom/text`),
+      200,
+      "read it back",
+    );
+    expect(read.text).toBe(text);
+    expect(read.text.charCodeAt(0)).toBe(0xfeff);
+    expect(await sha256Hex(bytes(read.text))).toBe(read.sha256);
+    expect(read.sha256).toBe(published.version.sha256);
+  });
+});

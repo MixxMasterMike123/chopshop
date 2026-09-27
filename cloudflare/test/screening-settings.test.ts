@@ -7,10 +7,12 @@ import { getPublicProduct } from "../src/catalog/public-catalog";
 import {
   addScreeningTerm,
   decideByPlatform,
+  deleteScreeningTerm,
   readRescreenBacklog,
   rescreenStaleScreenings,
   termFromKey,
   termKeyOf,
+  updateScreeningTerm,
 } from "../src/catalog/screening";
 import {
   findScreeningHits,
@@ -755,6 +757,51 @@ describe("the terms fence: a product mutation racing a blocklist change", () => 
     ).all<{ term: string }>();
     expect(stored.results.map((entry) => entry.term)).toEqual(["racerone", "racertwo"]);
   });
+
+  it("a note-only edit racing a hardBlock change writes the note and leaves the flag alone (Codex P1)", async () => {
+    await addScreeningTerm(env.DB, actor, { hardBlock: false, kind: "other", note: null, term: "racerflag" }, Date.now());
+    const versionBefore = (
+      await env.DB.prepare("SELECT screening_terms_version AS v FROM platform_settings WHERE id = 1").first<{ v: number }>()
+    )?.v;
+
+    // The note edit has read the term (hardBlock false); before its batch
+    // commits, another operator makes the term blocking.
+    const racing = racingDb(async (attempt) => {
+      if (attempt === 1) {
+        const flagged = await updateScreeningTerm(env.DB, actor, "racerflag", { hardBlock: true }, Date.now());
+        expect(flagged.status).toBe("ok");
+      }
+    });
+    const noted = await updateScreeningTerm(racing.db, actor, "racerflag", { note: "checked with legal" }, Date.now());
+    expect(noted.status).toBe("ok");
+
+    await expect(
+      env.DB.prepare("SELECT hard_block, note FROM content_screening_terms WHERE term = 'racerflag'").first(),
+    ).resolves.toEqual({ hard_block: 1, note: "checked with legal" });
+    // Only the hardBlock change moved the version: the note edit is cosmetic.
+    const versionAfter = (
+      await env.DB.prepare("SELECT screening_terms_version AS v FROM platform_settings WHERE id = 1").first<{ v: number }>()
+    )?.v;
+    expect(versionAfter).toBe((versionBefore ?? 0) + 1);
+  });
+
+  it("a note edit of a term deleted meanwhile writes nothing and audits nothing", async () => {
+    await addScreeningTerm(env.DB, actor, { hardBlock: false, kind: "other", note: null, term: "racergone" }, Date.now());
+    const audits = async () =>
+      (
+        await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM audit_events WHERE action = 'screening.term_update' AND resource_id = 'racergone'",
+        ).first<{ n: number }>()
+      )?.n;
+    const racing = racingDb(async (attempt) => {
+      if (attempt === 1) {
+        await deleteScreeningTerm(env.DB, actor, "racergone", Date.now());
+      }
+    });
+    const result = await updateScreeningTerm(racing.db, actor, "racergone", { note: "too late" }, Date.now());
+    expect(result.status).toBe("not_found");
+    expect(await audits()).toBe(0);
+  });
 });
 
 // ── what the term change cannot see ────────────────────────────────────────
@@ -788,6 +835,22 @@ describe("the limits, counted rather than silent", () => {
     expect(swept.rescreened).toBe(1);
     expect(await row("unv-old")).toMatchObject({ hits_json: '["fernwhisk"]', status: "blocked" });
     expect((await row("unv-old"))?.screened_tokens).toContain(" fernwhisk ");
+  });
+
+  it("the stored text admits the largest supported product, and is refused beyond the cap, never truncated (Codex P2)", async () => {
+    // 700 artworks with 100-character file names: over 70 000 characters.
+    const large = " fernwhisk ".padEnd(70_000, "a");
+    await env.DB.prepare(
+      "UPDATE product_screening SET screened_tokens = ?, screened_raw = ? WHERE product_id = 'unv-old'",
+    ).bind(large, large).run();
+    expect((await row("unv-old"))?.screened_tokens?.length).toBe(70_000);
+
+    await expect(
+      env.DB.prepare("UPDATE product_screening SET screened_tokens = ? WHERE product_id = 'unv-old'")
+        .bind("a".repeat(524_289))
+        .run(),
+    ).rejects.toThrow(/CHECK constraint failed/);
+    expect((await row("unv-old"))?.screened_tokens?.length).toBe(70_000);
   });
 
   it("a live product with NO screening row is outside the path: counted as unverified", async () => {

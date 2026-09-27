@@ -99,10 +99,15 @@ const GATEWAY_METHODS = [
 /**
  * Every onboarding-gateway failure, detail-free like StripeGatewayError.
  *
- * `rejected` is true only when Stripe ANSWERED and refused (a 4xx other than
- * 408/409/429 and other than an idempotency error): nothing was created.
- * Everything else — network, timeout, 5xx, rate limit, a key in use, an
- * idempotency-parameter mismatch — is an UNKNOWN outcome. An idempotency error
+ * `rejected` is true only when Stripe ANSWERED and refused THE REQUEST (a 4xx
+ * other than 401/403/408/409/429 and other than an idempotency error): nothing
+ * was created. Everything else — network, timeout, 5xx, rate limit, a key in
+ * use, an idempotency-parameter mismatch, and a CREDENTIAL failure — is an
+ * UNKNOWN outcome. 401 and 403 say nothing about an earlier attempt under the
+ * same key: if that attempt created the account and its answer was lost, and
+ * the retry then meets a rotated key or a changed permission, calling it a
+ * refusal would close the operation and let the next request create a SECOND
+ * account under a new key (Codex P1 on CP3-F). An idempotency error
  * in particular means the key already reached Stripe with other parameters,
  * so whatever that first request did stands; treating it as a refusal would
  * let a second account be created.
@@ -140,6 +145,8 @@ export function connectGatewayError(error: unknown): ConnectGatewayError {
     typeof status === "number" &&
     status >= 400 &&
     status < 500 &&
+    status !== 401 &&
+    status !== 403 &&
     status !== 408 &&
     status !== 409 &&
     status !== 429 &&

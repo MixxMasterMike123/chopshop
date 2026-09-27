@@ -578,6 +578,29 @@ describe("create or reuse the account — reserve first", () => {
     expect(fake.callsOf("createAccount")).toEqual([]);
   });
 
+  it("past the window, ONE match in an INCOMPLETE listing is not adopted: another may sit on an unread page (Codex P2)", async () => {
+    const shop = await createShop(world, unique("cx-partial"));
+    await enableConnect(world, shop, E);
+    const old = await seedReservedOp(shop, {
+      createdAtMs: Date.now() - CONNECT_KEY_RETRY_WINDOW_MS - 60_000,
+      leaseExpiresAtMs: null,
+    });
+    const visible = fake.seedAccount(accountMetadata({ opId: old, tenantId: shop.tenantId }));
+
+    fake.listingComplete = false;
+    await seller(OWN, shop, "POST", ACCOUNT, 202);
+    expect((await tenantConnectRow(shop.tenantId))?.stripe_account_id).toBeNull();
+    expect(await opsOf(shop.tenantId)).toMatchObject([
+      { error_code: "recovery_listing_incomplete", op_id: old, state: "reserved" },
+    ]);
+    expect(fake.callsOf("createAccount")).toEqual([]);
+
+    // The same account from a COMPLETE listing is the shop's.
+    fake.listingComplete = true;
+    await seller(OWN, shop, "POST", ACCOUNT, 201);
+    expect((await tenantConnectRow(shop.tenantId))?.stripe_account_id).toBe(visible.id);
+  });
+
   it("past the window, TWO accounts claiming the shop: a human decides (409 + alert), nothing adopted", async () => {
     const shop = await createShop(world, unique("cx-dup"));
     await enableConnect(world, shop, E);
@@ -797,6 +820,45 @@ describe("status refresh — ordered like account.updated", () => {
     const row = await tenantConnectRow(shop.tenantId);
     expect(row).toMatchObject({ stripe_charges_enabled: 1, stripe_payouts_enabled: 1 });
     expect(row?.stripe_account_synced_at).toBe(eventCreated * 1_000);
+  });
+
+  it("a restrictive event in the SAME second as the stored watermark, arriving while the refresh is at Stripe, is not overwritten (Codex P1)", async () => {
+    const { accountId, shop } = await shopWithAccount("rf-tie");
+    fake.setAccount(accountId, { chargesEnabled: true, detailsSubmitted: true, payoutsEnabled: true });
+    await seller(OWN, shop, "POST", REFRESH, 200);
+    const stored = await tenantConnectRow(shop.tenantId);
+    expect(stored).toMatchObject({ stripe_charges_enabled: 1, stripe_payouts_enabled: 1 });
+    const watermark = stored?.stripe_account_synced_at as number;
+
+    // Stripe restricts the account. The refresh's own read still says "on"
+    // (it was taken a moment earlier); the event carries the stored second.
+    fake.onRetrieve = async () => {
+      const { response } = await postEvent(
+        "account.updated",
+        { charges_enabled: false, details_submitted: true, id: accountId, object: "account", payouts_enabled: false },
+        { created: watermark / 1_000 },
+      );
+      expect(response.status).toBe(200);
+    };
+    const outcome = await refreshConnectStatus(env.DB, fake, shop.tenantId, () => watermark + 500);
+    expect(outcome).toMatchObject({ applied: false, status: "ok" });
+
+    const row = await tenantConnectRow(shop.tenantId);
+    expect(row, "the fail-closed merge stands").toMatchObject({
+      stripe_charges_enabled: 0,
+      stripe_payouts_enabled: 0,
+    });
+    expect(row?.stripe_account_synced_at, "the watermark did not move").toBe(watermark);
+    const marker = await env.DB.prepare("SELECT stripe_account_resync_needed AS n FROM tenants WHERE tenant_id = ?")
+      .bind(shop.tenantId)
+      .first<{ n: number }>();
+    expect(marker?.n, "the resync is still owed").toBe(1);
+
+    // The resync is global: leave no owed resync behind for the suites that
+    // count what one reconciliation run does.
+    await env.DB.prepare("UPDATE tenants SET stripe_account_resync_needed = 0 WHERE tenant_id = ?")
+      .bind(shop.tenantId)
+      .run();
   });
 
   it("the watermark is the moment BEFORE Stripe was asked, floored to its second — not when the answer arrived", async () => {
@@ -1165,6 +1227,33 @@ describe("account.updated and the 0027 resync keep the requirement list and disa
     expect(await tenantConnectRow(shop.tenantId)).toMatchObject({
       stripe_account_resync_needed: 0,
       stripe_charges_enabled: 1,
+      stripe_requirements_due_json: JSON.stringify(["external_account"]),
+    });
+  });
+
+  it("when the Connect gateway cannot read the account, the money gateway still re-reads the FLAGS (consolidation)", async () => {
+    const { accountId, shop } = await shopWithAccount("wh-degraded");
+    const at = base() + 20;
+    await deliver(accountObject(accountId, { currently_due: ["external_account"], disabled_reason: null }), at);
+    await deliver(accountObject(accountId, { currently_due: ["external_account"], disabled_reason: null }, { charges: true }), at);
+    expect((await tenantConnectRow(shop.tenantId))?.stripe_account_resync_needed).toBe(1);
+
+    world.stripe.accounts.set(accountId, {
+      charges_enabled: true,
+      details_submitted: true,
+      id: accountId,
+      payouts_enabled: true,
+    });
+    fake.failNext.retrieveAccount = "unknown";
+    const summary = await runReconciliation(connectEnv(world, fake), (at + 60) * 1_000);
+
+    expect(summary.accounts, "no failed resync, no alert").toMatchObject({ errors: 0, resynced: 1 });
+    expect(world.stripe.retrieveAccountCalls).toEqual([accountId]);
+    expect(await tenantConnectRow(shop.tenantId)).toMatchObject({
+      stripe_account_resync_needed: 0,
+      stripe_charges_enabled: 1,
+      stripe_payouts_enabled: 1,
+      // The seller's two facts stay as the events left them.
       stripe_requirements_due_json: JSON.stringify(["external_account"]),
     });
   });

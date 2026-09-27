@@ -559,7 +559,38 @@ const TENANT_HAS_REFUNDABLE_ORDER = `EXISTS (
     AND live.dispute_status IS NOT 'lost'
 )`;
 
-export type CloseTenantResult = TenantWriteResult | { status: "refundable_orders" };
+/**
+ * A payment that can still become an order (Codex P1 on CP3-A). A buyer who
+ * holds a PaymentIntent can pay it — and its success webhook can arrive — AFTER
+ * the shop was closed: the webhook makes the order whatever the tenant's
+ * status, and that order's refund would be stranded exactly like the ones the
+ * order rule protects. So close also waits for every checkout that has an
+ * intent which is not Stripe-terminal and has not become an order yet:
+ *
+ *   payment_intent_status   (0019; NULL = created, never heard of since)
+ *     'canceled'            terminal, can never be paid — releases
+ *     'succeeded'           paid; blocks until its order exists (then the
+ *                           order rule takes over)
+ *     anything else, NULL   payable — blocks
+ *
+ * The retention sweep cancels an abandoned intent after the checkout expired,
+ * so a SUSPENDED shop (no new checkout can open) becomes closable on its own.
+ */
+const TENANT_HAS_OPEN_PAYMENT = `EXISTS (
+  SELECT 1 FROM checkouts AS paying
+  WHERE paying.tenant_id = ?
+    AND paying.payment_intent_id IS NOT NULL
+    AND paying.payment_intent_status IS NOT 'canceled'
+    AND NOT EXISTS (SELECT 1 FROM orders AS made WHERE made.checkout_id = paying.checkout_id)
+)`;
+
+/** Both reasons close waits for, each taking the tenant id once. */
+const TENANT_NOT_CLOSABLE = `(${TENANT_HAS_REFUNDABLE_ORDER} OR ${TENANT_HAS_OPEN_PAYMENT})`;
+
+export type CloseTenantResult =
+  | TenantWriteResult
+  | { status: "open_payments" }
+  | { status: "refundable_orders" };
 
 /**
  * provisioning | active | suspended → closed, audited. `closed` is FINAL: the
@@ -576,7 +607,8 @@ export type CloseTenantResult = TenantWriteResult | { status: "refundable_orders
  * row's guard and in the UPDATE's WHERE — so an order paid between any
  * earlier read and the commit cannot slip through. A shop with live orders is
  * SUSPENDED instead (reversible; the seller can still refund once
- * reactivated).
+ * reactivated). For the same reason it refuses (`open_payments`) while a
+ * payment can still become an order (TENANT_HAS_OPEN_PAYMENT).
  *
  * Closing stops the storefront (resolution needs an active tenant), every
  * tenant-admin session and every acting-as grant on the next request, and
@@ -610,26 +642,32 @@ export async function closeTenant(
         },
         now,
         `EXISTS (SELECT 1 FROM tenants WHERE tenant_id = ? AND status = ?)
-         AND NOT ${TENANT_HAS_REFUNDABLE_ORDER}`,
-        [tenantId, status, tenantId],
+         AND NOT ${TENANT_NOT_CLOSABLE}`,
+        [tenantId, status, tenantId, tenantId],
       ),
       db
         .prepare(
           `UPDATE tenants
            SET status = 'closed', updated_at = MAX(?, created_at)
            WHERE tenant_id = ? AND status = ?
-             AND NOT ${TENANT_HAS_REFUNDABLE_ORDER}`,
+             AND NOT ${TENANT_NOT_CLOSABLE}`,
         )
-        .bind(now, tenantId, status, tenantId),
+        .bind(now, tenantId, status, tenantId, tenantId),
     ]);
     if ((results[1]?.meta.changes ?? 0) === 0) {
       // Nothing was written. Name the reason: a refundable order, or a status
       // that changed under us.
-      const refundable = await db
-        .prepare(`SELECT ${TENANT_HAS_REFUNDABLE_ORDER} AS refundable`)
-        .bind(tenantId)
-        .first<{ refundable: number }>();
-      return refundable?.refundable === 1 ? { status: "refundable_orders" } : { status: "conflict" };
+      const why = await db
+        .prepare(
+          `SELECT ${TENANT_HAS_REFUNDABLE_ORDER} AS refundable,
+                  ${TENANT_HAS_OPEN_PAYMENT} AS paying`,
+        )
+        .bind(tenantId, tenantId)
+        .first<{ paying: number; refundable: number }>();
+      if (why?.refundable === 1) {
+        return { status: "refundable_orders" };
+      }
+      return why?.paying === 1 ? { status: "open_payments" } : { status: "conflict" };
     }
   }
 
