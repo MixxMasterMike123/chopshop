@@ -2,7 +2,23 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
-## CP3 — Platform minimal + data import to staging (GO 2026-09-27 13:10, in progress)
+## CP3 — Platform minimal + data import to staging (GO 2026-09-27 13:10, ✅ CLOSED 2026-09-28 02:10)
+
+**✅ CP3 CLOSED.** Both exit criteria of PLAN §10 are met on staging:
+
+| Exit criterion | Evidence |
+|---|---|
+| The slice is operable by a platform user without scripts | The seed runs through the routes only: no `d1 execute`, no write to Stripe. Purchase, refund and reconciliation balanced at Δ 0 öre under the CP3 Worker (`f0db7a72`, version `2b2f3927`). The Connect v1 proof passed with an account the Worker created. |
+| Staging data = manifest | The import plan was applied on 2026-09-28 02:05: **862 statements, 2 509 rows written, no retry**. `verify.mjs`: **16 of 16 checks PASS**, nine items deferred to their checkpoints. |
+
+After the import: `/ready` on 0038, the storefront answers, the reconciliation is still balanced with 0 alerts, and the four shops read back through the platform routes (melodie-mc published, the other three hidden, as in the source). Bookmark before the import `0000007e-00000000-000050f3-72f83de0559e3938e07fe3d81ef7fcc9`, after it `00000081-0000003e-000050f3-be65903f470600c3b999f2a9142901e1`. Plan, states and the verify output are in `~/chopshop-export/import-2026-09-28/`.
+
+**The apply was run by Claude**, under a permission rule Mikael chose on 2026-09-28: `.claude/settings.local.json` allows `scripts/cf-preflight.sh staging -- d1 execute chopshop-stg --remote`, the staging database through the preflight and nothing else.
+
+**Carried forward, not verified in CP3:** email delivery (Resend waits for Kent's account; the forced password reset at cutover depends on it); requirements arriving by webhook during a Connect onboarding (needs a person in the flow); the v2 accounts adapter; legal acceptances and audit logs have met invented data only (the export holds none); `apparel_dtg` on staging is the old 250 × 350 mm; the imported admins hold placeholder addresses and cannot sign in on staging, by design.
+
+**Next: CP4, which needs Mikael's go.** `CP4_GAP_ANALYSIS.md`, decisions D77–D91.
+
 
 **Mikael:** "CP3 go, defaults" — D12–D23 on the recommended defaults (print-shop users + uid-keyed printer tiers archived; impersonationAudit archive only; legacy leftovers archived; only referenced legacy images copied; translations rebuilt as static JSON; mockups regenerated; 7 artworks imported as needs-reprocessing; 3D derivatives public; all shops imported to staging scrubbed; robowatz archived; effective feature values; DAC7 = CP9 in November). **Carried in from CP2's close:** design diff on the slice pages (CP4), and two "operable without scripts" gaps found by the staging run — no route manages a tenant's hostname, and no Connect onboarding endpoints exist (the seed script used the Stripe API + two raw D1 statements). **Started 13:15:** read-only gap analysis (what CP2 already built vs PLAN §10 CP3 scope, frontend scope, which manifest rows the CP3 importer handles) → builder briefs.
 
