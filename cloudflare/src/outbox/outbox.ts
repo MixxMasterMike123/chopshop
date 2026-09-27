@@ -57,6 +57,8 @@ export interface OutboxRow {
   created_at: number;
   dedupe_key: string;
   event_type: string;
+  /** The effect's input frozen at its first build (0022); email only today. */
+  frozen_json?: string | null;
   last_attempt_at: number | null;
   last_error: string | null;
   max_attempts: number;
@@ -90,7 +92,8 @@ export type WithTransition = (guard: SqlGuard) => D1PreparedStatement[];
 const OUTBOX_COLUMNS = `outbox_id, tenant_id, event_type, aggregate_type, aggregate_id,
   dedupe_key, payload_json, status, attempts, max_attempts, next_attempt_at,
   last_attempt_at, resolved_at, last_error, created_at, updated_at, claimed_by,
-  claim_expires_at, cancel_requested, result_ref, submitted_at, unknown_since`;
+  claim_expires_at, cancel_requested, result_ref, submitted_at, unknown_since,
+  frozen_json`;
 
 const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,100}$/;
 

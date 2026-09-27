@@ -465,3 +465,78 @@ describe("the ledger fingerprint covers the order content (Codex P2)", () => {
     expect(sent.text).toContain(`Totalt: ${formatOrderMoney(29_900, "SEK")}`);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("a confirmation is frozen at its first build (Codex P2)", () => {
+  it("record → rename the shop → retry ⇒ sent exactly once, with the original name", async () => {
+    const tenant = `tenant-outbox-email-rename-${crypto.randomUUID().slice(0, 8)}`;
+    await seedTenant(tenant, "Gamla Butiken");
+    const order = await seedOrder(tenant);
+    const deliveryId = await deliveryIdFromKey(`email:order_confirmation:${order.orderId}`);
+
+    // First attempt: the ledger row is recorded, then enqueueing fails.
+    const first = await processOutboxRowById(
+      quietEnv({ EMAIL_QUEUE: recordingQueue({ fail: true }).queue }).env,
+      order.emailId,
+    );
+    expect(first).toMatchObject({ kind: "ran", outcome: { kind: "retry" } });
+    expect((await ledger(deliveryId))?.status).toBe("pending");
+
+    await env.DB.prepare("UPDATE tenants SET shop_name = 'Nya Butiken' WHERE tenant_id = ?")
+      .bind(tenant)
+      .run();
+
+    const emails = recordingQueue();
+    const retry = await processOutboxRowById(
+      quietEnv({ EMAIL_QUEUE: emails.queue }).env,
+      order.emailId,
+      () => Date.now() + 2 * 60_000,
+    );
+    expect(retry).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(emails.sent).toHaveLength(1);
+    const job = emails.sent[0] as OrderConfirmationEmailJob;
+    expect(job.order.shopName).toBe("Gamla Butiken");
+
+    // The -email consumer accepts it (same fingerprint as the ledger row) and
+    // sends it once.
+    const resend = fakeResend();
+    const { acks, batch } = emailBatch([JSON.parse(JSON.stringify(job))]);
+    await worker.queue(batch, { ...env, [RESEND_FETCH_OVERRIDE]: resend.fetch } as unknown as Env);
+
+    expect(acks).toEqual(["m0"]);
+    expect(resend.calls).toHaveLength(1);
+    const sent = await resend.calls[0]!.json<{ text: string }>();
+    expect(sent.text).toContain("Tack för din beställning hos Gamla Butiken!");
+    expect((await ledger(deliveryId))?.status).toBe("sent");
+  });
+
+  it("freezes exactly what the job renders, once, on the first build", async () => {
+    const order = await seedOrder(TENANT);
+    const emails = recordingQueue();
+
+    await processOutboxRowById(quietEnv({ EMAIL_QUEUE: emails.queue }).env, order.emailId);
+
+    const row = await env.DB.prepare("SELECT frozen_json FROM outbox_events WHERE outbox_id = ?")
+      .bind(order.emailId)
+      .first<{ frozen_json: string }>();
+    const job = emails.sent[0] as OrderConfirmationEmailJob;
+    expect(JSON.parse(row!.frozen_json)).toEqual({ confirmation: job.order });
+    // The recipient is not copied into the outbox: it is the order's own,
+    // immutable customer_email.
+    expect(row!.frozen_json).not.toContain(job.recipient);
+  });
+
+  it("keeps the frozen payload write-once and well-formed (0022)", async () => {
+    const order = await seedOrder(TENANT);
+    const update = (value: string | null) =>
+      env.DB.prepare("UPDATE outbox_events SET frozen_json = ? WHERE outbox_id = ?")
+        .bind(value, order.emailId)
+        .run();
+
+    await expect(update("[1]")).rejects.toThrow(/CHECK/);
+    await expect(update("not json")).rejects.toThrow(/CHECK/);
+    await update('{"confirmation":{}}');
+    await expect(update('{"confirmation":{"shopName":"other"}}')).rejects.toThrow(/write-once/);
+    await expect(update(null)).rejects.toThrow(/write-once/);
+  });
+});

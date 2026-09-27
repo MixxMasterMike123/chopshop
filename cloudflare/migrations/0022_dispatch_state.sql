@@ -85,6 +85,36 @@ BEGIN
 END;
 
 -- ============================================================================
+-- outbox_events.frozen_json — an effect's input, frozen at its FIRST build.
+--
+-- The order confirmation renders `tenants.shop_name`, which is live: a shop
+-- renamed between an attempt that recorded the ledger row and its retry would
+-- rebuild a DIFFERENT job, whose fingerprint the ledger refuses as a conflict —
+-- the confirmation silently lost while the outbox row went `done`. So the email
+-- effect writes the rendered content here in the same fenced batch as the
+-- ledger record, and every retry reuses it (src/outbox/email-effect.ts).
+-- Shape: `{ "confirmation": <order content> }`. The recipient is NOT copied: it
+-- is the order's own `customer_email`, which 0011 makes immutable.
+-- Write-once, and never cleared.
+-- ============================================================================
+ALTER TABLE outbox_events ADD COLUMN frozen_json TEXT CHECK (
+  frozen_json IS NULL
+  OR (
+    json_valid(frozen_json)
+    AND json_type(frozen_json) = 'object'
+    AND length(frozen_json) <= 65536
+  )
+);
+
+CREATE TRIGGER outbox_events_frozen_write_once
+BEFORE UPDATE OF frozen_json ON outbox_events
+FOR EACH ROW
+WHEN OLD.frozen_json IS NOT NULL AND NEW.frozen_json IS NOT OLD.frozen_json
+BEGIN
+  SELECT RAISE(ABORT, 'outbox frozen payload is write-once');
+END;
+
+-- ============================================================================
 -- email_deliveries: admit the 'order_confirmation' kind.
 --
 -- The ledger's `kind` CHECK (0003) names only the two auth kinds, and SQLite

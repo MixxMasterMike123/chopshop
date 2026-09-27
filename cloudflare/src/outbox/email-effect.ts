@@ -3,7 +3,7 @@ import {
   deliveryIdFromKey,
   type OrderConfirmationEmailJob,
 } from "../email/auth-email-job";
-import { recordAuthEmailDelivery } from "../email/email-delivery-store";
+import { prepareAuthEmailDeliveryRecord } from "../email/email-delivery-store";
 import {
   alertStatement,
   complete,
@@ -34,6 +34,14 @@ import {
  * rather than mailing a day-old confirmation under a new id.
  *
  * The recipient is `orders.customer_email`, frozen at payment.
+ *
+ * FROZEN AT THE FIRST BUILD. The content also renders `tenants.shop_name`,
+ * which is live. The first build therefore writes the rendered content to the
+ * row's `frozen_json` (0022) in ONE batch with the ledger record and the move to
+ * `submitting`, all under the claim; every retry reuses it. A shop renamed
+ * between an attempt that recorded the ledger row and its retry thus cannot
+ * produce a job the ledger refuses as a fingerprint conflict (which would lose
+ * the confirmation while the outbox row went `done`).
  */
 
 const JOB_LIFETIME_MS = 24 * 60 * 60 * 1_000;
@@ -72,12 +80,31 @@ function parsePayload(payloadJson: string): string | null {
   return null;
 }
 
+/** The content a previous attempt froze, or undefined when none did. */
+function frozenConfirmation(frozenJson: string | null | undefined): unknown {
+  if (frozenJson === null || frozenJson === undefined) {
+    return undefined;
+  }
+  try {
+    return (JSON.parse(frozenJson) as { confirmation?: unknown }).confirmation ?? null;
+  } catch {
+    return null;
+  }
+}
+
+interface BuiltJob {
+  /** True when the content came from `frozen_json` (nothing to freeze). */
+  frozen: boolean;
+  job: OrderConfirmationEmailJob;
+}
+
 async function buildJob(
   ctx: EffectContext,
   orderId: string,
   tenantId: string,
-): Promise<OrderConfirmationEmailJob | "invalid" | "not_found"> {
+): Promise<BuiltJob | "invalid" | "not_found"> {
   const { env, row } = ctx;
+  const frozen = frozenConfirmation(row.frozen_json);
   const order = await env.DB.prepare(
     `SELECT o.order_number, o.customer_email, o.currency, o.delivery_method,
             o.shipping_country, o.subtotal_minor, o.shipping_minor,
@@ -102,11 +129,12 @@ async function buildJob(
     .all<{ line_total_minor: number; name: string; quantity: number }>();
 
   try {
-    return createOrderConfirmationEmailJob({
+    const job = createOrderConfirmationEmailJob({
       createdAt: row.created_at,
       deliveryId: await deliveryIdFromKey(row.dedupe_key),
       expiresAt: row.created_at + JOB_LIFETIME_MS,
-      order: {
+      // Re-validated by the job constructor like freshly built content.
+      order: frozen !== undefined ? (frozen as OrderConfirmationEmailJob["order"]) : {
         currency: order.currency,
         deliveryMethod: order.delivery_method,
         discountMinor: order.discount_minor,
@@ -126,6 +154,7 @@ async function buildJob(
       recipient: order.customer_email,
       tenantId,
     });
+    return { frozen: frozen !== undefined, job };
   } catch {
     return "invalid";
   }
@@ -179,34 +208,46 @@ export async function runEmailEffect(ctx: EffectContext): Promise<OutboxRunOutco
     return failEmail(ctx, "email_expired", true);
   }
 
-  const job = await buildJob(ctx, orderId, row.tenant_id);
-  if (job === "not_found") {
+  const built = await buildJob(ctx, orderId, row.tenant_id);
+  if (built === "not_found") {
     return failEmail(ctx, "order_not_found", true);
   }
-  if (job === "invalid") {
+  if (built === "invalid") {
     return failEmail(ctx, "invalid_email_content", true);
   }
+  const { job } = built;
 
-  const submitting = await markSubmitting(env.DB, claim, { now: ctx.clock() });
+  // One batch, under the claim: freeze the content (first build only), record
+  // the ledger row (the producer half, as for auth mails), move to submitting.
+  const now = ctx.clock();
+  const recordLedger = await prepareAuthEmailDeliveryRecord(env.DB, job, now);
+  const submitting = await markSubmitting(env.DB, claim, {
+    now,
+    withTransition: (guard) => [
+      ...(built.frozen
+        ? []
+        : [
+            env.DB.prepare(
+              `UPDATE outbox_events SET frozen_json = ?
+               WHERE outbox_id = ? AND frozen_json IS NULL AND ${guard.sql}`,
+            ).bind(JSON.stringify({ confirmation: job.order }), row.outbox_id, ...guard.binds),
+          ]),
+      recordLedger(guard),
+    ],
+  });
   if (submitting === null) {
     return { kind: "lost_claim" };
   }
 
-  try {
-    // Ledger first (the producer half, as for auth mails), then the queue.
-    await recordAuthEmailDelivery(env.DB, job, ctx.clock());
-  } catch {
-    return failEmail(ctx, "email_ledger_error", false);
-  }
   try {
     await queue.send(job, { contentType: "json" });
   } catch {
     return failEmail(ctx, "email_queue_error", false);
   }
 
-  const now = ctx.clock();
+  const doneAt = ctx.clock();
   return outcomeOf(
-    await complete(env.DB, claim, { now, resultRef: job.deliveryId }),
-    now,
+    await complete(env.DB, claim, { now: doneAt, resultRef: job.deliveryId }),
+    doneAt,
   );
 }

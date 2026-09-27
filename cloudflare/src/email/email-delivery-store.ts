@@ -54,13 +54,15 @@ function insertPendingStatement(
   recipientHash: string,
   fingerprint: string,
   now: number,
+  where?: { binds: unknown[]; sql: string },
 ): D1PreparedStatement {
   return db.prepare(
     `INSERT INTO email_deliveries (
       delivery_id, tenant_id, kind, recipient_hash, status, attempts,
       max_attempts, next_attempt_at, expires_at, created_at, updated_at,
       job_fingerprint
-    ) VALUES (?, ?, ?, ?, 'pending', 0, 8, ?, ?, ?, ?, ?)
+    ) SELECT ?, ?, ?, ?, 'pending', 0, 8, ?, ?, ?, ?, ?
+    WHERE ${where?.sql ?? "1"}
     ON CONFLICT(delivery_id) DO NOTHING`,
   ).bind(
     job.deliveryId,
@@ -72,7 +74,27 @@ function insertPendingStatement(
     job.createdAt,
     Math.max(now, job.createdAt),
     fingerprint,
+    ...(where?.binds ?? []),
   );
+}
+
+/**
+ * `recordAuthEmailDelivery` as a statement builder, so a producer can commit
+ * the ledger row atomically with its own state, conditioned on its own guard
+ * (the outbox email effect records it in the batch that freezes the
+ * confirmation and moves its outbox row, under that row's claim). The hashing
+ * is done here, up front; the returned builder is synchronous.
+ */
+export async function prepareAuthEmailDeliveryRecord(
+  db: D1Database,
+  job: AuthEmailJob,
+  now: number,
+): Promise<(where?: { binds: unknown[]; sql: string }) => D1PreparedStatement> {
+  const [recipientHash, fingerprint] = await Promise.all([
+    hashEmailRecipient(job.recipient),
+    fingerprintAuthEmailJob(job),
+  ]);
+  return (where) => insertPendingStatement(db, job, recipientHash, fingerprint, now, where);
 }
 
 /**

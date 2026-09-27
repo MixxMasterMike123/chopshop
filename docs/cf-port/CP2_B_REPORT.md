@@ -414,3 +414,29 @@ Tests (`describe "the line follows an exhausted row (Codex P2)"`):
 
 ### Commit-boundary note
 Commit 9542636 does not contain `src/routes/dispatch-admin.ts` or `src/routes/dispatch-platform.ts`; they are untracked in the tree. The `CP2-ROUTES-B` mounts in `src/app.ts` import them, so they must be committed with the reviewer's `app.ts` consolidation.
+
+### [P2, follow-on to 4543f11] The confirmation is frozen at its first build
+**The problem.** The fingerprint covers the rendered content, which includes the live `tenants.shop_name`, and `buildJob` reloaded it on every attempt. Suppose an attempt recorded the ledger row and then failed to enqueue, and the shop was renamed before the retry. The retry built a different job, the consumer answered `conflict` and never sent it, and the outbox row still went `done`. The confirmation was silently lost.
+
+**The fix.**
+- **`0022`** adds `outbox_events.frozen_json`: a JSON object of at most 64 KiB, write-once and never cleared (trigger `outbox_events_frozen_write_once`). It is additive only; nothing in 0021 changed.
+- **`src/outbox/email-effect.ts`.** The first build writes `{ "confirmation": <order content> }` there **in one batch** with the ledger record and the move to `submitting`, all conditioned on the claim. Every retry reuses the frozen content, which the job constructor re-validates. A frozen row can therefore never produce a different fingerprint.
+  - The recipient is **not** copied into the outbox row; it stays the order's own `customer_email`, which 0011 makes immutable.
+  - Every other job field is already deterministic: delivery id from the dedupe key; `createdAt` and `expiresAt` from the row.
+- **`src/email/email-delivery-store.ts`.** The new `prepareAuthEmailDeliveryRecord(db, job, now)` returns a synchronous builder for the ledger insert, optionally conditioned on a guard. The insert became `INSERT … SELECT … WHERE <guard | 1>`. `recordAuthEmailDelivery` behaves exactly as before; the ledger, consumer and password-reset suites are unchanged and green.
+- **`src/outbox/outbox.ts`.** The row type and the claim's `RETURNING` include `frozen_json`.
+
+**Tests** (`test/outbox-email.test.ts`, describe "a confirmation is frozen at its first build (Codex P2)"): 15 → **18**.
+- **Record → rename the shop → retry.** The first attempt records the ledger row and the enqueue fails; the shop is renamed; the retry enqueues the job with the **original** name. The real `-email` consumer sends it **exactly once** with "Tack för din beställning hos Gamla Butiken!", and the ledger row ends `sent`. On the old code this test failed: the retry carried "Nya Butiken".
+- **What is frozen.** Exactly `{ confirmation: job.order }`, written on the first build, and the recipient address is not in it.
+- **Schema.** The column CHECK (non-object, non-JSON) and the write-once trigger (change, or clear to NULL).
+
+**Mutation checks: 3 of 3 killed.** Sources restored byte-identical:
+1. The retry ignoring the frozen content.
+2. The first build never freezing.
+3. The write-once trigger disabled.
+
+**Check status.**
+- `npm run check` was red **only in CP2-C's still-changing files**: tsc in `src/pod/pod-mappings.ts` and `src/catalog/admin-catalog.ts`, and one failing test in `test/screening.test.ts`. The full vitest run was 1606 of 1607.
+- Run individually, my suites and the shared email suites are green: `outbox`, `dispatch`, `outbox-email`, `email-queue-consumer`, `email-delivery-store`, `password-reset`, `auth-email-job`, `fake-printer` — **246 tests / 8 files**.
+- Excluding CP2-C's files, tsc is clean.
