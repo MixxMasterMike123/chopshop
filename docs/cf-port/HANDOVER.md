@@ -45,9 +45,36 @@ The real bundle now builds: 864 statements, 286 KB, longest statement 47.7 KB, i
 
 **Rehearsal of the import (this commit, `CP3_S_REPORT.md` §10.7):** read-only target state from staging → plan from the real bundle → executed locally against every migration: 862 statements, none refused, the manifest's user figure. It found that melodie-mc would have been imported **unpublished** (no `published` field = published in Firebase), that its **commission of 5000 bps** was dropped without a word (D75), and that the VAT rate was not carried. All three fixed, 343 tests. Staging's `apparel_dtg` profile is the old 250 × 350; the export holds 300 × 400: correct it through the profiles route before the staging proof.
 
+**🚀 CP3 STAGING DEPLOY — 2026-09-27 21:58 CEST.** Mikael applied migrations 0032–0038 (21:50, all seven ✅). Deployed **`f0db7a72`** → version **`2b2f3927-3dfd-4d64-b86f-510e67a87545`**, `/ready` on `0038_connect_onboarding.sql`, `/health` staging, cron attached. The deployed SHA is the one both reviews passed (note recorded and pushed on `f0db7a72`); the branch's later commits are scripts and docs, and `git diff f0db7a72 HEAD -- cloudflare/` is empty. The deploy ran from a detached checkout of that SHA.
+
+**Staging proof, through the routes only (`seed-staging-slice.mjs`, first run against the CP3 Worker):**
+
+| Step | Result |
+|---|---|
+| explicit `pod` row for `slice-20260927` | written by `PUT …/features` |
+| Connect for the existing shop | enabled by the platform, the account found (200), refresh → `active`, charges and payouts enabled |
+| re-screen | pending 0, unverified 0 on the first call |
+| legal readiness | return address + VAT answer by `PUT /v1/admin/settings`, legal pages adopted by the shop's own admin, status `ready` |
+| purchase | checkout 39 900 öre → `pi_3UKOBGKAaBMOW5AC04DlBOlL` succeeded, fee 25 620 → order `25ff551b-9fd9-479e-9ef4-771e7dfdcf16` made by the webhook |
+| refund 10 000 | `8066e976-513c-433a-8556-7437d6e2d4a4` succeeded |
+| reconcile | **BALANCED, Δ 0 öre, 2 orders**, after the purchase and again after the refund; 1 printer job each; 0 alerts |
+
+**Connect v1 proof (`connect-proof-staging.mjs`, tenant `slice-connect-20260927`, account `acct_1UKOCrGyEAmj4zmk` created by the Worker):**
+
+| # of `CP3_F_REPORT.md` | Result |
+|---|---|
+| 1 create | 404 while Connect is not enabled → enable 200 → create **201**, operation `succeeded`; Stripe metadata holds `tenant_id` and `onboarding_op_id`; a second create answers 200; Stripe lists **one** account for the tenant |
+| 2 monthly schedule | `interval: monthly`, `monthly_anchor: 1`, `delay_days: 7` — **the parameter Stripe had not seen before is accepted** |
+| 3 onboarding link | 200, host `connect.stripe.com` (the return URL is not readable from the link) |
+| 5 refresh, login link | refresh 200; login link **issued to the shop's own admin**, the opaque **404 for the platform user acting-as** |
+| 6 payout delay | 10 → stored 10, Stripe 10; `minimum` → stored NULL, Stripe 7; 1 → **422** `connect_payout_delay_refused` |
+| 4 requirements by webhook, 7 stuck-operation alert, 8 v2 | not proven here (4 needs a person in the onboarding; 8 is its own proof) |
+
+**Seen on real Stripe, not changed:** a new account that has not started its onboarding reads **`restricted`**, not `onboarding`, after the first refresh: Stripe sets a disabled reason on every new account, and `deriveConnectStatus` tests it before `details_submitted`. Firebase's `deriveStatus` does the same, so it is parity, but the seller's payments page (CP5) should not tell a new seller that the account is restricted. The accounts made before the routes (`acct_1UKHP7K39XhkqYJ0`) keep their `daily` schedule.
+
 **Branding images (D76):** not copied in CP3. Public objects have no delivery in the Worker yet, so the copy moves to CP4 with the product images. The imported shops have no logo, hero or favicon on staging until then.
 
-**Order from here:** Mikael applies 0032–0038 → Codex on `416b3bb1` and on the seed commit → attestation → `cf-deploy.sh staging` → seed script (the Connect proof list of `CP3_F_REPORT.md`) → target state by read-only queries → plan from the bundle with `--scrub-unmapped --target-state` → Mikael applies `plan.sql` → `verify.mjs` → CP3 closed.
+**Order from here:** Codex on the script commits (`416b3bb1`, `7d59996b`, `779d3405`, and the proof script) → correct staging's `apparel_dtg` through the profiles route → target state by read-only queries → plan from the bundle with `--scrub-unmapped --target-state` → Mikael applies `plan.sql` → `verify.mjs` → CP3 closed.
 
 ## CP2 — Vertical slice (GO 2026-09-27 01:10, ✅ CLOSED 2026-09-27 13:00)
 

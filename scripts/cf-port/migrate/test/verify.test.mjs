@@ -256,8 +256,8 @@ test('the expected block import.mjs writes is what runChecks reads: a state buil
   }
 });
 
-test('KNOWN_NON_MANIFEST_TENANTS is exactly bench-cp1 and slice-20260927', () => {
-  assert.deepEqual([...KNOWN_NON_MANIFEST_TENANTS].sort(), ['bench-cp1', 'slice-20260927']);
+test('KNOWN_NON_MANIFEST_TENANTS is exactly the three test tenants of staging', () => {
+  assert.deepEqual([...KNOWN_NON_MANIFEST_TENANTS].sort(), ['bench-cp1', 'slice-20260927', 'slice-connect-20260927']);
 });
 
 test('CP3_ITEMS is exactly 1,2,3,4,6,7,10,14,15,17', () => {

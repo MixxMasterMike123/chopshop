@@ -23,7 +23,7 @@
  *
  * Adjusted to the decisions: robowatz archived (D21), staging default printer
  * NULL (D66), snapwear inactive on staging (D59), known non-manifest tenants
- * `bench-cp1` and `slice-20260927` are expected extras (D56).
+ * (`bench-cp1`, `slice-20260927`, `slice-connect-20260927`) are expected extras (D56).
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -34,7 +34,8 @@ import { verifyBundle } from './lib/verify-bundle.mjs';
 import { bundleSha } from './lib/bundle-reader.mjs';
 import { printQueries } from './state-from-queries.mjs';
 
-const KNOWN_NON_MANIFEST_TENANTS = new Set(['bench-cp1', 'slice-20260927']); // D56
+// D56, plus the tenant of scripts/cf-port/connect-proof-staging.mjs.
+const KNOWN_NON_MANIFEST_TENANTS = new Set(['bench-cp1', 'slice-20260927', 'slice-connect-20260927']);
 
 const CP3_ITEMS = [1, 2, 3, 4, 6, 7, 10, 14, 15, 17];
 const ALL_ITEM_NAMES = {
