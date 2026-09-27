@@ -448,6 +448,32 @@ export type PodGateFailure =
   | "price_below_floor";
 
 /**
+ * The admin-facing sentence for a POD refusal code — what to do next. The
+ * `pod_too_large` one names the exit explicitly, so a product imported with
+ * more variants than one gate checks is never silently stranded.
+ */
+export function podRefusalMessage(code: string): string {
+  switch (code) {
+    case "pod_too_large":
+      return `The product has more than ${MAX_GATE_VARIANTS} active variants, so its price floor cannot be checked. Unpublish it and reduce its active variants to ${MAX_GATE_VARIANTS} or fewer, then change it and publish again.`;
+    case "pod_mapping_suspended":
+      return "A print mapping is suspended because the printer can no longer make it. Re-post or delete that mapping first.";
+    case "pod_mapping_missing":
+      return "A sellable variant has no active print mapping.";
+    case "pod_unpriced":
+      return "The printer has no price for this garment and print areas.";
+    case "currency_mismatch":
+      return "The printer prices in another currency than the product.";
+    case "price_below_floor":
+      return "The price is below the break-even floor for this production cost.";
+    case "taken_down":
+      return "The product has been taken down by the platform.";
+    default:
+      return "Product cannot be published";
+  }
+}
+
+/**
  * The POD publish gate (PRISGOLV + "no mapping, no sale"), evaluated per
  * sellable unit against its mapping set. Port of the PublishPanel.jsx /
  * ProductForm.jsx rules: a POD product without a connection can be saved but
@@ -771,7 +797,9 @@ async function createMappingOnce(
     slots,
     status: "active",
     suspendedReason: null,
-    updatedAt: iso,
+    // Exactly what the row will hold: a re-activation stores
+    // max(now, created_at) (a clock behind the row's creator is clamped).
+    updatedAt: tuple !== undefined && tuple.createdAt > iso ? tuple.createdAt : iso,
     variantId: input.variantId,
   };
   const nextActive = [...others, mapping];
@@ -923,13 +951,17 @@ export async function listMappings(
  * that loses its last mapping leaves the storefront) is the trigger's. Fenced
  * and retried like createMapping; a second conflict answers `conflict` (409).
  */
+export type DeleteMappingResult =
+  | { code: "pod_too_large" | "price_below_floor"; status: "refused" }
+  | { status: "conflict" | "not_found" | "ok" };
+
 export async function deleteMapping(
   db: D1Database,
   principal: TenantAdminPrincipal,
   mappingId: string,
   now: number,
-): Promise<{ status: "conflict" | "not_found" | "ok" }> {
-  return withScreeningRetry<{ status: "conflict" | "not_found" | "ok" }>(
+): Promise<DeleteMappingResult> {
+  return withScreeningRetry<DeleteMappingResult>(
     now,
     (attemptNow) => deleteMappingOnce(db, principal, mappingId, attemptNow),
     () => ({ status: "conflict" }),
@@ -941,7 +973,7 @@ async function deleteMappingOnce(
   principal: TenantAdminPrincipal,
   mappingId: string,
   now: number,
-): Promise<{ status: "not_found" | "ok" }> {
+): Promise<DeleteMappingResult> {
   const tenantId = principal.tenantId;
   const loadRow = () =>
     db
@@ -981,6 +1013,24 @@ async function deleteMappingOnce(
   ];
 
   if (await isProductLive(db, tenantId, row.product_id)) {
+    // PRISGOLV on the state this delete leaves behind (reviewer P2): removing
+    // a mapping can make a unit sellable again (the last SUSPENDED mapping of a
+    // product goes, and it returns to the storefront at whatever price it has)
+    // or move a variant onto the costlier product-level set (its own set goes).
+    // Either may put a live price under the floor — refused, like any other
+    // mapping edit of a live product. A delete that leaves a unit with no set
+    // at all is allowed: that unit simply stops being sellable.
+    const active = await loadActiveMappings(db, tenantId, row.product_id);
+    if (active === null) {
+      return { code: "pod_too_large", status: "refused" };
+    }
+    const failure = await evaluatePodGate(db, tenantId, row.product_id, {
+      mappings: active.filter((mapping) => mapping.mappingId !== mappingId),
+    });
+    if (failure === "price_below_floor" || failure === "pod_too_large") {
+      return { code: failure, status: "refused" };
+    }
+
     // Complete by construction (DISTINCT artwork ids of the active rows).
     const remaining = await db
       .prepare(
@@ -1057,12 +1107,23 @@ const SLOT_ORDER = new Map<PrintSlot, number>(PRINT_SLOTS.map((slot, index) => [
  * larger than MAX_SCOPE_MAPPINGS breaks the one-mapping-per-slot invariant and
  * is refused. Suspended mappings are checked on their own, across all scopes.
  */
-export async function resolveProductionLine(
+interface ProductionItem {
+  productId: string;
+  quantity: number;
+  variantId: string | null;
+}
+
+// The rows a production read returns, per line.
+const STATEMENTS_PER_LINE = 3;
+
+// Suspended rows first; beyond this many rows the one-per-slot invariant broke.
+const PRODUCTION_PAGE_SIZE = 2 * MAX_SCOPE_MAPPINGS;
+
+function productionReadStatements(
   db: D1Database,
   tenantId: string,
-  item: { productId: string; quantity: number; variantId: string | null },
-  dispatchTarget: string | null,
-): Promise<ProductionLine | null> {
+  item: ProductionItem,
+): D1PreparedStatement[] {
   // ── ONE consistent read (Codex CP2 P1) ─────────────────────────────────────
   // The mappings the line can use, every suspended mapping of the product,
   // the printer(s) and the price tiers behind them are read in ONE D1 batch —
@@ -1084,8 +1145,7 @@ export async function resolveProductionLine(
   // Suspended rows sort first, so a page can never hide one; without any, the
   // two candidate scopes hold at most 2 × MAX_SCOPE_MAPPINGS active rows (one
   // per slot each) and a fuller page is a broken invariant.
-  const pageSize = 2 * MAX_SCOPE_MAPPINGS;
-  const [mappingResult, printerResult, tierResult] = await db.batch<unknown>([
+  return [
     db
       .prepare(
         `SELECT mapping.id, mapping.product_id, mapping.variant_id, mapping.artwork_id,
@@ -1099,7 +1159,7 @@ export async function resolveProductionLine(
           AND artwork.tenant_id = mapping.tenant_id
          WHERE ${scope}
          ORDER BY (mapping.status = 'suspended') DESC, mapping.created_at, mapping.id
-         LIMIT ${pageSize + 1}`,
+         LIMIT ${PRODUCTION_PAGE_SIZE + 1}`,
       )
       .bind(...scopeBinds),
     db
@@ -1126,7 +1186,16 @@ export async function resolveProductionLine(
          )`,
       )
       .bind(...scopeBinds),
-  ]);
+  ];
+}
+
+function decideProductionLine(
+  tenantId: string,
+  item: ProductionItem,
+  dispatchTarget: string | null,
+  results: ReadonlyArray<D1Result<unknown> | undefined>,
+): ProductionLine | null {
+  const [mappingResult, printerResult, tierResult] = results;
   const rowsRead = (mappingResult?.results ?? []) as ProductionRow[];
   const printerRows = (printerResult?.results ?? []) as PrinterRow[];
   const tierRows = (tierResult?.results ?? []) as Array<
@@ -1135,7 +1204,7 @@ export async function resolveProductionLine(
 
   // Any suspended mapping: the product as designed cannot be produced
   // (evaluatePodGate's rule; the public predicate hides it too).
-  if (rowsRead.length > pageSize || rowsRead.some((row) => row.status === "suspended")) {
+  if (rowsRead.length > PRODUCTION_PAGE_SIZE || rowsRead.some((row) => row.status === "suspended")) {
     return null;
   }
   // The variant's own set when it has one, else the product-level set.
@@ -1217,6 +1286,47 @@ export async function resolveProductionLine(
     shippingCostMinor: printer.shippingCostMinor,
     sku: routing.sku,
   };
+}
+
+/**
+ * Production eligibility for EVERY POD line of a checkout, read in ONE D1
+ * batch — one transaction, one snapshot of mappings, suspensions, printers and
+ * tiers for all lines together (reviewer P3): a routing edit (a tier price, a
+ * frame) can never land between line 1 and line 2 and freeze a price list that
+ * mixes the old and the new. Index-aligned with `items`; null = that line is
+ * not producible.
+ */
+export async function resolveProductionLines(
+  db: D1Database,
+  tenantId: string,
+  items: readonly ProductionItem[],
+  dispatchTarget: string | null,
+): Promise<Array<ProductionLine | null>> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results = await db.batch<unknown>(
+    items.flatMap((item) => productionReadStatements(db, tenantId, item)),
+  );
+  return items.map((item, index) =>
+    decideProductionLine(
+      tenantId,
+      item,
+      dispatchTarget,
+      results.slice(index * STATEMENTS_PER_LINE, (index + 1) * STATEMENTS_PER_LINE),
+    ),
+  );
+}
+
+/** One line on its own (its own snapshot) — see resolveProductionLines. */
+export async function resolveProductionLine(
+  db: D1Database,
+  tenantId: string,
+  item: ProductionItem,
+  dispatchTarget: string | null,
+): Promise<ProductionLine | null> {
+  const [line] = await resolveProductionLines(db, tenantId, [item], dispatchTarget);
+  return line ?? null;
 }
 
 // ── storefront: what a buyer may see of a POD product ──────────────────────

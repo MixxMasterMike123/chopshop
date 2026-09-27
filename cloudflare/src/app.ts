@@ -325,7 +325,12 @@ function adminResultResponse(
     // A publish/price edit the POD gate refuses (no active mapping, price
     // below the PRISGOLV floor, …): the code tells the admin UI what to fix.
     return jsonResponse(
-      { error: { code: result.code, message: "Product cannot be published" } },
+      {
+        error: {
+          code: result.code,
+          message: result.message ?? "Product cannot be published",
+        },
+      },
       422,
     );
   }

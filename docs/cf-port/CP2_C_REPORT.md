@@ -256,3 +256,41 @@ The same rule applies at publish, on a PATCH of the base price, and when a mappi
 **Counts:**
 - CP2-C tests: 99 → **104** (screening 51 → 53, pod-publish 22 → 25, pod-mappings 26).
 - `npm run check`, 2026-09-27: **green**. Types are up to date, `tsc` is clean, and the suite reports `Test Files 46 passed (46)`, `Tests 1656 passed (1656)`.
+
+### Reviewer round (after 201bc2e; adversarial reviewer standing in for Codex)
+
+**[P2] The price floor could be bypassed through a suspended mapping.** Files: `src/catalog/admin-catalog.ts`, `src/pod/pod-mappings.ts`.
+- **Bug:** the price-edit gate treated every answer except `price_below_floor`/`pod_too_large` as a pass, including `pod_mapping_suspended`, where `evaluatePodGate` returns before pricing anything. `deleteMapping` had no floor check at all. The reviewer proved a live front+back tee could be cut to 190 kr during a suspension, have its suspended back mapping deleted, and then be sold 10× under the 196 kr floor.
+- **Fix, price edit:** refuses ANY non-null gate answer, with the code and a sentence (`podRefusalMessage`).
+- **Fix, `deleteMapping` on a live product:** runs `evaluatePodGate` over the remaining active mappings and refuses `price_below_floor` / `pod_too_large` (422 with the code). This covers two cases:
+  - removing the last suspended mapping, which would return the product to the storefront at an under-floor price;
+  - removing a variant's own set, which would drop the variant onto a costlier product-level set.
+- A delete that leaves a unit with no set is still allowed; that unit just stops being sellable.
+- **Tests** (`test/pod-publish.test.ts`):
+  - The reviewer's scratch test, ported with its assertions flipped. The cut during a suspension is refused `pod_mapping_suspended`. With an under-floor price (set directly, as an import would), the delete is refused, the product stays off the storefront and checkout refuses qty 10. A raise is allowed, after which the delete passes and the product sells front-only at 140 kr × 10.
+  - A variant-fallback delete is refused.
+- **Mutation-checked:** with the old gate handling, both tests fail independently.
+
+**[P3] Checkout lines were read in separate batches.** File: `src/pod/pod-mappings.ts` + `src/commerce/checkout.ts`.
+- **Fix:** new `resolveProductionLines` builds each line's three reads and runs ALL POD lines of the cart in ONE D1 batch, so every line decides from the same snapshot of mappings, printers and tiers. `resolveProductionLine` is now the one-line case.
+- **Test:** a tier-only edit (front print 40 → 90 kr) is interleaved before each of the first 10 D1 calls of a two-line checkout. Both lines must be priced 140 or both 190, never one of each, and both outcomes must occur.
+- **Mutation-checked:** per-line batches fail with `interleaved at call 5: 14000/19000`.
+
+**[P3] `pod_too_large` could strand an imported product.** File: `src/catalog/admin-catalog.ts`.
+- **Fix:** the price-edit gate now runs only when the product stays live AND the price goes DOWN. A raise can only move away from the floor, and a product that is not live is gated in full by its next publish.
+- Refusals carry a `message`. For `pod_too_large` it names the exit: "…Unpublish it and reduce its active variants to 200 or fewer, then change it and publish again." The mapping routes (`src/routes/pod-admin.ts`) render it.
+- `src/app.ts`'s `adminResultResponse` still prints a fixed sentence. **Consolidation patch:** `message: result.message ?? "Product cannot be published"`.
+- **Test** on a live product with 201 variants:
+  - a cut is refused with the code and the exit message;
+  - a raise is accepted;
+  - after unpublish, a cut and a mapping post are accepted;
+  - the publish gate still refuses `pod_too_large`.
+- The earlier PRISGOLV/base-price tests were updated: a non-live PATCH is now accepted and the publish judges it; live cuts are refused; raises pass.
+
+**[P3] `createMapping` echoed the caller's clock.** File: `src/pod/pod-mappings.ts`.
+- **Fix:** the response's `updatedAt` is the value the row stores. On a re-activation that is `max(now, created_at)`.
+- **Test** (`test/screening.test.ts`): a mapping stamped by a clock 60 s ahead is re-activated, and the response equals the stored `updated_at`.
+
+**Counts:**
+- CP2-C tests: 104 → **108** (pod-publish 25 → 29; screening 53, with one assertion added; pod-mappings 26).
+- `npm run check`: **green**. Types are up to date, `tsc` is clean, and the suite reports `Test Files 46 passed (46)`, `Tests 1660 passed (1660)`.

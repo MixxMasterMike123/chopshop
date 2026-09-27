@@ -86,7 +86,7 @@ describe("the POD publish gate", () => {
     const [mapping] = await listMappings(env.DB, ADMIN, "gate-unmapped");
     await deleteMapping(env.DB, ADMIN, mapping?.mappingId ?? "", Date.now());
 
-    await expect(publishAdminProduct(env.DB, ADMIN, "gate-unmapped", Date.now())).resolves.toEqual({
+    await expect(publishAdminProduct(env.DB, ADMIN, "gate-unmapped", Date.now())).resolves.toMatchObject({
       code: "pod_mapping_missing",
       status: "refused",
     });
@@ -97,16 +97,20 @@ describe("the POD publish gate", () => {
     // front only: 60 + 40 + 40 = 140 kr ex → floor 196 kr.
     await seedProduct(TENANT, { productId: "gate-floor", priceMinor: 19_500 });
     expect((await map("gate-floor", "art-front", ["front"])).status).toBe("ok");
-    await expect(publishAdminProduct(env.DB, ADMIN, "gate-floor", Date.now())).resolves.toEqual({
+    await expect(publishAdminProduct(env.DB, ADMIN, "gate-floor", Date.now())).resolves.toMatchObject({
       code: "price_below_floor",
       status: "refused",
     });
 
-    // A PATCH may not dodge it either (ProductForm's rule): still refused…
+    // Not live: a PATCH is not gated (the next publish judges it in full)…
     await expect(
       updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_599 }, Date.now()),
-    ).resolves.toEqual({ code: "price_below_floor", status: "refused" });
-    // …while the floor itself is a legal price.
+    ).resolves.toMatchObject({ status: "ok" });
+    await expect(publishAdminProduct(env.DB, ADMIN, "gate-floor", Date.now())).resolves.toMatchObject({
+      code: "price_below_floor",
+      status: "refused",
+    });
+    // …and the floor itself is a legal price.
     await expect(
       updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_600 }, Date.now()),
     ).resolves.toMatchObject({ status: "ok" });
@@ -114,6 +118,22 @@ describe("the POD publish gate", () => {
       product: { isPod: true, priceMinor: 19_600, screeningStatus: "advisory" },
       status: "ok",
     });
+
+    // Live: lowering it under the floor is refused (ProductForm's rule), with
+    // the code and a sentence saying why; raising is always allowed.
+    await expect(
+      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_599 }, Date.now()),
+    ).resolves.toEqual({
+      code: "price_below_floor",
+      message: "The price is below the break-even floor for this production cost.",
+      status: "refused",
+    });
+    await expect(
+      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_700 }, Date.now()),
+    ).resolves.toMatchObject({ status: "ok" });
+    await expect(
+      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_600 }, Date.now()),
+    ).resolves.toMatchObject({ status: "ok" });
   });
 
   it("a mapping edit on a LIVE product may not push its floor over the price", async () => {
@@ -454,7 +474,7 @@ describe("checkout freezes the production snapshot", () => {
       createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "snap-tee", quantity: 1 }]), Date.now()),
     ).resolves.toEqual({ status: "invalid_items" });
     expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "snap-tee")).toBeNull();
-    await expect(publishAdminProduct(env.DB, ADMIN, "snap-tee", Date.now())).resolves.toEqual({
+    await expect(publishAdminProduct(env.DB, ADMIN, "snap-tee", Date.now())).resolves.toMatchObject({
       code: "pod_mapping_suspended",
       status: "refused",
     });
@@ -550,13 +570,18 @@ describe("the base price of a variant product is floor-checked whenever it is se
     // Not live: the mapping is accepted, and the publish gate refuses instead.
     await unpublishAdminProduct(env.DB, ADMIN, "base-low", Date.now());
     expect((await map("base-low", "art-back", ["front"], { sku: TEE_S })).status).toBe("ok");
-    await expect(publishAdminProduct(env.DB, ADMIN, "base-low", Date.now())).resolves.toEqual({
+    await expect(publishAdminProduct(env.DB, ADMIN, "base-low", Date.now())).resolves.toMatchObject({
       code: "price_below_floor",
       status: "refused",
     });
+    // Not live: the PATCH is accepted and the publish judges it.
     await expect(
       updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 15_000 }, Date.now()),
-    ).resolves.toEqual({ code: "price_below_floor", status: "refused" });
+    ).resolves.toMatchObject({ status: "ok" });
+    await expect(publishAdminProduct(env.DB, ADMIN, "base-low", Date.now())).resolves.toMatchObject({
+      code: "price_below_floor",
+      status: "refused",
+    });
 
     // The floor itself is a legal base price…
     expect((await updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 19_600 }, Date.now())).status).toBe("ok");
@@ -635,7 +660,7 @@ describe("large products are read completely, or refused — never truncated", (
   });
 
   it("the publish gate prices EVERY variant against its COMPLETE set (the 101st, front+back)", async () => {
-    await expect(publishAdminProduct(env.DB, ADMIN, "many", Date.now())).resolves.toEqual({
+    await expect(publishAdminProduct(env.DB, ADMIN, "many", Date.now())).resolves.toMatchObject({
       code: "price_below_floor",
       status: "refused",
     });
@@ -672,7 +697,7 @@ describe("large products are read completely, or refused — never truncated", (
         variantId: `too-many-v${String(index).padStart(3, "0")}`,
       })),
     });
-    await expect(publishAdminProduct(env.DB, ADMIN, "too-many", Date.now())).resolves.toEqual({
+    await expect(publishAdminProduct(env.DB, ADMIN, "too-many", Date.now())).resolves.toMatchObject({
       code: "pod_too_large",
       status: "refused",
     });
@@ -705,13 +730,29 @@ describe("pod_too_large on a live product is refused by every caller of the gate
     expect(await listMappings(env.DB, ADMIN, "big-live")).toEqual([]);
   });
 
-  it("a price edit is refused with the code", async () => {
-    await expect(
-      updateAdminProduct(env.DB, ADMIN, "big-live", { priceMinor: 100 }, Date.now()),
-    ).resolves.toEqual({ code: "pod_too_large", status: "refused" });
+  it("a price CUT is refused with the code and a message naming the exit", async () => {
+    const result = await updateAdminProduct(env.DB, ADMIN, "big-live", { priceMinor: 100 }, Date.now());
+    expect(result).toMatchObject({ code: "pod_too_large", status: "refused" });
+    expect(result.status === "refused" ? result.message : "").toMatch(/Unpublish it and reduce its active variants to 200 or fewer/);
     const row = await env.DB.prepare("SELECT b2c_price_minor FROM products WHERE product_id = 'big-live'")
       .first<{ b2c_price_minor: number }>();
     expect(row?.b2c_price_minor).toBe(39_900);
+  });
+
+  it("is never stranded: a price RAISE is allowed live, and anything is allowed once unpublished", async () => {
+    await expect(
+      updateAdminProduct(env.DB, ADMIN, "big-live", { priceMinor: 44_900 }, Date.now()),
+    ).resolves.toMatchObject({ product: { priceMinor: 44_900 }, status: "ok" });
+    await unpublishAdminProduct(env.DB, ADMIN, "big-live", Date.now());
+    await expect(
+      updateAdminProduct(env.DB, ADMIN, "big-live", { priceMinor: 100 }, Date.now()),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect((await map("big-live", "art-front", ["front"])).status).toBe("ok");
+    // …and the publish gate still will not put it live half-checked.
+    await expect(publishAdminProduct(env.DB, ADMIN, "big-live", Date.now())).resolves.toMatchObject({
+      code: "pod_too_large",
+      status: "refused",
+    });
   });
 });
 
@@ -812,6 +853,152 @@ describe("a routing edit at ANY point of a checkout never yields a partial produ
     // Both sides of the race were actually exercised.
     expect(outcomes).toContain("refused");
     expect(outcomes).toContain("complete");
+    await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
+  });
+});
+
+// ── Reviewer P2: no way around the floor through a suspended mapping ──────
+
+async function setLivePrice(productId: string, priceMinor: number): Promise<void> {
+  // A price that reached the row some other way (an import, legacy data).
+  await env.DB.batch([
+    env.DB.prepare("UPDATE products SET b2c_price_minor = ? WHERE product_id = ?").bind(priceMinor, productId),
+    env.DB.prepare("UPDATE product_publications SET public_price_minor = ? WHERE product_id = ?").bind(
+      priceMinor,
+      productId,
+    ),
+  ]);
+}
+
+describe("the price floor holds while a mapping is suspended, and when a mapping is deleted", () => {
+  it("ported regression: a price cut during a suspension is refused; the delete re-checks the floor", async () => {
+    await seedProduct(TENANT, { priceMinor: 39_900, productId: "fb" });
+    expect((await map("fb", "art-front", ["front"])).status).toBe("ok");
+    expect((await map("fb", "art-back", ["back"])).status).toBe("ok");
+    expect((await publishAdminProduct(env.DB, ADMIN, "fb", Date.now())).status).toBe("ok");
+    // Front+back floor 250 kr.
+    await expect(updateAdminProduct(env.DB, ADMIN, "fb", { priceMinor: 19_000 }, Date.now())).resolves.toMatchObject({
+      code: "price_below_floor",
+      status: "refused",
+    });
+
+    const noBack = testPrinter();
+    delete noBack.capabilities.models["2000"]?.printAreasMm.back;
+    await replacePrinters(env.DB, PLATFORM, [noBack], Date.now());
+
+    // THE BYPASS: the gate stopped at pod_mapping_suspended without pricing
+    // anything, and the cut was treated as a pass. Now: refused, with the code.
+    await expect(updateAdminProduct(env.DB, ADMIN, "fb", { priceMinor: 19_000 }, Date.now())).resolves.toMatchObject({
+      code: "pod_mapping_suspended",
+      status: "refused",
+    });
+
+    // A price under the front-only floor (196 kr) that got there another way:
+    // deleting the suspended back would return the product to the storefront
+    // at 190 kr — refused.
+    await setLivePrice("fb", 19_000);
+    const back = (await listMappings(env.DB, ADMIN, "fb")).find((m) => m.status === "suspended");
+    expect(back).toBeDefined();
+    await expect(deleteMapping(env.DB, ADMIN, back?.mappingId ?? "", Date.now())).resolves.toEqual({
+      code: "price_below_floor",
+      status: "refused",
+    });
+    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "fb")).toBeNull();
+    await expect(
+      createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "fb", quantity: 10 }]), Date.now(), {
+        dispatchTarget: "fake-printer",
+      }),
+    ).resolves.toEqual({ status: "invalid_items" });
+
+    // A raise is always allowed, even now; then the delete passes the floor.
+    await expect(updateAdminProduct(env.DB, ADMIN, "fb", { priceMinor: 39_900 }, Date.now())).resolves.toMatchObject({
+      status: "ok",
+    });
+    await expect(deleteMapping(env.DB, ADMIN, back?.mappingId ?? "", Date.now())).resolves.toEqual({ status: "ok" });
+    const sold = await createCheckout(
+      env.DB,
+      TENANT_CONTEXT,
+      checkoutInput([{ productId: "fb", quantity: 10 }]),
+      Date.now(),
+      { dispatchTarget: "fake-printer" },
+    );
+    expect(sold.status).toBe("ok");
+    const snapshot = (sold.status === "ok" ? await snapshotOf(sold.checkout.checkoutId) : null) as {
+      lines: Array<{ productionCostMinor: number }>;
+    };
+    expect(snapshot.lines[0]?.productionCostMinor).toBe(14_000 * 10);
+    await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
+  });
+
+  it("deleting a variant's own set may not drop it onto a costlier product-level set under its price", async () => {
+    // Independent of the previous case's printer state.
+    await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
+    await seedProduct(TENANT, {
+      priceMinor: 39_900,
+      productId: "fallback",
+      variants: [{ priceMinor: 20_000, sku: "FALLBACK-M", variantId: "fallback-m" }],
+    });
+    // The variant's own set: front only on TEE_M (floor 196 kr ≤ its 200 kr).
+    expect((await map("fallback", "art-front", ["front"], { sku: TEE_M, variantId: "fallback-m" })).status).toBe("ok");
+    // The product-level set: front+back on TEE_S (floor 250 kr).
+    expect((await map("fallback", "art-front", ["front"])).status).toBe("ok");
+    expect((await map("fallback", "art-back", ["back"])).status).toBe("ok");
+    expect((await publishAdminProduct(env.DB, ADMIN, "fallback", Date.now())).status).toBe("ok");
+
+    const own = (await listMappings(env.DB, ADMIN, "fallback")).find((m) => m.variantId === "fallback-m");
+    await expect(deleteMapping(env.DB, ADMIN, own?.mappingId ?? "", Date.now())).resolves.toEqual({
+      code: "price_below_floor",
+      status: "refused",
+    });
+    expect((await listMappings(env.DB, ADMIN, "fallback")).find((m) => m.variantId === "fallback-m")?.status).toBe(
+      "active",
+    );
+  });
+});
+
+// ── Reviewer P3: one snapshot for every line of a cart ─────────────────────
+
+describe("a tier-only routing edit at ANY point of a two-line checkout never mixes price lists", () => {
+  it("both lines priced under the old tiers, or both under the new — never one of each", async () => {
+    for (const productId of ["mix-a", "mix-b"]) {
+      await seedProduct(TENANT, { priceMinor: 39_900, productId });
+      expect((await map(productId, "art-front", ["front"])).status).toBe("ok");
+      expect((await publishAdminProduct(env.DB, ADMIN, productId, Date.now())).status).toBe("ok");
+    }
+    const pricier = testPrinter();
+    const teeS = pricier.tiers.find((tier) => tier.sku === TEE_S);
+    if (teeS !== undefined) {
+      teeS.printCostsMinor.front = 9_000;
+    }
+    const seen = new Set<string>();
+
+    for (let atCall = 1; atCall <= 10; atCall += 1) {
+      await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
+      const racing = interleavedDb(atCall, () => replacePrinters(env.DB, PLATFORM, [pricier], Date.now()));
+      const result = await createCheckout(
+        racing,
+        TENANT_CONTEXT,
+        checkoutInput([
+          { productId: "mix-a", quantity: 1 },
+          { productId: "mix-b", quantity: 1 },
+        ]),
+        Date.now(),
+      );
+      if (result.status !== "ok") {
+        seen.add("refused");
+        continue;
+      }
+      const snapshot = (await snapshotOf(result.checkout.checkoutId)) as {
+        lines: Array<{ productionCostMinor: number }>;
+      };
+      const costs = snapshot.lines.map((line) => line.productionCostMinor);
+      // 60 + 40 + 40 = 140 kr under the old tier, 60 + 90 + 40 = 190 kr under the new.
+      expect([[14_000, 14_000], [19_000, 19_000]], `interleaved at call ${atCall}: ${costs.join("/")}`).toContainEqual(costs);
+      seen.add(costs[0] === 14_000 ? "old" : "new");
+    }
+
+    expect(seen).toContain("old");
+    expect(seen).toContain("new");
     await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
   });
 });

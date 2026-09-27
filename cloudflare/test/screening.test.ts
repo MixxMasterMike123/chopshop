@@ -363,7 +363,7 @@ describe("D8 on the live publish path", () => {
     const taken = await decideByPlatform(env.DB, PLATFORM, "d8-first", "blocked", Date.now());
     expect(taken).toMatchObject({ reason: "takedown", status: "blocked", takenDown: true });
     expect(await getPublicProduct(env.DB, tenantContext, "d8-first")).toBeNull();
-    expect(await publishAdminProduct(env.DB, admin, "d8-first", Date.now())).toEqual({
+    expect(await publishAdminProduct(env.DB, admin, "d8-first", Date.now())).toMatchObject({
       code: "taken_down",
       status: "refused",
     });
@@ -626,5 +626,8 @@ describe("the retry stamps with a fresh clock, clamped to the row it writes", ()
       .bind(mappingId)
       .first<{ created_at: string; updated_at: string }>();
     expect(row !== null && row.updated_at >= row.created_at).toBe(true);
+    // The response describes the row as stored (the clamped stamp), not the
+    // caller's clock (reviewer P3).
+    expect(again.status === "ok" ? again.mapping.updatedAt : "").toBe(row?.updated_at);
   });
 });

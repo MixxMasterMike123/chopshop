@@ -12,6 +12,7 @@ import {
   deleteMapping,
   listMappings,
   parseCreateMappingInput,
+  podRefusalMessage,
   quoteForProduct,
 } from "../pod/pod-mappings";
 import { listTenantPrinters } from "../pod/printers";
@@ -130,10 +131,20 @@ export async function handleAdminPodProductRoute(
       return routeNotFoundResponse();
     }
     if (result.status === "conflict") {
-      return errorResponse(409, result.code, "Request conflicts with the current mapping state");
+      return errorResponse(
+        409,
+        result.code,
+        result.code === "pod_too_large"
+          ? podRefusalMessage(result.code)
+          : "Request conflicts with the current mapping state",
+      );
     }
     if (result.status === "refused") {
-      return errorResponse(422, result.code, "Mapping cannot be created");
+      return errorResponse(
+        422,
+        result.code,
+        result.code === "price_below_floor" ? podRefusalMessage(result.code) : "Mapping cannot be created",
+      );
     }
     return jsonResponse(
       {
@@ -151,6 +162,9 @@ export async function handleAdminPodProductRoute(
     return routeNotFoundResponse();
   }
   const deleted = await deleteMapping(env.DB, principal, mappingId, now);
+  if (deleted.status === "refused") {
+    return errorResponse(422, deleted.code, podRefusalMessage(deleted.code));
+  }
   if (deleted.status === "conflict") {
     return errorResponse(409, "conflict", "Request conflicts with the current mapping state");
   }

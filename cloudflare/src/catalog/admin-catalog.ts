@@ -9,7 +9,7 @@ import {
   normalizeShippingRates,
   toShippingRatesWire,
 } from "../commerce/shipping";
-import { evaluatePodGate } from "../pod/pod-mappings";
+import { evaluatePodGate, podRefusalMessage } from "../pod/pod-mappings";
 import type { ScreeningStatus } from "./screening-core";
 import {
   isScreeningConflict,
@@ -67,8 +67,17 @@ export type AdminRefusalCode =
 
 export type AdminCatalogResult =
   | { product: AdminProduct; status: "ok" }
-  | { code: AdminRefusalCode; status: "refused" }
+  /**
+   * `message` says what to do next (podRefusalMessage) — for pod_too_large it
+   * names the exit (unpublish + reduce variants). src/app.ts renders a fixed
+   * sentence today; the consolidation should prefer this one.
+   */
+  | { code: AdminRefusalCode; message: string; status: "refused" }
   | { status: "conflict" | "invalid" | "not_found" };
+
+function refused(code: AdminRefusalCode): AdminCatalogResult {
+  return { code, message: podRefusalMessage(code), status: "refused" };
+}
 
 export interface CreateProductInput {
   allowPickup?: boolean;
@@ -662,18 +671,31 @@ async function updateAdminProductOnce(
     .first<{ published: number }>();
 
   // PRISGOLV (src/wagons/pod-wagon/podPricing.js, enforced by ProductForm on
-  // every save of a live POD product): a price edit may not put a POD product
-  // under its break-even floor. Only answerable once the product is quotable —
-  // a POD product without a priced mapping has no floor yet, and the publish
-  // gate refuses it on its own.
-  if (input.priceMinor !== undefined && existing.is_pod === 1) {
+  // every save of a live POD product): a price edit may not put a LIVE POD
+  // product under its break-even floor.
+  //
+  //   - Only a LOWERED price on a product that stays live is gated. A raise
+  //     can only move a price away from the floor, and a product that is not
+  //     live is gated in full by the next publish — so neither is refused,
+  //     and an imported product past the gate's size is never stranded (it
+  //     can always be unpublished, re-priced upward, and re-mapped).
+  //   - The gate must PASS: every non-null answer refuses (reviewer P2). A
+  //     gate that stopped early — a suspended mapping, a unit it could not
+  //     quote, too many variants — has not shown the new price clears the
+  //     floor, and treating that as a pass let a live product be re-priced
+  //     under PRISGOLV while one of its mappings was suspended.
+  const liveAfter = publication?.published === 1 && next.status === "active";
+  if (
+    input.priceMinor !== undefined &&
+    existing.is_pod === 1 &&
+    liveAfter &&
+    input.priceMinor < existing.b2c_price_minor
+  ) {
     const failure = await evaluatePodGate(db, principal.tenantId, productId, {
       productPriceMinor: input.priceMinor,
     });
-    // pod_too_large: the gate could not price every unit, so it cannot
-    // vouch for the new price either — refused, never waved through.
-    if (failure === "price_below_floor" || failure === "pod_too_large") {
-      return { code: failure, status: "refused" };
+    if (failure !== null) {
+      return refused(failure);
     }
   }
 
@@ -737,7 +759,6 @@ async function updateAdminProductOnce(
   // through this edit is re-screened from the text this batch writes, in this
   // batch; one that leaves the storefront (archived/draft) is not live, and a
   // draft harms nobody (the Firebase `isLive` rule).
-  const liveAfter = publication?.published === 1 && next.status === "active";
   let screeningStatus = current.screeningStatus;
   if (liveAfter) {
     const screening = await screeningStatementsFor(db, {
@@ -811,12 +832,12 @@ async function publishAdminProductOnce(
     return { status: "conflict" };
   }
   if (existing.takedown_at !== null) {
-    return { code: "taken_down", status: "refused" };
+    return refused("taken_down");
   }
   if (existing.is_pod === 1) {
     const failure = await evaluatePodGate(db, principal.tenantId, productId);
     if (failure !== null) {
-      return { code: failure, status: "refused" };
+      return refused(failure);
     }
   }
 

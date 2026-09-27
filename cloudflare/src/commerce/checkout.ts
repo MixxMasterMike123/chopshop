@@ -3,7 +3,7 @@ import {
   ELIGIBLE_PRODUCTS_FROM,
   PUBLIC_ELIGIBILITY_PREDICATE,
 } from "../catalog/eligibility";
-import { resolveProductionLine } from "../pod/pod-mappings";
+import { resolveProductionLines } from "../pod/pod-mappings";
 import { withholdMinorFor } from "../pod/pod-quote";
 import type { ResolvedDiscount } from "./discount-codes";
 import {
@@ -900,7 +900,7 @@ export interface CheckoutOptions {
  *     totals: { productionCostMinor, withholdMinor } }
  *
  * PRODUCTION ELIGIBILITY IS RECOMPUTED HERE FROM CURRENT FACTS (PLAN §2.3) —
- * resolveProductionLine re-proves every POD line's mapping, printer, capability,
+ * resolveProductionLines re-proves every POD line's mapping, printer, capability,
  * artwork and price — and ANY miss refuses the whole checkout: a line that
  * cannot be produced must not be paid for.
  *
@@ -936,21 +936,27 @@ async function freezeProductionSnapshot(
   let shipping: number | null = null;
   let productionCostMinor = 0;
   const snapshotLines = [];
-  for (const line of podLines) {
-    const production = await resolveProductionLine(
-      db,
-      tenant.tenantId,
-      { productId: line.productId, quantity: line.quantity, variantId: line.variantId },
-      dispatchTarget ?? null,
-    );
+  // ALL POD lines in ONE D1 batch: one snapshot of mappings, printers and
+  // tiers for the whole cart, so a routing edit cannot land between two lines
+  // and freeze a price list that mixes the old and the new.
+  const productions = await resolveProductionLines(
+    db,
+    tenant.tenantId,
+    podLines.map((line) => ({
+      productId: line.productId,
+      quantity: line.quantity,
+      variantId: line.variantId,
+    })),
+    dispatchTarget ?? null,
+  );
+  for (const [index, line] of podLines.entries()) {
+    const production = productions[index] ?? null;
     if (
       production === null ||
       !SNAPSHOT_PRINTERS.includes(production.printerId) ||
       // A4: one order → one printer (one parcel, one submission target).
       (printer !== null && printer !== production.printerId) ||
-      // Each line is read in its own consistent snapshot; lines that saw the
-      // printer's parcel price differently straddled a routing edit — refuse
-      // rather than freeze a mixture (the buyer's retry reads one state).
+      // One snapshot, so the lines agree by construction; kept as a guard.
       (shipping !== null && shipping !== production.shippingCostMinor) ||
       production.currency !== currency
     ) {
