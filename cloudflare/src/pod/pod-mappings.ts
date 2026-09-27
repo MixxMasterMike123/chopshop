@@ -7,10 +7,10 @@ import {
   screeningStatementsFor,
   withScreeningRetry,
 } from "../catalog/screening";
-import type { PodQuote } from "./pod-quote";
-import { priceFloorMinor, quotePodCost } from "./pod-quote";
-import type { PrintArea, PrintSlot, Printer } from "./printers";
-import { loadUsablePrinter, PRINT_SLOTS, slotFrame } from "./printers";
+import type { PodQuote, TierFacts } from "./pod-quote";
+import { priceFloorMinor, quoteFromTier, quotePodCost } from "./pod-quote";
+import type { PrintArea, PrintSlot, Printer, PrinterRow } from "./printers";
+import { loadUsablePrinter, PRINT_SLOTS, slotFrame, toPrinter } from "./printers";
 
 /**
  * POD mappings — "product P prints artwork A on slots S of printer X's SKU K".
@@ -647,7 +647,8 @@ export async function createMapping(
   now: number,
 ): Promise<CreateMappingResult> {
   return withScreeningRetry<CreateMappingResult>(
-    () => createMappingOnce(db, principal, input, now),
+    now,
+    (attemptNow) => createMappingOnce(db, principal, input, attemptNow),
     () => ({ code: "conflict", status: "conflict" }),
   );
 }
@@ -795,6 +796,12 @@ async function createMappingOnce(
     if (failure === "price_below_floor") {
       return { code: "price_below_floor", status: "refused" };
     }
+    // The gate could not price every unit of this live product (more
+    // variants than it checks completely), so it cannot vouch that the new
+    // cost keeps them above the floor: refused, never treated as a pass.
+    if (failure === "pod_too_large") {
+      return { code: "pod_too_large", status: "conflict" };
+    }
   }
 
   const statements: D1PreparedStatement[] = [
@@ -821,7 +828,8 @@ async function createMappingOnce(
       : db
           .prepare(
             `UPDATE pod_mappings
-             SET status = 'active', suspended_reason = NULL, slots_json = ?, updated_at = ?
+             SET status = 'active', suspended_reason = NULL, slots_json = ?,
+                 updated_at = max(?, created_at)
              WHERE tenant_id = ? AND id = ?`,
           )
           .bind(JSON.stringify(slots), iso, tenantId, mapping.mappingId),
@@ -922,7 +930,8 @@ export async function deleteMapping(
   now: number,
 ): Promise<{ status: "conflict" | "not_found" | "ok" }> {
   return withScreeningRetry<{ status: "conflict" | "not_found" | "ok" }>(
-    () => deleteMappingOnce(db, principal, mappingId, now),
+    now,
+    (attemptNow) => deleteMappingOnce(db, principal, mappingId, attemptNow),
     () => ({ status: "conflict" }),
   );
 }
@@ -958,7 +967,8 @@ async function deleteMappingOnce(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `UPDATE pod_mappings SET status = 'inactive', suspended_reason = NULL, updated_at = ?
+        `UPDATE pod_mappings SET status = 'inactive', suspended_reason = NULL,
+           updated_at = max(?, created_at)
          WHERE tenant_id = ? AND id = ?`,
       )
       .bind(iso, tenantId, mappingId),
@@ -1014,6 +1024,8 @@ export interface ProductionLine {
   printFiles: PrintFile[];
   printerId: string;
   productionCostMinor: number;
+  /** The printer's flat per-order parcel (ex VAT), read in the same snapshot. */
+  shippingCostMinor: number;
   sku: string;
 }
 
@@ -1051,24 +1063,30 @@ export async function resolveProductionLine(
   item: { productId: string; quantity: number; variantId: string | null },
   dispatchTarget: string | null,
 ): Promise<ProductionLine | null> {
-  // Any suspended mapping: the product as designed cannot be produced
-  // (evaluatePodGate's rule; the public predicate hides it too).
-  const suspended = await db
-    .prepare(
-      `SELECT 1 AS present FROM pod_mappings
-       WHERE tenant_id = ? AND product_id = ? AND status = 'suspended'
-       LIMIT 1`,
-    )
-    .bind(tenantId, item.productId)
-    .first();
-  if (suspended !== null) {
-    return null;
-  }
-
-  // LEFT JOIN: a mapping whose artwork row were missing must surface (and be
-  // refused below), not vanish from the set and leave a smaller one behind.
-  const scopeRows = async (variantId: string | null): Promise<ProductionRow[]> => {
-    const result = await db
+  // ── ONE consistent read (Codex CP2 P1) ─────────────────────────────────────
+  // The mappings the line can use, every suspended mapping of the product,
+  // the printer(s) and the price tiers behind them are read in ONE D1 batch —
+  // one transaction, one snapshot. Separate reads let a routing edit land
+  // between "is anything suspended?" and "which mappings are active?": the
+  // edit suspends the back mapping, the back vanishes from the active set, and
+  // a front+back garment freezes front-only. Inside one snapshot the edit is
+  // either wholly before (suspended row seen → refused) or wholly after
+  // (complete set, validated against the capabilities and prices of the same
+  // moment) — never half.
+  const scope = `mapping.tenant_id = ?
+         AND mapping.product_id = ?
+         AND (
+           mapping.status = 'suspended'
+           OR (mapping.status = 'active'
+               AND (mapping.variant_id IS ? OR mapping.variant_id IS NULL))
+         )`;
+  const scopeBinds = [tenantId, item.productId, item.variantId] as const;
+  // Suspended rows sort first, so a page can never hide one; without any, the
+  // two candidate scopes hold at most 2 × MAX_SCOPE_MAPPINGS active rows (one
+  // per slot each) and a fuller page is a broken invariant.
+  const pageSize = 2 * MAX_SCOPE_MAPPINGS;
+  const [mappingResult, printerResult, tierResult] = await db.batch<unknown>([
+    db
       .prepare(
         `SELECT mapping.id, mapping.product_id, mapping.variant_id, mapping.artwork_id,
                 mapping.printer_id, mapping.sku, mapping.slots_json, mapping.status,
@@ -1079,21 +1097,51 @@ export async function resolveProductionLine(
          LEFT JOIN pod_artwork AS artwork
            ON artwork.artwork_id = mapping.artwork_id
           AND artwork.tenant_id = mapping.tenant_id
-         WHERE mapping.tenant_id = ?
-           AND mapping.product_id = ?
-           AND mapping.status = 'active'
-           AND mapping.variant_id IS ?
-         ORDER BY mapping.created_at, mapping.id
-         LIMIT ${MAX_SCOPE_MAPPINGS + 1}`,
+         WHERE ${scope}
+         ORDER BY (mapping.status = 'suspended') DESC, mapping.created_at, mapping.id
+         LIMIT ${pageSize + 1}`,
       )
-      .bind(tenantId, item.productId, variantId)
-      .all<ProductionRow>();
-    return result.results;
-  };
-  let scoped = item.variantId === null ? [] : await scopeRows(item.variantId);
-  if (scoped.length === 0) {
-    scoped = await scopeRows(null);
+      .bind(...scopeBinds),
+    db
+      .prepare(
+        `SELECT id, tenant_id, type, name, status, currency, shipping_cost_minor,
+                capabilities_json
+         FROM printers
+         WHERE id IN (
+           SELECT mapping.printer_id FROM pod_mappings AS mapping
+           WHERE ${scope} AND mapping.status = 'active'
+         )`,
+      )
+      .bind(...scopeBinds),
+    db
+      .prepare(
+        `SELECT tier.printer_id, tier.sku, tier.blank_cost_minor, tier.print_costs_json
+         FROM printer_sku_tiers AS tier
+         WHERE EXISTS (
+           SELECT 1 FROM pod_mappings AS mapping
+           WHERE ${scope}
+             AND mapping.status = 'active'
+             AND mapping.printer_id = tier.printer_id
+             AND mapping.sku = tier.sku
+         )`,
+      )
+      .bind(...scopeBinds),
+  ]);
+  const rowsRead = (mappingResult?.results ?? []) as ProductionRow[];
+  const printerRows = (printerResult?.results ?? []) as PrinterRow[];
+  const tierRows = (tierResult?.results ?? []) as Array<
+    Omit<TierFacts, "currency"> & { printer_id: string; sku: string }
+  >;
+
+  // Any suspended mapping: the product as designed cannot be produced
+  // (evaluatePodGate's rule; the public predicate hides it too).
+  if (rowsRead.length > pageSize || rowsRead.some((row) => row.status === "suspended")) {
+    return null;
   }
+  // The variant's own set when it has one, else the product-level set.
+  const variantRows =
+    item.variantId === null ? [] : rowsRead.filter((row) => row.variant_id === item.variantId);
+  const scoped = variantRows.length > 0 ? variantRows : rowsRead.filter((row) => row.variant_id === null);
   if (scoped.length === 0 || scoped.length > MAX_SCOPE_MAPPINGS) {
     return null;
   }
@@ -1107,8 +1155,14 @@ export async function resolveProductionLine(
     return null;
   }
 
-  const printer = await loadUsablePrinter(db, tenantId, routing.printerId);
-  if (printer === null || printer.capabilities.skus[routing.sku] === undefined) {
+  const printerRow = printerRows.find((row) => row.id === routing.printerId);
+  const printer = printerRow === undefined ? null : toPrinter(printerRow);
+  if (
+    printer === null ||
+    printer.status !== "active" ||
+    (printer.tenantId !== null && printer.tenantId !== tenantId) ||
+    printer.capabilities.skus[routing.sku] === undefined
+  ) {
     return null;
   }
 
@@ -1141,12 +1195,16 @@ export async function resolveProductionLine(
   }
   printFiles.sort((a, b) => (SLOT_ORDER.get(a.slot) ?? 0) - (SLOT_ORDER.get(b.slot) ?? 0));
 
-  const quote = await quotePodCost(db, {
-    printerId: routing.printerId,
-    quantity: item.quantity,
-    sku: routing.sku,
-    slots: printFiles.map((file) => file.slot),
-  });
+  const tier = tierRows.find(
+    (row) => row.printer_id === routing.printerId && row.sku === routing.sku,
+  );
+  const quote =
+    tier === undefined
+      ? null
+      : quoteFromTier(
+          { ...tier, currency: printer.currency },
+          { quantity: item.quantity, slots: printFiles.map((file) => file.slot) },
+        );
   if (quote === null) {
     return null;
   }
@@ -1156,17 +1214,9 @@ export async function resolveProductionLine(
     printFiles,
     printerId: routing.printerId,
     productionCostMinor: quote.productionCostMinor,
+    shippingCostMinor: printer.shippingCostMinor,
     sku: routing.sku,
   };
-}
-
-/** The printer's flat per-order parcel cost (ex VAT) — platform-only. */
-export async function printerShippingMinor(db: D1Database, printerId: string): Promise<number | null> {
-  const row = await db
-    .prepare("SELECT shipping_cost_minor FROM printers WHERE id = ? AND status = 'active' LIMIT 1")
-    .bind(printerId)
-    .first<{ shipping_cost_minor: number }>();
-  return row === null ? null : row.shipping_cost_minor;
 }
 
 // ── storefront: what a buyer may see of a POD product ──────────────────────

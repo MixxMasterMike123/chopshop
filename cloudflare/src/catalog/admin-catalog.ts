@@ -599,7 +599,8 @@ export async function updateAdminProduct(
   now: number,
 ): Promise<AdminCatalogResult> {
   return withScreeningRetry<AdminCatalogResult>(
-    () => updateAdminProductOnce(db, principal, productId, input, now),
+    now,
+    (attemptNow) => updateAdminProductOnce(db, principal, productId, input, attemptNow),
     () => ({ status: "conflict" }),
   );
 }
@@ -669,8 +670,10 @@ async function updateAdminProductOnce(
     const failure = await evaluatePodGate(db, principal.tenantId, productId, {
       productPriceMinor: input.priceMinor,
     });
-    if (failure === "price_below_floor") {
-      return { code: "price_below_floor", status: "refused" };
+    // pod_too_large: the gate could not price every unit, so it cannot
+    // vouch for the new price either — refused, never waved through.
+    if (failure === "price_below_floor" || failure === "pod_too_large") {
+      return { code: failure, status: "refused" };
     }
   }
 
@@ -786,7 +789,8 @@ export async function publishAdminProduct(
   now: number,
 ): Promise<AdminCatalogResult> {
   return withScreeningRetry<AdminCatalogResult>(
-    () => publishAdminProductOnce(db, principal, productId, now),
+    now,
+    (attemptNow) => publishAdminProductOnce(db, principal, productId, attemptNow),
     () => ({ status: "conflict" }),
   );
 }

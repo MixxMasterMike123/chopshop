@@ -3,10 +3,7 @@ import {
   ELIGIBLE_PRODUCTS_FROM,
   PUBLIC_ELIGIBILITY_PREDICATE,
 } from "../catalog/eligibility";
-import {
-  printerShippingMinor,
-  resolveProductionLine,
-} from "../pod/pod-mappings";
+import { resolveProductionLine } from "../pod/pod-mappings";
 import { withholdMinorFor } from "../pod/pod-quote";
 import type { ResolvedDiscount } from "./discount-codes";
 import {
@@ -936,6 +933,7 @@ async function freezeProductionSnapshot(
   }
 
   let printer: string | null = null;
+  let shipping: number | null = null;
   let productionCostMinor = 0;
   const snapshotLines = [];
   for (const line of podLines) {
@@ -950,11 +948,16 @@ async function freezeProductionSnapshot(
       !SNAPSHOT_PRINTERS.includes(production.printerId) ||
       // A4: one order → one printer (one parcel, one submission target).
       (printer !== null && printer !== production.printerId) ||
+      // Each line is read in its own consistent snapshot; lines that saw the
+      // printer's parcel price differently straddled a routing edit — refuse
+      // rather than freeze a mixture (the buyer's retry reads one state).
+      (shipping !== null && shipping !== production.shippingCostMinor) ||
       production.currency !== currency
     ) {
       return null;
     }
     printer = production.printerId;
+    shipping = production.shippingCostMinor;
     productionCostMinor += production.productionCostMinor;
     snapshotLines.push({
       lineNo: line.itemIndex + 1,
@@ -972,7 +975,6 @@ async function freezeProductionSnapshot(
     });
   }
 
-  const shipping = printer === null ? null : await printerShippingMinor(db, printer);
   if (printer === null || shipping === null) {
     return null;
   }

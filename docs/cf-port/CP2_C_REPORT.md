@@ -226,3 +226,33 @@ The same rule applies at publish, on a PATCH of the base price, and when a mappi
 - My suites: `screening`, `pod-mappings`, `pod-publish`, `admin-catalog`, `public-catalog`, `checkout`: **all green**.
 - Full `npx vitest run` in the shared tree, 2026-09-27 ~02:40: `Test Files 43 passed | 2 failed (45)`, `Tests 1584 passed | 34 failed (1618)`. All 34 failures are in CP2-A's `test/money-crons.test.ts` (14) and `test/refunds.test.ts` (20). They are mid-edit in the working tree (`src/commerce/refunds.ts`, `stripe-client.ts`, `crons.ts`, and a new `0026`).
 - `tsc` shows 9 errors, all in `src/commerce/crons.ts`, `test/money-fixtures.ts` and `test/refunds.test.ts`, and none in CP2-C files. `npm run check` is therefore red on CP2-A's in-progress work, not on these fixes.
+
+### Follow-ons (after ee55cac)
+
+**[P1] The freeze read mapping state in two queries (`resolveProductionLine`, `src/pod/pod-mappings.ts`).**
+- **Bug:** a `replacePrinters` that removed the back frame could land between "any suspended mapping?" and "which mappings are active?". It suspended the back mapping, the back vanished from the active set, and checkout froze a front-only snapshot for a front+back product.
+- **Fix:** the whole production read is now ONE D1 batch, i.e. one transaction and one snapshot. It covers:
+  - the line's candidate mappings (the variant scope and the product scope) together with every suspended mapping of the product, suspended rows sorted first so a page can never hide one, with the artwork LEFT JOINed;
+  - the printer row(s) behind the active candidates;
+  - their price tiers.
+- Everything is decided in code from that single snapshot. `quoteFromTier` (the pure half of `quotePodCost`, `src/pod/pod-quote.ts`) prices from the tier row that was validated.
+- The printer's parcel cost now comes from the same snapshot (`ProductionLine.shippingCostMinor`), replacing the separate `printerShippingMinor` read. `src/commerce/checkout.ts` refuses a cart whose lines saw different parcel prices, since those lines straddled a routing edit.
+- **Test** (`test/pod-publish.test.ts`, "a routing edit at ANY point of a checkout"): a D1 proxy runs the back-removing printer edit before the k-th D1 operation of a checkout, for every k = 1..12. Every outcome must be either refused or a complete front+back snapshot at 180 kr, and both outcomes must occur.
+- **Mutation-checked:** the previous two-query read, spliced back in, fails this test with `interleaved at call 4: [front]`.
+
+**[P2] `pod_too_large` was treated as a pass (`createMappingOnce`, `updateAdminProductOnce`).**
+- **Fix:** both now refuse it with the code. A mapping edit on a live product answers `{code:"pod_too_large", status:"conflict"}` (409). A price edit answers `{code:"pod_too_large", status:"refused"}` (422). A gate that could not price every unit cannot vouch for a new cost or price.
+- **Tests:** a live product with 201 variants. The mapping edit is refused and writes nothing; the price edit is refused and the price is unchanged.
+
+**[P2] The retry reused the original `now` (every `withScreeningRetry` caller).**
+- **Bug:** a first publish stamped later than the mutation's `now` made the retry write `updated_at < created_at`, so the CHECK threw (500).
+- **Fix, part 1:** `withScreeningRetry(now, attempt(now), onConflict)` gives each attempt its own clock: the first uses `now`, the retry uses `max(now, Date.now())`. All four callers are updated (edit, publish, mapping create, mapping delete).
+- **Fix, part 2:** because another isolate's clock may still run ahead, every ISO stamp written to an existing row is clamped to that row's `created_at` (`max(?, created_at)`). This covers:
+  - screening decisions (`decided_at`, `updated_at`), the fence bump, and the platform decision's upsert;
+  - mapping re-activation, mapping delete, and mapping suspension;
+  - the printer upsert and printer deactivation.
+- **Tests:** an edit races a first publish stamped 10 ms later, and the retry succeeds with `updated_at ≥ created_at`. A mapping stamped by a clock 60 s ahead can still be deleted and re-activated.
+
+**Counts:**
+- CP2-C tests: 99 → **104** (screening 51 → 53, pod-publish 22 → 25, pod-mappings 26).
+- `npm run check`, 2026-09-27: **green**. Types are up to date, `tsc` is clean, and the suite reports `Test Files 46 passed (46)`, `Tests 1656 passed (1656)`.

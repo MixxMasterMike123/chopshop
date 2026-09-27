@@ -678,3 +678,140 @@ describe("large products are read completely, or refused — never truncated", (
     });
   });
 });
+
+// ── Codex follow-on: a gate that cannot price everything is a refusal ──────
+
+describe("pod_too_large on a live product is refused by every caller of the gate", () => {
+  beforeAll(async () => {
+    // Live before it grew past MAX_GATE_VARIANTS (a fixture publication).
+    await seedProduct(TENANT, {
+      isPod: true,
+      priceMinor: 39_900,
+      productId: "big-live",
+      published: true,
+      variants: Array.from({ length: MAX_GATE_VARIANTS + 1 }, (_, index) => ({
+        priceMinor: 39_900,
+        sku: `BIG-LIVE-${index}`,
+        variantId: `big-live-v${String(index).padStart(3, "0")}`,
+      })),
+    });
+  });
+
+  it("a mapping edit that would raise the floor is refused with the code, and writes nothing", async () => {
+    await expect(map("big-live", "art-front", ["front"])).resolves.toEqual({
+      code: "pod_too_large",
+      status: "conflict",
+    });
+    expect(await listMappings(env.DB, ADMIN, "big-live")).toEqual([]);
+  });
+
+  it("a price edit is refused with the code", async () => {
+    await expect(
+      updateAdminProduct(env.DB, ADMIN, "big-live", { priceMinor: 100 }, Date.now()),
+    ).resolves.toEqual({ code: "pod_too_large", status: "refused" });
+    const row = await env.DB.prepare("SELECT b2c_price_minor FROM products WHERE product_id = 'big-live'")
+      .first<{ b2c_price_minor: number }>();
+    expect(row?.b2c_price_minor).toBe(39_900);
+  });
+});
+
+// ── Codex follow-on: the freeze reads ONE snapshot ─────────────────────────
+
+/**
+ * A D1 handle that runs `interleave` on the real database immediately before
+ * its `atCall`-th operation (a statement's first/all/run/raw, or a batch) —
+ * i.e. exactly between two of the caller's reads. Statements stay real for
+ * batch(): the proxies are unwrapped before they reach D1.
+ */
+function interleavedDb(atCall: number, interleave: () => Promise<unknown>): D1Database {
+  let calls = 0;
+  const tick = async (): Promise<void> => {
+    calls += 1;
+    if (calls === atCall) {
+      await interleave();
+    }
+  };
+  const realOf = new WeakMap<object, D1PreparedStatement>();
+  const wrap = (statement: D1PreparedStatement): D1PreparedStatement => {
+    const proxy = new Proxy(statement, {
+      get(target, prop) {
+        if (prop === "bind") {
+          return (...values: unknown[]) => wrap(target.bind(...values));
+        }
+        if (prop === "first" || prop === "all" || prop === "run" || prop === "raw") {
+          return async (...args: unknown[]) => {
+            await tick();
+            return (Reflect.get(target, prop, target) as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        const value = Reflect.get(target, prop, target) as unknown;
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    realOf.set(proxy, statement);
+    return proxy;
+  };
+  return new Proxy(env.DB, {
+    get(target, prop) {
+      if (prop === "prepare") {
+        return (sql: string) => wrap(target.prepare(sql));
+      }
+      if (prop === "batch") {
+        return async (statements: D1PreparedStatement[]) => {
+          await tick();
+          return target.batch(statements.map((statement) => realOf.get(statement) ?? statement));
+        };
+      }
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function"
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+}
+
+describe("a routing edit at ANY point of a checkout never yields a partial production snapshot", () => {
+  it("refused, or complete front+back — for every interleaving point", async () => {
+    const noBack = testPrinter();
+    delete noBack.capabilities.models["2000"]?.printAreasMm.back;
+    const outcomes: string[] = [];
+
+    for (let atCall = 1; atCall <= 12; atCall += 1) {
+      await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
+      const productId = `race-freeze-${atCall}`;
+      await seedProduct(TENANT, { priceMinor: 39_900, productId });
+      expect((await map(productId, "art-front", ["front"])).status).toBe("ok");
+      expect((await map(productId, "art-back", ["back"])).status).toBe("ok");
+      expect((await publishAdminProduct(env.DB, ADMIN, productId, Date.now())).status).toBe("ok");
+
+      const racing = interleavedDb(atCall, () => replacePrinters(env.DB, PLATFORM, [noBack], Date.now()));
+      const result = await createCheckout(
+        racing,
+        TENANT_CONTEXT,
+        checkoutInput([{ productId, quantity: 1 }]),
+        Date.now(),
+      );
+      if (result.status !== "ok") {
+        outcomes.push("refused");
+        continue;
+      }
+      const snapshot = (await snapshotOf(result.checkout.checkoutId)) as {
+        lines: Array<{ printFiles: Array<{ slot: string }>; productionCostMinor: number }>;
+      };
+      // Never front-only: the whole garment, priced as the whole garment.
+      expect(snapshot.lines[0]?.printFiles.map((file) => file.slot), `interleaved at call ${atCall}`).toEqual([
+        "front",
+        "back",
+      ]);
+      expect(snapshot.lines[0]?.productionCostMinor).toBe(18_000);
+      outcomes.push("complete");
+    }
+
+    // Both sides of the race were actually exercised.
+    expect(outcomes).toContain("refused");
+    expect(outcomes).toContain("complete");
+    await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
+  });
+});

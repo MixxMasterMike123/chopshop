@@ -72,7 +72,7 @@ export interface Printer {
   type: "api" | "manual";
 }
 
-interface PrinterRow {
+export interface PrinterRow {
   capabilities_json: string;
   currency: string;
   id: string;
@@ -353,7 +353,7 @@ export function printersAllowedIn(
   });
 }
 
-function toPrinter(row: PrinterRow): Printer | null {
+export function toPrinter(row: PrinterRow): Printer | null {
   let capabilities: PrinterCapabilities | null;
   try {
     capabilities = parseCapabilities(JSON.parse(row.capabilities_json));
@@ -591,7 +591,7 @@ export async function replacePrinters(
              currency = excluded.currency,
              shipping_cost_minor = excluded.shipping_cost_minor,
              capabilities_json = excluded.capabilities_json,
-             updated_at = excluded.updated_at
+             updated_at = max(excluded.updated_at, printers.created_at)
            WHERE printers.tenant_id IS NULL`,
         )
         .bind(
@@ -632,7 +632,7 @@ export async function replacePrinters(
   statements.push(
     db
       .prepare(
-        `UPDATE printers SET status = 'inactive', updated_at = ?
+        `UPDATE printers SET status = 'inactive', updated_at = max(?, created_at)
          WHERE tenant_id IS NULL
            AND status = 'active'
            AND id NOT IN (SELECT value FROM json_each(?))`,
@@ -649,7 +649,7 @@ export async function replacePrinters(
         db
           .prepare(
             `UPDATE pod_mappings
-             SET status = 'suspended', suspended_reason = ?, updated_at = ?
+             SET status = 'suspended', suspended_reason = ?, updated_at = max(?, created_at)
              WHERE status = 'active'
                AND id IN (${chunk.map(() => "?").join(", ")})`,
           )

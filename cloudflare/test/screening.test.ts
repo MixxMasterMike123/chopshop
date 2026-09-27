@@ -579,3 +579,52 @@ describe("the screening fence (a platform decision racing a seller mutation)", (
     expect((await screeningRow("race-fence"))?.version).toBe((fresh.row?.version ?? 0) + 1);
   });
 });
+
+// ── Codex follow-on: every retry attempt stamps with its own clock ─────────
+
+describe("the retry stamps with a fresh clock, clamped to the row it writes", () => {
+  it("an edit racing a FIRST publish stamped 10 ms later: the retry succeeds (no updated_at < created_at)", async () => {
+    // Live via a fixture publication and never screened: the edit's first
+    // attempt INSERTs the screening row.
+    await seedProduct(RACE_TENANT, { name: "Clock tee", productId: "race-clock", published: true });
+    const start = Date.now();
+    const racing = racingDb(async (attempt) => {
+      if (attempt === 1) {
+        expect((await publishAdminProduct(env.DB, raceAdmin, "race-clock", start + 10)).status).toBe("ok");
+      }
+    });
+
+    // Before the fix the retry reused `start`, stamped updated_at before the
+    // publish's created_at, and the CHECK threw (a 500).
+    const result = await updateAdminProduct(racing, raceAdmin, "race-clock", { name: "Clock tee v2" }, start);
+    expect(result).toMatchObject({ product: { name: "Clock tee v2" }, status: "ok" });
+
+    const row = await env.DB.prepare(
+      "SELECT created_at, updated_at, decided_at FROM product_screening WHERE product_id = 'race-clock'",
+    ).first<{ created_at: string; decided_at: string; updated_at: string }>();
+    expect(row?.created_at).toBe(new Date(start + 10).toISOString());
+    expect(row !== null && row.updated_at >= row.created_at).toBe(true);
+    expect(await productName("race-clock")).toBe("Clock tee v2");
+  });
+
+  it("a mapping stamped by a clock that runs ahead can still be deleted (and re-activated)", async () => {
+    await seedProduct(RACE_TENANT, { priceMinor: 39_900, productId: "race-ahead" });
+    const start = Date.now();
+    const created = await createMapping(env.DB, raceAdmin, {
+      artworkId: "race-clean", printerId: "fake-printer", productId: "race-ahead", sku: TEE_S, slots: ["front"], variantId: null,
+    }, start + 60_000);
+    expect(created.status).toBe("ok");
+    const mappingId = created.status === "ok" ? created.mapping.mappingId : "";
+
+    const { deleteMapping } = await import("../src/pod/pod-mappings");
+    await expect(deleteMapping(env.DB, raceAdmin, mappingId, start)).resolves.toEqual({ status: "ok" });
+    const again = await createMapping(env.DB, raceAdmin, {
+      artworkId: "race-clean", printerId: "fake-printer", productId: "race-ahead", sku: TEE_S, slots: ["front"], variantId: null,
+    }, start);
+    expect(again).toMatchObject({ created: false, status: "ok" });
+    const row = await env.DB.prepare("SELECT created_at, updated_at FROM pod_mappings WHERE id = ?")
+      .bind(mappingId)
+      .first<{ created_at: string; updated_at: string }>();
+    expect(row !== null && row.updated_at >= row.created_at).toBe(true);
+  });
+});

@@ -218,14 +218,22 @@ export function isScreeningConflict(error: unknown): boolean {
  * Run a guarded mutation; on a tripped fence run it ONCE more from fresh
  * reads, and if the fence trips again answer `onConflict()` rather than
  * committing anything under facts the mutation never saw.
+ *
+ * Each attempt gets its own clock reading (Codex CP2 follow-on): the retry
+ * runs AFTER the writer it lost to, whose rows may be stamped later than this
+ * mutation's original `now` — reusing that instant would write an
+ * `updated_at` before the row's own `created_at`. The retry takes
+ * max(now, the current time); the SQL additionally clamps every ISO stamp it
+ * writes to the row's `created_at` (another isolate's clock may run ahead).
  */
 export async function withScreeningRetry<T>(
-  attempt: () => Promise<T>,
+  now: number,
+  attempt: (now: number) => Promise<T>,
   onConflict: () => T,
 ): Promise<T> {
   for (let round = 0; round < 2; round += 1) {
     try {
-      return await attempt();
+      return await attempt(round === 0 ? now : Math.max(now, Date.now()));
     } catch (error) {
       if (!isScreeningConflict(error)) {
         throw error;
@@ -255,7 +263,7 @@ export function screeningFenceStatement(
         .bind(guard.tenantId, guard.productId)
     : db
         .prepare(
-          `UPDATE product_screening SET version = ?, updated_at = ?
+          `UPDATE product_screening SET version = ?, updated_at = max(?, created_at)
            WHERE tenant_id = ? AND product_id = ?`,
         )
         .bind(
@@ -371,8 +379,9 @@ export async function screeningStatementsFor(
           .prepare(
             `UPDATE product_screening
              SET status = ?, reason = ?, hits_json = ?, earlier_hits_json = ?,
-                 requires_approval = ?, decided_by = 'system', decided_at = ?,
-                 version = ?, updated_at = ?
+                 requires_approval = ?, decided_by = 'system',
+                 decided_at = max(?, created_at),
+                 version = ?, updated_at = max(?, created_at)
              WHERE tenant_id = ? AND product_id = ?`,
           )
           .bind(
@@ -536,9 +545,9 @@ export async function decideByPlatform(
            requires_approval = CASE WHEN excluded.status = 'approved' THEN 0
                                     ELSE product_screening.requires_approval END,
            decided_by = excluded.decided_by,
-           decided_at = excluded.decided_at,
+           decided_at = max(excluded.decided_at, product_screening.created_at),
            version = product_screening.version + 1,
-           updated_at = excluded.updated_at`,
+           updated_at = max(excluded.updated_at, product_screening.created_at)`,
       )
       .bind(productId, product.tenant_id, status, reason, principal.userId, iso, iso, iso),
     db

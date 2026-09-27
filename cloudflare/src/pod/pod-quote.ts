@@ -49,14 +49,65 @@ export interface PodQuote {
   productionCostMinor: number;
 }
 
-interface TierRow {
+function isCost(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** One printer_sku_tiers row and its printer's currency, as read from D1. */
+export interface TierFacts {
   blank_cost_minor: number;
   currency: string;
   print_costs_json: string;
 }
 
-function isCost(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+/**
+ * The quote arithmetic over an already-read tier — the pure half of
+ * quotePodCost, so a caller that reads the tier inside a consistent D1 batch
+ * (the checkout freeze) prices from exactly the facts it validated.
+ */
+export function quoteFromTier(
+  tier: TierFacts,
+  input: { quantity: number; slots: readonly PrintSlot[] },
+): PodQuote | null {
+  if (
+    !Number.isSafeInteger(input.quantity) ||
+    input.quantity < 1 ||
+    input.slots.length === 0 ||
+    !isCost(tier.blank_cost_minor)
+  ) {
+    return null;
+  }
+
+  let printCosts: Record<string, unknown>;
+  try {
+    printCosts = JSON.parse(tier.print_costs_json) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  const printMinorBySlot: Partial<Record<PrintSlot, number>> = {};
+  let prints = 0;
+  for (const slot of new Set(input.slots)) {
+    const cost = printCosts[slot];
+    if (!isCost(cost)) {
+      return null;
+    }
+    printMinorBySlot[slot] = cost;
+    prints += cost;
+  }
+
+  const unitMinor = tier.blank_cost_minor + prints + PLATFORM_CUT_MINOR;
+  return {
+    breakdown: {
+      blankMinor: tier.blank_cost_minor,
+      currency: tier.currency,
+      platformCutMinor: PLATFORM_CUT_MINOR,
+      printMinorBySlot,
+      quantity: input.quantity,
+      unitMinor,
+    },
+    productionCostMinor: unitMinor * input.quantity,
+  };
 }
 
 /**
@@ -103,41 +154,8 @@ export async function quotePodCost(
        LIMIT 1`,
     )
     .bind(input.printerId, input.sku)
-    .first<TierRow>();
-  if (tier === null || !isCost(tier.blank_cost_minor)) {
-    return null;
-  }
-
-  let printCosts: Record<string, unknown>;
-  try {
-    printCosts = JSON.parse(tier.print_costs_json) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-
-  const printMinorBySlot: Partial<Record<PrintSlot, number>> = {};
-  let prints = 0;
-  for (const slot of new Set(input.slots)) {
-    const cost = printCosts[slot];
-    if (!isCost(cost)) {
-      return null;
-    }
-    printMinorBySlot[slot] = cost;
-    prints += cost;
-  }
-
-  const unitMinor = tier.blank_cost_minor + prints + PLATFORM_CUT_MINOR;
-  return {
-    breakdown: {
-      blankMinor: tier.blank_cost_minor,
-      currency: tier.currency,
-      platformCutMinor: PLATFORM_CUT_MINOR,
-      printMinorBySlot,
-      quantity: input.quantity,
-      unitMinor,
-    },
-    productionCostMinor: unitMinor * input.quantity,
-  };
+    .first<TierFacts>();
+  return tier === null ? null : quoteFromTier(tier, input);
 }
 
 /**
