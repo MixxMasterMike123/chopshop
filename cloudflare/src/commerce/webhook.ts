@@ -1,4 +1,6 @@
 import { printerJobId } from "../dispatch/snapwear-wire";
+import { orderConsentOf } from "../legal/consent";
+import { nudgeOutbox } from "../outbox/nudge";
 import { initialDispatchAttemptSql } from "./dispatch-hold";
 import { raiseAlertStatement } from "./money-alerts";
 import type {
@@ -75,6 +77,8 @@ interface CheckoutOrderRow {
   application_fee_minor: number | null;
   checkout_id: string;
   connect_account_id: string | null;
+  /** The buyer's frozen consent (0031); copied onto the order. */
+  consent_json: string | null;
   currency: string;
   customer_email: string;
   delivery_method: string;
@@ -203,7 +207,7 @@ async function loadCheckoutByIntent(
          delivery_method, shipping_country, subtotal_minor, shipping_minor,
          vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
          connect_account_id, application_fee_minor, withheld_minor,
-         production_snapshot_json
+         production_snapshot_json, consent_json
        FROM checkouts
        WHERE payment_intent_id = ?
        LIMIT 1`,
@@ -306,11 +310,18 @@ function readIntent(event: VerifiedStripeEvent): WebhookIntent | null {
  * decides what it means and makes it durable. It answers with an outcome rather
  * than a Response so the routing layer owns the HTTP shape — and so that every
  * path through here is testable without a Request.
+ *
+ * `env`, when given (the route always gives it), is used for ONE thing: after
+ * a new order's batch has committed, its dispatch + email outbox rows are
+ * nudged onto OUTBOX_QUEUE so the printer and the buyer hear within seconds
+ * rather than at the next 15-minute sweep. The nudge never throws and never
+ * decides anything — the rows are the truth and the sweeper the backstop.
  */
 export async function handleStripeWebhookEvent(
   db: D1Database,
   event: VerifiedStripeEvent,
   now: number,
+  env?: Env,
 ): Promise<HandleWebhookEventResult> {
   // The cheap replay check. An event already in the ledger has already had its
   // effects — whatever they were — and must produce none a second time.
@@ -494,6 +505,10 @@ export async function handleStripeWebhookEvent(
   // an order — and a rolled-back delivery leaves neither behind.
   const receipt = await mintReceiptCapability(now);
 
+  // The buyer's consent (src/legal/consent.ts), copied from the checkout: the
+  // frozen facts verbatim, and is_personalized = a withdrawal right was waived.
+  const consent = orderConsentOf(checkout.consent_json);
+
   // ── ONE BATCH, OR NOTHING ────────────────────────────────────────────────
   // Order, receipt hand-off, lines, status history, the checkout transition,
   // the discount burn, the audit row and the event ledger row all commit
@@ -518,9 +533,9 @@ export async function handleStripeWebhookEvent(
           receipt_token_hash, receipt_token_expires_at,
           charged_minor, application_fee_minor, withheld_minor,
           connect_account_id, stripe_charge_id, production_snapshot_json,
-          payout_state
+          payout_state, consent_json, is_personalized
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, 'pending')`,
+                  ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       )
       .bind(
         orderId,
@@ -562,6 +577,8 @@ export async function handleStripeWebhookEvent(
         checkout.connect_account_id,
         intent.latestChargeId,
         production.status === "ok" ? production.json : null,
+        consent.consentJson,
+        consent.isPersonalized,
       ),
     db
       .prepare(
@@ -637,10 +654,12 @@ export async function handleStripeWebhookEvent(
   //             `{orderId}-{lineNo}` so a resubmission is deduplicated by the
   //             printer. Only when there is a snapshot.
   //   email     the order confirmation, one per order.
+  // The ids of the rows this batch inserts: nudged once it has committed.
+  const outboxIds: string[] = [];
   if (production.status === "ok") {
     for (const lineNo of production.lines.keys()) {
       statements.push(
-        outboxStatement(db, {
+        outboxStatement(db, outboxIds, {
           aggregateId: orderId,
           dedupeKey: `dispatch:${orderId}:${lineNo}`,
           eventType: "dispatch",
@@ -673,7 +692,7 @@ export async function handleStripeWebhookEvent(
   }
 
   statements.push(
-    outboxStatement(db, {
+    outboxStatement(db, outboxIds, {
       aggregateId: orderId,
       dedupeKey: `email:order_confirmation:${orderId}`,
       eventType: "email",
@@ -799,6 +818,13 @@ export async function handleStripeWebhookEvent(
   // deliver in order) were parked; they apply now, before anything else
   // happens to the order — a full refund supersedes its dispatch here.
   await replayDeferredSafely(db, intent.id, now);
+
+  // The order is committed: tell the outbox consumer its rows exist (PLAN
+  // §2.2). After the replay, so a dispatch a parked full refund superseded is
+  // simply acked. nudgeOutbox never throws; a lost nudge is the sweeper's.
+  if (env !== undefined) {
+    await nudgeOutbox(env, outboxIds);
+  }
   return { orderId, outcome: "processed", replayed: false };
 }
 
@@ -906,6 +932,8 @@ function readProductionSnapshot(
  */
 function outboxStatement(
   db: D1Database,
+  /** Collects the new row's id (for the post-commit nudge). */
+  ids: string[],
   row: {
     aggregateId: string;
     dedupeKey: string;
@@ -920,6 +948,8 @@ function outboxStatement(
   const nextAttempt = row.held === undefined ? "?" : initialDispatchAttemptSql();
   const nextAttemptBinds =
     row.held === undefined ? [row.now] : [row.held.orderId, row.held.orderId, row.now];
+  const outboxId = crypto.randomUUID();
+  ids.push(outboxId);
   return db
     .prepare(
       `INSERT INTO outbox_events (
@@ -929,7 +959,7 @@ function outboxStatement(
       ) VALUES (?, ?, ?, 'order', ?, ?, ?, 'pending', ${nextAttempt}, ?, ?)`,
     )
     .bind(
-      crypto.randomUUID(),
+      outboxId,
       row.tenantId,
       row.eventType,
       row.aggregateId,

@@ -8,6 +8,7 @@ import type {
 import { createAuth } from "../src/auth/create-auth";
 import type { PrinterCapabilities, PrinterInput } from "../src/pod/printers";
 import { replacePrinters } from "../src/pod/printers";
+import { acceptTermsStatement } from "./legal-fixtures";
 
 /**
  * Shared fixtures for the CP2-C suites (pod-mappings, pod-publish, screening).
@@ -96,6 +97,8 @@ export async function seedTenant(tenantId: string, hostname: string): Promise<vo
          domain_id, tenant_id, hostname, kind, status, created_at, updated_at
        ) VALUES (?, ?, ?, 'storefront', 'verified', ?, ?)`,
     ).bind(`domain-${tenantId}`, tenantId, hostname, SEED_NOW, SEED_NOW),
+    // A shop that sells has accepted the current platform terms (CP2-E gate).
+    acceptTermsStatement(env.DB, tenantId),
   ]);
 }
 

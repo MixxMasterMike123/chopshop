@@ -1,13 +1,14 @@
 import { env } from "cloudflare:workers";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { runReconciliation, runRetentionSweep } from "../../src/commerce/crons";
 import { runClaimedOutboxRow } from "../../src/outbox/effects";
 import { CLAIM_TTL_MS, claimById, newClaimToken } from "../../src/outbox/outbox";
 import { runOutboxSweep } from "../../src/outbox/sweeper";
-import { lineRow, outboxRow, printerJobs } from "../dispatch-fixtures";
+import { lineRow, outboxRow, printerJobs, recordingQueue } from "../dispatch-fixtures";
 import { paymentEventRow, postEvent, refundOps } from "../money-fixtures";
 import {
+  ADMIN,
   acquireJob,
   adminOrder,
   approveProduct,
@@ -15,6 +16,7 @@ import {
   assertLedgerBalanced,
   bootstrapPlatform,
   buyProduct,
+  call,
   cancelCall,
   claimReceipt,
   completeJob,
@@ -38,6 +40,8 @@ import {
   outboxRowsFor,
   payCheckout,
   paymentCall,
+  PLATFORM,
+  platformCall,
   pngBytes,
   type PrinterLog,
   printerWire,
@@ -830,6 +834,389 @@ describe("8. expired render lease with a late completion", () => {
     const bytes = new Uint8Array(await (canonical?.arrayBuffer() ?? Promise.resolve(new ArrayBuffer(0))));
     expect(bytes.length).toBe(fresh.print.bytes);
     expect(bytes[0]).toBe(12);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CP2-E additions (CP2-D1 findings 2–5)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * The CP2-E cases stand 31+ minutes in the future to see alerts, and the
+ * alerts they leave open are FUTURE-dated: the digest counts an open alert as
+ * "new" until the wall clock passes it, so the exit criteria's own digest clock
+ * (which starts at the real now) would see them at every tick. Resolved after
+ * each such case — the cases assert their alerts before this runs.
+ */
+async function resolveFutureAlerts(): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE alerts SET resolved_at = created_at WHERE resolved_at IS NULL AND created_at > ?",
+  )
+    .bind(new Date().toISOString())
+    .run();
+}
+
+describe("4b. a refund retried after a lost response (Idempotency-Key)", () => {
+  afterEach(resolveFutureAlerts);
+
+  it("the admin never saw the answer and retries with the same key → the SAME operation; ONE refund at Stripe", async () => {
+    const order = await buyProduct(world, shopA, teeA);
+    await drain(order.orderId);
+    const key = crypto.randomUUID();
+
+    const first = await refundCall(world, shopA, order.orderId, 4_000, undefined, key);
+    expect(first.status).toBe(201);
+    await first.body?.cancel(); // lost on the way back
+    const retry = await refundCall(world, shopA, order.orderId, 4_000, undefined, key);
+
+    expect(retry.status).toBe(201);
+    expect(retry.headers.get("idempotent-replayed")).toBe("true");
+    const ops = await refundOps(order.orderId);
+    expect(ops).toHaveLength(1);
+    expect(await retry.json()).toEqual({
+      refund: { amountMinor: 4_000, refundId: ops[0]?.id, state: "succeeded" },
+    });
+    expect(world.stripe.refundCalls, "Stripe was asked once").toHaveLength(1);
+    const ledger = await assertLedgerBalanced(env.DB, order.orderId, { stripe: world.stripe });
+    expect(ledger.refundedMinor).toBe(4_000);
+  });
+
+  it("Stripe refunded, the worker died before the settlement, the admin retries → the held reservation (202), never a second refund", async () => {
+    const order = await buyProduct(world, shopA, teeA);
+    await drain(order.orderId);
+    const key = crypto.randomUUID();
+    const dying = dyingDb(
+      () => world.stripe.refunds.size > 0,
+      (op) => op.kind === "batch" && opWrites(op, /UPDATE refund_operations/),
+    );
+
+    expect(FAILED).toContain(
+      await settle(refundCall(world, shopA, order.orderId, 5_000, world.with({ DB: dying.db }), key)),
+    );
+    const [op] = await refundOps(order.orderId);
+    const retry = await refundCall(world, shopA, order.orderId, 5_000, undefined, key);
+    expect(retry.status, "still reserved: Stripe's outcome is not recorded yet").toBe(202);
+    expect(await retry.json()).toEqual({ refund: { amountMinor: 5_000, refundId: op?.id, state: "reserved" } });
+    expect(world.stripe.refundCalls).toHaveLength(1);
+
+    await runReconciliation(world.env, Date.now() + 31 * MINUTE_MS);
+    const settled = await refundCall(world, shopA, order.orderId, 5_000, undefined, key);
+    expect(await expectJson(settled, 201, "after reconciliation")).toEqual({
+      refund: { amountMinor: 5_000, refundId: op?.id, state: "succeeded" },
+    });
+    expect(world.stripe.refundCalls).toHaveLength(1);
+    await assertLedgerBalanced(env.DB, order.orderId, { stripe: world.stripe });
+  });
+
+  it("a double click (two requests, one key, at once) → one reservation, one Stripe refund, both answers name it", async () => {
+    const order = await buyProduct(world, shopA, teeA);
+    await drain(order.orderId);
+    const key = crypto.randomUUID();
+
+    const answers = await Promise.all([
+      refundCall(world, shopA, order.orderId, 3_000, undefined, key),
+      refundCall(world, shopA, order.orderId, 3_000, undefined, key),
+    ]);
+
+    expect(answers.map((response) => response.status).every((status) => status === 201 || status === 202)).toBe(true);
+    const bodies = await Promise.all(answers.map((response) => response.json<{ refund: { refundId: string } }>()));
+    const ops = await refundOps(order.orderId);
+    expect(ops).toHaveLength(1);
+    expect(bodies.map((body) => body.refund.refundId)).toEqual([ops[0]?.id, ops[0]?.id]);
+    expect(world.stripe.refundCalls).toHaveLength(1);
+    await assertLedgerBalanced(env.DB, order.orderId, { stripe: world.stripe });
+  });
+
+  it("a key reused for a different amount → 409; no key or a malformed one → 400; nothing reserved", async () => {
+    const order = await buyProduct(world, shopA, teeA);
+    await drain(order.orderId);
+    const key = crypto.randomUUID();
+    await expectJson(await refundCall(world, shopA, order.orderId, 2_000, undefined, key), 201, "first");
+
+    expect(await expectJson(await refundCall(world, shopA, order.orderId, 2_500, undefined, key), 409, "other amount")).toEqual({
+      error: { code: "conflict", message: "Idempotency key was already used for a different request" },
+    });
+    const badHeaders: Array<Record<string, string>> = [{}, { "idempotency-key": "not-a-uuid" }, { "idempotency-key": "" }];
+    for (const headers of badHeaders) {
+      const response = await call(world, "POST", `${ADMIN}/v1/admin/orders/${order.orderId}/refunds`, {
+        body: { amountMinor: 1_000, reason: "Kunden ångrade köpet" },
+        cookie: shopA.adminCookie,
+        headers,
+        shopId: shopA.tenantId,
+      });
+      expect(await expectJson(response, 400, JSON.stringify(headers))).toMatchObject({
+        error: { code: "idempotency_key_required" },
+      });
+    }
+    // The same UUID in another shop is another key (UNIQUE per tenant).
+    const mug = await buyProduct(world, shopB, mugB);
+    await expectJson(await refundCall(world, shopB, mug.orderId, 1_000, undefined, key), 201, "other shop, same key");
+    expect(await refundOps(order.orderId)).toHaveLength(1);
+    expect(world.stripe.refundCalls).toHaveLength(2);
+    await assertLedgerBalanced(env.DB, order.orderId, { stripe: world.stripe });
+  });
+});
+
+describe("the webhook nudges the outbox after its batch commits", () => {
+  it("dispatch + email are nudged once the order exists; the batch dying nudges nothing; Stripe's retry nudges once", async () => {
+    const checkout = await openCheckout(world, shopA, [{ productId: teeA, quantity: 1 }]);
+    const paymentIntentId = await payCheckout(world, shopA, checkout.checkoutId);
+    markIntentSucceeded(world, paymentIntentId);
+    const object = {
+      amount: checkout.totalMinor,
+      currency: "sek",
+      id: paymentIntentId,
+      latest_charge: `ch_${paymentIntentId.replace(/^pi_/, "")}`,
+      metadata: { checkout_id: checkout.checkoutId, tenant_id: shopA.tenantId },
+      object: "payment_intent",
+      status: "succeeded",
+    };
+    const dying = dyingDb(() => true, (op) => op.kind === "batch" && opWrites(op, /INSERT INTO orders\b/));
+
+    const died = await settle(
+      postEvent("payment_intent.succeeded", object, { env: world.with({ DB: dying.db }) }).then((r) => r.response),
+    );
+    expect(FAILED).toContain(died);
+    expect(await ordersForCheckout(checkout.checkoutId)).toBe(0);
+    expect(world.nudges.sent, "no order, no nudge").toEqual([]);
+
+    const retried = await postEvent("payment_intent.succeeded", object, { env: world.env });
+    expect(retried.response.status).toBe(200);
+    const order = await env.DB.prepare("SELECT order_id FROM orders WHERE checkout_id = ?")
+      .bind(checkout.checkoutId)
+      .first<{ order_id: string }>();
+    const rows = await outboxRowsFor(order?.order_id ?? "");
+    expect(rows.map((row) => row.event_type)).toEqual(["dispatch", "email"]);
+    expect(world.nudges.sent).toEqual(rows.map((row) => ({ outboxId: row.outbox_id })));
+
+    // A replay of the event commits nothing and nudges nothing more.
+    await postEvent("payment_intent.succeeded", object, { env: world.env, eventId: retried.eventId });
+    expect(world.nudges.sent).toHaveLength(2);
+    await drain(order?.order_id ?? "");
+    expect(await printerJobs(order?.order_id ?? "")).toHaveLength(1);
+  });
+
+  it("the queue is down: the webhook still answers 200 with the order committed; the sweeper delivers it", async () => {
+    const down = recordingQueue({ fail: true });
+    const checkout = await openCheckout(world, shopB, [{ productId: mugB, quantity: 1 }]);
+    const paymentIntentId = await payCheckout(world, shopB, checkout.checkoutId);
+    const { orderId } = await succeedPayment(
+      world,
+      shopB,
+      { checkoutId: checkout.checkoutId, paymentIntentId, totalMinor: checkout.totalMinor },
+      { env: world.with({ OUTBOX_QUEUE: down.queue }) },
+    );
+    expect(orderId).not.toBeNull();
+    expect(down.sent).toEqual([]);
+    const [email] = await outboxRowsFor(orderId ?? "");
+    expect(email).toMatchObject({ event_type: "email", status: "pending" });
+
+    await runOutboxSweep(world.env, Date.now());
+    expect((await outboxRowsFor(orderId ?? ""))[0]?.status).toBe("done");
+  });
+});
+
+describe("resolved or moot dispatch is not stranded (reconciliation)", () => {
+  afterEach(resolveFutureAlerts);
+
+  it("a failure an operator resolved, and a line whose order was fully refunded, raise no dispatch_stranded_30m", async () => {
+    // (a) never reached the printer → unknown → resolved FAILED by a human.
+    const resolved = await buyProduct(world, shopA, teeA);
+    const resolvedDispatch = resolved.dispatchIds[0]!;
+    await deliverOutbox(world, [resolvedDispatch], world.with(printerWire(() => "unreachable")));
+    await expectJson(
+      await resolveCall(world, resolvedDispatch, { note: "Aldrig mottagen, kunden kontaktad", outcome: "failed" }),
+      200,
+      "resolve failed",
+    );
+    expect(await outboxRow(resolvedDispatch)).toMatchObject({ last_error: "resolved_failed", status: "failed" });
+
+    // (b) unknown at the printer, then the whole order refunded.
+    const refunded = await buyProduct(world, shopA, teeA);
+    const refundedDispatch = refunded.dispatchIds[0]!;
+    await deliverOutbox(world, [refundedDispatch], world.with(printerWire(() => "unreachable")));
+    await expectJson(await refundCall(world, shopA, refunded.orderId, refunded.totalMinor), 201, "full refund");
+    expect((await adminOrder(world, shopA, refunded.orderId)).status).toBe("refunded");
+
+    // (c) the control: a paid order whose printer is still unreachable IS stranded.
+    const stuck = await buyProduct(world, shopA, teeA);
+    const stuckDispatch = stuck.dispatchIds[0]!;
+    await deliverOutbox(world, [stuckDispatch], world.with(printerWire(() => "unreachable")));
+
+    // Twice: a resolved failure is never re-raised, however often it is seen.
+    await runReconciliation(world.env, Date.now() + 31 * MINUTE_MS);
+    await runReconciliation(world.env, Date.now() + 32 * MINUTE_MS);
+    const stranded = async (resourceId: string) =>
+      (
+        await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM alerts WHERE kind = 'dispatch_stranded_30m' AND resource_id = ?",
+        )
+          .bind(resourceId)
+          .first<{ n: number }>()
+      )?.n ?? 0;
+    expect(await stranded(resolvedDispatch), "resolved by a human").toBe(0);
+    expect(await stranded(refundedDispatch), "nothing owed to the printer").toBe(0);
+    expect(await stranded(stuckDispatch), "the control still alerts, once").toBe(1);
+  });
+});
+
+describe("platform reads: orders and alerts (what reconcile-staging.mjs reads)", () => {
+  afterEach(resolveFutureAlerts);
+
+  interface PlatformOrder {
+    createdAt: string;
+    dispatch: Array<{ lineNo: number | null; outboxId: string; state: string }>;
+    isPersonalized: boolean;
+    money: { applicationFeeMinor: number; chargedMinor: number; refundedMinor: number; withheldMinor: number };
+    orderId: string;
+    paymentIntentId: string;
+    payout: { amountMinor: number };
+    production: { printer: string | null; productionCostMinor: number | null } | null;
+    tenantId: string;
+  }
+
+  async function allOrders(tenantId: string, extra = ""): Promise<PlatformOrder[]> {
+    const all: PlatformOrder[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 50; page += 1) {
+      const qs = `tenantId=${tenantId}&limit=2${extra}${cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`}`;
+      const body: { nextCursor: string | null; orders: PlatformOrder[] } = await expectJson(
+        await platformCall(world, "GET", `/v1/platform/orders?${qs}`),
+        200,
+        "platform orders",
+      );
+      all.push(...body.orders);
+      cursor = body.nextCursor;
+      if (cursor === null) {
+        return all;
+      }
+    }
+    throw new Error("the order list never ended");
+  }
+
+  it("GET /v1/platform/orders pages a shop's orders to exhaustion, with the money facts, the intent and the dispatch states", async () => {
+    const made = [
+      await buyProduct(world, shopB, mugB),
+      await buyProduct(world, shopB, mugB),
+      await buyProduct(world, shopB, mugB),
+    ];
+    const listed = await allOrders(shopB.tenantId);
+    const mine = listed.filter((order) => made.some((m) => m.orderId === order.orderId));
+    expect(mine.map((order) => order.orderId)).toEqual(made.map((m) => m.orderId));
+    expect(new Set(listed.map((order) => order.orderId)).size, "no page repeats a row").toBe(listed.length);
+    expect(listed.every((order) => order.tenantId === shopB.tenantId)).toBe(true);
+    const first = mine[0]!;
+    expect(first).toMatchObject({
+      dispatch: [],
+      isPersonalized: false,
+      money: { chargedMinor: made[0]!.totalMinor, refundedMinor: 0, withheldMinor: 0 },
+      paymentIntentId: made[0]!.paymentIntentId,
+      production: null,
+    });
+    const since = await allOrders(shopB.tenantId, `&since=${encodeURIComponent(mine[2]!.createdAt)}`);
+    expect(since.map((order) => order.orderId)).toContain(made[2]!.orderId);
+    expect(since.every((order) => order.createdAt >= mine[2]!.createdAt)).toBe(true);
+
+    // A POD order: platform-only production facts and the dispatch state machine.
+    const tee = await buyProduct(world, shopA, teeA);
+    await drain(tee.orderId);
+    const pod = (await allOrders(shopA.tenantId)).find((order) => order.orderId === tee.orderId);
+    expect(pod).toMatchObject({
+      dispatch: [{ lineNo: 1, outboxId: tee.dispatchIds[0], state: "done" }],
+      production: { printer: "fake-printer", productionCostMinor: expect.any(Number) },
+    });
+    expect(pod?.money.withheldMinor).toBeGreaterThan(0);
+    const ledger = await assertLedgerBalanced(env.DB, tee.orderId, { stripe: world.stripe });
+    expect(pod?.payout.amountMinor).toBe(ledger.payoutMinor);
+  });
+
+  it("the orders list is platform-only and strict about its query", async () => {
+    const asAdmin = await call(world, "GET", `${ADMIN}/v1/platform/orders?tenantId=${shopA.tenantId}`, {
+      cookie: shopA.adminCookie,
+    });
+    expect(asAdmin.status).toBe(404);
+    expect((await call(world, "GET", `${PLATFORM}/v1/platform/orders?tenantId=${shopA.tenantId}`)).status).toBe(404);
+    for (const qs of ["", "tenantId=Bad_Id", `tenantId=${shopA.tenantId}&limit=101`, `tenantId=${shopA.tenantId}&since=yesterday`, `tenantId=${shopA.tenantId}&cursor=x`, `tenantId=${shopA.tenantId}&email=a`]) {
+      expect((await platformCall(world, "GET", `/v1/platform/orders?${qs}`)).status, qs).toBe(400);
+    }
+    expect((await platformCall(world, "POST", `/v1/platform/orders?tenantId=${shopA.tenantId}`, {})).status).toBe(404);
+  });
+
+  it("GET /v1/platform/alerts + POST …/resolve: an audited, final resolution; a still-true condition raises a fresh alert", async () => {
+    const stuck = await buyProduct(world, shopA, teeA);
+    const dispatchId = stuck.dispatchIds[0]!;
+    await deliverOutbox(world, [dispatchId], world.with(printerWire(() => "unreachable")));
+    await runReconciliation(world.env, Date.now() + 31 * MINUTE_MS);
+
+    const open: Array<{ alertId: string; kind: string; resolution: unknown; resourceId: string | null }> = [];
+    let cursor: string | null = null;
+    do {
+      const body: { alerts: typeof open; nextCursor: string | null } = await expectJson(
+        await platformCall(
+          world,
+          "GET",
+          `/v1/platform/alerts?state=open&kind=dispatch_stranded_30m&tenantId=${shopA.tenantId}&limit=1${cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`}`,
+        ),
+        200,
+        "open alerts",
+      );
+      open.push(...body.alerts);
+      cursor = body.nextCursor;
+    } while (cursor !== null);
+    const alert = open.find((entry) => entry.resourceId === dispatchId);
+    expect(alert).toMatchObject({ kind: "dispatch_stranded_30m", resolution: null });
+
+    const resolved = await expectJson<{ alert: { resolution: { at: string; byUserId: string; note: string } } }>(
+      await platformCall(world, "POST", `/v1/platform/alerts/${encodeURIComponent(alert?.alertId ?? "")}/resolve`, {
+        note: "Skrivaren nere, SnapWear kontaktad",
+      }),
+      200,
+      "resolve",
+    );
+    expect(resolved.alert.resolution).toEqual({
+      at: expect.any(String),
+      byUserId: world.platformUserId,
+      note: "Skrivaren nere, SnapWear kontaktad",
+    });
+    const again = await platformCall(world, "POST", `/v1/platform/alerts/${encodeURIComponent(alert?.alertId ?? "")}/resolve`, {
+      note: "igen",
+    });
+    expect(again.status, "resolution is final").toBe(409);
+    const audit = await env.DB.prepare(
+      "SELECT actor_user_id, reason FROM audit_events WHERE action = 'alert.resolve' AND resource_id = ?",
+    )
+      .bind(alert?.alertId ?? "")
+      .all();
+    expect(audit.results).toEqual([{ actor_user_id: world.platformUserId, reason: "Skrivaren nere, SnapWear kontaktad" }]);
+
+    const resolvedList = await expectJson<{ alerts: Array<{ alertId: string }> }>(
+      await platformCall(world, "GET", `/v1/platform/alerts?state=resolved&tenantId=${shopA.tenantId}&limit=100`),
+      200,
+      "resolved alerts",
+    );
+    expect(resolvedList.alerts.map((entry) => entry.alertId)).toContain(alert?.alertId);
+
+    // The printer is still down: the next run raises a FRESH alert for it.
+    await runReconciliation(world.env, Date.now() + 32 * MINUTE_MS);
+    const fresh = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM alerts WHERE kind = 'dispatch_stranded_30m' AND resource_id = ? AND resolved_at IS NULL",
+    )
+      .bind(dispatchId)
+      .first<{ n: number }>();
+    expect(fresh?.n).toBe(1);
+
+    // Refusals: unknown id, cross-origin, a shop admin, a bad body, a bad query.
+    expect((await platformCall(world, "POST", "/v1/platform/alerts/no-such-alert/resolve", { note: "x" })).status).toBe(404);
+    const crossOrigin = await call(world, "POST", `${PLATFORM}/v1/platform/alerts/${encodeURIComponent(alert?.alertId ?? "")}/resolve`, {
+      body: { note: "x" },
+      cookie: world.platformCookie,
+      origin: "https://evil.test",
+    });
+    expect(crossOrigin.status).toBe(404);
+    const asAdmin = await call(world, "GET", `${ADMIN}/v1/platform/alerts`, { cookie: shopA.adminCookie });
+    expect(asAdmin.status).toBe(404);
+    expect((await platformCall(world, "POST", "/v1/platform/alerts/x/resolve", { note: "" })).status).toBe(400);
+    expect((await platformCall(world, "GET", "/v1/platform/alerts?state=closed")).status).toBe(400);
   });
 });
 

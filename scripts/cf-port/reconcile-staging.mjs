@@ -6,30 +6,33 @@
  *   CHOPSHOP_API_URL=https://chopshop-api-stg.kent-ee2.workers.dev \
  *   CHOPSHOP_PLATFORM_EMAIL=… CHOPSHOP_PLATFORM_PASSWORD=… \
  *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] \
- *   node scripts/cf-port/reconcile-staging.mjs [--tenant slice-YYYYMMDD]
- *        (--orders-json <wrangler d1 --json output> | --order <orderId>:<pi_…> …)
- *        [--alerts-json <wrangler d1 --json output>]
+ *   node scripts/cf-port/reconcile-staging.mjs [--tenant slice-YYYYMMDD] [--order <orderId> …]
  *
- * There is no order-listing route before CP5 and the admin order read deliberately carries no
- * Stripe ids (the seller sees ONE number), so the order ↔ PaymentIntent pairs come from D1:
- * without --orders-json/--order the script prints the exact preflight command that produces
- * them, and exits 2. The same holds for open alerts (no alerts route yet).
+ * The order ↔ PaymentIntent pairs come from the platform's order list (CP2-E):
+ *   GET /v1/platform/orders?tenantId=…   paginated, followed to exhaustion (nextCursor)
+ * — the platform-only view with the Stripe ids, the GROSS application fee and the withholding
+ * released from it (D36). `--order` narrows the run to the named orders. No D1 export needed.
  *
  * Per order it reads:
- *   D1 side    GET /v1/admin/orders/:id (acting-as)   charged, refunded, pending, fee, payout
+ *   platform   the order list row                      intent id, gross fee, released
+ *   seller     GET /v1/admin/orders/:id (acting-as)    charged, refunded, pending, fee (NET), payout
  *   Stripe     the PaymentIntent + its charge, the charge's transfer (and reversals), the
  *              application fee (and its refunds), every refund of the intent, and any further
  *              transfer to the connected account whose metadata names the order
  *   printer    GET /v1/staging/fake-printer/jobs?orderId= (with FAKE_PRINTER_TOKEN)
  * and checks:
  *   charged    = the charge's amount_captured
- *   fee        = the intent's application_fee_amount = the application fee's amount
+ *   fee gross  = the platform row's applicationFeeMinor = the intent's application_fee_amount
+ *                = the application fee object's amount (Stripe never changes the gross)
+ *   fee net    = the seller's ONE fee figure = gross − released (D1) = the fee object's
+ *                amount − amount_refunded (Stripe's net: a D36 release is a fee refund)
  *   refunded   = Σ succeeded refunds at Stripe = the charge's amount_refunded
  *   pending    = Σ pending refunds at Stripe
  *   payout     = what the connected account nets at Stripe:
  *                transfer − reversed − (fee − fee refunded) + further transfers for the order
  * then prints the dispatch rows that need a human (GET /v1/platform/dispatch?state=unknown|failed)
- * and ends with ONE line: `BALANCED …` or `UNBALANCED … Δ <öre>` (exit 0 / 1).
+ * and the tenant's open alerts (GET /v1/platform/alerts?state=open) — every list followed to
+ * exhaustion — and ends with ONE line: `BALANCED …` or `UNBALANCED … Δ <öre>` (exit 0 / 1).
  *
  * Read-only everywhere except the acting-as grant it opens (audited, 1 h). Credentials come only
  * from the environment variables above; nothing is written to disk and no secret is printed.
@@ -57,22 +60,18 @@ function requireEnv(name) {
 
 // ── arguments ───────────────────────────────────────────────────────────────
 
-const args = { alertsJson: null, orders: [], ordersJson: null, tenant: null };
+const args = { orders: [], tenant: null };
 for (let index = 2; index < process.argv.length; index += 1) {
   const arg = process.argv[index];
   const value = () => process.argv[++index] ?? die(`${arg} needs a value`);
   if (arg === "--tenant") {
     args.tenant = value();
-  } else if (arg === "--orders-json") {
-    args.ordersJson = value();
-  } else if (arg === "--alerts-json") {
-    args.alertsJson = value();
   } else if (arg === "--order") {
-    const [orderId, paymentIntentId] = value().split(":");
-    if (!/^[0-9a-f-]{36}$/.test(orderId ?? "") || !/^pi_[A-Za-z0-9]+$/.test(paymentIntentId ?? "")) {
-      die("--order needs <orderId>:<pi_…>");
+    const orderId = value();
+    if (!/^[0-9a-f-]{36}$/.test(orderId)) {
+      die("--order needs an order id");
     }
-    args.orders.push({ order_id: orderId, payment_intent_id: paymentIntentId });
+    args.orders.push(orderId);
   } else {
     die(`unknown argument ${arg}`);
   }
@@ -95,31 +94,6 @@ const FAKE_PRINTER_TOKEN = process.env.FAKE_PRINTER_TOKEN?.trim() || null;
 const TENANT_ID = args.tenant ?? `slice-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}`;
 if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(TENANT_ID)) {
   die(`tenant id ${TENANT_ID} is not a valid tenant id`);
-}
-
-/** Rows from `wrangler d1 execute --json` (an array of { results }) or a plain array. */
-function readRows(file) {
-  const parsed = JSON.parse(readFileSync(file, "utf8"));
-  const list = Array.isArray(parsed) ? parsed : [parsed];
-  return list.flatMap((entry) => (Array.isArray(entry?.results) ? entry.results : [entry]));
-}
-
-const d1 = (sql) =>
-  `scripts/cf-preflight.sh staging -- d1 execute ${PINNED.d1.name} --remote --json --command "${sql}"`;
-
-if (args.ordersJson !== null) {
-  args.orders.push(...readRows(args.ordersJson).filter((row) => row.tenant_id === undefined || row.tenant_id === TENANT_ID));
-}
-if (args.orders.length === 0) {
-  console.log("No orders given. Produce them (reviewer, through the preflight) and re-run with --orders-json:");
-  console.log(
-    `  ${d1(`SELECT order_id, payment_intent_id, tenant_id, status FROM orders WHERE tenant_id = '${TENANT_ID}' ORDER BY created_at`)} > orders.json`,
-  );
-  console.log("Open alerts (optional, --alerts-json):");
-  console.log(
-    `  ${d1("SELECT kind, severity, resource_type, resource_id, tenant_id, created_at FROM alerts WHERE resolved_at IS NULL ORDER BY created_at")} > alerts.json`,
-  );
-  process.exit(2);
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
@@ -151,6 +125,33 @@ async function api(method, route, options = {}) {
     json = null;
   }
   return { json, status: response.status, text };
+}
+
+/**
+ * Every row of a paginated platform list: follows `nextCursor` to exhaustion (Codex P2 on
+ * CP2-D1 — filtering only the FIRST page reported zero rows for a tenant whose rows sat on a
+ * later one). `key` names the array in the body; a non-200 page stops with its status.
+ */
+async function listAll(route, key) {
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 1_000; page += 1) {
+    const separator = route.includes("?") ? "&" : "?";
+    const listed = await api(
+      "GET",
+      `${route}${separator}limit=100${cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`}`,
+      { session: true },
+    );
+    if (listed.status !== 200) {
+      return { rows, status: listed.status };
+    }
+    rows.push(...(listed.json?.[key] ?? []));
+    cursor = listed.json?.nextCursor ?? null;
+    if (cursor === null) {
+      return { rows, status: 200 };
+    }
+  }
+  return { rows, status: "unterminated" };
 }
 
 async function stripeGet(route, params = {}) {
@@ -215,13 +216,31 @@ if (grant.status !== 201) {
   die(`acting-as ${TENANT_ID}: HTTP ${grant.status}`);
 }
 
+const platformOrders = await listAll(`/v1/platform/orders?tenantId=${TENANT_ID}`, "orders");
+if (platformOrders.status !== 200) {
+  die(`GET /v1/platform/orders: ${platformOrders.status}`);
+}
+const selected =
+  args.orders.length === 0
+    ? platformOrders.rows
+    : platformOrders.rows.filter((order) => args.orders.includes(order.orderId));
+for (const orderId of args.orders) {
+  if (!selected.some((order) => order.orderId === orderId)) {
+    die(`--order ${orderId} is not an order of ${TENANT_ID}`);
+  }
+}
+if (selected.length === 0) {
+  console.log(`Tenant ${TENANT_ID} has no orders yet (run seed-staging-slice.mjs --purchase).`);
+  process.exit(2);
+}
+
 const rows = [];
 let totalDelta = 0;
 let problems = 0;
 
-for (const pair of args.orders) {
-  const orderId = pair.order_id;
-  const intentId = pair.payment_intent_id;
+for (const platformOrder of selected) {
+  const orderId = platformOrder.orderId;
+  const intentId = platformOrder.paymentIntentId;
   const issues = [];
   const read = await api("GET", `/v1/admin/orders/${orderId}`, { session: true, shop: true });
   if (read.status !== 200) {
@@ -268,6 +287,8 @@ for (const pair of args.orders) {
       destination,
       fee: intent.application_fee_amount ?? 0,
       feeObject: fee?.amount ?? null,
+      // Stripe's NET fee: a D36 withholding release is an application-fee refund.
+      feeNet: fee === null ? null : fee.amount - fee.amount_refunded,
       pending: sum(refunds.data, ["pending", "requires_action"]),
       refunded: sum(refunds.data, ["succeeded"]),
       shopNet: transferred - feeKept + furtherIn,
@@ -285,10 +306,22 @@ for (const pair of args.orders) {
     }
   };
   check("charged", order.money.chargedMinor, stripe.captured);
-  check("fee", order.money.feeMinor, stripe.fee);
+  // Codex P2 on CP2-D1: after a D36 release the seller's fee is NET (gross − released) while
+  // the intent's application_fee_amount and the fee object's amount stay GROSS. Gross is
+  // checked against gross, net against net — a correct release is BALANCED.
+  check("fee gross (platform row vs intent)", platformOrder.money.applicationFeeMinor, stripe.fee);
   if (stripe.feeObject !== null) {
-    check("fee collected", order.money.feeMinor, stripe.feeObject);
+    check("fee gross (intent vs application fee)", stripe.fee, stripe.feeObject);
   }
+  const d1Net = platformOrder.money.applicationFeeMinor - platformOrder.money.withholdingReleasedMinor;
+  if (order.money.feeMinor !== d1Net) {
+    issues.push(`fee net: the seller's figure ${order.money.feeMinor} ≠ D1 gross − released ${d1Net}`);
+  }
+  check(
+    "fee net (seller's figure vs Stripe's amount − amount_refunded)",
+    order.money.feeMinor,
+    stripe.feeNet ?? stripe.fee,
+  );
   check("refunded", order.money.refundedMinor, stripe.refunded);
   check("charge.amount_refunded", stripe.refunded, stripe.chargeRefunded);
   check("refund pending", order.money.refundPendingMinor, stripe.pending);
@@ -356,25 +389,21 @@ for (const row of rows.filter((candidate) => candidate.issues.length > 0)) {
 // ── work that needs a human ─────────────────────────────────────────────────
 
 for (const state of ["unknown", "failed"]) {
-  const listed = await api("GET", `/v1/platform/dispatch?state=${state}`, { session: true });
-  const mine = (listed.json?.dispatches ?? []).filter((dispatch) => dispatch.tenantId === TENANT_ID);
+  // Every page (Codex P2 on CP2-D1): the list is cross-tenant and paginated.
+  const listed = await listAll(`/v1/platform/dispatch?state=${state}`, "dispatches");
+  const mine = listed.rows.filter((dispatch) => dispatch.tenantId === TENANT_ID);
   console.log(`\nDispatch rows '${state}' for ${TENANT_ID}: ${listed.status === 200 ? mine.length : `HTTP ${listed.status}`}`);
   for (const dispatch of mine) {
     console.log(`    ${dispatch.outboxId}  order ${dispatch.orderId} line ${dispatch.lineNo}  ${dispatch.lastError ?? ""}`);
   }
 }
 
-if (args.alertsJson !== null) {
-  const alerts = readRows(args.alertsJson).filter((alert) => alert.tenant_id === null || alert.tenant_id === TENANT_ID);
-  console.log(`\nOpen alerts (${alerts.length}):`);
-  for (const alert of alerts) {
-    console.log(`    ${alert.created_at}  ${alert.severity}  ${alert.kind}  ${alert.resource_type}:${alert.resource_id}`);
-  }
-} else {
-  console.log("\nOpen alerts: no route yet — list them through the preflight and pass --alerts-json:");
-  console.log(
-    `    ${d1("SELECT kind, severity, resource_type, resource_id, tenant_id, created_at FROM alerts WHERE resolved_at IS NULL ORDER BY created_at")} > alerts.json`,
-  );
+// The tenant's own open alerts and the platform-wide ones (tenant null), every page.
+const openAlerts = await listAll("/v1/platform/alerts?state=open", "alerts");
+const alerts = openAlerts.rows.filter((alert) => alert.tenantId === null || alert.tenantId === TENANT_ID);
+console.log(`\nOpen alerts (${openAlerts.status === 200 ? alerts.length : `HTTP ${openAlerts.status}`}):`);
+for (const alert of alerts) {
+  console.log(`    ${alert.createdAt}  ${alert.severity}  ${alert.kind}  ${alert.resourceType}:${alert.resourceId}`);
 }
 
 console.log("");

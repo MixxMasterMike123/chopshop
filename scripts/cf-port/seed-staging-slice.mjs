@@ -23,9 +23,15 @@
  *      (.bench/render-bench-typical.png if present, else a generated 3600 × 3600 PNG — the real
  *      render container needs ≥ 300 DPI at 300 mm), wait for `ready`, product, mapping, quote,
  *      publish, platform approval, and the public PDP;
- *   5. --purchase: checkout (pickup) → PaymentIntent → Stripe confirm with pm_card_visa →
- *      the receipt poll until the webhook made the order (needs step 3's UPDATE applied);
- *   6. --refund <orderId>:<amountMinor>: a partial refund through the admin route.
+ *   5. --purchase: the platform terms (CP2-E checkout gate — the shop's OWN admin must accept;
+ *      a platform user acting-as cannot): when not yet accepted, a slice tenant admin
+ *      `slice-admin+<tenant>@example.com` is created with CHOPSHOP_SLICE_ADMIN_PASSWORD and
+ *      accepts; then checkout (pickup, the buyer's terms consent) → PaymentIntent → Stripe
+ *      confirm with pm_card_visa → the receipt poll until the webhook made the order (needs
+ *      step 3's UPDATE applied);
+ *   6. --refund <orderId>:<amountMinor>: a partial refund through the admin route, with an
+ *      Idempotency-Key derived from (tenant, order, amount) — re-running the same command
+ *      replays the first refund instead of making a second one.
  *
  * Credentials come ONLY from the environment variables above. Nothing is written to disk and no
  * secret, cookie or receipt token is printed. Never runs wrangler: the one D1 write it needs is
@@ -685,7 +691,75 @@ async function ensureProduct(artworkId) {
   return productId;
 }
 
+/** Same (tenant, order, amount) → same UUID-shaped Idempotency-Key. */
+function refundIdempotencyKey(target) {
+  const hex = createHash("sha256")
+    .update(`${TENANT_ID}:${target.orderId}:${target.amountMinor}`)
+    .digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * CP2-E: checkout is closed until the shop's own admin accepted the CURRENT platform terms.
+ * The platform user (acting-as) can read the status but can never accept for the seller, so a
+ * slice tenant admin is created (once) and accepts. The password comes only from the env.
+ */
+async function ensureTermsAccepted() {
+  step("platform terms (the checkout gate)");
+  const status = expectStatus(
+    await api("GET", "/v1/admin/legal/status", { session: true, shop: true }),
+    [200],
+    "terms status",
+  );
+  if (status.json.accepted) {
+    info("accepted", `${status.json.currentVersion} at ${status.json.acceptedAt}`);
+    return;
+  }
+  const password = process.env.CHOPSHOP_SLICE_ADMIN_PASSWORD?.trim() ?? "";
+  if (password.length < 12) {
+    die(
+      `the shop has not accepted platform terms ${status.json.currentVersion}: set ` +
+        "CHOPSHOP_SLICE_ADMIN_PASSWORD (≥ 12 chars) so the slice tenant admin is created and accepts",
+    );
+  }
+  const email = `slice-admin+${TENANT_ID}@example.com`;
+  expectStatus(
+    await api("POST", "/v1/platform/users", {
+      json: { accountType: "tenant_admin", email, password },
+      session: true,
+    }),
+    [201, 409],
+    "slice tenant admin",
+  );
+  const signedIn = await fetch(`${API}/api/auth/sign-in/email`, {
+    body: JSON.stringify({ email, password }),
+    headers: { "content-type": "application/json", origin: API },
+    method: "POST",
+  });
+  if (signedIn.status !== 200) {
+    die(`slice tenant admin sign-in failed: HTTP ${signedIn.status} (an existing ${email} with another password?)`);
+  }
+  const adminUser = (await signedIn.json())?.user?.id;
+  const adminCookie = signedIn.headers.getSetCookie().map((value) => value.split(";", 1)[0]).join("; ");
+  expectStatus(
+    await api("POST", `/v1/platform/tenants/${TENANT_ID}/admins`, { json: { userId: adminUser }, session: true }),
+    [200, 201],
+    "grant tenant admin",
+  );
+  const accepted = expectStatus(
+    await api("POST", "/v1/admin/legal/accept-terms", {
+      headers: { cookie: adminCookie },
+      json: { termsVersion: status.json.currentVersion },
+      shop: true,
+    }),
+    [200, 201],
+    "accept platform terms",
+  );
+  info("accepted", `${accepted.json.acceptance.termsVersion} at ${accepted.json.acceptance.acceptedAt} by ${email}`);
+}
+
 async function purchase(productId, account) {
+  await ensureTermsAccepted();
   step("purchase (checkout → PaymentIntent → Stripe confirm → webhook → receipt)");
   if (!account.charges_enabled) {
     die("the connected account cannot take charges yet (finish onboarding, apply the UPDATE, re-run)");
@@ -693,6 +767,8 @@ async function purchase(productId, account) {
   const checkout = expectStatus(
     await api("POST", "/v1/checkout", {
       json: {
+        // The buyer ticked the purchase terms (required); marketing stays unticked.
+        consent: { terms: true },
         deliveryMethod: "pickup",
         email: `slice-buyer+${Date.now()}@example.com`,
         idempotencyKey: `slice-${randomUUID()}`,
@@ -741,6 +817,7 @@ async function refund(target) {
   step(`refund ${target.amountMinor} öre of order ${target.orderId}`);
   const result = expectStatus(
     await api("POST", `/v1/admin/orders/${target.orderId}/refunds`, {
+      headers: { "idempotency-key": refundIdempotencyKey(target) },
       json: { amountMinor: target.amountMinor, reason: "CP2 slice refund (staging)" },
       session: true,
       shop: true,
@@ -780,5 +857,5 @@ if (orderId !== null) {
 }
 console.log(
   "\n  Next: node scripts/cf-port/reconcile-staging.mjs --tenant " +
-    `${TENANT_ID} (it prints the preflight command that lists the tenant's orders)`,
+    `${TENANT_ID} (it lists the tenant's orders through GET /v1/platform/orders)`,
 );

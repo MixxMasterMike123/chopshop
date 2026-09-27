@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/auth/create-auth";
+import { acceptTermsStatement, BUYER_CONSENT } from "./legal-fixtures";
 
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
 const HOST_A = "https://admin-a.dcadmin.test";
@@ -113,6 +114,7 @@ async function seedTenant(tenantId: string, hostname: string): Promise<void> {
         domain_id, tenant_id, hostname, kind, status, created_at, updated_at
       ) VALUES (?, ?, ?, 'admin', 'verified', ?, ?)`,
     ).bind(`domain-${tenantId}`, tenantId, hostname, NOW, NOW),
+    acceptTermsStatement(env.DB, tenantId),
   ]);
 }
 
@@ -831,6 +833,7 @@ describe("admin-created codes price a real checkout", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
+          consent: BUYER_CONSENT,
           deliveryMethod: "pickup",
           discountCode: code.toLowerCase(),
           email: "e2e-buyer@example.test",

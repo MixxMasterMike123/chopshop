@@ -65,6 +65,9 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 | D43 | A job submitted then REFUSED by the printer, or a dispatch left `failed`, releases no withholding under the strict "before submission" rule until a human resolves it. | **Keep strict**; the manual resolution route (`resolve … failed`) makes the order eligible and reconciliation releases within 15 min — document in the ops runbook. |
 | D44 | Application-fee refunds made in the Stripe dashboard raise an alert but are not counted in payout facts. | **Keep** (dashboard fee refunds are an ops action; the alert is the audit trail). |
 | D45 | D41 floor uses `max(tenant VAT, 25 %)` (builder addition: at 0 % VAT the floor fell below the withholding) and assumes the 8 % BAS fee, so a PLUS shop's 5 % is covered but a commission above 8 % is not. | **Accept the VAT factor**; commission above 8 % does not exist in the pricing tiers (BAS 8 / PLUS 5). |
+| D46 | **Personalised POD = product flag** (`products.is_personalized`, default 0), not "every POD line" (CP2-E deviation, matches Firebase + the ångerrätt rule: catalogue POD products keep the 14-day withdrawal right; only buyer-designed items may waive it with disclosure + checkbox). | **Accept the product flag.** CP6 (studio) sets it for buyer-designed items. |
+| D47 | A new platform-terms version closes every shop's checkout until its admin re-accepts (no grace period). | **Add a 14-day grace period on version publish** (previous acceptance stays valid until `published_at + 14 d`; admin banner meanwhile) — CP3 with the settings table. |
+| D48 | The payment route does not re-check the terms gate; a checkout opened before a version change can be paid within its 24 h window. | **Accept** (the checkout row is the contract; 24 h bound). |
 
 ## Affiliate rebuild (PORT-LATER — answer before that checkpoint, not now)
 

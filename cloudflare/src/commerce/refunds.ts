@@ -561,6 +561,12 @@ interface OrderRefundRow {
 
 /**
  * `POST /v1/admin/orders/:orderId/refunds` — reserve, then ask Stripe.
+ *
+ * `options.clientKey` (CP2-E): the admin's Idempotency-Key, stored on the
+ * operation IN the reservation batch; `refund_operations_client_key_idx`
+ * (UNIQUE per tenant) then makes a second reservation under the same key
+ * impossible — the batch aborts and the caller replays the first operation
+ * (src/routes/money-orders.ts).
  */
 export async function requestRefund(
   db: D1Database,
@@ -569,6 +575,7 @@ export async function requestRefund(
   orderId: string,
   input: RefundRequestInput,
   now: number,
+  options: { clientKey?: string } = {},
 ): Promise<RequestRefundResult> {
   const operationId = crypto.randomUUID();
   let reserved = false;
@@ -631,9 +638,9 @@ export async function requestRefund(
         .prepare(
           `INSERT INTO refund_operations (
             id, tenant_id, order_id, amount_minor, state, origin, reason,
-            created_by, created_at, updated_at
+            created_by, created_at, updated_at, client_key
           )
-          SELECT ?, ?, ?, ?, 'reserved', 'admin', ?, ?, ?, ?
+          SELECT ?, ?, ?, ?, 'reserved', 'admin', ?, ?, ?, ?, ?
           WHERE ${onlyIfReserved}`,
         )
         .bind(
@@ -645,6 +652,7 @@ export async function requestRefund(
           principal.userId,
           iso(now),
           iso(now),
+          options.clientKey ?? null,
           orderId,
           operationId,
         ),

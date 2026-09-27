@@ -779,12 +779,33 @@ export async function signUpAdmin(email: string, tenantId: string | null): Promi
 
 export const ADMIN_HOST = "https://admin.money.test";
 
+/**
+ * A tenant-admin request. A POST to `…/refunds` carries a fresh
+ * `Idempotency-Key` unless the caller names one (or `null` for none): the
+ * route requires it (CP2-E), and every suite but the idempotency one is about
+ * something else.
+ */
 export function adminRequest(
   path: string,
   method: string,
-  options: { body?: unknown; cookie?: string; origin?: string | null; shopId?: string | null } = {},
+  options: {
+    body?: unknown;
+    cookie?: string;
+    idempotencyKey?: string | null;
+    origin?: string | null;
+    shopId?: string | null;
+  } = {},
 ): Request {
   const headers = new Headers();
+  const idempotencyKey =
+    options.idempotencyKey !== undefined
+      ? options.idempotencyKey
+      : method === "POST" && path.endsWith("/refunds")
+        ? crypto.randomUUID()
+        : null;
+  if (idempotencyKey !== null) {
+    headers.set("idempotency-key", idempotencyKey);
+  }
   if (options.cookie !== undefined) {
     headers.set("cookie", options.cookie);
   }

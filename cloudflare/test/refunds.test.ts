@@ -780,6 +780,8 @@ describe("GET /v1/admin/orders/:orderId", () => {
     const paidAt = body.order.paidAt as string;
     expect(body).toEqual({
       order: {
+        // CP2-E: the buyer's consent facts (none on a seeded checkout).
+        consent: null,
         currency: "SEK",
         money: {
           chargedMinor: 20_000,
@@ -816,6 +818,7 @@ describe("GET /v1/admin/orders/:orderId", () => {
           totalMinor: 20_000,
           vatMinor: 0,
         },
+        withdrawal: { waived: false },
       },
     });
   });

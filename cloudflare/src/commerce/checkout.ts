@@ -1,4 +1,15 @@
 import type { TenantContext } from "../tenancy/resolve-tenant";
+import type {
+  CheckoutConsentInput,
+  ConsentRefusalCode,
+} from "../legal/consent";
+import {
+  freezeConsent,
+  isPersonalizedLine,
+  parseCheckoutConsent,
+  sameConsent,
+} from "../legal/consent";
+import { hasAcceptedCurrentTerms } from "../legal/platform-terms";
 import {
   ELIGIBLE_PRODUCTS_FROM,
   PUBLIC_ELIGIBILITY_PREDICATE,
@@ -31,6 +42,13 @@ export interface CheckoutItemInput {
 }
 
 export interface CreateCheckoutInput {
+  /**
+   * The buyer's consent (src/legal/consent.ts). The HTTP parser always sets it
+   * and requires `terms: true`; it is optional here only for engine-level
+   * callers, which then freeze no consent and still cannot buy a personalised
+   * line (no waiver was given).
+   */
+  consent?: CheckoutConsentInput;
   deliveryMethod: DeliveryMethod;
   /**
    * The normalized (trimmed, uppercased) campaign code the buyer presented, or
@@ -66,6 +84,8 @@ interface ResolvedLine extends CheckoutLine {
   allowPickup: boolean;
   allowShipping: boolean;
   currency: string;
+  /** products.is_personalized — no right of withdrawal once waived (src/legal/consent.ts). */
+  isPersonalized: boolean;
   /** products.is_pod — the line needs a production snapshot line. */
   isPod: boolean;
   shippingRates: ShippingRates | null;
@@ -102,12 +122,17 @@ export interface Checkout {
 
 export type CreateCheckoutResult =
   | { checkout: Checkout; replayed: boolean; status: "ok" }
-  | { status: "conflict" | "invalid_items" };
+  | { status: "conflict" | "invalid_items" }
+  /** The shop may not sell: its admin has not accepted the current platform terms. */
+  | { status: "not_found" }
+  /** The basket needs a consent the request did not give (400 with the code). */
+  | { code: ConsentRefusalCode; status: "consent_refused" };
 
 interface PublicationRow {
   allow_pickup: number;
   allow_shipping: number;
   currency: string;
+  is_personalized: number;
   is_pod: number;
   product_id: string;
   public_name: string;
@@ -125,6 +150,7 @@ interface VariantRow {
 
 interface CheckoutRow {
   checkout_id: string;
+  consent_json: string | null;
   currency: string;
   customer_email: string;
   delivery_method: DeliveryMethod;
@@ -168,6 +194,7 @@ export const MAX_ITEM_QUANTITY = 999;
 const MAX_UNIT_PRICE_MINOR = 100_000_000;
 
 const CHECKOUT_KEYS = [
+  "consent",
   "deliveryMethod",
   "discountCode",
   "email",
@@ -321,7 +348,15 @@ export function parseCreateCheckoutInput(
   const email = parseEmail(body.email);
   const idempotencyKey = parseIdempotencyKey(body.idempotencyKey);
   const deliveryMethod = parseDeliveryMethod(body.deliveryMethod);
-  if (email === null || idempotencyKey === null || deliveryMethod === null) {
+  // Required: a checkout without the buyer's acceptance of the purchase terms
+  // is not a checkout (src/legal/consent.ts rule 1).
+  const consent = parseCheckoutConsent(body.consent);
+  if (
+    email === null ||
+    idempotencyKey === null ||
+    deliveryMethod === null ||
+    consent === null
+  ) {
     return null;
   }
 
@@ -368,6 +403,7 @@ export function parseCreateCheckoutInput(
   }
 
   return {
+    consent,
     deliveryMethod,
     discountCode,
     email,
@@ -447,7 +483,8 @@ async function resolveLine(
          product.allow_shipping AS allow_shipping,
          product.allow_pickup AS allow_pickup,
          product.shipping_json AS shipping_json,
-         product.is_pod AS is_pod
+         product.is_pod AS is_pod,
+         product.is_personalized AS is_personalized
        ${ELIGIBLE_PRODUCTS_FROM}
        WHERE publication.tenant_id = ?
          AND product.tenant_id = ?
@@ -510,6 +547,7 @@ async function resolveLine(
     allowPickup: publication.allow_pickup === 1,
     allowShipping: publication.allow_shipping === 1,
     currency: publication.currency,
+    isPersonalized: publication.is_personalized === 1,
     isPod: publication.is_pod === 1,
     itemIndex,
     lineTotalMinor: unitPriceMinor * item.quantity,
@@ -750,6 +788,8 @@ function matchesExisting(
   currency: string,
   lines: CheckoutLine[],
   quote: {
+    /** The freshly frozen consent: a replay that changed a box conflicts. */
+    consentJson: string | null;
     deliveryMethod: DeliveryMethod;
     discountCodeId: string | null;
     discountMinor: number;
@@ -792,6 +832,9 @@ function matchesExisting(
     // The frozen rate. A tenant that changed its VAT rate between attempts
     // would otherwise replay an invoice line computed under the old one.
     existing.vat_rate_bp !== quote.vatRateBp ||
+    // The consent is part of what the buyer asked for: the same key with the
+    // marketing box flipped, or a waiver added, is a different request.
+    !sameConsent(existing.consent_json, quote.consentJson) ||
     existingLines.length !== lines.length
   ) {
     return false;
@@ -829,7 +872,8 @@ async function loadExisting(
       `SELECT
          checkout_id, currency, customer_email, delivery_method,
          shipping_country, expires_at, subtotal_minor, shipping_minor,
-         vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor
+         vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
+         consent_json
        FROM checkouts
        WHERE tenant_id = ?
          AND idempotency_key_hash = ?
@@ -1007,6 +1051,14 @@ export async function createCheckout(
     return { status: "invalid_items" };
   }
 
+  // THE LEGAL GATE (src/legal/platform-terms.ts). A shop whose admin has not
+  // accepted the CURRENT platform terms takes no checkout at all, and says so
+  // with the same opaque 404 an unknown shop gets: nothing about the gate
+  // reaches a buyer. First, so a gated shop resolves no line and writes nothing.
+  if (!(await hasAcceptedCurrentTerms(db, tenant.tenantId, now))) {
+    return { status: "not_found" };
+  }
+
   const lines = await resolveLines(db, tenant, input.items);
   if (lines === null) {
     return { status: "invalid_items" };
@@ -1071,6 +1123,18 @@ export async function createCheckout(
     return { status: "invalid_items" };
   }
 
+  // Buyer consent (src/legal/consent.ts), decided on the priced basket: the
+  // server, never the client, says which lines are personalised. After every
+  // 422 above, so an unpurchasable basket is refused as such first.
+  const consent = await freezeConsent(
+    input.consent,
+    lines.filter(isPersonalizedLine).map((line) => line.itemIndex),
+    now,
+  );
+  if (consent.status === "refused") {
+    return { code: consent.code, status: "consent_refused" };
+  }
+
   const expiresAt = now + CHECKOUT_TTL_MS;
   const checkoutId = crypto.randomUUID();
   const idempotencyKeyHash = await hashIdempotencyKey(
@@ -1086,8 +1150,8 @@ export async function createCheckout(
           delivery_method, shipping_country, subtotal_minor, shipping_minor,
           vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
           payment_intent_id, idempotency_key_hash, production_snapshot_json,
-          expires_at, created_at, updated_at
-        ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
+          expires_at, created_at, updated_at, consent_json
+        ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         checkoutId,
@@ -1113,6 +1177,7 @@ export async function createCheckout(
         expiresAt,
         now,
         now,
+        consent.json,
       ),
   ];
 
@@ -1182,6 +1247,7 @@ export async function createCheckout(
         currency,
         lines,
         {
+          consentJson: consent.json,
           deliveryMethod: input.deliveryMethod,
           discountCodeId: discount.discountCodeId,
           discountMinor: discount.discountMinor,

@@ -1134,6 +1134,16 @@ async function reconcilePaymentIntents(
  * minutes after the order created it: a paid POD line that has not provably
  * reached the printer. CP2-B's sweeper separately alerts on `unknown` rows;
  * this is the order-level net under all of them, including `failed`.
+ *
+ * NOT stranded (CP2-E, CP2-D1 finding 5), so never re-alerted:
+ *   - a failure a human already decided: `last_error = 'resolved_failed'`
+ *     (POST /v1/platform/dispatch/:id/resolve, outcome failed — who/when/why
+ *     are in its audit row);
+ *   - a line whose order is `cancelled` or fully `refunded`: nothing is owed
+ *     to the printer any more (an in-flight `unknown` there still has the
+ *     sweeper's own dispatch_unknown_30m alert).
+ * Excluding them in SQL also keeps them from filling the LIMIT and starving
+ * newer stranded rows.
  */
 async function detectStrandedDispatch(
   db: D1Database,
@@ -1144,12 +1154,19 @@ async function detectStrandedDispatch(
   const settled = DISPATCH_SETTLED.map((s) => `'${s}'`).join(", ");
   const rows = await db
     .prepare(
-      `SELECT outbox_id, tenant_id, aggregate_id, status
-       FROM outbox_events
-       WHERE event_type = 'dispatch'
-         AND status NOT IN (${settled})
-         AND created_at <= ?
-       ORDER BY created_at ASC
+      `SELECT e.outbox_id, e.tenant_id, e.aggregate_id, e.status
+       FROM outbox_events AS e
+       WHERE e.event_type = 'dispatch'
+         AND e.status NOT IN (${settled})
+         AND e.created_at <= ?
+         AND (e.last_error IS NULL OR e.last_error <> 'resolved_failed')
+         AND NOT EXISTS (
+           SELECT 1 FROM orders AS o
+           WHERE o.order_id = e.aggregate_id
+             AND o.tenant_id = e.tenant_id
+             AND o.status IN ('cancelled', 'refunded')
+         )
+       ORDER BY e.created_at ASC
        LIMIT ?`,
     )
     .bind(now - STRANDED_MS, 100)

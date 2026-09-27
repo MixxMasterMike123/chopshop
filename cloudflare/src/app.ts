@@ -131,6 +131,21 @@ import {
   handleAdminOrderRefundsRoute,
   handleAdminOrderRoute,
 } from "./routes/money-orders";
+// CP2-E (legal gate, platform order/alert reads) route handlers.
+import {
+  ADMIN_LEGAL_ACCEPT_TERMS_PATH,
+  ADMIN_LEGAL_STATUS_PATH,
+  handleAdminLegalAcceptTermsRoute,
+  handleAdminLegalStatusRoute,
+} from "./routes/legal-admin";
+import {
+  handlePlatformAlertResolveRoute,
+  handlePlatformAlertsRoute,
+  handlePlatformOrdersRoute,
+  PLATFORM_ALERT_RESOLVE_ROUTE,
+  PLATFORM_ALERTS_PATH,
+  PLATFORM_ORDERS_PATH,
+} from "./routes/platform-orders";
 import { FAKE_PRINTER_JOBS_PATH } from "./dispatch/fake-printer";
 // CP2-B (outbox/dispatch) route handlers.
 import {
@@ -193,7 +208,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0030_withholding_release_backoff.sql";
+const REQUIRED_MIGRATION = "0031_legal_consent.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -918,6 +933,23 @@ async function handleCheckoutRoute(
     return unprocessableResponse();
   }
 
+  // CP2-E: the legal gate answers exactly as an unknown shop does, and a basket
+  // that needs a consent the buyer did not give is a 400 naming which one.
+  if (result.status === "not_found") {
+    return notFoundResponse("Checkout not found");
+  }
+  if (result.status === "consent_refused") {
+    return jsonResponse(
+      {
+        error: {
+          code: result.code,
+          message: "The basket needs a consent the request did not give",
+        },
+      },
+      400,
+    );
+  }
+
   return jsonResponse(
     {
       error: {
@@ -1210,7 +1242,8 @@ async function handleStripeWebhookRoute(
   // answers differently for, because every one of them is a fact recorded in
   // `payment_events` rather than a message to the caller. A D1 fault throws
   // instead of returning, which is the one case Stripe should retry.
-  await handleStripeWebhookEvent(env.DB, event, Date.now());
+  // `env` (CP2-E): the committed order's dispatch + email rows are nudged.
+  await handleStripeWebhookEvent(env.DB, event, Date.now(), env);
 
   // `received` and nothing else. Not the outcome, not the reason code, not the
   // order id: Stripe does not read the body, and a webhook endpoint is a public
@@ -1999,6 +2032,22 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   );
   app.all(ADMIN_ORDER_REFUNDS_ROUTE, (c) =>
     handleAdminOrderRefundsRoute(
+      c.env,
+      c.req.raw,
+      new URL(c.req.url).pathname.split("/")[4] ?? "",
+    ),
+  );
+  // CP2-E: the seller's platform-terms acceptance (the checkout gate) and the
+  // platform's order/alert reads. Exact patterns only; the alert id segment is
+  // taken from the RAW pathname and decoded once by the handler.
+  app.all(ADMIN_LEGAL_STATUS_PATH, (c) => handleAdminLegalStatusRoute(c.env, c.req.raw));
+  app.all(ADMIN_LEGAL_ACCEPT_TERMS_PATH, (c) =>
+    handleAdminLegalAcceptTermsRoute(c.env, c.req.raw),
+  );
+  app.all(PLATFORM_ORDERS_PATH, (c) => handlePlatformOrdersRoute(c.env, c.req.raw));
+  app.all(PLATFORM_ALERTS_PATH, (c) => handlePlatformAlertsRoute(c.env, c.req.raw));
+  app.all(PLATFORM_ALERT_RESOLVE_ROUTE, (c) =>
+    handlePlatformAlertResolveRoute(
       c.env,
       c.req.raw,
       new URL(c.req.url).pathname.split("/")[4] ?? "",

@@ -202,6 +202,12 @@ export interface BuyerOrder {
     totalMinor: number;
     vatMinor: number;
   };
+  /**
+   * CP2-E: whether the buyer waived the 14-day right of withdrawal for a
+   * personalised line after the disclosure (src/legal/consent.ts). false =
+   * the full right applies.
+   */
+  withdrawal: { waived: boolean };
 }
 
 interface BuyerOrderRow {
@@ -210,6 +216,7 @@ interface BuyerOrderRow {
   customer_email: string;
   delivery_method: string;
   discount_minor: number;
+  is_personalized: number;
   order_id: string;
   order_number: string;
   shipping_country: string | null;
@@ -258,7 +265,7 @@ export async function readBuyerOrder(
       `SELECT
          order_id, order_number, status, customer_email, currency,
          delivery_method, shipping_country, subtotal_minor, shipping_minor,
-         vat_minor, discount_minor, total_minor, created_at
+         vat_minor, discount_minor, total_minor, created_at, is_personalized
        FROM orders
        WHERE tenant_id = ?
          AND order_id = ?
@@ -307,5 +314,6 @@ export async function readBuyerOrder(
       totalMinor: order.total_minor,
       vatMinor: order.vat_minor,
     },
+    withdrawal: { waived: order.is_personalized === 1 },
   };
 }

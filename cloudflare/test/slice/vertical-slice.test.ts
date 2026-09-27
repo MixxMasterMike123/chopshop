@@ -6,6 +6,7 @@ import { postEvent } from "../money-fixtures";
 import { lineRow, outboxRow, printerJobs } from "../dispatch-fixtures";
 import { expectNoCostKeys, TEE_S } from "../pod-fixtures";
 import {
+  acceptPlatformTerms,
   adminOrder,
   approveProduct,
   assertLedgerBalanced,
@@ -38,6 +39,7 @@ import {
   SliceWorld,
   storefrontCall,
   succeedPayment,
+  termsStatus,
   uploadOriginal,
   uploadOutputs,
   acquireJob,
@@ -96,7 +98,9 @@ describe("CP2 vertical slice", () => {
       expect(world.platformCookie).not.toBe("");
 
       // ── 2. tenant + Connect account (charges + payouts enabled) ─────────
+      // The admin does NOT accept the platform terms yet: step 12a proves the gate.
       const tenant = await createTenant(world, {
+        acceptTerms: false,
         commissionBps: COMMISSION_BPS,
         host: HOST,
         shopName: SHOP_NAME,
@@ -182,15 +186,73 @@ describe("CP2 vertical slice", () => {
       });
       expect(revalidated.status).toBe(304);
 
+      // ── 12a. THE LEGAL GATE: no checkout before the seller accepts the terms
+      expect(await termsStatus(world, tenant)).toEqual({
+        accepted: false,
+        acceptedAt: null,
+        currentVersion: "2026-09-07",
+      });
+      const gated = await storefrontCall(world, tenant, "POST", "/v1/checkout", {
+        body: {
+          consent: { terms: true },
+          deliveryMethod: "pickup",
+          email: "early@buyers.slice.test",
+          idempotencyKey: "idem-slice-gated",
+          items: [{ productId, quantity: 1 }],
+        },
+        origin: null,
+      });
+      expect(await expectJson(gated, 404, "gated checkout"), "the same answer as an unknown shop").toEqual({
+        error: { code: "not_found", message: "Checkout not found" },
+      });
+      const noCheckout = await env.DB.prepare("SELECT COUNT(*) AS n FROM checkouts WHERE tenant_id = ?")
+        .bind(TENANT_ID)
+        .first<{ n: number }>();
+      expect(noCheckout?.n, "a gated shop writes nothing").toBe(0);
+      const acceptedAt = await acceptPlatformTerms(world, tenant);
+      expect(await termsStatus(world, tenant)).toEqual({
+        accepted: true,
+        acceptedAt,
+        currentVersion: "2026-09-07",
+      });
+      const evidence = await env.DB.prepare(
+        `SELECT user_id, terms_version, accepted_at, ip, evidence_json
+         FROM platform_terms_acceptances WHERE tenant_id = ?`,
+      )
+        .bind(TENANT_ID)
+        .all<{ accepted_at: string; evidence_json: string; ip: string | null; terms_version: string; user_id: string }>();
+      expect(evidence.results).toEqual([
+        {
+          accepted_at: acceptedAt,
+          evidence_json: expect.stringContaining('"termsSha256":"ca1f708f'),
+          ip: expect.stringMatching(/^203\.0\./),
+          terms_version: "2026-09-07",
+          user_id: tenant.adminUserId,
+        },
+      ]);
+
       // ── 12. checkout (pickup): the production snapshot is frozen ────────
+      // The buyer ticks the terms and (separately) marketing. The POD tee is a
+      // CATALOGUE product (the seller's own design), so no waiver is asked for
+      // and the full right of withdrawal stays (the legal firewall).
       const buyerEmail = "kund@buyers.slice.test";
-      const checkout = await openCheckout(world, tenant, [{ productId, quantity: 1 }], { email: buyerEmail });
+      const checkout = await openCheckout(world, tenant, [{ productId, quantity: 1 }], {
+        consent: { marketing: true, terms: true },
+        email: buyerEmail,
+      });
       expect(checkout).toMatchObject({ deliveryMethod: "pickup", totalMinor: PRICE_MINOR });
       const frozen = await env.DB.prepare(
-        "SELECT production_snapshot_json FROM checkouts WHERE checkout_id = ?",
+        "SELECT production_snapshot_json, consent_json FROM checkouts WHERE checkout_id = ?",
       )
         .bind(checkout.checkoutId)
-        .first<{ production_snapshot_json: string }>();
+        .first<{ consent_json: string; production_snapshot_json: string }>();
+      expect(JSON.parse(frozen?.consent_json ?? "null")).toEqual({
+        marketing: true,
+        recordedAt: expect.any(String),
+        terms: true,
+        v: 1,
+        withdrawal: { disclosureSha256: null, disclosureVersion: null, personalizedItems: [], waived: false },
+      });
       const snapshot = JSON.parse(frozen?.production_snapshot_json ?? "null") as {
         lines: Array<{ lineNo: number; printFiles: Array<{ r2Key: string; sha256: string; slot: string }>; quantity: number; sku: string }>;
         printer: string;
@@ -275,7 +337,7 @@ describe("CP2 vertical slice", () => {
 
       const order = await env.DB.prepare(
         `SELECT status, charged_minor, application_fee_minor, withheld_minor, connect_account_id,
-                production_snapshot_json, payout_state
+                production_snapshot_json, payout_state, consent_json, is_personalized
          FROM orders WHERE order_id = ?`,
       )
         .bind(orderId)
@@ -284,6 +346,9 @@ describe("CP2 vertical slice", () => {
         application_fee_minor: fee,
         charged_minor: PRICE_MINOR,
         connect_account_id: tenant.accountId,
+        // The consent, copied in the order batch (CP2-E).
+        consent_json: frozen?.consent_json,
+        is_personalized: 0,
         payout_state: "pending",
         production_snapshot_json: frozen?.production_snapshot_json,
         status: "paid",
@@ -300,6 +365,11 @@ describe("CP2 vertical slice", () => {
       ]);
       const dispatchId = outbox[0]!.outbox_id;
       const emailId = outbox[1]!.outbox_id;
+      // The webhook nudged both rows once the batch committed (CP2-E): the
+      // printer hears within seconds, not at the next 15-minute sweep.
+      expect(world.nudges.sent).toEqual(
+        expect.arrayContaining([{ outboxId: dispatchId }, { outboxId: emailId }]),
+      );
       expect(JSON.parse((await outboxRow(dispatchId)).payload_json)).toEqual({
         jobId: `${orderId}-1`,
         lineNo: 1,
@@ -366,12 +436,15 @@ describe("CP2 vertical slice", () => {
         "orderNumber",
         "status",
         "totals",
+        "withdrawal",
       ]);
       expect(buyer.order).toMatchObject({
         delivery: { country: null, method: "pickup" },
         email: "k***@buyers.slice.test",
         items: [{ lineTotalMinor: PRICE_MINOR, name: "Slice-tröja", quantity: 1, unitPriceMinor: PRICE_MINOR }],
         status: "paid",
+        // A catalogue POD product: the 14-day right of withdrawal applies.
+        withdrawal: { waived: false },
       });
       expectNoDeniedKeys(buyer, "buyer read");
       expect(numbersOf(buyer)).not.toContain(fee);
@@ -388,6 +461,14 @@ describe("CP2 vertical slice", () => {
         refundPendingMinor: 0,
       });
       expect(read.payout).toMatchObject({ amountMinor: PRICE_MINOR - fee, state: "pending" });
+      // …and what the buyer consented to (CP2-E): terms, marketing separately, no waiver.
+      expect(read.consent).toEqual({
+        marketing: true,
+        recordedAt: expect.any(String),
+        terms: true,
+        withdrawal: { disclosureVersion: null, personalizedItems: [], waived: false },
+      });
+      expect(read.withdrawal).toEqual({ waived: false });
       expectNoDeniedKeys(read, "admin read");
       expect(numbersOf(read), "neither half of the fee is shown").not.toContain(withheld);
       expect(numbersOf(read)).not.toContain(commission);
@@ -396,12 +477,20 @@ describe("CP2 vertical slice", () => {
       // ── 19. partial refund, reserve-first; Stripe says "pending" ────────
       const PARTIAL = 10_000;
       world.stripe.refundStatus = "pending";
+      const partialKey = crypto.randomUUID();
       const partial = await expectJson<{ refund: { refundId: string; state: string } }>(
-        await refundCall(world, tenant, orderId, PARTIAL),
+        await refundCall(world, tenant, orderId, PARTIAL, undefined, partialKey),
         201,
         "partial refund",
       );
       expect(partial.refund.state).toBe("submitted");
+      // The admin's retry with the same Idempotency-Key (CP2-E) is the SAME
+      // operation: no second reservation, no second call to Stripe.
+      const retried = await refundCall(world, tenant, orderId, PARTIAL, undefined, partialKey);
+      expect(retried.headers.get("idempotent-replayed")).toBe("true");
+      expect((await expectJson<{ refund: { refundId: string } }>(retried, 201, "refund retry")).refund.refundId).toBe(
+        partial.refund.refundId,
+      );
       expect(world.stripe.refundCalls).toEqual([
         expect.objectContaining({
           amount: PARTIAL,

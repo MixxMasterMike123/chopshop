@@ -279,6 +279,11 @@ export function storefrontCall(
 }
 
 export interface TenantSpec {
+  /**
+   * false: the shop's admin does NOT accept the platform terms, so the CP2-E
+   * checkout gate stays closed (the slice then accepts through the route).
+   */
+  acceptTerms?: boolean;
   commissionBps?: number | null;
   host: string;
   shopName: string;
@@ -288,7 +293,9 @@ export interface TenantSpec {
 /**
  * POST /v1/platform/tenants → the Connect account (SQL: onboarding endpoints
  * are not built; staging gets the same UPDATE from the seed script) → a tenant
- * admin (POST /v1/platform/users + /admins) → that admin's session.
+ * admin (POST /v1/platform/users + /admins) → that admin's session → the admin
+ * accepts the current platform terms (POST /v1/admin/legal/accept-terms, the
+ * CP2-E checkout gate) unless `acceptTerms: false`.
  */
 export async function createTenant(world: SliceWorld, spec: TenantSpec): Promise<Tenant> {
   await expectJson(
@@ -339,7 +346,31 @@ export async function createTenant(world: SliceWorld, spec: TenantSpec): Promise
     tenantId: spec.tenantId,
   };
   world.tenants.push(tenant);
+  if (spec.acceptTerms !== false) {
+    await acceptPlatformTerms(world, tenant);
+  }
   return tenant;
+}
+
+/** GET /v1/admin/legal/status as the shop's admin. */
+export async function termsStatus(world: SliceWorld, tenant: Tenant) {
+  return expectJson<{ accepted: boolean; acceptedAt: string | null; currentVersion: string | null }>(
+    await adminCall(world, tenant, "GET", "/v1/admin/legal/status"),
+    200,
+    "terms status",
+  );
+}
+
+/** The shop's admin accepts the CURRENT platform terms version (201). */
+export async function acceptPlatformTerms(world: SliceWorld, tenant: Tenant): Promise<string> {
+  const { currentVersion } = await termsStatus(world, tenant);
+  const body = await expectJson<{ acceptance: { acceptedAt: string; termsVersion: string } }>(
+    await adminCall(world, tenant, "POST", "/v1/admin/legal/accept-terms", { termsVersion: currentVersion }),
+    201,
+    "accept platform terms",
+  );
+  expect(body.acceptance.termsVersion).toBe(currentVersion);
+  return body.acceptance.acceptedAt;
 }
 
 /** PUT /v1/platform/printers (the fake printer + its tiers) and PUT /v1/platform/pod/profiles. */
@@ -609,15 +640,24 @@ export interface CheckoutView {
   totalMinor: number;
 }
 
+/** The buyer's boxes (CP2-E): terms always; marketing and the waiver when ticked. */
+export interface BuyerConsent {
+  disclosureVersion?: string;
+  marketing?: boolean;
+  terms: true;
+  withdrawalWaiver?: boolean;
+}
+
 export async function openCheckout(
   world: SliceWorld,
   tenant: Tenant,
   items: Array<{ productId: string; quantity: number }>,
-  options: { email?: string } = {},
+  options: { consent?: BuyerConsent; email?: string } = {},
 ): Promise<CheckoutView> {
   const body = await expectJson<{ checkout: CheckoutView }>(
     await storefrontCall(world, tenant, "POST", "/v1/checkout", {
       body: {
+        consent: options.consent ?? { terms: true },
         deliveryMethod: "pickup",
         email: options.email ?? `${unique("buyer")}@buyers.slice.test`,
         idempotencyKey: unique("idem-slice"),
@@ -868,6 +908,12 @@ export function readBuyerOrder(world: SliceWorld, tenant: Tenant, orderId: strin
 }
 
 export interface AdminOrder {
+  consent: {
+    marketing: boolean;
+    recordedAt: string;
+    terms: boolean;
+    withdrawal: { disclosureVersion: string | null; personalizedItems: number[]; waived: boolean };
+  } | null;
   money: {
     chargedMinor: number;
     feeMinor: number;
@@ -878,6 +924,7 @@ export interface AdminOrder {
   payout: { amountMinor: number; eligibleAt: string; state: string };
   refunds: Array<{ amountMinor: number; origin: string; refundId: string; state: string }>;
   status: string;
+  withdrawal: { waived: boolean };
 }
 
 export async function adminOrder(world: SliceWorld, tenant: Tenant, orderId: string): Promise<AdminOrder> {
@@ -889,17 +936,25 @@ export async function adminOrder(world: SliceWorld, tenant: Tenant, orderId: str
   return body.order;
 }
 
+/**
+ * POST …/refunds with the Idempotency-Key the route requires (CP2-E): a fresh
+ * one unless the caller names it (a retry after a lost response reuses it).
+ */
 export function refundCall(
   world: SliceWorld,
   tenant: Tenant,
   orderId: string,
   amountMinor: number,
   targetEnv?: Env,
+  idempotencyKey: string = crypto.randomUUID(),
 ) {
-  return adminCall(world, tenant, "POST", `/v1/admin/orders/${orderId}/refunds`, {
-    amountMinor,
-    reason: "Kunden ångrade köpet",
-  }, targetEnv);
+  return call(world, "POST", `${ADMIN}/v1/admin/orders/${orderId}/refunds`, {
+    body: { amountMinor, reason: "Kunden ångrade köpet" },
+    cookie: tenant.adminCookie,
+    env: targetEnv,
+    headers: { "idempotency-key": idempotencyKey },
+    shopId: tenant.tenantId,
+  });
 }
 
 export function cancelCall(world: SliceWorld, tenant: Tenant, orderId: string, targetEnv?: Env) {

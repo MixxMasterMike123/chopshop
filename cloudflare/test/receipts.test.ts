@@ -420,6 +420,7 @@ describe("reading an order with the receipt token", () => {
       "orderNumber",
       "status",
       "totals",
+      "withdrawal",
     ]);
     expect(body.order).toMatchObject({
       currency: "SEK",
@@ -438,6 +439,8 @@ describe("reading an order with the receipt token", () => {
         totalMinor: 59_600,
         vatMinor: 0,
       },
+      // CP2-E: a checkout seeded before consent existed keeps the full right.
+      withdrawal: { waived: false },
     });
     expect(body.order.orderNumber).toMatch(/^\d{8}-[0-9A-HJ-NP-TV-Z]{8}$/);
     expect(body.order.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);

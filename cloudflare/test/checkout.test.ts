@@ -7,6 +7,7 @@ import {
   shippingMinor as shippingMinorFor,
   vatMinor,
 } from "../src/commerce/shipping";
+import { acceptTermsStatement, BUYER_CONSENT } from "./legal-fixtures";
 
 const NOW = 1_787_200_000_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -69,6 +70,7 @@ async function seedTenant(tenantId: string, hostname: string): Promise<void> {
         domain_id, tenant_id, hostname, kind, status, created_at, updated_at
       ) VALUES (?, ?, ?, 'storefront', 'verified', ?, ?)`,
     ).bind(`domain-${tenantId}`, tenantId, hostname, NOW, NOW),
+    acceptTermsStatement(env.DB, tenantId),
   ]);
 }
 
@@ -177,16 +179,23 @@ function checkoutRequest(
 }
 
 /**
- * Posts a body EXACTLY as given. Parser tests use this so an assertion about a
- * missing or malformed field is about the field the test names, not about
- * whatever a helper filled in on its behalf.
+ * Posts a body EXACTLY as given — with ONE exception: a body that does not
+ * mention `consent` at all gets the buyer's terms acceptance (CP2-E), because
+ * every suite but the consent suite is about something else. A test that means
+ * "no consent" says so with `consent: undefined` (dropped by JSON). Parser
+ * tests use this so an assertion about a missing or malformed field is about
+ * the field the test names, not about whatever a helper filled in on its behalf.
  */
 async function postRaw(
   hostname: string,
   body: unknown,
   headers: Record<string, string> = {},
 ): Promise<Response> {
-  return exports.default.fetch(checkoutRequest(hostname, body, headers));
+  const withConsent =
+    body !== null && typeof body === "object" && !Array.isArray(body) && !("consent" in body)
+      ? { consent: BUYER_CONSENT, ...(body as Record<string, unknown>) }
+      : body;
+  return exports.default.fetch(checkoutRequest(hostname, withConsent, headers));
 }
 
 /**
@@ -1853,6 +1862,145 @@ describe("POST /v1/checkout idempotency", () => {
 
     const second = await post(HOST_A, payload);
     expect(second.status).toBe(409);
+  });
+});
+
+describe("POST /v1/checkout legal gate and buyer consent (CP2-E)", () => {
+  const TENANT_GATED = "tenant-ck-gated";
+  const HOST_GATED = "gated.checkout.test";
+
+  beforeAll(async () => {
+    // A shop whose admin never accepted the platform terms.
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO tenants (
+          tenant_id, status, shop_name, default_locale, default_currency, created_at, updated_at
+        ) VALUES (?, 'active', 'Gated', 'sv-SE', 'SEK', ?, ?)`,
+      ).bind(TENANT_GATED, NOW, NOW),
+      env.DB.prepare(
+        `INSERT INTO tenant_domains (
+          domain_id, tenant_id, hostname, kind, status, created_at, updated_at
+        ) VALUES (?, ?, ?, 'storefront', 'verified', ?, ?)`,
+      ).bind(`domain-${TENANT_GATED}`, TENANT_GATED, HOST_GATED, NOW, NOW),
+    ]);
+    await seedProduct({
+      productId: "ck-gated-live",
+      publicPriceMinor: 10_000,
+      published: true,
+      sku: "CK-GATED-LIVE",
+      status: "active",
+      tenantId: TENANT_GATED,
+    });
+    await seedProduct({
+      productId: "ck-a-personal",
+      publicPriceMinor: 30_000,
+      published: true,
+      sku: "CK-A-PERSONAL",
+      status: "active",
+      tenantId: TENANT_A,
+    });
+    await env.DB.prepare("UPDATE products SET is_personalized = 1 WHERE product_id = 'ck-a-personal'").run();
+  });
+
+  it("refuses every checkout of a shop without the current terms acceptance — the unknown-shop 404, nothing written", async () => {
+    const body = { email: "gate@example.test", idempotencyKey: nextKey(), items: [{ productId: "ck-gated-live", quantity: 1 }] };
+    const gated = await post(HOST_GATED, body);
+    const unknown = await post("nobody.checkout.test", body);
+
+    expect(gated.status).toBe(404);
+    const gatedBody = await gated.json();
+    expect(gatedBody).toEqual({ error: { code: "not_found", message: "Checkout not found" } });
+    expect(gatedBody).toEqual(await unknown.json());
+    await expect(countCheckouts(TENANT_GATED)).resolves.toBe(0);
+
+    await acceptTermsStatement(env.DB, TENANT_GATED).run();
+    const open = await post(HOST_GATED, { ...body, idempotencyKey: nextKey() });
+    expect(open.status).toBe(201);
+    await expect(countCheckouts(TENANT_GATED)).resolves.toBe(1);
+  });
+
+  it("requires the buyer's terms consent (400, nothing written)", async () => {
+    const before = await countCheckouts(TENANT_A);
+    for (const consent of [undefined, { terms: false }, { marketing: true }]) {
+      const response = await post(HOST_A, {
+        consent,
+        email: "noconsent@example.test",
+        idempotencyKey: nextKey(),
+        items: [{ productId: "ck-a-live", quantity: 1 }],
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "invalid_request", message: "Request is not valid" },
+      });
+    }
+    await expect(countCheckouts(TENANT_A)).resolves.toBe(before);
+  });
+
+  it("a personalised line needs the waiver with the current disclosure; a standard basket needs none", async () => {
+    const before = await countCheckouts(TENANT_A);
+    const withoutWaiver = await post(HOST_A, {
+      consent: { terms: true },
+      email: "personal@example.test",
+      idempotencyKey: nextKey(),
+      items: [{ productId: "ck-a-live", quantity: 1 }, { productId: "ck-a-personal", quantity: 1 }],
+    });
+    expect(withoutWaiver.status).toBe(400);
+    await expect(withoutWaiver.json()).resolves.toEqual({
+      error: {
+        code: "withdrawal_waiver_required",
+        message: "The basket needs a consent the request did not give",
+      },
+    });
+    const staleDisclosure = await post(HOST_A, {
+      consent: { disclosureVersion: "v0-old", terms: true, withdrawalWaiver: true },
+      email: "personal@example.test",
+      idempotencyKey: nextKey(),
+      items: [{ productId: "ck-a-personal", quantity: 1 }],
+    });
+    expect(staleDisclosure.status).toBe(400);
+    await expect(staleDisclosure.json()).resolves.toMatchObject({
+      error: { code: "withdrawal_disclosure_outdated" },
+    });
+    await expect(countCheckouts(TENANT_A)).resolves.toBe(before);
+
+    const waived = await post(HOST_A, {
+      consent: { disclosureVersion: "v1-2026-06", marketing: true, terms: true, withdrawalWaiver: true },
+      email: "personal@example.test",
+      idempotencyKey: nextKey(),
+      items: [{ productId: "ck-a-live", quantity: 1 }, { productId: "ck-a-personal", quantity: 1 }],
+    });
+    expect(waived.status).toBe(201);
+    const { checkout } = await waived.json<CheckoutBody>();
+    // The consent is server-side evidence: the buyer-facing checkout does not echo it.
+    expect(Object.keys(checkout)).not.toContain("consent");
+    const row = await env.DB.prepare("SELECT consent_json FROM checkouts WHERE checkout_id = ?")
+      .bind(checkout.checkoutId)
+      .first<{ consent_json: string }>();
+    expect(JSON.parse(row?.consent_json ?? "null")).toMatchObject({
+      marketing: true,
+      terms: true,
+      withdrawal: { disclosureVersion: "v1-2026-06", personalizedItems: [1], waived: true },
+    });
+
+    const standard = await post(HOST_A, {
+      consent: { terms: true },
+      email: "standard@example.test",
+      idempotencyKey: nextKey(),
+      items: [{ productId: "ck-a-live", quantity: 1 }],
+    });
+    expect(standard.status).toBe(201);
+  });
+
+  it("conflicts when the same key is replayed with a different consent", async () => {
+    const idempotencyKey = nextKey();
+    const payload = {
+      email: "consent-replay@example.test",
+      idempotencyKey,
+      items: [{ productId: "ck-a-live", quantity: 1 }],
+    };
+    expect((await post(HOST_A, { ...payload, consent: { terms: true } })).status).toBe(201);
+    expect((await post(HOST_A, { ...payload, consent: { terms: true } })).status).toBe(200);
+    expect((await post(HOST_A, { ...payload, consent: { marketing: true, terms: true } })).status).toBe(409);
   });
 });
 

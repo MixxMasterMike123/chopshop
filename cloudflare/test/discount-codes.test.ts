@@ -1,6 +1,8 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { acceptTermsStatement, BUYER_CONSENT } from "./legal-fixtures";
+
 import {
   MAX_DISCOUNT_PERCENT_BP,
   percentDiscountMinor,
@@ -72,6 +74,7 @@ async function seedTenant(tenantId: string, hostname: string): Promise<void> {
         domain_id, tenant_id, hostname, kind, status, created_at, updated_at
       ) VALUES (?, ?, ?, 'storefront', 'verified', ?, ?)`,
     ).bind(`domain-${tenantId}`, tenantId, hostname, NOW, NOW),
+    acceptTermsStatement(env.DB, tenantId),
   ]);
 }
 
@@ -177,6 +180,7 @@ async function post(
         "content-type": "application/json",
       },
       body: JSON.stringify({
+        consent: BUYER_CONSENT,
         deliveryMethod: "pickup",
         email: nextEmail(),
         idempotencyKey: nextKey(),
@@ -750,6 +754,7 @@ describe("discount replay fingerprint", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
+          consent: BUYER_CONSENT,
           deliveryMethod: "pickup",
           discountCode,
           email,

@@ -453,6 +453,7 @@ describe("checkout freezes the production snapshot", () => {
     const response = await exports.default.fetch(
       new Request(`${ORIGIN}/v1/checkout`, {
         body: JSON.stringify({
+          consent: { terms: true },
           deliveryMethod: "shipping",
           email: "late@podtest.test",
           idempotencyKey: `idem-late-${crypto.randomUUID()}`,
@@ -504,6 +505,7 @@ describe("checkout freezes the production snapshot", () => {
     const response = await exports.default.fetch(
       new Request(`${ORIGIN}/v1/checkout`, {
         body: JSON.stringify({
+          consent: { terms: true },
           deliveryMethod: "shipping",
           email: "http@podtest.test",
           idempotencyKey: `idem-http-${crypto.randomUUID()}`,
