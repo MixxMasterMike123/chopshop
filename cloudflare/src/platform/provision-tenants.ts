@@ -28,7 +28,10 @@ export type DomainKind = "storefront" | "admin";
 
 export type TenantResult =
   | { status: "ok"; tenant: ProvisionedTenant }
-  | { status: "conflict" | "not_found" };
+  // `code` names a specific refusal (setTenantStatus on a closed shop). A route
+  // that knows nothing of it still answers the generic 409.
+  | { code?: "tenant_closed"; status: "conflict" }
+  | { status: "not_found" };
 
 export type DomainResult =
   | { domain: ProvisionedDomain; status: "ok" }
@@ -429,25 +432,52 @@ export async function setTenantStatus(
 
   // Idempotent by construction: the same status written twice is a no-op row
   // update, and the audit trail still records that the operator asked for it.
-  await db.batch([
+  //
+  // CLOSED IS FINAL (0032, trigger tenants_closed_is_final). The refusal is
+  // part of the UPDATE's WHERE, not a read before it: a closed shop matches no
+  // row, so the trigger never fires (it would abort the batch into a 500) and
+  // nothing is written. The audit row is conditional on the same fact, read
+  // after the UPDATE in the same batch: the shop holds the requested status
+  // (active or suspended) exactly when the UPDATE matched, because a shop the
+  // UPDATE skipped is still closed.
+  const [updated] = await db.batch([
     db
       .prepare(
         `UPDATE tenants
          SET status = ?, updated_at = ?
-         WHERE tenant_id = ?`,
+         WHERE tenant_id = ?
+           AND status <> 'closed'`,
       )
       .bind(status, now, tenantId),
-    auditStatement(
-      db,
-      principal,
-      status === "active" ? "tenant.activate" : "tenant.suspend",
-      tenantId,
-      "tenant",
-      tenantId,
-      now,
-      null,
-    ),
+    db
+      .prepare(
+        `INSERT INTO audit_events (
+          event_id, tenant_id, actor_user_id, action, resource_type,
+          resource_id, request_id, metadata_json, created_at
+        )
+        SELECT ?, ?, ?, ?, 'tenant', ?, ?, NULL, ?
+        WHERE EXISTS (
+          SELECT 1 FROM tenants WHERE tenant_id = ? AND status = ?
+        )`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        tenantId,
+        principal.userId,
+        status === "active" ? "tenant.activate" : "tenant.suspend",
+        tenantId,
+        crypto.randomUUID(),
+        now,
+        tenantId,
+        status,
+      ),
   ]);
+
+  // D1's meta.changes also counts rows written by triggers (0025 bumps
+  // catalog_version on every status change), so "matched" is > 0, not === 1.
+  if ((updated?.meta.changes ?? 0) === 0) {
+    return { code: "tenant_closed", status: "conflict" };
+  }
 
   return {
     status: "ok",
@@ -514,11 +544,7 @@ export async function grantTenantAdmin(
     .first<{ membership_id: string; status: string }>();
 
   if (existingMembership !== null) {
-    if (existingMembership.status !== "active") {
-      return { status: "conflict" };
-    }
-
-    return {
+    const granted: MembershipResult = {
       membership: {
         membershipId: existingMembership.membership_id,
         role: "admin",
@@ -528,6 +554,103 @@ export async function grantTenantAdmin(
       },
       status: "ok",
     };
+
+    // Already an admin of this shop: idempotent, nothing written.
+    if (existingMembership.status === "active") {
+      return granted;
+    }
+
+    // `revoked` or `suspended` (the only other states 0002 allows): a grant is
+    // the operator's explicit instruction to make this user an admin of this
+    // shop, so the existing row is re-activated — the (tenant, user, role) key
+    // is unique, a second row is impossible — and audited with the state it
+    // left. It never re-enables the IDENTITY: a suspended or revoked
+    // identity_access row was refused above and stays refused here.
+    //
+    // One guarded UPDATE decides (the lifecycle pattern of
+    // src/platform/user-lifecycle.ts): the membership is still in the state
+    // read above, the shop is active, and the identity is an active tenant
+    // admin or has no access row yet (which a fresh grant would create). The
+    // identity insert and the audit row are keyed on its status_change_id.
+    const changeId = crypto.randomUUID();
+    const [decision] = await db.batch([
+      db
+        .prepare(
+          `UPDATE tenant_memberships
+           SET status = 'active',
+               updated_at = MAX(updated_at, ?),
+               status_change_id = ?
+           WHERE membership_id = ?
+             AND status = ?
+             AND EXISTS (
+               SELECT 1 FROM tenants WHERE tenant_id = ? AND status = 'active'
+             )
+             AND (
+               NOT EXISTS (SELECT 1 FROM identity_access WHERE user_id = ?)
+               OR EXISTS (
+                 SELECT 1 FROM identity_access
+                 WHERE user_id = ?
+                   AND account_type = 'tenant_admin'
+                   AND status = 'active'
+               )
+             )`,
+        )
+        .bind(
+          now,
+          changeId,
+          existingMembership.membership_id,
+          existingMembership.status,
+          tenantId,
+          input.userId,
+          input.userId,
+        ),
+      db
+        .prepare(
+          `INSERT INTO identity_access (
+            user_id, account_type, status, created_at, updated_at
+          )
+          SELECT ?, 'tenant_admin', 'active', ?, ?
+          WHERE NOT EXISTS (SELECT 1 FROM identity_access WHERE user_id = ?)
+            AND EXISTS (
+              SELECT 1 FROM tenant_memberships
+              WHERE membership_id = ? AND status_change_id = ?
+            )`,
+        )
+        .bind(
+          input.userId,
+          now,
+          now,
+          input.userId,
+          existingMembership.membership_id,
+          changeId,
+        ),
+      db
+        .prepare(
+          `INSERT INTO audit_events (
+            event_id, tenant_id, actor_user_id, action, resource_type,
+            resource_id, request_id, metadata_json, created_at
+          )
+          SELECT ?, tenant_id, ?, 'tenant.admin_reactivate', 'tenant_membership',
+            membership_id, ?,
+            json_object('changeId', ?, 'previousStatus', ?),
+            ?
+          FROM tenant_memberships
+          WHERE membership_id = ? AND status_change_id = ?`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          principal.userId,
+          crypto.randomUUID(),
+          changeId,
+          existingMembership.status,
+          now,
+          existingMembership.membership_id,
+          changeId,
+        ),
+    ]);
+
+    // "Matched" is changes > 0: D1 counts rows a trigger writes as well.
+    return (decision?.meta.changes ?? 0) > 0 ? granted : { status: "conflict" };
   }
 
   const membershipId = crypto.randomUUID();

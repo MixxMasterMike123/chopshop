@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   createAuthEmailJob,
   hashEmailRecipient,
+  INVITE_LINK_VALID_HOURS,
   parseAuthEmailJob,
+  PLATFORM_DISPLAY_NAME,
   redactedAuthEmailJobMetadata,
   renderAuthEmail,
 } from "../src/email/auth-email-job";
@@ -134,5 +136,128 @@ describe("email delivery ledger", () => {
         .bind("tenant-email-b", NOW + 1, "delivery-email-a")
         .run(),
     ).rejects.toThrow("tenant_id is immutable");
+  });
+});
+
+describe("the display name and the invite wording (CP3-B review round 1)", () => {
+  const recipient = "invitee@example.com";
+  const actionUrl = `${AUTH_BASE_URL}/api/auth/reset-password/invite-token?callbackURL=https%3A%2F%2Fweb.test.invalid%2Freset-password&x=1`;
+
+  function resetJob(locale: "en" | "sv", variant?: "invite") {
+    return createAuthEmailJob(
+      {
+        actionUrl,
+        expiresAt: EXPIRES_AT,
+        kind: "password_reset",
+        locale,
+        recipient,
+        ...(variant === undefined ? {} : { variant }),
+      },
+      AUTH_BASE_URL,
+    );
+  }
+
+  it("names the product through one constant; reset and verification subjects are unchanged", () => {
+    expect(PLATFORM_DISPLAY_NAME).toBe("ChopShop");
+
+    const svReset = renderAuthEmail(resetJob("sv"));
+    expect(svReset.subject).toBe("Återställ ditt lösenord");
+    expect(svReset.text).toBe(
+      `Du har begärt att återställa ditt lösenord för ChopShop.\n\nÅterställ lösenord: ${actionUrl}`,
+    );
+    const enReset = renderAuthEmail(resetJob("en"));
+    expect(enReset.subject).toBe("Reset your password");
+    expect(enReset.text).toContain("You requested a password reset for ChopShop.");
+
+    const verification = renderAuthEmail(
+      createAuthEmailJob(
+        {
+          actionUrl: `${AUTH_BASE_URL}/api/auth/verify-email?token=a`,
+          expiresAt: EXPIRES_AT,
+          kind: "email_verification",
+          locale: "sv",
+          recipient,
+        },
+        AUTH_BASE_URL,
+      ),
+    );
+    expect(verification.subject).toBe("Verifiera din e-postadress");
+    expect(verification.text).toContain("Bekräfta din e-postadress för ChopShop.");
+
+    for (const message of [svReset, enReset, verification]) {
+      expect(message.text).not.toContain("MeteorShop");
+      expect(message.html).not.toContain("MeteorShop");
+    }
+  });
+
+  it("keeps the ordinary reset job's shape: no variant key, before or after the queue", () => {
+    const job = resetJob("sv");
+    expect("variant" in job).toBe(false);
+    const parsed = parseAuthEmailJob(JSON.parse(JSON.stringify(job)), AUTH_BASE_URL);
+    expect("variant" in parsed).toBe(false);
+    expect(parsed).toEqual(job);
+  });
+
+  it("renders an invite: Swedish wording by default, English as the alternative", () => {
+    expect(INVITE_LINK_VALID_HOURS).toBe(72);
+
+    const sv = resetJob("sv", "invite");
+    expect(sv).toMatchObject({ kind: "password_reset", variant: "invite" });
+    const parsed = parseAuthEmailJob(JSON.parse(JSON.stringify(sv)), AUTH_BASE_URL);
+    expect(parsed).toEqual(sv);
+
+    const svMessage = renderAuthEmail(parsed);
+    expect(svMessage.subject).toBe("Välj ditt lösenord för ChopShop");
+    expect(svMessage.text).toBe(
+      [
+        "Ett konto har skapats åt dig på ChopShop.",
+        "Välj ett lösenord för att logga in.",
+        "",
+        `Välj lösenord: ${actionUrl}`,
+        "",
+        "Länken gäller i 72 timmar och kan bara användas en gång.",
+        "Om du inte väntade dig det här mejlet kan du bortse från det.",
+      ].join("\n"),
+    );
+    expect(svMessage.html).toContain(`href="${actionUrl.replaceAll("&", "&amp;")}"`);
+    expect(svMessage.html).toContain("<p>Länken gäller i 72 timmar och kan bara användas en gång.</p>");
+    expect(svMessage.text).not.toContain("begärt");
+
+    const enMessage = renderAuthEmail(resetJob("en", "invite"));
+    expect(enMessage.subject).toBe("Choose your password for ChopShop");
+    expect(enMessage.text).toBe(
+      [
+        "An account has been created for you on ChopShop.",
+        "Choose a password to sign in.",
+        "",
+        `Choose password: ${actionUrl}`,
+        "",
+        "The link works for 72 hours and can be used once.",
+        "If you did not expect this email, you can ignore it.",
+      ].join("\n"),
+    );
+  });
+
+  it("refuses a variant on a verification job, and an unknown variant, on create and on parse", () => {
+    expect(() =>
+      createAuthEmailJob(
+        {
+          actionUrl: `${AUTH_BASE_URL}/api/auth/verify-email?token=a`,
+          expiresAt: EXPIRES_AT,
+          kind: "email_verification",
+          locale: "sv",
+          recipient,
+          variant: "invite",
+        },
+        AUTH_BASE_URL,
+      ),
+    ).toThrow("Invalid auth email variant");
+
+    const job = resetJob("sv", "invite");
+    for (const variant of ["welcome", "", 1, null]) {
+      expect(() => parseAuthEmailJob({ ...job, variant }, AUTH_BASE_URL), String(variant)).toThrow(
+        "Invalid auth email variant",
+      );
+    }
   });
 });

@@ -469,7 +469,11 @@ describe("platform user provisioning denials", () => {
     ).resolves.toEqual({ total: 0 });
   });
 
-  it.each([["GET"], ["PATCH"], ["PUT"], ["DELETE"]])(
+  // GET is not in this list since CP3-B: GET /v1/platform/users is the user
+  // directory (src/routes/platform-users.ts), whose guard contract is pinned in
+  // test/platform-users.test.ts. Every other method still falls through to the
+  // POST-only create handler's 404.
+  it.each([["PATCH"], ["PUT"], ["DELETE"]])(
     "does not expose the route through %s",
     async (method) => {
       const before = await countUsers();

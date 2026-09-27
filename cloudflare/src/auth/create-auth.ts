@@ -1,9 +1,11 @@
 import { betterAuth } from "better-auth";
 
+import { PLATFORM_DISPLAY_NAME } from "../email/auth-email-job";
 import { readCanonicalOrigins } from "../lib/origins";
 import {
   enqueuePasswordResetEmail,
   PASSWORD_RESET_TOKEN_TTL_SECONDS,
+  resetPageOrigins,
 } from "./password-reset";
 
 const MINIMUM_SECRET_LENGTH = 32;
@@ -24,14 +26,19 @@ function trustedOrigins(env: Env): string[] {
     throw new Error("AUTH_TRUSTED_ORIGINS must contain at least one origin");
   }
 
-  // The canonical WEB origin is trusted by definition: it is where the reset
-  // link's redirect lands, and Better Auth validates that redirect against this
-  // list. Adding it here rather than relying on AUTH_TRUSTED_ORIGINS to repeat
-  // it keeps one source of truth for "the web app's origin". A missing or
-  // malformed allowlist adds nothing — and the reset routes are dark anyway.
+  // The canonical reset pages are trusted by definition: the reset link's
+  // redirect lands on one of them (the WEB page for an ordinary reset, the
+  // admin or platform page for a CP3 invite once the allowlist lists those
+  // surfaces — until then they resolve to the web origin), and Better Auth
+  // validates that redirect against this list. Adding them here rather than
+  // relying on AUTH_TRUSTED_ORIGINS to repeat them keeps one source of truth for
+  // "the web app's origins". A missing or malformed allowlist adds nothing —
+  // and the reset routes are dark anyway.
   const canonical = readCanonicalOrigins(env);
-  if (canonical !== null && !origins.includes(canonical.web)) {
-    origins.push(canonical.web);
+  for (const origin of canonical === null ? [] : resetPageOrigins(canonical)) {
+    if (!origins.includes(origin)) {
+      origins.push(origin);
+    }
   }
 
   return origins;
@@ -55,7 +62,7 @@ export function createAuth(env: Env) {
         ipAddressHeaders: ["cf-connecting-ip"],
       },
     },
-    appName: "MeteorShop",
+    appName: PLATFORM_DISPLAY_NAME,
     baseURL: env.AUTH_BASE_URL,
     database: env.DB,
     emailAndPassword: {

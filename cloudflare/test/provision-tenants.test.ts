@@ -713,14 +713,19 @@ describe("platform provisioning authorization", () => {
     await expect(countTenants()).resolves.toBe(before);
   });
 
+  // GET is not among these since CP3: GET /v1/platform/tenants is the tenant
+  // list (src/routes/platform-tenants.ts). Every other method still falls
+  // through to the POST-only create handler's 404.
   it("does not expose the collection through another method", async () => {
-    const response = await exports.default.fetch(
-      platformRequest(`${PLATFORM_HOST}/v1/platform/tenants`, "GET", {
-        cookie: platformAdmin.cookie,
-      }),
-    );
+    for (const method of ["PATCH", "PUT", "DELETE"]) {
+      const response = await exports.default.fetch(
+        platformRequest(`${PLATFORM_HOST}/v1/platform/tenants`, method, {
+          cookie: platformAdmin.cookie,
+        }),
+      );
 
-    expect(response.status).toBe(404);
+      expect(response.status, method).toBe(404);
+    }
   });
 
   it.each([
@@ -952,5 +957,341 @@ describe("platform provisioning validation", () => {
 
     expect(response.status).toBe(409);
     await expect(countTenants()).resolves.toBe(before);
+  });
+});
+
+// ── CP3-B review round 1 ────────────────────────────────────────────────────
+// (a) activate/suspend on a CLOSED shop (0032: closed is final) answers 409
+//     tenant_closed and writes nothing, instead of the trigger's 500.
+// (b) a grant re-activates a revoked or suspended membership of that shop,
+//     audited as tenant.admin_reactivate; an active one stays a no-op.
+
+async function platformPost(path: string, body?: unknown): Promise<Response> {
+  return exports.default.fetch(
+    platformRequest(`${PLATFORM_HOST}${path}`, "POST", {
+      body,
+      cookie: platformAdmin.cookie,
+    }),
+  );
+}
+
+async function tenantRow(tenantId: string) {
+  return env.DB.prepare("SELECT status, updated_at FROM tenants WHERE tenant_id = ?")
+    .bind(tenantId)
+    .first<{ status: string; updated_at: number }>();
+}
+
+async function membershipRow(tenantId: string, userId: string) {
+  return env.DB.prepare(
+    `SELECT membership_id, status FROM tenant_memberships
+     WHERE tenant_id = ? AND user_id = ? AND role = 'admin'`,
+  )
+    .bind(tenantId, userId)
+    .first<{ membership_id: string; status: string }>();
+}
+
+async function reactivationAudits(tenantId: string) {
+  const rows = await env.DB.prepare(
+    `SELECT actor_user_id, resource_type, resource_id, metadata_json
+     FROM audit_events
+     WHERE tenant_id = ? AND action = 'tenant.admin_reactivate'
+     ORDER BY created_at ASC, event_id ASC`,
+  )
+    .bind(tenantId)
+    .all<{
+      actor_user_id: string;
+      metadata_json: string;
+      resource_id: string;
+      resource_type: string;
+    }>();
+  return rows.results;
+}
+
+function adminWrite(cookie: string, shopId: string, sku: string): Promise<Response> {
+  return exports.default.fetch(
+    platformRequest("https://admin.regrant.test/v1/admin/products", "POST", {
+      body: { currency: "SEK", name: `Product ${sku}`, priceMinor: 1_000, sku },
+      cookie,
+      shopId,
+    }),
+  );
+}
+
+describe("status change on a closed shop", () => {
+  it("answers 409 tenant_closed for activate and suspend, and writes nothing", async () => {
+    await provisionTenant({
+      hostname: "shop.closed.test",
+      shopName: "Closed Shop",
+      tenantId: "closed-shop",
+    });
+    await env.DB.prepare("UPDATE tenants SET status = 'closed' WHERE tenant_id = 'closed-shop'").run();
+    const before = await tenantRow("closed-shop");
+    const auditsBefore = await auditActions("closed-shop");
+
+    for (const action of ["activate", "suspend"]) {
+      const response = await platformPost(`/v1/platform/tenants/closed-shop/${action}`);
+      expect(response.status, action).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          code: "tenant_closed",
+          message: "A closed shop cannot be activated or suspended",
+        },
+      });
+    }
+
+    await expect(tenantRow("closed-shop")).resolves.toEqual(before);
+    expect(before?.status).toBe("closed");
+    await expect(auditActions("closed-shop")).resolves.toEqual(auditsBefore);
+  });
+
+  it("refuses inside the write, not in a read before it", async () => {
+    const { setTenantStatus } = await import("../src/platform/provision-tenants");
+    // The function is called directly on a closed shop: it must return the
+    // refusal (the 0032 trigger would otherwise abort the batch with a throw).
+    await expect(
+      setTenantStatus(
+        env.DB,
+        { accountType: "platform_admin", userId: platformAdmin.userId },
+        "closed-shop",
+        "active",
+        Date.now(),
+      ),
+    ).resolves.toEqual({ code: "tenant_closed", status: "conflict" });
+    await expect(tenantRow("closed-shop")).resolves.toMatchObject({ status: "closed" });
+  });
+
+  it("still activates and suspends an open shop with the old responses", async () => {
+    await provisionTenant({
+      hostname: "shop.open.test",
+      shopName: "Open Shop",
+      tenantId: "open-shop",
+    });
+    const suspended = await platformPost("/v1/platform/tenants/open-shop/suspend");
+    expect(suspended.status).toBe(200);
+    await expect(suspended.json()).resolves.toEqual({
+      tenant: {
+        defaultCurrency: "SEK",
+        defaultLocale: "sv-SE",
+        shopName: "Open Shop",
+        status: "suspended",
+        tenantId: "open-shop",
+      },
+    });
+    expect((await platformPost("/v1/platform/tenants/open-shop/activate")).status).toBe(200);
+    expect(await auditActions("open-shop")).toEqual([
+      "tenant.provision",
+      "tenant.suspend",
+      "tenant.activate",
+    ]);
+    expect((await platformPost("/v1/platform/tenants/no-such-shop/activate")).status).toBe(404);
+  });
+});
+
+describe("grant on a non-active membership", () => {
+  it("re-activates a revoked membership of the same shop, audited, once", async () => {
+    await provisionTenant({
+      hostname: "shop.regrant.test",
+      shopName: "Regrant Shop",
+      tenantId: "regrant-shop",
+    });
+    const user = await signUp("regrantee@platformshop.test");
+
+    const first = await platformPost("/v1/platform/tenants/regrant-shop/admins", {
+      userId: user.userId,
+    });
+    expect(first.status).toBe(201);
+    const { membership } = await first.json<MembershipBody>();
+    expect((await adminWrite(user.cookie, "regrant-shop", "REGRANT-1")).status).toBe(201);
+
+    const revoked = await platformPost(
+      `/v1/platform/tenants/regrant-shop/admins/${user.userId}/revoke`,
+    );
+    expect(revoked.status).toBe(200);
+    expect((await adminWrite(user.cookie, "regrant-shop", "REGRANT-2")).status).toBe(404);
+
+    const regranted = await platformPost("/v1/platform/tenants/regrant-shop/admins", {
+      userId: user.userId,
+    });
+    expect(regranted.status).toBe(201);
+    await expect(regranted.json()).resolves.toEqual({
+      membership: {
+        membershipId: membership.membershipId,
+        role: "admin",
+        status: "active",
+        tenantId: "regrant-shop",
+        userId: user.userId,
+      },
+    });
+    await expect(countMemberships("regrant-shop")).resolves.toBe(1);
+    expect((await adminWrite(user.cookie, "regrant-shop", "REGRANT-3")).status).toBe(201);
+
+    const audits = await reactivationAudits("regrant-shop");
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      actor_user_id: platformAdmin.userId,
+      resource_id: membership.membershipId,
+      resource_type: "tenant_membership",
+    });
+    expect(JSON.parse(audits[0]?.metadata_json as string)).toMatchObject({
+      previousStatus: "revoked",
+    });
+
+    // Active again: a further grant is the old idempotent no-op.
+    const again = await platformPost("/v1/platform/tenants/regrant-shop/admins", {
+      userId: user.userId,
+    });
+    expect(again.status).toBe(201);
+    expect(await reactivationAudits("regrant-shop")).toHaveLength(1);
+    // The admin's own product writes are audited too; only tenant.* matters here.
+    expect(
+      (await auditActions("regrant-shop")).filter((action) => action.startsWith("tenant.")),
+    ).toEqual([
+      "tenant.provision",
+      "tenant.admin_grant",
+      "tenant.admin_revoke",
+      "tenant.admin_reactivate",
+    ]);
+  });
+
+  it("re-activates a suspended membership, recording the state it left", async () => {
+    const user = await signUp("suspended-member@platformshop.test");
+    await seedAccess(user.userId, "tenant_admin");
+    await env.DB.prepare(
+      `INSERT INTO tenant_memberships (
+        membership_id, tenant_id, user_id, role, status, created_at, updated_at
+      ) VALUES ('membership-suspended-member', 'regrant-shop', ?, 'admin', 'suspended', ?, ?)`,
+    )
+      .bind(user.userId, NOW, NOW)
+      .run();
+
+    const response = await platformPost("/v1/platform/tenants/regrant-shop/admins", {
+      userId: user.userId,
+    });
+    expect(response.status).toBe(201);
+    await expect(membershipRow("regrant-shop", user.userId)).resolves.toEqual({
+      membership_id: "membership-suspended-member",
+      status: "active",
+    });
+    const audits = await reactivationAudits("regrant-shop");
+    expect(JSON.parse(audits.at(-1)?.metadata_json as string)).toMatchObject({
+      previousStatus: "suspended",
+    });
+    expect(audits.at(-1)?.resource_id).toBe("membership-suspended-member");
+  });
+
+  it("creates the missing identity row when a revoked membership has none", async () => {
+    const user = await signUp("identityless-member@platformshop.test");
+    await env.DB.prepare(
+      `INSERT INTO tenant_memberships (
+        membership_id, tenant_id, user_id, role, status, created_at, updated_at
+      ) VALUES ('membership-identityless', 'regrant-shop', ?, 'admin', 'revoked', ?, ?)`,
+    )
+      .bind(user.userId, NOW, NOW)
+      .run();
+
+    const response = await platformPost("/v1/platform/tenants/regrant-shop/admins", {
+      userId: user.userId,
+    });
+    expect(response.status).toBe(201);
+    await expect(
+      env.DB.prepare("SELECT account_type, status FROM identity_access WHERE user_id = ?")
+        .bind(user.userId)
+        .first(),
+    ).resolves.toEqual({ account_type: "tenant_admin", status: "active" });
+    await expect(membershipRow("regrant-shop", user.userId)).resolves.toMatchObject({
+      status: "active",
+    });
+  });
+
+  it("never re-enables a suspended identity through its revoked membership", async () => {
+    const user = await signUp("suspended-identity@platformshop.test");
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO identity_access (user_id, account_type, status, created_at, updated_at)
+         VALUES (?, 'tenant_admin', 'suspended', ?, ?)`,
+      ).bind(user.userId, NOW, NOW),
+      env.DB.prepare(
+        `INSERT INTO tenant_memberships (
+          membership_id, tenant_id, user_id, role, status, created_at, updated_at
+        ) VALUES ('membership-suspended-identity', 'regrant-shop', ?, 'admin', 'revoked', ?, ?)`,
+      ).bind(user.userId, NOW, NOW),
+    ]);
+    const auditsBefore = await reactivationAudits("regrant-shop");
+
+    const response = await platformPost("/v1/platform/tenants/regrant-shop/admins", {
+      userId: user.userId,
+    });
+    expect(response.status).toBe(409);
+    await expect(membershipRow("regrant-shop", user.userId)).resolves.toMatchObject({
+      status: "revoked",
+    });
+    await expect(
+      env.DB.prepare("SELECT status FROM identity_access WHERE user_id = ?")
+        .bind(user.userId)
+        .first(),
+    ).resolves.toEqual({ status: "suspended" });
+    await expect(reactivationAudits("regrant-shop")).resolves.toEqual(auditsBefore);
+  });
+
+  it("refuses the re-activation inside the write when the shop stopped being active after the read", async () => {
+    // The guarded UPDATE re-checks the shop, the identity and the membership
+    // state itself; the reads at the top of grantTenantAdmin only choose the
+    // answer. Simulated with a stale read: the function is told the shop is
+    // active, the row says suspended. (If the proxy were bypassed, the result
+    // would be not_found, not conflict.)
+    const { grantTenantAdmin } = await import("../src/platform/provision-tenants");
+    const user = await signUp("moved-member@platformshop.test");
+    await seedAccess(user.userId, "tenant_admin");
+    await env.DB.prepare(
+      `INSERT INTO tenant_memberships (
+        membership_id, tenant_id, user_id, role, status, created_at, updated_at
+      ) VALUES ('membership-moved', 'regrant-shop', ?, 'admin', 'revoked', ?, ?)`,
+    )
+      .bind(user.userId, NOW, NOW)
+      .run();
+
+    // Suspend the shop between the read and the write: the tenant guard in the
+    // UPDATE (not the read at the top of the function) must refuse. The read
+    // runs against a proxy DB whose first read reports the shop active.
+    let firstTenantRead = true;
+    const staleDb = new Proxy(env.DB, {
+      get(target, property, receiver) {
+        if (property === "prepare") {
+          return (sql: string) => {
+            if (firstTenantRead && sql.includes("FROM tenants") && sql.includes("status = 'active'")) {
+              firstTenantRead = false;
+              const statement = target.prepare(sql);
+              return {
+                bind: () => ({
+                  first: async () => ({ tenant_id: "regrant-shop" }),
+                }),
+                first: statement.first.bind(statement),
+              };
+            }
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as D1Database;
+
+    await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE tenant_id = 'regrant-shop'").run();
+    try {
+      await expect(
+        grantTenantAdmin(
+          staleDb,
+          { accountType: "platform_admin", userId: platformAdmin.userId },
+          "regrant-shop",
+          { userId: user.userId },
+          Date.now(),
+        ),
+      ).resolves.toEqual({ status: "conflict" });
+      await expect(membershipRow("regrant-shop", user.userId)).resolves.toMatchObject({
+        status: "revoked",
+      });
+    } finally {
+      await env.DB.prepare("UPDATE tenants SET status = 'active' WHERE tenant_id = 'regrant-shop'").run();
+    }
   });
 });

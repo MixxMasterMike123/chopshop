@@ -45,6 +45,9 @@ export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string
     ...(job.kind === "order_confirmation" ? { order: canonicalOrderContent(job.order) } : {}),
     // Likewise the platform alert digest's (D40); absent for every other kind.
     ...(job.kind === "alert_digest" ? { digest: canonicalAlertDigestContent(job.digest) } : {}),
+    // And the invite variant of a password reset (CP3-B): the wording is part
+    // of the job, so a message whose variant changed in transit is a conflict.
+    ...(job.kind === "password_reset" && job.variant === "invite" ? { variant: "invite" } : {}),
   });
   return bytesToHex(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)),

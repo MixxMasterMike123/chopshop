@@ -8,6 +8,27 @@ export type AuthEmailLocale = "en" | "sv";
 /** The two kinds that carry an action link (verify / reset). */
 export type AuthActionEmailKind = "email_verification" | "password_reset";
 
+/**
+ * The product's display name in every email this module renders. ONE place:
+ * the reset, verification and invite templates all read it.
+ */
+export const PLATFORM_DISPLAY_NAME = "ChopShop";
+
+/**
+ * How long an invite link works, in the words of the invite email. The token's
+ * own lifetime (src/platform/invites.ts INVITE_TOKEN_TTL_SECONDS) is derived
+ * from this, so the copy and the token cannot disagree.
+ */
+export const INVITE_LINK_VALID_HOURS = 72;
+
+/**
+ * A wording variant of an action email. `invite` exists only on a
+ * `password_reset` job: the link and the mechanism are the reset's, the words
+ * are an invitation (src/platform/invites.ts). The ledger kind stays
+ * `password_reset`.
+ */
+export type AuthActionEmailVariant = "invite";
+
 interface EmailJobBase {
   createdAt: number;
   deliveryId: string;
@@ -22,6 +43,8 @@ export interface AuthActionEmailJob extends EmailJobBase {
   actionUrl: string;
   kind: AuthActionEmailKind;
   order?: undefined;
+  /** Absent on every ordinary reset and verification job (their shape is unchanged). */
+  variant?: AuthActionEmailVariant;
 }
 
 /**
@@ -155,6 +178,20 @@ function validatedActionUrl(
   return url.href;
 }
 
+/** A variant is either absent or `invite` on a `password_reset` job. */
+function validatedVariant(
+  value: unknown,
+  kind: AuthActionEmailKind,
+): { variant?: AuthActionEmailVariant } {
+  if (value === undefined) {
+    return {};
+  }
+  if (value === "invite" && kind === "password_reset") {
+    return { variant: "invite" };
+  }
+  throw new Error("Invalid auth email variant");
+}
+
 export function createAuthEmailJob(
   input: Omit<
     AuthActionEmailJob,
@@ -186,6 +223,7 @@ export function createAuthEmailJob(
     locale: input.locale,
     recipient: normalizedEmail(input.recipient),
     ...(input.tenantId === undefined ? {} : { tenantId: input.tenantId }),
+    ...validatedVariant(input.variant, input.kind),
     version: 1,
   };
 }
@@ -237,6 +275,7 @@ export function parseAuthEmailJob(
     locale: job.locale,
     recipient: normalizedEmail(String(job.recipient ?? "")),
     ...(job.tenantId === undefined ? {} : { tenantId: job.tenantId }),
+    ...validatedVariant(job.variant, job.kind),
     version: 1,
   };
 }
@@ -281,28 +320,32 @@ export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
     return renderAlertDigestEmail(job);
   }
 
+  if (job.variant === "invite") {
+    return renderInviteEmail(job);
+  }
+
   const copy =
     job.locale === "sv"
       ? job.kind === "email_verification"
         ? {
             action: "Verifiera e-postadress",
-            intro: "Bekräfta din e-postadress för MeteorShop.",
+            intro: `Bekräfta din e-postadress för ${PLATFORM_DISPLAY_NAME}.`,
             subject: "Verifiera din e-postadress",
           }
         : {
             action: "Återställ lösenord",
-            intro: "Du har begärt att återställa ditt lösenord för MeteorShop.",
+            intro: `Du har begärt att återställa ditt lösenord för ${PLATFORM_DISPLAY_NAME}.`,
             subject: "Återställ ditt lösenord",
           }
       : job.kind === "email_verification"
         ? {
             action: "Verify email address",
-            intro: "Confirm your email address for MeteorShop.",
+            intro: `Confirm your email address for ${PLATFORM_DISPLAY_NAME}.`,
             subject: "Verify your email address",
           }
         : {
             action: "Reset password",
-            intro: "You requested a password reset for MeteorShop.",
+            intro: `You requested a password reset for ${PLATFORM_DISPLAY_NAME}.`,
             subject: "Reset your password",
           };
   const safeUrl = escapeHtml(job.actionUrl);
@@ -311,6 +354,71 @@ export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
     html: `<p>${copy.intro}</p><p><a href="${safeUrl}">${copy.action}</a></p>`,
     subject: copy.subject,
     text: `${copy.intro}\n\n${copy.action}: ${job.actionUrl}`,
+  };
+}
+
+// ── the platform invite (CP3-B) ──────────────────────────────────────────────
+
+/**
+ * The invite wording (a `password_reset` job with `variant: "invite"`). Plain:
+ * what this is, what to do, how long the link works, and that an unexpected
+ * mail can be ignored. Swedish by default, English as the alternative, like
+ * the reset template.
+ */
+export function inviteEmailCopy(locale: AuthEmailLocale): {
+  action: string;
+  lines: { after: string[]; before: string[] };
+  subject: string;
+} {
+  return locale === "sv"
+    ? {
+        action: "Välj lösenord",
+        lines: {
+          after: [
+            `Länken gäller i ${INVITE_LINK_VALID_HOURS} timmar och kan bara användas en gång.`,
+            "Om du inte väntade dig det här mejlet kan du bortse från det.",
+          ],
+          before: [
+            `Ett konto har skapats åt dig på ${PLATFORM_DISPLAY_NAME}.`,
+            "Välj ett lösenord för att logga in.",
+          ],
+        },
+        subject: `Välj ditt lösenord för ${PLATFORM_DISPLAY_NAME}`,
+      }
+    : {
+        action: "Choose password",
+        lines: {
+          after: [
+            `The link works for ${INVITE_LINK_VALID_HOURS} hours and can be used once.`,
+            "If you did not expect this email, you can ignore it.",
+          ],
+          before: [
+            `An account has been created for you on ${PLATFORM_DISPLAY_NAME}.`,
+            "Choose a password to sign in.",
+          ],
+        },
+        subject: `Choose your password for ${PLATFORM_DISPLAY_NAME}`,
+      };
+}
+
+function renderInviteEmail(job: AuthActionEmailJob): AuthEmailMessage {
+  const copy = inviteEmailCopy(job.locale);
+  const paragraph = (line: string) => `<p>${escapeHtml(line)}</p>`;
+
+  return {
+    html: [
+      ...copy.lines.before.map(paragraph),
+      `<p><a href="${escapeHtml(job.actionUrl)}">${escapeHtml(copy.action)}</a></p>`,
+      ...copy.lines.after.map(paragraph),
+    ].join(""),
+    subject: copy.subject,
+    text: [
+      ...copy.lines.before,
+      "",
+      `${copy.action}: ${job.actionUrl}`,
+      "",
+      ...copy.lines.after,
+    ].join("\n"),
   };
 }
 

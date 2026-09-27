@@ -70,14 +70,49 @@ export function isPasswordResetConfigured(env: Env): boolean {
   return env.EMAIL_QUEUE !== undefined && readCanonicalOrigins(env) !== null;
 }
 
-/** The web page the emailed link lands on — always the canonical web origin. */
-export function passwordResetCallbackUrl(origins: CanonicalOrigins): string {
-  return `${origins.web}${PASSWORD_RESET_WEB_PATH}`;
+/**
+ * The web surfaces a reset link may land on (CP3). The ordinary reset lands on
+ * `web`; a platform invite (src/platform/invites.ts) lands on `platform` for a
+ * platform admin and on `admin` for a tenant admin (PLAN §2.1: admin and
+ * platform are one hostname each).
+ */
+export type ResetPageSurface = "admin" | "platform" | "web";
+
+const RESET_PAGE_SURFACES: readonly ResetPageSurface[] = ["web", "admin", "platform"];
+
+/**
+ * The canonical origin of one reset surface. The allowlist (src/lib/origins.ts)
+ * lists `api` and `web` today; until it also lists `admin` and `platform`, those
+ * surfaces are served by the web origin and land there. The origin is always an
+ * allowlist value, never anything the request carried.
+ */
+export function resetPageOrigin(
+  origins: CanonicalOrigins,
+  surface: ResetPageSurface,
+): string {
+  const listed = (origins as Readonly<Partial<Record<ResetPageSurface, string>>>)[surface];
+  return typeof listed === "string" ? listed : origins.web;
+}
+
+/** Every distinct origin a reset link may land on (Better Auth must trust them). */
+export function resetPageOrigins(origins: CanonicalOrigins): string[] {
+  return [...new Set(RESET_PAGE_SURFACES.map((surface) => resetPageOrigin(origins, surface)))];
+}
+
+/**
+ * The web page the emailed link lands on. The ordinary reset (no surface)
+ * always lands on the canonical web origin.
+ */
+export function passwordResetCallbackUrl(
+  origins: CanonicalOrigins,
+  surface: ResetPageSurface = "web",
+): string {
+  return `${resetPageOrigin(origins, surface)}${PASSWORD_RESET_WEB_PATH}`;
 }
 
 /**
  * The emailed link. Built from AUTH_BASE_URL (Better Auth's own base, and the
- * only origin the job validator accepts) and the canonical web origin — never
+ * only origin the job validator accepts) and a canonical reset page — never
  * from the request, and never from the URL Better Auth hands the hook, which
  * would carry whatever `redirectTo` reached Better Auth.
  */
@@ -85,12 +120,13 @@ export function passwordResetActionUrl(
   env: Env,
   origins: CanonicalOrigins,
   token: string,
+  surface: ResetPageSurface = "web",
 ): string {
   const url = new URL(
     `/api/auth/reset-password/${encodeURIComponent(token)}`,
     env.AUTH_BASE_URL,
   );
-  url.searchParams.set("callbackURL", passwordResetCallbackUrl(origins));
+  url.searchParams.set("callbackURL", passwordResetCallbackUrl(origins, surface));
   return url.href;
 }
 
@@ -252,16 +288,27 @@ export async function handleRequestPasswordReset(
 /**
  * `GET /api/auth/reset-password/:token` — the link in the email.
  *
- * The `callbackURL` query is replaced with the canonical web reset page before
- * Better Auth sees it, so a doctored link cannot bounce a valid token to any
- * other page, trusted or not.
+ * The `callbackURL` query is rebuilt before Better Auth sees it: it survives
+ * only when it is EXACTLY one of the canonical reset pages (the web page, or the
+ * admin/platform page an invite points at), and is otherwise replaced with the
+ * canonical web reset page. Every other query parameter is dropped. A doctored
+ * link therefore cannot bounce a valid token to any page outside the allowlist,
+ * trusted or not. While the allowlist has only `web`, this is exactly the old
+ * rule: the callback is always the web reset page.
  */
 export function canonicalResetLinkRequest(
   request: Request,
   origins: CanonicalOrigins,
 ): Request {
   const url = new URL(request.url);
+  const asked = url.searchParams.get("callbackURL");
+  const allowed = RESET_PAGE_SURFACES.map((surface) =>
+    passwordResetCallbackUrl(origins, surface),
+  );
   url.search = "";
-  url.searchParams.set("callbackURL", passwordResetCallbackUrl(origins));
+  url.searchParams.set(
+    "callbackURL",
+    asked !== null && allowed.includes(asked) ? asked : passwordResetCallbackUrl(origins),
+  );
   return new Request(url.href, { headers: request.headers, method: "GET" });
 }

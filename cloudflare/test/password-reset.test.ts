@@ -4,7 +4,7 @@ import {
   createMessageBatch,
   getQueueResult,
 } from "cloudflare:test";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
 import { createAuth } from "../src/auth/create-auth";
@@ -509,5 +509,57 @@ describe("the emailed link and the reset itself", () => {
       env,
     );
     expect(replay.status).toBe(400);
+  });
+});
+
+/**
+ * CP3 added a 72-hour INVITE token (src/platform/invites.ts) that rides the
+ * same reset endpoints. The self-service reset must keep its one hour: pinned
+ * here against the clock Better Auth itself reads, just before and just after
+ * the boundary.
+ */
+describe("the ordinary reset token still lives one hour", () => {
+  const HOUR_MS = 60 * 60 * 1_000;
+  const email = "one-hour@passwordreset.test";
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is valid just before the hour and refused just after it", async () => {
+    await drainAuthLimiter();
+    const signUp = await createAuth(env).handler(
+      new Request(`${AUTH_ORIGIN}/api/auth/sign-up/email`, {
+        body: JSON.stringify({ email, name: email, password: PASSWORD }),
+        headers: { "content-type": "application/json", origin: AUTH_ORIGIN },
+        method: "POST",
+      }),
+    );
+    expect(signUp.status).toBe(200);
+
+    const issuedAt = Date.now();
+    vi.useFakeTimers({ now: issuedAt, toFake: ["Date"] });
+
+    const captured = captureQueue();
+    const response = await requestReset(envWith({ EMAIL_QUEUE: captured.queue }), { email });
+    expect(response.status).toBe(200);
+    const resetJob = parseAuthEmailJob(captured.sent[0], env.AUTH_BASE_URL);
+    expect(resetJob.expiresAt - resetJob.createdAt).toBe(HOUR_MS);
+    const token = new URL(resetJob.actionUrl).pathname.split("/").at(-1) as string;
+
+    const follow = async (): Promise<URLSearchParams> => {
+      const followed = await worker.fetch(
+        new Request(resetJob.actionUrl, { redirect: "manual" }),
+        env,
+      );
+      expect(followed.status).toBe(302);
+      return new URL(followed.headers.get("location") ?? "").searchParams;
+    };
+
+    vi.setSystemTime(issuedAt + HOUR_MS - 1_000);
+    expect((await follow()).get("token")).toBe(token);
+
+    vi.setSystemTime(issuedAt + HOUR_MS + 1_000);
+    expect((await follow()).get("error")).toBe("INVALID_TOKEN");
   });
 });
