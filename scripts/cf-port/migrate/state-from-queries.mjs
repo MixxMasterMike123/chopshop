@@ -172,11 +172,24 @@ function buildTargetState(fromDir) {
   const emailToId = {};
   const identities = {};
   for (const row of users) {
-    if (typeof row.email === 'string' && typeof row.id === 'string') {
-      emailToId[row.email] = row.id;
-      // null = the user has no identity row (the query is a LEFT JOIN).
-      identities[row.id] = typeof row.account_type === 'string' && typeof row.status === 'string' ? { accountType: row.account_type, status: row.status } : null;
+    // Strict: a row this tool cannot read is never skipped and never guessed.
+    // `null` means "this user has no identity row" and is reserved for the
+    // LEFT JOIN's own pair of NULLs. A result of the earlier query (id and
+    // email only) has neither column: read as null it would let an adoption
+    // pass unchecked.
+    if (typeof row?.id !== 'string' || typeof row.email !== 'string') {
+      die('users.json holds a row without a text id and email');
     }
+    if (!Object.hasOwn(row, 'account_type') || !Object.hasOwn(row, 'status')) {
+      die('users.json has no account_type / status columns: it is the result of an earlier query. Run the users query of --print-queries target again');
+    }
+    const bothNull = row.account_type === null && row.status === null;
+    const bothText = typeof row.account_type === 'string' && typeof row.status === 'string';
+    if (!bothNull && !bothText) {
+      die('users.json holds a row whose account_type and status are not both text or both NULL');
+    }
+    emailToId[row.email] = row.id;
+    identities[row.id] = bothNull ? null : { accountType: row.account_type, status: row.status };
   }
   const activeCounts = activeCountsOf(readQueryFile(fromDir, 'identity_counts'));
   const activePlatformAdminCount = activeCounts.platform_admin;

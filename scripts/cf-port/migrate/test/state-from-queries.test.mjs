@@ -158,3 +158,33 @@ test('a missing or unreadable query file refuses, and the refusal never quotes t
     rmDir(base);
   }
 });
+
+test('buildTargetState: a users result without the identity columns refuses; NULL means "no identity" only when the query said so', () => {
+  const cases = [
+    [[{ email: 'a@example.com', id: 'user_1' }], /has no account_type \/ status columns/],
+    [[{ account_type: 'platform_admin', email: 'a@example.com', id: 'user_1' }], /has no account_type \/ status columns/],
+    [[{ account_type: 'platform_admin', email: 'a@example.com', id: 'user_1', status: null }], /not both text or both NULL/],
+    [[{ account_type: null, email: 'a@example.com', id: 'user_1', status: 'active' }], /not both text or both NULL/],
+    [[{ account_type: 1, email: 'a@example.com', id: 'user_1', status: 'active' }], /not both text or both NULL/],
+    [[{ account_type: 'platform_admin', email: null, id: 'user_1', status: 'active' }], /without a text id and email/],
+    [[{ account_type: 'platform_admin', email: 'a@example.com', status: 'active' }], /without a text id and email/],
+  ];
+  for (const [users, expected] of cases) {
+    const base = tmpDir();
+    try {
+      writeQueryFiles(base, { ...TARGET_FILES, users });
+      const message = withExitStub(() => buildTargetState(base));
+      assert.match(String(message), expected, JSON.stringify(users));
+      assert.ok(!String(message).includes('a@example.com'), 'the refusal names no address');
+    } finally {
+      rmDir(base);
+    }
+  }
+  const base = tmpDir();
+  try {
+    writeQueryFiles(base, { ...TARGET_FILES, users: [] });
+    assert.deepEqual(buildTargetState(base).users.identities, {}, 'no user at all is a valid result');
+  } finally {
+    rmDir(base);
+  }
+});
