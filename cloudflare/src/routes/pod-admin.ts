@@ -7,6 +7,7 @@ import {
   routeNotFoundResponse,
 } from "../lib/responses";
 import { isSameOriginRequest } from "../lib/same-origin";
+import type { PodMapping } from "../pod/pod-mappings";
 import {
   createMapping,
   deleteMapping,
@@ -36,7 +37,16 @@ import { listTenantPrinters } from "../pod/printers";
  * `inkopMinor` (the production cost of one item, ex VAT) and `priceFloorMinor`
  * (PRISGOLV). No tier, blank, print price, platform cut, shipping or supplier
  * figure is ever serialized here — test/pod-mappings.test.ts walks every
- * response body for those keys.
+ * response body for those keys, and test/printers-platform.test.ts walks
+ * every key AND value of every answer (success and error) against the
+ * platform's actual prices and catalogue.
+ *
+ * "Never show our hand" covers refusals too (CP3): a refusal that would tell
+ * the seller HOW the platform prices — `unpriced` (the printer has no price
+ * row for that SKU/slot) or `currency_mismatch` (the printer is priced in
+ * another currency) — answers with the code the seller can act on instead:
+ * the SKU / the printer is unavailable to them. The mapping functions keep
+ * the precise codes for the platform's own use.
  */
 export const ADMIN_POD_MAPPINGS_PATH = "/v1/admin/pod/mappings";
 export const ADMIN_POD_MAPPING_PATH_PREFIX = "/v1/admin/pod/mappings/";
@@ -47,6 +57,39 @@ const ID_MAX_LENGTH = 128;
 
 function errorResponse(status: number, code: string, message: string): Response {
   return jsonResponse({ error: { code, message } }, status);
+}
+
+/** The code a tenant sees for a refusal (see the header: pricing structure stays hidden). */
+const TENANT_REFUSAL_CODE: Readonly<Record<string, string>> = {
+  currency_mismatch: "printer_unavailable",
+  unpriced: "sku_unavailable",
+};
+
+function tenantRefusalCode(code: string): string {
+  return TENANT_REFUSAL_CODE[code] ?? code;
+}
+
+/**
+ * A mapping as a tenant sees it, rebuilt field by field (allowlist). A
+ * mapping suspended because its SKU/slot lost its price row reads as
+ * `sku_unavailable`, for the same reason as the refusal codes above; the
+ * seller's remedy (re-post or delete the mapping) is the same.
+ */
+function tenantMapping(mapping: PodMapping): PodMapping {
+  return {
+    artworkId: mapping.artworkId,
+    createdAt: mapping.createdAt,
+    mappingId: mapping.mappingId,
+    printerId: mapping.printerId,
+    productId: mapping.productId,
+    sku: mapping.sku,
+    slots: mapping.slots.map(({ heightMm, slot, widthMm }) => ({ heightMm, slot, widthMm })),
+    status: mapping.status,
+    suspendedReason:
+      mapping.suspendedReason === null ? null : tenantRefusalCode(mapping.suspendedReason),
+    updatedAt: mapping.updatedAt,
+    variantId: mapping.variantId,
+  };
 }
 
 function queryId(url: URL, name: string): string | null | undefined {
@@ -99,7 +142,7 @@ export async function handleAdminPodProductRoute(
     if (result.status !== "ok") {
       return result.status === "not_found"
         ? routeNotFoundResponse()
-        : errorResponse(422, "not_quotable", "Product has no priced POD mapping");
+        : errorResponse(422, "not_quotable", "Product has no POD mapping that can be produced");
     }
     return jsonResponse({
       currency: result.quote.currency,
@@ -115,7 +158,7 @@ export async function handleAdminPodProductRoute(
         return invalidRequestResponse();
       }
       return jsonResponse({
-        mappings: await listMappings(env.DB, principal, productId ?? null),
+        mappings: (await listMappings(env.DB, principal, productId ?? null)).map(tenantMapping),
       });
     }
     if (request.method !== "POST") {
@@ -142,7 +185,7 @@ export async function handleAdminPodProductRoute(
     if (result.status === "refused") {
       return errorResponse(
         422,
-        result.code,
+        tenantRefusalCode(result.code),
         result.code === "price_below_floor" ? podRefusalMessage(result.code) : "Mapping cannot be created",
       );
     }
@@ -150,7 +193,7 @@ export async function handleAdminPodProductRoute(
       {
         currency: result.quote.currency,
         inkopMinor: result.quote.inkopMinor,
-        mapping: result.mapping,
+        mapping: tenantMapping(result.mapping),
         priceFloorMinor: result.quote.priceFloorMinor,
       },
       result.created ? 201 : 200,

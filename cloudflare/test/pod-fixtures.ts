@@ -289,6 +289,142 @@ export function expectNoCostKeys(value: unknown, path = "$"): void {
   }
 }
 
+// ── CP3: the one-number walk ────────────────────────────────────────────────
+
+/**
+ * A printer whose every hidden figure is DISTINCTIVE (no other number in a
+ * tenant body can equal one by chance, and each is ≥ 60 kr so its "61.37"
+ * kronor form can never be mistaken for the seconds of an ISO timestamp).
+ * Same SKUs/capabilities as testPrinter().
+ */
+export function hiddenPrinter(overrides: Partial<PrinterInput> = {}): PrinterInput {
+  return testPrinter({
+    shippingCostMinor: 6_957,
+    tiers: [
+      { blankCostMinor: 7_137, printCostsMinor: { back: 6_223, front: 6_211, pocket: 6_039 }, sku: TEE_S },
+      { blankCostMinor: 7_137, printCostsMinor: { back: 6_223, front: 6_211, pocket: 6_039 }, sku: TEE_M },
+      { blankCostMinor: 7_071, printCostsMinor: { front: 6_017 }, sku: CAP },
+    ],
+    ...overrides,
+  });
+}
+
+/** What the platform knows and a tenant must never be able to read or derive. */
+export interface PlatformSecrets {
+  numbers: ReadonlySet<number>;
+  strings: readonly string[];
+}
+
+/** 40 kr, the platform's cut per printed item (src/pod/pod-quote.ts PLATFORM_CUT_MINOR). */
+const PLATFORM_CUT = 4_000;
+
+/**
+ * Every price figure of `printers` (blank, per-slot print, shipping), the
+ * platform cut, plus any extra numbers/strings (catalogue canaries, its sha,
+ * pricing-basis values, supplier brand names).
+ */
+export function secretsOf(
+  printers: readonly PrinterInput[],
+  extra: { numbers?: readonly number[]; strings?: readonly string[] } = {},
+): PlatformSecrets {
+  const numbers = new Set<number>([PLATFORM_CUT, ...(extra.numbers ?? [])]);
+  for (const printer of printers) {
+    numbers.add(printer.shippingCostMinor);
+    for (const tier of printer.tiers) {
+      numbers.add(tier.blankCostMinor);
+      for (const cost of Object.values(tier.printCostsMinor)) {
+        numbers.add(cost);
+      }
+    }
+  }
+  return { numbers, strings: [...(extra.strings ?? [])] };
+}
+
+/** Key fragments (lower-case) that name a cost, the pricing structure or the supplier catalogue. */
+const HAND_KEY_PARTS = [
+  "productioncost", "withhold", "supplier", "cut", "printcost", "tier", "blank",
+  "shipping", "parcel", "catalog", "pricing", "basis", "cost", "sha", "brand",
+  "eur", "buffer", "fee", "margin", "import", "source", "generat", "framevariant",
+  "rowcount", "pallet", "neck",
+];
+
+/**
+ * Value fragments (lower-case) that describe HOW the platform prices, or where
+ * from. Review round 1 added "cost", "currency" and "price row": no text a
+ * tenant reads may mention a price row, a tier, the printer's currency, the
+ * supplier or a cost — in success and error answers alike.
+ */
+const HAND_VALUE_PARTS = [
+  "tier", "blank", "shipping", "parcel", "supplier", "catalog", "pricing", "basis",
+  "withh", "platform cut", "unpriced", "no price", "priced in", "prices in",
+  "another currency", "exchange rate", "eur/sek", "print cost", "printcost",
+  "cost", "currency", "price row",
+];
+
+/**
+ * THE ONE-NUMBER WALK (A13, CP3): walks EVERY key and EVERY value of a body a
+ * TENANT session received — success or error — and fails on
+ *   - a key naming a cost, a tier, shipping, the supplier catalogue or the
+ *     pricing basis (HAND_KEY_PARTS),
+ *   - a string describing the pricing structure (HAND_VALUE_PARTS),
+ *   - a number equal to one of the platform's actual hidden figures, or a
+ *     string that spells one (digits, or kronor "61.37"/"61,37" for figures
+ *     ≥ 60 kr),
+ *   - a string containing a secret (catalogue canaries, its sha256, supplier
+ *     brand names).
+ * The only money a tenant may hold is `inkopMinor` / `priceFloorMinor`, which
+ * are sums and never equal a single hidden figure (hiddenPrinter()).
+ */
+export function expectHandHidden(value: unknown, secrets: PlatformSecrets, path = "$"): void {
+  if (typeof value === "number") {
+    expect(secrets.numbers.has(value), `${path} = ${value} is a hidden platform figure`).toBe(false);
+    return;
+  }
+  if (typeof value === "string") {
+    const lowered = value.toLowerCase();
+    const part = HAND_VALUE_PARTS.find((fragment) => lowered.includes(fragment));
+    expect(part, `${path} = ${JSON.stringify(value)} describes the pricing structure`).toBeUndefined();
+    const secret = secrets.strings.find((entry) => entry.length > 0 && value.includes(entry));
+    expect(secret, `${path} carries a platform secret`).toBeUndefined();
+    for (const figure of secrets.numbers) {
+      const spelled =
+        value === String(figure) ||
+        (figure >= 6_000 &&
+          (value.includes((figure / 100).toFixed(2)) || value.includes((figure / 100).toFixed(2).replace(".", ","))));
+      expect(spelled, `${path} = ${JSON.stringify(value)} spells the hidden figure ${figure}`).toBe(false);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => expectHandHidden(entry, secrets, `${path}[${index}]`));
+    return;
+  }
+  if (typeof value !== "object" || value === null) {
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    const lowered = key.toLowerCase();
+    const denied = HAND_KEY_PARTS.find((part) => lowered.includes(part));
+    expect(denied, `${path}.${key} names hidden pricing/catalogue data`).toBeUndefined();
+    expectHandHidden(entry, secrets, `${path}.${key}`);
+  }
+}
+
+/** A live acting-as grant (0013), as the mint route writes it. */
+export async function grantActingAs(platformUserId: string, tenantId: string): Promise<string> {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO acting_as_grants (id, platform_user_id, tenant_id, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  )
+    .bind(id, platformUserId, tenantId, new Date(now).toISOString(), new Date(now + 60 * 60 * 1_000).toISOString())
+    .run();
+  return id;
+}
+
+export const OPAQUE_NOT_FOUND = { error: { code: "not_found", message: "Route not found" } };
+
 // ── sessions (only the HTTP-level cases need them) ─────────────────────────
 
 const FIXTURE_PASSWORD = "test-password-long-enough";

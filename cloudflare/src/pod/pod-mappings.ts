@@ -451,6 +451,11 @@ export type PodGateFailure =
  * The admin-facing sentence for a POD refusal code — what to do next. The
  * `pod_too_large` one names the exit explicitly, so a product imported with
  * more variants than one gate checks is never silently stranded.
+ *
+ * TENANT-VISIBLE (A13, "never show our hand", CP3-C review): each sentence
+ * says what the seller can do, never how the platform prices — no price rows,
+ * tiers, printer currency, supplier or cost. test/printers-platform.test.ts
+ * walks every one of these texts.
  */
 export function podRefusalMessage(code: string): string {
   switch (code) {
@@ -461,11 +466,11 @@ export function podRefusalMessage(code: string): string {
     case "pod_mapping_missing":
       return "A sellable variant has no active print mapping.";
     case "pod_unpriced":
-      return "The printer has no price for this garment and print areas.";
+      return "The printer cannot make this product with its current print mappings. Re-post or delete the mappings, or contact support.";
     case "currency_mismatch":
-      return "The printer prices in another currency than the product.";
+      return "The printer cannot make this product as it is set up. Contact support.";
     case "price_below_floor":
-      return "The price is below the break-even floor for this production cost.";
+      return "The price is below this product's price floor. Raise it to at least the floor shown with the product's print quote.";
     case "taken_down":
       return "The product has been taken down by the platform.";
     default:

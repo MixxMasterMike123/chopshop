@@ -132,7 +132,7 @@ describe("the POD publish gate", () => {
       updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 26_299 }, Date.now()),
     ).resolves.toEqual({
       code: "price_below_floor",
-      message: "The price is below the break-even floor for this production cost.",
+      message: "The price is below this product's price floor. Raise it to at least the floor shown with the product's print quote.",
       status: "refused",
     });
     await expect(
