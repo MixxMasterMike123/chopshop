@@ -1,0 +1,5 @@
+codex: PASS
+
+fable: PASS
+
+codex: 4622b68 clean (refund key race fix; no actionable findings). fable: diff reviewed line by line; gate 1776/51, preflight 75/75, guard PASS
