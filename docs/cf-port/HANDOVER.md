@@ -2,7 +2,7 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
-## CP2 — Vertical slice (GO 2026-09-27 01:10, in progress)
+## CP2 — Vertical slice (GO 2026-09-27 01:10, ✅ CLOSED 2026-09-27 13:00)
 
 **Mikael:** "Skip all Codex reviews until 01:55 … GO!" — CP2 build started under the recommended defaults for D8–D11 (assumed; veto window until the CP2 deploy). Codex reviews resume 01:55 and gate the deploy as always. **Split (three Opus builders in parallel, disjoint files, route mounts via anchors in `src/app.ts`):** CP2-A money (refunds reserve-first, Stripe event handlers, Connect PI params, payout facts, retention sweep, reconciliation), CP2-B outbox with claims + dispatch state machine + cancellation ×4 + 15-min sweeper cron + manual resolution, CP2-C POD product path (mappings, screening D8, quotePodCost, publish gate, production snapshot at checkout, storefront POD fields). Then CP2-D: seed script + failure-injection suite + reconcile-to-the-öre report.
 
@@ -21,6 +21,23 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 **Staging run, first attempt (12:05):** Mikael ran the hostname rename (`bench-cp1` → `bench-cp1.invalid`). `seed-staging-slice.mjs`: preflight ✅, sign-in ✅, tenant **`slice-20260927` created** (holds the API host), then **refused at the Express account: Stripe 400 on `POST /v1/accounts`** — the sandbox platform no longer allows Accounts v1 creation → DECISIONS **D49** (Mikael enables "Accounts v1 support" for the sandbox; v2 for the onboarding checkpoint). Nothing else was written; the script is idempotent and resumes at the account step.
 
 **Staging run, seed complete (12:42):** Mikael enabled "Support för Accounts v1" — first in **Testläge** (the live account's test sandbox, shares settings with live), then in the sandbox `Meteor Public Relations AB-sandlåda` (`acct_1Tp7gtKAaBMOW5AC`), the one staging uses. The refusal still came back: **Stripe was replaying the first attempt's 400 under the script's fixed Idempotency-Key** (`idempotent-replayed: true`, 24 h) → the seed script takes an optional `SLICE_KEY_SALT` (the metadata lookup still prevents a second account). With `SLICE_KEY_SALT=r2`: Express account **`acct_1UKHP7K39XhkqYJ0`** created (charges/payouts false until onboarded), acting-as ✅, printer `fake-printer` 2 SKUs ✅, artwork `716dbc1a…` rendered by the real container (3240×3240 px, 329 DPI) ✅, product `94913ccb…` `SLICE-TEE-20260927` ✅, mapping ✅, quote inköp 14000 öre / floor 26300 öre ✅, screening approved ✅, PDP 200 `W/"8"` ✅. **Next:** Mikael completes the Express onboarding in the browser → re-run the seed (prints the `UPDATE tenants …` with Stripe's flags) → Mikael runs it through the preflight → `--purchase` → `--refund` → `reconcile-staging.mjs`.
+
+**✅ CP2 CLOSED — 2026-09-27 13:00 CEST — the real staging money run, BALANCED to the öre.** Staging Worker `0395b454` (code `4622b68`), sandbox platform `acct_1Tp7gtKAaBMOW5AC`, tenant `slice-20260927`, Connect `acct_1UKHP7K39XhkqYJ0` (Express onboarding completed by Mikael: charges + payouts enabled, `card_payments` + `transfers` active, nothing due; Connect facts set on D1 through the preflight by Mikael).
+
+| Step (live, staging) | Result |
+|---|---|
+| Seller terms gate | accepted `2026-09-07` by `slice-admin+slice-20260927@example.com` (the shop's own admin; password in `secrets.staging.env`) |
+| Checkout `0b6cafdc…` | 39 900 öre, pickup, buyer consent |
+| PaymentIntent `pi_3UKHZAKAaBMOW5AC1FvKJxZ0` | `succeeded` with `pm_card_visa`, application fee 25 620, destination the Connect account |
+| Webhook → order `88afc8cf-c89c-43ad-8203-7eccb830938f` | made in one batch; receipt `ready` |
+| Reconciliation after the purchase | **BALANCED Δ 0**: charged 39 900 · fee 25 620 · payout D1 14 280 = Stripe net 14 280 · **1 printer job** · 0 unknown/failed dispatches · 0 open alerts |
+| Partial refund 10 000 öre | refund `a94c6e4d-aa95-4e3b-94d3-43bd71384141` → `succeeded` |
+| The same refund command again | the SAME refundId answered (Idempotency-Key replay); **Stripe holds exactly one refund** (`re_3UKHZAKAaBMOW5AC1NSdJHVp`, 10 000) |
+| Reconciliation after the refund | **BALANCED Δ 0**: `partially_refunded` · refunded 10 000 · payout D1 4 280 = Stripe net 4 280 · 1 job · 0 alerts |
+
+**Exit criteria (PLAN §9):** money reconciles to the öre ✅ **live** (twice) · one accepted printer job per eligible order ✅ **live** (1) and under every injected failure ✅ suite · zero jobs for pre-dispatch cancellations, stranded-work alerts within 30 min, refund race cannot over-refund, guest receipt cannot read another shop's order, late render completion rejected ✅ **failure-injection suite** (`test/slice/`, part of the 1776-test gate; not repeated live) · **design diff clean on the slice pages — NOT RUN: no storefront page renders from Cloudflare before CP4; carried to CP4's exit.** Also not exercised live: email delivery (Resend blocked on Kent's key), full refund + printer cancellation on staging, withholding release (D36) on staging.
+
+**Notes for the next checkpoint:** DECISIONS D49 (Accounts v1 enabled in the sandbox AND in Testläge/live by Mikael; v2 at the onboarding checkpoint). HEAD carries docs + the seed script's `SLICE_KEY_SALT` (`d52e866`) — not deployed code, but Codex has not seen it; it rides along with the next reviewed deploy. `juridik.md` lives in `OBSOLETE/` (gitignored). Staging holds throwaway data: tenants `bench-cp1` (hostname `bench-cp1.invalid`), `slice-20260927`. **Next: CP3 needs Mikael's "CP3 go" + "defaults" for D12–D23.**
 
 ## CP1 — Foundation on Kent's account (approved 2026-09-26, ✅ CLOSED 2026-09-27 01:05)
 
