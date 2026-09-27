@@ -186,11 +186,23 @@ describe("CP2 vertical slice", () => {
       });
       expect(revalidated.status).toBe(304);
 
-      // ── 12a. THE LEGAL GATE: no checkout before the seller accepts the terms
+      // ── 12a. THE LEGAL GATE: no checkout before the seller accepts the terms.
+      // The shop is legally READY (the harness made it so), which makes the
+      // terms gate the only thing between this shop and a checkout.
+      const legallyReady = {
+        legalPagesAccepted: true,
+        ready: true,
+        returnAddress: true,
+        vatAnswered: true,
+      };
       expect(await termsStatus(world, tenant)).toEqual({
         accepted: false,
         acceptedAt: null,
+        acceptedVersion: null,
         currentVersion: "2026-09-07",
+        graceDeadline: null,
+        inGrace: false,
+        readiness: legallyReady,
       });
       const gated = await storefrontCall(world, tenant, "POST", "/v1/checkout", {
         body: {
@@ -213,7 +225,11 @@ describe("CP2 vertical slice", () => {
       expect(await termsStatus(world, tenant)).toEqual({
         accepted: true,
         acceptedAt,
+        acceptedVersion: "2026-09-07",
         currentVersion: "2026-09-07",
+        graceDeadline: null,
+        inGrace: false,
+        readiness: legallyReady,
       });
       const evidence = await env.DB.prepare(
         `SELECT user_id, terms_version, accepted_at, ip, evidence_json

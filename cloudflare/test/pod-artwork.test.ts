@@ -642,7 +642,9 @@ interface RequestOptions {
  * Admin routes take the active shop from `X-Shop-Id` (PLAN §2.1), never from
  * the hostname. Each fixture host stands for one shop, so the helper names the
  * shop its host stands for; `shopId` overrides that and `null` omits it.
- * Platform routes ignore the header entirely.
+ * A platform route is never called in a shop's context (DECISIONS D70: a
+ * request naming a shop is refused there), so for `/v1/platform/**` the
+ * default is NO header, as a platform client sends it.
  */
 const SHOP_BY_HOST: Record<string, string> = {
   [new URL(HOST_A).host]: TENANT_A,
@@ -658,7 +660,11 @@ function podRequest(path: string, options: RequestOptions = {}): Request {
     origin = host,
   } = options;
   const shopId =
-    options.shopId === undefined ? SHOP_BY_HOST[new URL(host).host] : options.shopId;
+    options.shopId !== undefined
+      ? options.shopId
+      : path.startsWith("/v1/platform/")
+        ? null
+        : SHOP_BY_HOST[new URL(host).host];
 
   const headers: Record<string, string> = {};
   if (cookie !== undefined) {

@@ -180,16 +180,123 @@ import {
 } from "./routes/pod-storefront";
 // CP3 route handlers: each builder adds its imports ONLY inside its own block.
 // CP3-IMPORTS-A — begin
+import {
+  handlePlatformDomainLookupRoute,
+  handlePlatformDomainMoveRoute,
+  handlePlatformTenantActionRoute,
+  handlePlatformTenantDetailRoute,
+  handlePlatformTenantDomainActionRoute,
+  handlePlatformTenantDomainRoute,
+  handlePlatformTenantDomainsRoute,
+  handlePlatformTenantFeaturesRoute,
+  handlePlatformTenantListRoute,
+  PLATFORM_DOMAIN_LOOKUP_PATH,
+  PLATFORM_DOMAIN_MOVE_PATH,
+  PLATFORM_TENANT_CLOSE_ROUTE,
+  PLATFORM_TENANT_DETAIL_ROUTE,
+  PLATFORM_TENANT_DOMAIN_DISABLE_ROUTE,
+  PLATFORM_TENANT_DOMAIN_ENABLE_ROUTE,
+  PLATFORM_TENANT_DOMAIN_ROUTE,
+  PLATFORM_TENANT_DOMAINS_ROUTE,
+  PLATFORM_TENANT_FEATURES_ROUTE,
+  PLATFORM_TENANT_LIST_PATH,
+  PLATFORM_TENANT_PUBLISH_ROUTE,
+  PLATFORM_TENANT_UNPUBLISH_ROUTE,
+} from "./routes/platform-tenants";
+import { ADMIN_SETTINGS_PATH, handleAdminSettingsRoute } from "./routes/admin-settings";
 // CP3-IMPORTS-A — end
 // CP3-IMPORTS-B — begin
+import {
+  handlePlatformTenantAdminRevokeRoute,
+  handlePlatformTenantStatusRoute,
+  handlePlatformUserDirectoryRoute,
+  handlePlatformUserInviteRoute,
+  handlePlatformUserLifecycleRoute,
+  handlePlatformUserReadRoute,
+  PLATFORM_TENANT_ACTIVATE_ROUTE,
+  PLATFORM_TENANT_ADMIN_REVOKE_ROUTE,
+  PLATFORM_TENANT_SUSPEND_ROUTE,
+  PLATFORM_USER_DEACTIVATE_ROUTE,
+  PLATFORM_USER_DIRECTORY_PATH,
+  PLATFORM_USER_INVITE_ROUTE,
+  PLATFORM_USER_REACTIVATE_ROUTE,
+  PLATFORM_USER_ROUTE,
+} from "./routes/platform-users";
 // CP3-IMPORTS-B — end
 // CP3-IMPORTS-C — begin
+import {
+  handlePlatformDefaultPrinterRoute,
+  handlePlatformPrinterCatalogApplyRoute,
+  handlePlatformPrinterCatalogRoute,
+  handlePlatformPrinterListRoute,
+  handlePlatformPrinterRoute,
+  PLATFORM_DEFAULT_PRINTER_PATH,
+  PLATFORM_PRINTER_CATALOG_APPLY_ROUTE,
+  PLATFORM_PRINTER_CATALOG_ROUTE,
+  PLATFORM_PRINTER_ROUTE,
+} from "./routes/pod-platform";
 // CP3-IMPORTS-C — end
 // CP3-IMPORTS-D — begin
+import {
+  handlePlatformScreeningRescreenRoute,
+  handlePlatformScreeningTermRoute,
+  handlePlatformScreeningTermsRoute,
+  handlePlatformSettingsRoute,
+  PLATFORM_SCREENING_RESCREEN_PATH,
+  PLATFORM_SCREENING_TERM_ROUTE,
+  PLATFORM_SCREENING_TERMS_PATH,
+  PLATFORM_SETTINGS_PATH,
+} from "./routes/platform-settings";
+import {
+  handlePlatformReportActionRoute,
+  handlePlatformReportRoute,
+  handlePlatformReportsRoute,
+  PLATFORM_REPORT_HANDLE_ROUTE,
+  PLATFORM_REPORT_ROUTE,
+  PLATFORM_REPORT_TAKEDOWN_ROUTE,
+  PLATFORM_REPORTS_PATH,
+} from "./routes/platform-reports";
+import {
+  handleStorefrontReportRoute,
+  STOREFRONT_REPORTS_PATH,
+} from "./routes/storefront-reports";
 // CP3-IMPORTS-D — end
 // CP3-IMPORTS-E — begin
+import {
+  ADMIN_LEGAL_ACCEPT_PAGES_PATH,
+  ADMIN_LEGAL_PAGES_PATH,
+  ADMIN_LEGAL_TERMS_PATH,
+  handleAdminLegalAcceptPagesRoute,
+  handleAdminLegalPagesRoute,
+  handleAdminLegalTermsRoute,
+} from "./routes/legal-admin";
+import {
+  handlePlatformTermsTextRoute,
+  handlePlatformTermsVersionsRoute,
+  PLATFORM_TERMS_TEXT_ROUTE,
+  PLATFORM_TERMS_VERSIONS_PATH,
+} from "./routes/legal-platform";
 // CP3-IMPORTS-E — end
 // CP3-IMPORTS-F — begin
+import {
+  ADMIN_CONNECT_ACCOUNT_PATH,
+  ADMIN_CONNECT_LOGIN_LINK_PATH,
+  ADMIN_CONNECT_ONBOARDING_LINK_PATH,
+  ADMIN_CONNECT_PATH,
+  ADMIN_CONNECT_REFRESH_PATH,
+  handleAdminConnectAccountRoute,
+  handleAdminConnectLoginLinkRoute,
+  handleAdminConnectOnboardingLinkRoute,
+  handleAdminConnectRefreshRoute,
+  handleAdminConnectStatusRoute,
+} from "./routes/connect-admin";
+import {
+  handlePlatformConnectRoute,
+  PLATFORM_CONNECT_DISABLE_ROUTE,
+  PLATFORM_CONNECT_ENABLE_ROUTE,
+  PLATFORM_CONNECT_PAYOUT_DELAY_ROUTE,
+  PLATFORM_CONNECT_ROUTE,
+} from "./routes/connect-platform";
 // CP3-IMPORTS-F — end
 
 const HEALTH_PATH = "/health";
@@ -221,7 +328,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0031_legal_consent.sql";
+const REQUIRED_MIGRATION = "0038_connect_onboarding.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -342,6 +449,11 @@ function platformConflictResponse(): Response {
   );
 }
 
+const TENANT_REFUSAL_CODES: Readonly<Record<string, string>> = {
+  currency_mismatch: "pod_unavailable",
+  pod_unpriced: "pod_unavailable",
+};
+
 function adminResultResponse(
   result: AdminCatalogResult,
   successStatus: number,
@@ -352,10 +464,14 @@ function adminResultResponse(
   if (result.status === "refused") {
     // A publish/price edit the POD gate refuses (no active mapping, price
     // below the PRISGOLV floor, …): the code tells the admin UI what to fix.
+    // "The seller sees one number" covers codes too: the two refusals that
+    // would say HOW the platform prices (no price row for the SKU, the printer
+    // priced in another currency) read as one neutral code. The gate keeps the
+    // precise codes; the message is already neutral (podRefusalMessage).
     return jsonResponse(
       {
         error: {
-          code: result.code,
+          code: TENANT_REFUSAL_CODES[result.code] ?? result.code,
           message: result.message ?? "Product cannot be published",
         },
       },
@@ -2040,16 +2156,304 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // decoded once by the handler (see ACTING_AS_ROUTE). The reviewer
   // consolidates after merge. ─────────────────────────────────────────────
   // CP3-ROUTES-A (tenants: directory, config, features, domains) — begin
+  // Exact paths, each claiming only its own methods: POST on the list path and
+  // on …/domains still reaches the older tenant handler below (create, add
+  // domain), as do …/activate, /suspend and /admins. The handlers read their
+  // id segments from the raw pathname and decode them once.
+  app.all(
+    PLATFORM_TENANT_LIST_PATH,
+    onMethods(["GET"], (c) => handlePlatformTenantListRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_TENANT_DETAIL_ROUTE,
+    onMethods(["GET", "PATCH"], (c) => handlePlatformTenantDetailRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_TENANT_PUBLISH_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformTenantActionRoute(c.env, c.req.raw, "publish")),
+  );
+  app.all(
+    PLATFORM_TENANT_UNPUBLISH_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformTenantActionRoute(c.env, c.req.raw, "unpublish")),
+  );
+  app.all(
+    PLATFORM_TENANT_CLOSE_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformTenantActionRoute(c.env, c.req.raw, "close")),
+  );
+  app.all(
+    PLATFORM_TENANT_FEATURES_ROUTE,
+    onMethods(["GET", "PUT"], (c) => handlePlatformTenantFeaturesRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_TENANT_DOMAINS_ROUTE,
+    onMethods(["GET"], (c) => handlePlatformTenantDomainsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_TENANT_DOMAIN_ROUTE,
+    onMethods(["DELETE"], (c) => handlePlatformTenantDomainRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_TENANT_DOMAIN_DISABLE_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformTenantDomainActionRoute(c.env, c.req.raw, "disable")),
+  );
+  app.all(
+    PLATFORM_TENANT_DOMAIN_ENABLE_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformTenantDomainActionRoute(c.env, c.req.raw, "enable")),
+  );
+  app.all(
+    PLATFORM_DOMAIN_LOOKUP_PATH,
+    onMethods(["GET"], (c) => handlePlatformDomainLookupRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_DOMAIN_MOVE_PATH,
+    onMethods(["POST"], (c) => handlePlatformDomainMoveRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_SETTINGS_PATH,
+    onMethods(["GET", "PUT"], (c) => handleAdminSettingsRoute(c.env, c.req.raw)),
+  );
   // CP3-ROUTES-A — end
   // CP3-ROUTES-B (identity: users, lifecycle, invites) — begin
+  // The directory GET shares its path with the POST-only create handler
+  // registered below; onMethods(["GET"]) lets POST (and every other method)
+  // fall through to it unchanged. Id segments are RAW path segments, decoded
+  // once by the handler.
+  app.all(
+    PLATFORM_USER_DIRECTORY_PATH,
+    onMethods(["GET"], (c) => handlePlatformUserDirectoryRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_USER_ROUTE,
+    onMethods(["GET"], (c) =>
+      handlePlatformUserReadRoute(
+        c.env,
+        c.req.raw,
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
+  app.all(
+    PLATFORM_USER_DEACTIVATE_ROUTE,
+    onMethods(["POST"], (c) =>
+      handlePlatformUserLifecycleRoute(
+        c.env,
+        c.req.raw,
+        "deactivate",
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
+  app.all(
+    PLATFORM_USER_REACTIVATE_ROUTE,
+    onMethods(["POST"], (c) =>
+      handlePlatformUserLifecycleRoute(
+        c.env,
+        c.req.raw,
+        "reactivate",
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
+  app.all(
+    PLATFORM_USER_INVITE_ROUTE,
+    onMethods(["POST"], (c) =>
+      handlePlatformUserInviteRoute(
+        c.env,
+        c.req.raw,
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
+  app.all(
+    PLATFORM_TENANT_ADMIN_REVOKE_ROUTE,
+    onMethods(["POST"], (c) => {
+      const segments = new URL(c.req.url).pathname.split("/");
+      return handlePlatformTenantAdminRevokeRoute(
+        c.env,
+        c.req.raw,
+        segments[4] ?? "",
+        segments[6] ?? "",
+      );
+    }),
+  );
+  // Review round 1: POST activate/suspend are claimed here so a CLOSED shop
+  // answers 409 tenant_closed. Same guards and responses as the older
+  // handlePlatformTenantRoute branch, which POST no longer reaches (reviewer:
+  // that branch can go at consolidation). Other methods fall through to it.
+  app.all(
+    PLATFORM_TENANT_ACTIVATE_ROUTE,
+    onMethods(["POST"], (c) =>
+      handlePlatformTenantStatusRoute(
+        c.env,
+        c.req.raw,
+        "active",
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
+  app.all(
+    PLATFORM_TENANT_SUSPEND_ROUTE,
+    onMethods(["POST"], (c) =>
+      handlePlatformTenantStatusRoute(
+        c.env,
+        c.req.raw,
+        "suspended",
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
   // CP3-ROUTES-B — end
   // CP3-ROUTES-C (printers: platform read, partial edit, catalogue) — begin
+  // GET on the list path is claimed here; PUT falls through to the CP2
+  // replace-all handler below, unchanged. `/default` is registered BEFORE the
+  // `:printerId` pattern, so the literal is never read as an id (and the id
+  // handlers refuse `default` besides). Id segments come from the RAW pathname
+  // and are decoded once by the handler.
+  const printerSegment = (c: Context<AppEnv>): string =>
+    new URL(c.req.url).pathname.split("/")[4] ?? "";
+  app.all(
+    PLATFORM_PRINTERS_PATH,
+    onMethods(["GET"], (c) => handlePlatformPrinterListRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_DEFAULT_PRINTER_PATH,
+    onMethods(["GET", "PUT"], (c) => handlePlatformDefaultPrinterRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_PRINTER_ROUTE,
+    onMethods(["GET", "PATCH"], (c) =>
+      handlePlatformPrinterRoute(c.env, c.req.raw, printerSegment(c)),
+    ),
+  );
+  app.all(
+    PLATFORM_PRINTER_CATALOG_ROUTE,
+    onMethods(["GET", "PUT"], (c) =>
+      handlePlatformPrinterCatalogRoute(c.env, c.req.raw, printerSegment(c)),
+    ),
+  );
+  app.all(
+    PLATFORM_PRINTER_CATALOG_APPLY_ROUTE,
+    onMethods(["POST"], (c) =>
+      handlePlatformPrinterCatalogApplyRoute(c.env, c.req.raw, printerSegment(c)),
+    ),
+  );
   // CP3-ROUTES-C — end
   // CP3-ROUTES-D (platform settings, screening terms, infringement reports) — begin
+  // Exact paths, each claiming only its own methods. The rescreen path is
+  // registered before the `:termKey` pattern it would otherwise match (they
+  // differ in method anyway). Id segments are read from the RAW pathname and
+  // decoded once by the handlers.
+  app.all(
+    PLATFORM_SETTINGS_PATH,
+    onMethods(["GET", "PATCH"], (c) => handlePlatformSettingsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_SCREENING_TERMS_PATH,
+    onMethods(["GET", "POST"], (c) => handlePlatformScreeningTermsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_SCREENING_RESCREEN_PATH,
+    onMethods(["POST"], (c) => handlePlatformScreeningRescreenRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_SCREENING_TERM_ROUTE,
+    onMethods(["PATCH", "DELETE"], (c) => handlePlatformScreeningTermRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_REPORTS_PATH,
+    onMethods(["GET"], (c) => handlePlatformReportsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_REPORT_ROUTE,
+    onMethods(["GET"], (c) => handlePlatformReportRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_REPORT_HANDLE_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformReportActionRoute(c.env, c.req.raw, "handle")),
+  );
+  app.all(
+    PLATFORM_REPORT_TAKEDOWN_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformReportActionRoute(c.env, c.req.raw, "takedown")),
+  );
+  // A storefront route: tenant by hostname, the same public-entrypoint rule.
+  app.all(
+    STOREFRONT_REPORTS_PATH,
+    onMethods(["POST"], storefront((c) => handleStorefrontReportRoute(c.env, c.req.raw))),
+  );
   // CP3-ROUTES-D — end
   // CP3-ROUTES-E (legal: terms versions, legal pages) — begin
+  // The status and accept-terms routes stay in the CP2 block below; these are
+  // exact paths. The version segment is taken from the RAW pathname and
+  // decoded once by the handler (see ACTING_AS_ROUTE).
+  app.all(
+    ADMIN_LEGAL_TERMS_PATH,
+    onMethods(["GET"], (c) => handleAdminLegalTermsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_LEGAL_PAGES_PATH,
+    onMethods(["GET"], (c) => handleAdminLegalPagesRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_LEGAL_ACCEPT_PAGES_PATH,
+    onMethods(["POST"], (c) => handleAdminLegalAcceptPagesRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_TERMS_VERSIONS_PATH,
+    onMethods(["GET", "POST"], (c) => handlePlatformTermsVersionsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_TERMS_TEXT_ROUTE,
+    onMethods(["GET", "PUT"], (c) =>
+      handlePlatformTermsTextRoute(
+        c.env,
+        c.req.raw,
+        new URL(c.req.url).pathname.split("/")[5] ?? "",
+      ),
+    ),
+  );
   // CP3-ROUTES-E — end
   // CP3-ROUTES-F (Connect onboarding) — begin
+  // Exact paths. The seller's under /v1/admin/payments (no earlier route
+  // claims it); the platform's under the tenant prefix, whose older handler
+  // is POST-only with a terminal 404 — so each claims only its own method and
+  // lets the rest fall through. The tenant segment is taken from the RAW
+  // pathname and decoded once by the handler (see ACTING_AS_ROUTE).
+  app.all(ADMIN_CONNECT_PATH, onMethods(["GET"], (c) => handleAdminConnectStatusRoute(c.env, c.req.raw)));
+  app.all(
+    ADMIN_CONNECT_ACCOUNT_PATH,
+    onMethods(["POST"], (c) => handleAdminConnectAccountRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_CONNECT_ONBOARDING_LINK_PATH,
+    onMethods(["POST"], (c) => handleAdminConnectOnboardingLinkRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_CONNECT_REFRESH_PATH,
+    onMethods(["POST"], (c) => handleAdminConnectRefreshRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_CONNECT_LOGIN_LINK_PATH,
+    onMethods(["POST"], (c) => handleAdminConnectLoginLinkRoute(c.env, c.req.raw)),
+  );
+  const platformConnectTenant = (c: Context<AppEnv>) => new URL(c.req.url).pathname.split("/")[4] ?? "";
+  app.all(
+    PLATFORM_CONNECT_ROUTE,
+    onMethods(["GET"], (c) => handlePlatformConnectRoute(c.env, c.req.raw, platformConnectTenant(c), "read")),
+  );
+  app.all(
+    PLATFORM_CONNECT_ENABLE_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformConnectRoute(c.env, c.req.raw, platformConnectTenant(c), "enable")),
+  );
+  app.all(
+    PLATFORM_CONNECT_DISABLE_ROUTE,
+    onMethods(["POST"], (c) => handlePlatformConnectRoute(c.env, c.req.raw, platformConnectTenant(c), "disable")),
+  );
+  app.all(
+    PLATFORM_CONNECT_PAYOUT_DELAY_ROUTE,
+    onMethods(["PUT"], (c) =>
+      handlePlatformConnectRoute(c.env, c.req.raw, platformConnectTenant(c), "payout_delay"),
+    ),
+  );
   // CP3-ROUTES-F — end
 
   app.all(PLATFORM_BOOTSTRAP_PATH, (c) =>

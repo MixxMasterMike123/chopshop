@@ -54,10 +54,22 @@ export async function resolveSessionIdentity(
   return { userId: result.user.id };
 }
 
+/**
+ * The platform guard. A request that names a shop (`X-Shop-Id`) is made IN A
+ * SHOP'S CONTEXT — a tenant admin, or a platform user working inside a shop
+ * under an acting-as grant — and is never a platform request (DECISIONS D70):
+ * it is refused before the session is read, with the same null every other
+ * failure gives. One rule for every platform route, so no route has to
+ * remember it.
+ */
 export async function authorizePlatformRequest(
   env: Env,
   request: Request,
 ): Promise<PlatformPrincipal | null> {
+  if (request.headers.has(SHOP_ID_HEADER)) {
+    return null;
+  }
+
   const identity = await resolveSessionIdentity(env, request);
   return identity === null
     ? null

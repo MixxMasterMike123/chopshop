@@ -1,3 +1,5 @@
+import { rescreenStaleScreenings } from "../catalog/screening";
+import { raiseStuckOnboardingAlerts } from "../commerce/connect-onboarding";
 import { runOutboxSweep } from "./sweeper";
 
 /**
@@ -7,6 +9,7 @@ import { runOutboxSweep } from "./sweeper";
  *   "*\/15 * * * *"  → runOutboxSweep (PLAN §2.2), THEN CP2-A's
  *                      runReconciliation and runRetentionSweep (§2.2, §2.3) —
  *                      same 15-minute cadence, so the 30-minute alert SLA holds
+ *                      — THEN the CP3 steps (CP3_STEPS below), THEN the digest
  *   anything else    → logged and ignored (a cron this build does not know)
  *
  * Each step is isolated: one failing never skips the next. If any failed, the
@@ -71,6 +74,11 @@ async function runStep(name: string, step: () => Promise<unknown>): Promise<bool
   }
 }
 
+const CP3_STEPS: ReadonlyArray<readonly [string, CronStep]> = [
+  ["rescreen_stale", (env, now) => rescreenStaleScreenings(env.DB, now)],
+  ["connect_stuck", (env, now) => raiseStuckOnboardingAlerts(env.DB, now)],
+];
+
 export async function handleScheduled(
   controller: Pick<ScheduledController, "cron" | "scheduledTime">,
   env: Env,
@@ -100,16 +108,33 @@ export async function handleScheduled(
     failures.push("outbox_sweep");
   }
 
-  // The digest runs LAST so it sees the alerts this tick raised (D40).
-  for (const name of ["runReconciliation", "runRetentionSweep", "runAlertDigest"] as const) {
+  const runCommerce = async (name: keyof CommerceCrons): Promise<void> => {
     const step = commerce?.[name];
     if (typeof step !== "function") {
-      continue;
+      return;
     }
     if (!(await runStep(name, () => step(env, now())))) {
       failures.push(name);
     }
+  };
+
+  await runCommerce("runReconciliation");
+  await runCommerce("runRetentionSweep");
+
+  // CP3 steps. Each is bounded per tick and safe to repeat every 15 minutes.
+  //   rescreen_stale   product verdicts computed under an older blocklist are
+  //                    re-screened, 25 per tick (src/catalog/screening.ts);
+  //   connect_stuck    one warning alert per Connect onboarding operation that
+  //                    has stayed `reserved` for more than 24 hours
+  //                    (src/commerce/connect-onboarding.ts).
+  for (const [name, step] of CP3_STEPS) {
+    if (!(await runStep(name, () => step(env, now())))) {
+      failures.push(name);
+    }
   }
+
+  // The digest runs LAST so it sees the alerts this tick raised (D40).
+  await runCommerce("runAlertDigest");
 
   if (failures.length > 0) {
     throw new Error(`scheduled steps failed: ${failures.join(", ")}`);

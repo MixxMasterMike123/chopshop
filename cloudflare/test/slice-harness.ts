@@ -285,6 +285,12 @@ export interface TenantSpec {
    */
   acceptTerms?: boolean;
   commissionBps?: number | null;
+  /**
+   * false: the shop is left as a fresh shop is — no store settings, no legal
+   * pages adopted — so the CP3-E readiness gate keeps its checkout closed. For
+   * suites about the settings themselves. Default: made ready.
+   */
+  legallyReady?: boolean;
   host: string;
   shopName: string;
   tenantId: string;
@@ -346,15 +352,70 @@ export async function createTenant(world: SliceWorld, spec: TenantSpec): Promise
     tenantId: spec.tenantId,
   };
   world.tenants.push(tenant);
+  // CP3-E: checkout has a second gate, legal readiness. Every slice shop is
+  // made ready here, through the seller's own routes, so that the only gate a
+  // test with `acceptTerms: false` still meets is the terms gate it is about.
+  if (spec.legallyReady !== false) {
+    await makeLegallyReady(world, tenant);
+  }
   if (spec.acceptTerms !== false) {
     await acceptPlatformTerms(world, tenant);
   }
   return tenant;
 }
 
+export const SLICE_RETURN_ADDRESS = "Testgatan 1, 123 45 Teststad";
+export const SLICE_LEGAL_TEMPLATE_VERSION = "2026-09-07";
+
+/**
+ * The three conditions of the legal readiness gate (src/legal/legal-pages.ts
+ * isLegallyReady), met the way a seller meets them: a return address and the
+ * VAT answer through PUT /v1/admin/settings, and the adoption of the three
+ * legal pages through POST /v1/admin/legal/accept-pages.
+ */
+export async function makeLegallyReady(world: SliceWorld, tenant: Tenant): Promise<void> {
+  await expectJson(
+    await adminCall(world, tenant, "PUT", "/v1/admin/settings", {
+      returnAddress: SLICE_RETURN_ADDRESS,
+      vatRegistered: true,
+    }),
+    200,
+    "store settings (return address, VAT answer)",
+  );
+  await expectJson(
+    await adminCall(world, tenant, "POST", "/v1/admin/legal/accept-pages", {
+      custom: false,
+      pod: true,
+      templateVersion: SLICE_LEGAL_TEMPLATE_VERSION,
+      texts: {
+        angerratt: "<h1>Ångerrätt och returer</h1><p>Slice fixture.</p>",
+        integritetspolicy: "<h1>Integritetspolicy</h1><p>Slice fixture.</p>",
+        kopvillkor: "<h1>Köpvillkor</h1><p>Slice fixture.</p>",
+      },
+    }),
+    201,
+    "accept legal pages",
+  );
+}
+
+export interface TermsStatusBody {
+  accepted: boolean;
+  acceptedAt: string | null;
+  acceptedVersion: string | null;
+  currentVersion: string | null;
+  graceDeadline: string | null;
+  inGrace: boolean;
+  readiness: {
+    legalPagesAccepted: boolean;
+    ready: boolean;
+    returnAddress: boolean;
+    vatAnswered: boolean;
+  };
+}
+
 /** GET /v1/admin/legal/status as the shop's admin. */
 export async function termsStatus(world: SliceWorld, tenant: Tenant) {
-  return expectJson<{ accepted: boolean; acceptedAt: string | null; currentVersion: string | null }>(
+  return expectJson<TermsStatusBody>(
     await adminCall(world, tenant, "GET", "/v1/admin/legal/status"),
     200,
     "terms status",
