@@ -123,3 +123,32 @@ Both regression tests were verified to FAIL with the fix reverted.
 3. **Dashboard fee refunds** are alerted (`withholding_release_unmatched`) but not counted in the payout facts. Count them as releases, or keep them out-of-band?
 4. **Custom commission above 8 %** (`tenants.commission_bps > 800`): the floor assumes the 8 % BAS fee; above that, a single item at the floor can still exceed the gross on large prices. Fine while per-shop tiers have no billing rails (PLUS 5 % / BAS 8 %); revisit with tiers.
 5. **D41 VAT factor** `max(tenant VAT, 25 %)` goes beyond the brief (see §4); rule on it.
+
+## 9. Codex fix on 0cad1f0 — the release executor could starve (P2)
+
+**Finding.** `executeWithholdingReleases` took the 50 oldest unsettled releases each run (`ORDER BY updated_at`), and a row that failed early (fee lookup, refund listing) returned without touching any column — so 50 rows failing forever filled every batch and newer, processable releases (other shops' money) were never examined.
+
+**Fix.**
+- `migrations/0030_withholding_release_backoff.sql`: `withholding_releases.next_attempt_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'` (ISO CHECK) and `last_attempt_at` (ISO, nullable); index `withholding_releases_due_idx (state, next_attempt_at, created_at)`. The epoch default makes existing and newly reserved rows due at once. **REQUIRED_MIGRATION → `0030_withholding_release_backoff.sql`** (reviewer bumps).
+- `src/commerce/withholding-release.ts`:
+  - Selection: `WHERE state IN ('reserved','submitted') AND next_attempt_at <= now ORDER BY next_attempt_at, created_at, id LIMIT 50`.
+  - **Every attempted row is stamped FIRST** (`stampAttempt`: `attempts + 1`, `last_attempt_at = now`, `next_attempt_at = now + releaseRetryDelayMs(attempt)`), a CAS on the attempts value just read that also acts as the run's claim. So every early return (fee lookup failed / fee not found / listing failed or incomplete / unknown create outcome / unreadable response) leaves the row backed off at the end of the queue. `attempts` now counts execution attempts, not create calls; `markSubmitted` no longer increments it.
+  - Backoff: 10, 20, 40, 80, 160, 320 min, then capped at 6 h (the first retry is shorter than the 15-min cron, so the next tick retries even when its clock runs slightly early).
+  - After `MAX_RELEASE_ATTEMPTS = 10` (about 30 h), a row that still fails goes to `failed` with `last_error = 'attempts_exhausted'` and ONE critical `withholding_release_failed` alert. The message names the last error code and, for a `submitted` row, warns that Stripe may hold a fee refund from an earlier attempt. The alert is inserted in the same batch as the transition, conditioned on the `settled_at` this batch stamped and deduped on an open alert. The Stripe-refusal path uses the same batch.
+  - A late Stripe fact for a `failed` release now raises `withholding_release_unmatched` on that release, so the open `withholding_release_failed` alert can no longer dedupe it away. Nothing is recorded; a human settles it.
+  - The stranded-alert query skips releases that already have an open `withholding_release_unsettled_30m` alert, so more than 50 stranded rows cannot starve the newer ones of their alert either.
+  - Summary gains `gaveUp` (also counted in `failed`).
+
+**Tests** (`test/money-followups.test.ts`, +3; one updated):
+- The backoff schedule is pinned.
+- **The regression:** 51 releases, the 50 oldest failing the fee lookup forever.
+  - Run 1 stamps them (attempts 1, `last_attempt_at` = run time, `next_attempt_at` = +10 min).
+  - The 51st is **released on run 2**.
+  - Every one of the 50 ends `failed / attempts_exhausted` after exactly 10 fee lookups, with exactly one critical alert each, and no amount appears in any message.
+  - Verified to FAIL with the old ordering restored.
+- A late fact on a failed release produces the separate `unmatched` alert.
+- Updated: the lost-answer test now also asserts the row is not retried within the same tick, and settles on the next one (attempts 2).
+
+`npm run check`: **50 files / 1741 tests passing** (1738 → 1741: +3 here; CP2-D1's `test/slice*` in the tree, unchanged).
+
+Files: `cloudflare/migrations/0030_withholding_release_backoff.sql` (new), `cloudflare/src/commerce/withholding-release.ts`, `cloudflare/test/money-followups.test.ts`, this report. Nothing else touched.

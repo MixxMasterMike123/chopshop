@@ -314,14 +314,20 @@ export async function applyFeeRefundFact(
   }
 
   if (release.amount_minor !== fact.amount || release.state === "failed") {
-    // Asked for exactly amount_minor under an idempotency key, or refused by
-    // Stripe: a fee refund that disagrees is outside this design. No money
-    // is recorded on a guess; a human reconciles.
+    // Asked for exactly amount_minor under an idempotency key, or already
+    // given up on (refused, or out of attempts): a fee refund that disagrees
+    // is outside this design. No money is recorded on a guess; a human
+    // reconciles. A late fact on a FAILED release gets its own alert kind, so
+    // the release's open `withholding_release_failed` alert cannot hide that
+    // Stripe did make it after all.
+    const late = release.state === "failed" && release.amount_minor === fact.amount;
     await raiseAlertStatement(
       db,
       {
-        kind: "withholding_release_failed",
-        message: `withholding release ${release.id}: Stripe fee refund ${fact.id} does not match it (${release.state === "failed" ? "the release was refused" : "different amount"}); reconcile by hand`,
+        kind: late ? "withholding_release_unmatched" : "withholding_release_failed",
+        message: late
+          ? `withholding release ${release.id} was marked failed, but Stripe reports fee refund ${fact.id} for it: the shop HAS received it — record it by hand`
+          : `withholding release ${release.id}: Stripe fee refund ${fact.id} does not match it (${release.state === "failed" ? "the release had failed" : "different amount"}); reconcile by hand`,
         resourceId: release.id,
         resourceType: "withholding_release",
         severity: "critical",
@@ -455,10 +461,32 @@ export async function handleApplicationFeeEvent(
 const STRANDED_MS = 30 * 60 * 1_000;
 const EXECUTE_BATCH = 50;
 
+/**
+ * Attempts per release before it is given up (`failed` + a critical alert).
+ * With RELEASE_RETRY_BASE_MS doubling to the cap: 10 attempts span about 30
+ * hours — a Stripe outage longer than that is a human's anyway, and the
+ * 30-minute stranded alert told one long before.
+ */
+export const MAX_RELEASE_ATTEMPTS = 10;
+/**
+ * The first retry: under the 15-minute cron cadence, so the very next tick
+ * retries even when its clock runs a little early.
+ */
+export const RELEASE_RETRY_BASE_MS = 10 * 60 * 1_000;
+export const RELEASE_RETRY_CAP_MS = 6 * 60 * 60 * 1_000;
+
+/** Delay after attempt number `attempt` (1-based): 10, 20, 40 … min, ≤ 6 h. */
+export function releaseRetryDelayMs(attempt: number): number {
+  const exponent = Math.max(0, Math.min(Math.floor(attempt) - 1, 20));
+  return Math.min(RELEASE_RETRY_BASE_MS * 2 ** exponent, RELEASE_RETRY_CAP_MS);
+}
+
 export interface WithholdingReleaseSummary {
   discovered: number;
   errors: number;
   failed: number;
+  /** Rows given up after MAX_RELEASE_ATTEMPTS (also counted in `failed`). */
+  gaveUp: number;
   released: number;
   /** "unavailable": no fee-refund gateway (Stripe unconfigured / a fake without it). */
   stripe: "configured" | "unavailable";
@@ -466,12 +494,50 @@ export interface WithholdingReleaseSummary {
 }
 
 export function emptyWithholdingReleaseSummary(): WithholdingReleaseSummary {
-  return { discovered: 0, errors: 0, failed: 0, released: 0, stripe: "unavailable", unsettled: 0 };
+  return {
+    discovered: 0,
+    errors: 0,
+    failed: 0,
+    gaveUp: 0,
+    released: 0,
+    stripe: "unavailable",
+    unsettled: 0,
+  };
 }
 
 interface ExecutableRow extends ReleaseRow {
+  attempts: number;
   payment_intent_id: string;
   stripe_charge_id: string | null;
+}
+
+/**
+ * The attempt stamp — FIRST, before any Stripe call, on every row the run
+ * touches (Codex CP2-D2 P2: rows that failed early used to keep their place
+ * at the head of the queue forever). A CAS on the attempts count read by the
+ * selection, so it doubles as this run's claim: a concurrent run, or a row
+ * settled meanwhile, makes it a no-op. Returns the attempt number, or null.
+ */
+async function stampAttempt(
+  db: D1Database,
+  row: ExecutableRow,
+  nowMs: number,
+): Promise<number | null> {
+  const attempt = row.attempts + 1;
+  const result = await db
+    .prepare(
+      `UPDATE withholding_releases
+       SET attempts = attempts + 1,
+           last_attempt_at = ?1,
+           next_attempt_at = ?2,
+           updated_at = MAX(updated_at, ?1)
+       WHERE id = ?3 AND attempts = ?4
+         AND state IN ('reserved', 'submitted')
+         AND next_attempt_at <= ?1`,
+    )
+    .bind(iso(nowMs), iso(nowMs + releaseRetryDelayMs(attempt)), row.id, row.attempts)
+    .run();
+  return result.meta.changes === 1 ? attempt : null;
 }
 
 async function markSubmitted(
@@ -484,7 +550,6 @@ async function markSubmitted(
     .prepare(
       `UPDATE withholding_releases
        SET state = 'submitted',
-           attempts = attempts + 1,
            stripe_application_fee_id = COALESCE(stripe_application_fee_id, ?),
            updated_at = MAX(updated_at, ?)
        WHERE id = ? AND state IN ('reserved', 'submitted')`,
@@ -494,13 +559,21 @@ async function markSubmitted(
   return result.meta.changes === 1;
 }
 
+/**
+ * → failed, and its critical alert IN THE SAME BATCH, the alert conditioned
+ * on this batch's transition (the settled_at it stamped — NULL until a row
+ * settles, 0028) and deduped on an open alert for the release — so a failure
+ * is never recorded without its alert, and never alerted twice.
+ */
 async function markFailed(
   db: D1Database,
   row: ExecutableRow,
   feeId: string | null,
   error: string,
+  message: string,
   nowMs: number,
 ): Promise<boolean> {
+  const now = iso(nowMs);
   const results = await db.batch([
     db
       .prepare(
@@ -512,27 +585,145 @@ async function markFailed(
              updated_at = MAX(updated_at, ?)
          WHERE id = ? AND state IN ('reserved', 'submitted')`,
       )
-      .bind(feeId, error, iso(nowMs), iso(nowMs), row.id),
-    raiseAlertStatement(
-      db,
-      {
-        kind: "withholding_release_failed",
-        message: `withholding release ${row.id} for order ${row.order_id}: Stripe refused the application-fee refund (${error}); the shop has not received it — reconcile by hand`,
-        resourceId: row.id,
-        resourceType: "withholding_release",
-        severity: "critical",
-        tenantId: row.tenant_id,
-      },
-      nowMs,
-    ),
+      .bind(feeId, error, now, now, row.id),
+    db
+      .prepare(
+        `INSERT INTO alerts (
+           id, tenant_id, kind, severity, message, resource_type, resource_id, created_at
+         )
+         SELECT ?, ?, 'withholding_release_failed', 'critical', ?, 'withholding_release', ?, ?
+         WHERE EXISTS (
+             SELECT 1 FROM withholding_releases
+             WHERE id = ? AND state = 'failed' AND last_error = ? AND settled_at = MAX(?, created_at)
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM alerts
+             WHERE kind = 'withholding_release_failed'
+               AND resource_type = 'withholding_release'
+               AND resource_id = ? AND resolved_at IS NULL
+           )`,
+      )
+      .bind(
+        `withholding_release_failed:${crypto.randomUUID()}`,
+        row.tenant_id,
+        message.slice(0, 1_000),
+        row.id,
+        now,
+        row.id,
+        error,
+        now,
+        row.id,
+      ),
   ]);
   return results[0]?.meta.changes === 1;
 }
 
+type AttemptOutcome =
+  | { kind: "failed" }
+  | { kind: "released" }
+  | { kind: "retry"; error: string }
+  | { kind: "skipped" };
+
+/** One attempt at one (already stamped) release. Never throws on Stripe. */
+async function attemptRelease(
+  db: D1Database,
+  gateway: StripeFeeRefundGateway,
+  row: ExecutableRow,
+  nowMs: number,
+): Promise<AttemptOutcome> {
+  // ── the fee ────────────────────────────────────────────────────────────
+  let feeId = row.stripe_application_fee_id;
+  if (feeId === null) {
+    try {
+      feeId = await gateway.retrieveChargeApplicationFee({
+        chargeId: row.stripe_charge_id,
+        paymentIntentId: row.payment_intent_id,
+      });
+    } catch {
+      return { error: "fee_lookup_failed", kind: "retry" };
+    }
+    if (feeId === null || !/^[A-Za-z0-9_]{3,255}$/.test(feeId)) {
+      // A charge with an application_fee_amount always carries a fee; its
+      // absence is not Stripe refusing, so it is retried — and given up with
+      // an alert after the last attempt.
+      return { error: "fee_not_found", kind: "retry" };
+    }
+  }
+
+  // ── a previous create whose answer was lost: ask Stripe first ──────────
+  if (row.state === "submitted") {
+    let listing;
+    try {
+      listing = await gateway.listApplicationFeeRefunds(feeId);
+    } catch {
+      return { error: "fee_refund_listing_failed", kind: "retry" };
+    }
+    const made = listing.data.find((refund) => refund.metadata.withholding_release_id === row.id);
+    if (made !== undefined) {
+      const fact = viewFact(made);
+      if (fact === null) {
+        return { error: "fee_refund_unreadable", kind: "retry" };
+      }
+      const applied = await applyFeeRefundFact(db, { ...fact, feeId, releaseId: row.id }, nowMs);
+      return applied.result === "applied" ? { kind: "released" } : { kind: "skipped" };
+    }
+    if (!listing.complete) {
+      // Cannot rule out a refund past the page bound; creating one blind
+      // could release twice once the idempotency key has expired.
+      return { error: "fee_refund_listing_incomplete", kind: "retry" };
+    }
+  }
+
+  // ── write-ahead, then the call ─────────────────────────────────────────
+  if (!(await markSubmitted(db, row, feeId, nowMs))) {
+    return { kind: "skipped" };
+  }
+
+  let refund: ApplicationFeeRefundView;
+  try {
+    refund = await gateway.createApplicationFeeRefund({
+      amount: row.amount_minor,
+      applicationFeeId: feeId,
+      idempotencyKey: row.id,
+      // Join keys only.
+      metadata: {
+        order_id: row.order_id,
+        tenant_id: row.tenant_id,
+        withholding_release_id: row.id,
+      },
+    });
+  } catch (error) {
+    if (error instanceof StripeGatewayError && error.rejected) {
+      return (await markFailed(
+        db,
+        row,
+        feeId,
+        "stripe_refused",
+        `withholding release ${row.id} for order ${row.order_id}: Stripe refused the application-fee refund (stripe_refused); the shop has not received it — reconcile by hand`,
+        nowMs,
+      ))
+        ? { kind: "failed" }
+        : { kind: "skipped" };
+    }
+    // Unknown outcome: stays `submitted`; the next attempt lists first.
+    return { error: "fee_refund_outcome_unknown", kind: "retry" };
+  }
+
+  const fact = viewFact(refund);
+  if (fact === null) {
+    return { error: "fee_refund_unreadable", kind: "retry" };
+  }
+  const applied = await applyFeeRefundFact(db, { ...fact, feeId, releaseId: row.id }, nowMs);
+  return applied.result === "applied" ? { kind: "released" } : { kind: "skipped" };
+}
+
 /**
- * Performs every reserved/submitted release (bounded), then alerts for any
- * still unsettled 30 minutes after it was decided. Stripe failures are per
- * row: counted, skipped, retried next run.
+ * Performs the DUE reserved/submitted releases (bounded, least recently
+ * attempted first), then alerts for any still unsettled 30 minutes after it
+ * was decided. Every attempted row is stamped first (attempts,
+ * last_attempt_at, a backed-off next_attempt_at) whatever happens next, so a
+ * row that keeps failing moves to the back of the queue and can never starve
+ * the others; after MAX_RELEASE_ATTEMPTS it is given up with an alert.
  */
 export async function executeWithholdingReleases(
   db: D1Database,
@@ -544,114 +735,69 @@ export async function executeWithholdingReleases(
   summary.stripe = "configured";
   const rows = await db
     .prepare(
-      `SELECT w.id, w.tenant_id, w.order_id, w.amount_minor, w.state,
+      `SELECT w.id, w.tenant_id, w.order_id, w.amount_minor, w.state, w.attempts,
               w.stripe_application_fee_id, w.stripe_fee_refund_id,
               o.stripe_charge_id, o.payment_intent_id
        FROM withholding_releases AS w
        JOIN orders AS o ON o.order_id = w.order_id
        WHERE w.state IN ('reserved', 'submitted')
-       ORDER BY w.updated_at ASC
+         AND w.next_attempt_at <= ?
+       ORDER BY w.next_attempt_at ASC, w.created_at ASC, w.id ASC
        LIMIT ?`,
     )
-    .bind(EXECUTE_BATCH)
+    .bind(iso(nowMs), EXECUTE_BATCH)
     .all<ExecutableRow>();
 
   for (const row of rows.results) {
-    // ── the fee ──────────────────────────────────────────────────────────
-    let feeId = row.stripe_application_fee_id;
-    if (feeId === null) {
-      try {
-        feeId = await gateway.retrieveChargeApplicationFee({
-          chargeId: row.stripe_charge_id,
-          paymentIntentId: row.payment_intent_id,
-        });
-      } catch {
-        summary.errors += 1;
-        continue;
-      }
-      if (feeId === null || !/^[A-Za-z0-9_]{3,255}$/.test(feeId)) {
-        // A charge with an application_fee_amount always carries a fee; its
-        // absence is not something a retry fixes by itself — but it is not
-        // Stripe refusing either. Left for the stranded alert.
-        summary.errors += 1;
-        continue;
-      }
-    }
-
-    // ── a previous create whose answer was lost: ask Stripe first ────────
-    if (row.state === "submitted") {
-      let listing;
-      try {
-        listing = await gateway.listApplicationFeeRefunds(feeId);
-      } catch {
-        summary.errors += 1;
-        continue;
-      }
-      const made = listing.data.find((refund) => refund.metadata.withholding_release_id === row.id);
-      if (made !== undefined) {
-        const fact = viewFact(made);
-        if (fact !== null) {
-          const applied = await applyFeeRefundFact(db, { ...fact, feeId, releaseId: row.id }, nowMs);
-          if (applied.result === "applied") {
-            summary.released += 1;
-          }
-        }
-        continue;
-      }
-      if (!listing.complete) {
-        // Cannot rule out a refund past the page bound; creating one blind
-        // could release twice once the idempotency key has expired.
-        summary.errors += 1;
-        continue;
-      }
-    }
-
-    // ── write-ahead, then the call ───────────────────────────────────────
-    if (!(await markSubmitted(db, row, feeId, nowMs))) {
+    const attempt = await stampAttempt(db, row, nowMs);
+    if (attempt === null) {
       continue;
     }
 
-    let refund: ApplicationFeeRefundView;
-    try {
-      refund = await gateway.createApplicationFeeRefund({
-        amount: row.amount_minor,
-        applicationFeeId: feeId,
-        idempotencyKey: row.id,
-        // Join keys only.
-        metadata: {
-          order_id: row.order_id,
-          tenant_id: row.tenant_id,
-          withholding_release_id: row.id,
-        },
-      });
-    } catch (error) {
-      if (error instanceof StripeGatewayError && error.rejected) {
-        if (await markFailed(db, row, feeId, "stripe_refused", nowMs)) {
-          summary.failed += 1;
-        }
-      } else {
-        // Unknown outcome: stays `submitted`; the next run lists first.
-        summary.errors += 1;
-      }
-      continue;
-    }
-
-    const fact = viewFact(refund);
-    if (fact === null) {
-      summary.errors += 1;
-      continue;
-    }
-    const applied = await applyFeeRefundFact(db, { ...fact, feeId, releaseId: row.id }, nowMs);
-    if (applied.result === "applied") {
+    const outcome = await attemptRelease(db, gateway, row, nowMs);
+    if (outcome.kind === "released") {
       summary.released += 1;
+      continue;
+    }
+    if (outcome.kind === "failed") {
+      summary.failed += 1;
+      continue;
+    }
+    if (outcome.kind === "skipped") {
+      continue;
+    }
+
+    summary.errors += 1;
+    if (attempt >= MAX_RELEASE_ATTEMPTS) {
+      const gaveUp = await markFailed(
+        db,
+        row,
+        null,
+        "attempts_exhausted",
+        `withholding release ${row.id} for order ${row.order_id}: given up after ${attempt} attempts (last: ${outcome.error}); the shop has not received it${row.state === "submitted" ? " unless Stripe holds a fee refund made by an earlier attempt — check the application fee" : ""} — reconcile by hand`,
+        nowMs,
+      );
+      if (gaveUp) {
+        summary.failed += 1;
+        summary.gaveUp += 1;
+      }
     }
   }
 
+  // One alert per stranded release: rows that already have an open one are
+  // not selected, so more than a batch of stranded rows cannot starve the
+  // newer ones of theirs either.
   const stranded = await db
     .prepare(
-      `SELECT id, tenant_id, order_id FROM withholding_releases
-       WHERE state IN ('reserved', 'submitted') AND created_at <= ?
-       ORDER BY created_at ASC
+      `SELECT w.id, w.tenant_id, w.order_id FROM withholding_releases AS w
+       WHERE w.state IN ('reserved', 'submitted') AND w.created_at <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM alerts AS a
+           WHERE a.kind = 'withholding_release_unsettled_30m'
+             AND a.resource_type = 'withholding_release'
+             AND a.resource_id = w.id AND a.resolved_at IS NULL
+         )
+       ORDER BY w.created_at ASC
        LIMIT ?`,
     )
     .bind(iso(nowMs - STRANDED_MS), EXECUTE_BATCH)

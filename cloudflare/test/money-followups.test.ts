@@ -7,6 +7,11 @@ import { publishAdminProduct } from "../src/catalog/admin-catalog";
 import { runAlertDigest } from "../src/commerce/alert-digest";
 import { createCheckout } from "../src/commerce/checkout";
 import { runReconciliation, secondWatermark } from "../src/commerce/crons";
+import {
+  MAX_RELEASE_ATTEMPTS,
+  RELEASE_RETRY_CAP_MS,
+  releaseRetryDelayMs,
+} from "../src/commerce/withholding-release";
 import { DISPATCH_HOLD_UNTIL_MS, releaseDispatchHolds } from "../src/commerce/dispatch-hold";
 import { computeCommissionMinor } from "../src/commerce/payment";
 import { applyRefundFact } from "../src/commerce/refunds";
@@ -91,7 +96,15 @@ class FakeFeeStripe extends FakeMoneyStripe implements StripeFeeRefundGateway {
     this.feeAmount.set(feeId, amount);
   }
 
+  /** Charges whose fee lookup fails (an unknown outcome) — forever. */
+  readonly brokenCharges = new Set<string>();
+  readonly feeLookupCalls: string[] = [];
+
   async retrieveChargeApplicationFee(params: { chargeId: string | null }): Promise<string | null> {
+    this.feeLookupCalls.push(params.chargeId ?? "");
+    if (params.chargeId !== null && this.brokenCharges.has(params.chargeId)) {
+      throw new StripeGatewayError(false);
+    }
     return params.chargeId === null ? null : (this.feeByCharge.get(params.chargeId) ?? null);
   }
 
@@ -503,13 +516,17 @@ describe("D36: the release's own failure modes", () => {
     await expect(releaseOf(order.orderId)).resolves.toMatchObject({ attempts: 1, state: "submitted" });
 
     stripe.loseFeeRefundResponse = false;
-    const second = await runReconciliation(quietMoneyEnv(), Date.now());
+    // Backed off (0030): not retried within the same tick …
+    await runReconciliation(quietMoneyEnv(), Date.now());
+    expect(stripe.listFeeRefundCalls.filter((id) => id === order.feeId)).toHaveLength(0);
+    // … but on the next one.
+    const second = await runReconciliation(quietMoneyEnv(), Date.now() + 11 * MIN);
 
-    expect(second.withholding).toMatchObject({ errors: 0, released: 1 });
+    expect(second.withholding).toMatchObject({ released: 1 });
     expect(stripe.listFeeRefundCalls.filter((id) => id === order.feeId)).toHaveLength(1);
     // Found, not created again.
     expect(callsFor(order.orderId)).toHaveLength(1);
-    await expect(releaseOf(order.orderId)).resolves.toMatchObject({ attempts: 1, state: "succeeded" });
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({ attempts: 2, state: "succeeded" });
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({ withholding_released_minor: WITHHELD } as Record<string, unknown>);
   });
 
@@ -1110,5 +1127,125 @@ describe("P4-2: the account resync watermark is second-aligned", () => {
       .first<{ c: number; r: number }>();
     // Applied fail-closed and marked for an authoritative re-read.
     expect(after).toEqual({ c: 0, r: 1 });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Codex CP2-D2 P2 — the release executor cannot starve (0030)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Codex P2: releases that keep failing never starve the others (0030)", () => {
+  it("backs off 10, 20, 40 … minutes up to 6 hours", () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 10].map(releaseRetryDelayMs)).toEqual([
+      10 * MIN, 20 * MIN, 40 * MIN, 80 * MIN, 160 * MIN, 320 * MIN, RELEASE_RETRY_CAP_MS, RELEASE_RETRY_CAP_MS,
+    ]);
+  });
+
+  it("51 releases, the 50 oldest failing the fee lookup forever: the 51st is executed by the 2nd run; the 50 end failed + one alert each", async () => {
+    const orders: PaidOrder[] = [];
+    for (let index = 0; index < 51; index += 1) {
+      orders.push(await paidPodOrder());
+    }
+    const failing = orders.slice(0, 50);
+    const newest = orders[50] as PaidOrder;
+    for (const order of failing) {
+      stripe.brokenCharges.add(order.chargeId);
+    }
+    // Full refunds (a Stripe fact each) in age order: each settlement batch
+    // supersedes the dispatch and reserves the release — the 51st youngest.
+    const t0 = Date.now();
+    for (const [index, order] of orders.entries()) {
+      await applyRefundFact(env.DB, {
+        amount: PRICE,
+        operationId: null,
+        paymentIntentId: order.paymentIntentId,
+        status: "succeeded",
+        stripeRefundId: next("re_starve"),
+      }, t0 + index);
+    }
+    for (const order of orders) {
+      await expect(releaseOf(order.orderId)).resolves.toMatchObject({ attempts: 0, state: "reserved" });
+    }
+
+    // Run 1: the batch is full of the oldest — which all fail early …
+    const t1 = t0 + 1_000;
+    await runReconciliation(quietMoneyEnv(), t1);
+    // … and are STAMPED even so: attempts, last attempt, a backed-off due time.
+    const oldest = await env.DB.prepare(
+      "SELECT attempts, last_attempt_at, next_attempt_at, state FROM withholding_releases WHERE order_id = ?",
+    )
+      .bind(failing[0]?.orderId)
+      .first<{ attempts: number; last_attempt_at: string; next_attempt_at: string; state: string }>();
+    expect(oldest).toEqual({
+      attempts: 1,
+      last_attempt_at: new Date(t1).toISOString(),
+      next_attempt_at: new Date(t1 + 10 * MIN).toISOString(),
+      state: "reserved",
+    });
+
+    // Run 2 (the next tick): the never-attempted 51st sorts first.
+    await runReconciliation(quietMoneyEnv(), t1 + 15 * MIN);
+    await expect(releaseOf(newest.orderId)).resolves.toMatchObject({ state: "succeeded" });
+    expect(callsFor(newest.orderId).map((call) => call.amount)).toEqual([WITHHELD]);
+
+    // The 50 keep failing: after MAX_RELEASE_ATTEMPTS each is given up —
+    // failed with ONE critical alert, never silently dropped.
+    let at = t1 + 15 * MIN;
+    for (let run = 0; run < MAX_RELEASE_ATTEMPTS + 5; run += 1) {
+      at += RELEASE_RETRY_CAP_MS + MIN;
+      await runReconciliation(quietMoneyEnv(), at);
+      const open = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM withholding_releases
+         WHERE state IN ('reserved', 'submitted') AND order_id IN (${failing.map(() => "?").join(", ")})`,
+      )
+        .bind(...failing.map((order) => order.orderId))
+        .first<{ n: number }>();
+      if (open?.n === 0) {
+        break;
+      }
+    }
+    // One more run changes nothing for them.
+    await runReconciliation(quietMoneyEnv(), at + RELEASE_RETRY_CAP_MS + MIN);
+
+    for (const order of failing) {
+      const release = await releaseOf(order.orderId);
+      expect(release).toMatchObject({
+        attempts: MAX_RELEASE_ATTEMPTS,
+        last_error: "attempts_exhausted",
+        state: "failed",
+        stripe_fee_refund_id: null,
+      });
+      expect(stripe.feeLookupCalls.filter((charge) => charge === order.chargeId)).toHaveLength(MAX_RELEASE_ATTEMPTS);
+      const alerts = await openAlerts("withholding_release_failed", release?.id);
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toMatchObject({ resource_type: "withholding_release", severity: "critical" });
+      expect(alerts[0]?.message).toContain(`given up after ${MAX_RELEASE_ATTEMPTS} attempts (last: fee_lookup_failed)`);
+      expect(alerts[0]?.message).not.toContain(String(WITHHELD));
+      await expect(orderMoney(order.orderId)).resolves.toMatchObject({ withholding_released_minor: 0 } as Record<string, unknown>);
+    }
+    expect(callsFor(newest.orderId)).toHaveLength(1);
+  }, 120_000);
+
+  it("a late Stripe fact for a release given up on is alerted separately, never hidden or recorded", async () => {
+    const order = await paidPodOrder();
+    await refund(order.orderId, PRICE);
+    stripe.feeRefundBehaviour = "reject";
+    await runReconciliation(quietMoneyEnv(), Date.now());
+    const release = await releaseOf(order.orderId);
+    expect(release).toMatchObject({ state: "failed" });
+
+    await postEvent("application_fee.refund.updated", {
+      amount: WITHHELD,
+      fee: order.feeId,
+      id: next("fr_late"),
+      metadata: { withholding_release_id: release?.id ?? "" },
+      object: "fee_refund",
+    });
+
+    expect(await openAlerts("withholding_release_failed", release?.id)).toHaveLength(1);
+    const late = await openAlerts("withholding_release_unmatched", release?.id);
+    expect(late).toHaveLength(1);
+    expect(late[0]?.message).toContain("HAS received it");
+    await expect(releaseOf(order.orderId)).resolves.toMatchObject({ state: "failed" });
   });
 });
