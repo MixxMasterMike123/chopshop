@@ -27,6 +27,24 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 **Open:** Codex review of the seven commits (started 19:52) → fixes → attestation → Mikael applies 0032–0038 to staging D1 → deploy → routes-only staging proof (seed script update) + the Connect v1 proof list → CP3-S import / verify scripts (Sonnet, launched 19:55) → staging import → CP3 close.
 
+**Codex on the seven commits (21:00):** consolidation clean; nine real findings, four of them P1, fixed in `f0db7a7` (+11 tests, **2416 / 69**); Codex on `f0db7a7`: clean. Three further P1s were commit boundaries (a builder's commit alone has no route mounts).
+
+**Import, verify and restore scripts landed — `416b3bb1` (339 tests).** Review round 1 was finished by the reviewer, who also ran the importer in memory against the real bundle (statistics only, nothing written). `CP3_S_REPORT.md` §10 has the full list. What matters for the staging import:
+
+| Found | Where | Effect before the fix |
+|---|---|---|
+| Gallery image URLs on Firebase Storage | real bundle, one shop | the importer refused the real bundle (D73) |
+| A profile link with an `@` in its path taken for an address | real bundle, one shop | the link was replaced by a placeholder address |
+| The plan's clock was the wall clock from the CLI | reading | two runs, two plans; every test passed its own clock |
+| `verify.mjs`: a check against itself, one ending in `\|\| true`, one passing for any number, the production user count expected on staging | reading | checks that could not fail, and one that could not pass |
+| `--scrub-unmapped` accepted on production | reading | placeholder addresses for real users |
+
+The real bundle now builds: 864 statements, 286 KB, longest statement 47.7 KB, identical on a second run. It holds no legal acceptance and no audit log. **Codex on `416b3bb1` was cut off by Codex's own usage limit with no finding; it must be re-run before the attestation.**
+
+**Seed script routes-only (this commit).** `seed-staging-slice.mjs` no longer creates the Stripe account and prints no D1 statement: the platform enables Connect, the Worker creates or reuses the account, the refresh route writes Stripe's status, the onboarding link comes from the route. New steps: an explicit `pod` feature row, the re-screen route until nothing is pending, legal readiness before the purchase (terms, return address + VAT answer, legal pages adopted by the shop's own admin). `--connect-proof` runs the login link (issued to the seller, refused to acting-as) and the payout delay (7, then the minimum). It refuses a Worker below migration 0038. **Not run: it needs the CP3 Worker on staging.**
+
+**Order from here:** Mikael applies 0032–0038 → Codex on `416b3bb1` and on the seed commit → attestation → `cf-deploy.sh staging` → seed script (the Connect proof list of `CP3_F_REPORT.md`) → target state by read-only queries → plan from the bundle with `--scrub-unmapped --target-state` → Mikael applies `plan.sql` → `verify.mjs` → CP3 closed.
+
 ## CP2 — Vertical slice (GO 2026-09-27 01:10, ✅ CLOSED 2026-09-27 13:00)
 
 **Mikael:** "Skip all Codex reviews until 01:55 … GO!" — CP2 build started under the recommended defaults for D8–D11 (assumed; veto window until the CP2 deploy). Codex reviews resume 01:55 and gate the deploy as always. **Split (three Opus builders in parallel, disjoint files, route mounts via anchors in `src/app.ts`):** CP2-A money (refunds reserve-first, Stripe event handlers, Connect PI params, payout facts, retention sweep, reconciliation), CP2-B outbox with claims + dispatch state machine + cancellation ×4 + 15-min sweeper cron + manual resolution, CP2-C POD product path (mappings, screening D8, quotePodCost, publish gate, production snapshot at checkout, storefront POD fields). Then CP2-D: seed script + failure-injection suite + reconcile-to-the-öre report.

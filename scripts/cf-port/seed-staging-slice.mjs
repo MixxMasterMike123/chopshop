@@ -1,41 +1,50 @@
 #!/usr/bin/env node
 /**
- * scripts/cf-port/seed-staging-slice.mjs — CP2-D1: seed the vertical slice on STAGING
- * (docs/cf-port/PLAN.md §10 CP2), through the deployed Worker's real routes + the Stripe API.
+ * scripts/cf-port/seed-staging-slice.mjs — seed the vertical slice on STAGING
+ * (docs/cf-port/PLAN.md §10 CP2, routes-only since CP3), through the deployed Worker's real
+ * routes. Stripe is called directly for two things only: reading (the platform account, the
+ * connected account's metadata and payout schedule) and confirming the test payment as the
+ * buyer's browser would. Every write to the shop goes through a route.
  *
  *   CHOPSHOP_API_URL=https://chopshop-api-stg.kent-ee2.workers.dev \
  *   CHOPSHOP_PLATFORM_EMAIL=… CHOPSHOP_PLATFORM_PASSWORD=… \
- *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] [SLICE_KEY_SALT=r2] \
+ *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] [CHOPSHOP_SLICE_ADMIN_PASSWORD=…] \
  *   node scripts/cf-port/seed-staging-slice.mjs [--tenant slice-YYYYMMDD]
- *        [--purchase] [--refund <orderId>:<amountMinor>]
+ *        [--purchase] [--refund <orderId>:<amountMinor>] [--connect-proof]
  *
  * Steps (each idempotent; every id is printed):
  *   0. refuse unless the API origin is cloudflare/pinned.staging.json origins.api, /health says
- *      "staging", the Stripe key is a TEST key and its account is the pinned sandbox account;
+ *      "staging", /ready is on migration 0038 or later (the CP3 Worker), the Stripe key is a
+ *      TEST key and its account is the pinned sandbox account;
  *   1. sign in as the platform user;
  *   2. tenant `slice-<yyyymmdd>` (UTC) whose storefront hostname IS the API host;
- *   3. a sandbox Express Connect account (accounts.create, type express, SE, card_payments +
- *      transfers requested), found again by metadata on later runs; prints the exact D1
- *      `UPDATE tenants …` for the reviewer to run THROUGH THE PREFLIGHT (and an onboarding
- *      link while Stripe has not enabled charges);
- *   4. open the shop as the platform user (acting-as, 1 h), then printers (the fake printer,
- *      capabilities from docs/SnapWearDocs/snapwear-catalog.json), the DTG profile, artwork
- *      (.bench/render-bench-typical.png if present, else a generated 3600 × 3600 PNG — the real
- *      render container needs ≥ 300 DPI at 300 mm), wait for `ready`, product, mapping, quote,
- *      publish, platform approval, and the public PDP;
- *   5. --purchase: the platform terms (CP2-E checkout gate — the shop's OWN admin must accept;
- *      a platform user acting-as cannot): when not yet accepted, a slice tenant admin
- *      `slice-admin+<tenant>@example.com` is created with CHOPSHOP_SLICE_ADMIN_PASSWORD and
- *      accepts; then checkout (pickup, the buyer's terms consent) → PaymentIntent → Stripe
- *      confirm with pm_card_visa → the receipt poll until the webhook made the order (needs
- *      step 3's UPDATE applied);
- *   6. --refund <orderId>:<amountMinor>: a partial refund through the admin route, with an
+ *   3. an explicit `pod` feature row for the shop (POD is opt-in: no row, no POD);
+ *   4. open the shop as the platform user (acting-as, 1 h);
+ *   5. Stripe Connect through the routes: the platform enables Connect for the shop, the shop's
+ *      account is created by the Worker (or is already there), Stripe's status is written by
+ *      the refresh route, and while Stripe has not enabled charges an onboarding link is
+ *      printed. Finish the onboarding in a browser and re-run;
+ *   6. printers (the fake printer, capabilities from docs/SnapWearDocs/snapwear-catalog.json),
+ *      the DTG profile, artwork (.bench/render-bench-typical.png if present, else a generated
+ *      3600 × 3600 PNG — the real render container needs ≥ 300 DPI at 300 mm), wait for
+ *      `ready`, product, mapping, quote, publish, platform approval, the public PDP;
+ *   7. the re-screen route until no product is pending (rows older than 0034 hold no text);
+ *   8. --purchase: the shop must be LEGALLY READY (the checkout gate): platform terms accepted
+ *      and the legal pages adopted by the shop's OWN admin (a platform user acting-as cannot
+ *      sign for the seller), a return address and the VAT answer in the store settings. What
+ *      is missing is done as the slice tenant admin `slice-admin+<tenant>@example.com`
+ *      (created with CHOPSHOP_SLICE_ADMIN_PASSWORD when absent). Then checkout (pickup, the
+ *      buyer's terms consent) → PaymentIntent → Stripe confirm with pm_card_visa → the receipt
+ *      poll until the webhook made the order;
+ *   9. --refund <orderId>:<amountMinor>: a partial refund through the admin route, with an
  *      Idempotency-Key derived from (tenant, order, amount) — re-running the same command
- *      replays the first refund instead of making a second one.
+ *      replays the first refund instead of making a second one;
+ *  10. --connect-proof (docs/cf-port/CP3_F_REPORT.md, the v1 proof list): the dashboard login
+ *      link as the shop's own admin and refused to the platform user acting-as, then the
+ *      payout delay set to 7 days and back to the country's minimum.
  *
  * Credentials come ONLY from the environment variables above. Nothing is written to disk and no
- * secret, cookie or receipt token is printed. Never runs wrangler: the one D1 write it needs is
- * printed for the reviewer to run through scripts/cf-preflight.sh.
+ * secret, cookie or receipt token is printed. Never runs wrangler and needs no D1 statement.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -64,6 +73,16 @@ const PROFILE = {
   sortOrder: 0,
 };
 const PRICE_MINOR = 39_900;
+/** The first migration of the routes this script calls (0038 = Connect onboarding). */
+const REQUIRED_MIGRATION_PREFIX = "0038";
+/** What the slice shop adopts as its legal pages until CP4 renders the templates. */
+const LEGAL_TEMPLATE_VERSION = "2026-09-07";
+const LEGAL_TEXTS = {
+  angerratt: "<h1>Ångerrätt</h1><p>Testbutik på staging. Ingen verklig försäljning.</p>",
+  integritetspolicy: "<h1>Integritetspolicy</h1><p>Testbutik på staging. Ingen verklig försäljning.</p>",
+  kopvillkor: "<h1>Köpvillkor</h1><p>Testbutik på staging. Ingen verklig försäljning.</p>",
+};
+const RETURN_ADDRESS = "Slice Test AB\nTestgatan 1\n123 45 Teststad";
 const RENDER_TIMEOUT_MS = Number(process.env.SLICE_RENDER_TIMEOUT_S ?? "600") * 1_000;
 
 // ── plumbing ────────────────────────────────────────────────────────────────
@@ -90,11 +109,13 @@ function requireEnv(name) {
 }
 
 function parseArgs(argv) {
-  const out = { purchase: false, refund: null, tenant: null };
+  const out = { connectProof: false, purchase: false, refund: null, tenant: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--purchase") {
       out.purchase = true;
+    } else if (arg === "--connect-proof") {
+      out.connectProof = true;
     } else if (arg === "--tenant") {
       out.tenant = argv[++index] ?? die("--tenant needs a value");
     } else if (arg === "--refund") {
@@ -146,23 +167,16 @@ if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(TENANT_ID)) {
   die(`tenant id ${TENANT_ID} is not a valid tenant id`);
 }
 const SHOP_NAME = `Slice ${TENANT_ID.replace(/^slice-/, "")}`;
-const ACCOUNT_KEY_SALT = (() => {
-  const salt = process.env.SLICE_KEY_SALT?.trim() ?? "";
-  if (!/^[a-z0-9-]{0,32}$/.test(salt)) {
-    die("SLICE_KEY_SALT must be at most 32 characters of a-z, 0-9 and -");
-  }
-  return salt === "" ? "" : `-${salt}`;
-})();
-
 // ── the API ─────────────────────────────────────────────────────────────────
 
 let platformCookie = null;
 
 async function api(method, route, options = {}) {
-  const headers = { origin: API, ...(options.headers ?? {}) };
+  const headers = { origin: API };
   if (options.session === true) {
     headers.cookie = platformCookie;
   }
+  Object.assign(headers, options.headers ?? {});
   if (options.shop === true) {
     headers["x-shop-id"] = TENANT_ID;
   }
@@ -342,7 +356,14 @@ async function preflight() {
     die(`/health says environment ${health.json?.environment}, not staging`);
   }
   const ready = await api("GET", "/ready");
-  info("api", `${API} (${health.json.service}, /ready ${ready.json?.migration ?? ready.status})`);
+  const migration = ready.status === 200 ? String(ready.json?.migration ?? "") : "";
+  if (!/^\d{4}_/.test(migration) || migration.slice(0, 4) < REQUIRED_MIGRATION_PREFIX) {
+    die(
+      `/ready answers ${ready.status} ${migration || ready.json?.database || ""}: this script needs the CP3 Worker ` +
+        `on migration ${REQUIRED_MIGRATION_PREFIX} or later (apply the migrations, then deploy)`,
+    );
+  }
+  info("api", `${API} (${health.json.service}, /ready ${migration})`);
   const account = await stripe("GET", "/v1/account");
   if (account.id !== PINNED.stripeAccountId) {
     die(`the Stripe key belongs to ${account.id}, not the pinned sandbox platform ${PINNED.stripeAccountId}`);
@@ -400,72 +421,166 @@ async function ensureTenant() {
   );
 }
 
-async function ensureConnectAccount() {
-  step("Stripe Express account (sandbox)");
-  let account = null;
-  let startingAfter = null;
-  for (let page = 0; page < 10 && account === null; page += 1) {
-    const listed = await stripe("GET", "/v1/accounts", {
-      limit: 100,
-      ...(startingAfter === null ? {} : { starting_after: startingAfter }),
-    });
-    account = listed.data.find((candidate) => candidate.metadata?.chopshop_slice_tenant === TENANT_ID) ?? null;
-    if (!listed.has_more || listed.data.length === 0) {
-      break;
-    }
-    startingAfter = listed.data[listed.data.length - 1].id;
+/** POD is opt-in: without an explicit `pod` row the shop has no POD routes and cannot publish. */
+async function ensurePodFeature() {
+  step("features (explicit pod row)");
+  const route = `/v1/platform/tenants/${TENANT_ID}/features`;
+  const current = expectStatus(await api("GET", route, { session: true }), [200], "read features");
+  const pod = (current.json.features ?? []).find((feature) => feature.key === "pod");
+  if (pod?.enabled === true && pod.source === "explicit") {
+    info("pod", "enabled (explicit row present)");
+    return;
   }
-  if (account === null) {
-    account = await stripe(
-      "POST",
-      "/v1/accounts",
-      {
-        business_profile: { name: SHOP_NAME },
-        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
-        country: "SE",
-        metadata: { chopshop_slice_tenant: TENANT_ID },
-        type: "express",
-      },
-      // Stripe replays a key's FIRST answer for 24 h, refusals included (found 2026-09-27: a
-      // policy 400 kept coming back after the policy was changed). SLICE_KEY_SALT gives the
-      // request a fresh key; the metadata lookup above still prevents a second account.
-      `chopshop-slice-account-${TENANT_ID}${ACCOUNT_KEY_SALT}`,
-    );
-    info("account", `${account.id} created`);
-  } else {
-    account = await stripe("GET", `/v1/accounts/${account.id}`);
-    info("account", `${account.id} (found by metadata)`);
+  const written = expectStatus(
+    await api("PUT", route, { json: { features: { pod: true } }, session: true }),
+    [200],
+    "PUT features",
+  );
+  const after = (written.json.features ?? []).find((feature) => feature.key === "pod");
+  if (after?.enabled !== true || after.source !== "explicit") {
+    die(`the pod feature is ${JSON.stringify(after)} after the write`);
   }
-  info("charges_enabled", String(account.charges_enabled));
-  info("payouts_enabled", String(account.payouts_enabled));
-  info("details_submitted", String(account.details_submitted));
+  info("pod", "enabled (explicit row written)");
+}
 
-  if (!account.charges_enabled) {
-    const link = await stripe("POST", "/v1/account_links", {
-      account: account.id,
-      refresh_url: `${API}/health`,
-      return_url: `${API}/health`,
-      type: "account_onboarding",
-    });
+/**
+ * Stripe Connect through the routes (CP3-F): nothing here writes to Stripe or to D1 itself.
+ * The platform session holds the acting-as grant, which the seller's Connect routes admit
+ * (the dashboard login link excepted). Returns what the purchase needs.
+ *
+ * Until CP3 this script created the account itself and printed a D1 UPDATE for the reviewer.
+ * The two Stripe calls it made, proven on the sandbox on 2026-09-27, are kept key for key in
+ * cloudflare/test/connect-gateway.test.ts (SEED_ACCOUNT_PARAMS, SEED_LINK_KEYS).
+ */
+async function ensureConnect() {
+  step("Stripe Connect (through the routes)");
+  const platformRoute = `/v1/platform/tenants/${TENANT_ID}/connect`;
+  let platformView = expectStatus(await api("GET", platformRoute, { session: true }), [200], "read connect").json.connect;
+  if (!platformView.enabled) {
+    platformView = expectStatus(
+      await api("POST", `${platformRoute}/enable`, { session: true }),
+      [200],
+      "enable connect",
+    ).json.connect;
+    info("connect", "enabled for the shop by the platform");
+  }
+
+  if (platformView.accountId === null) {
+    for (let attempt = 0; ; attempt += 1) {
+      const created = expectStatus(
+        await api("POST", "/v1/admin/payments/connect/account", { session: true, shop: true }),
+        [200, 201, 202],
+        "create the connected account",
+      );
+      if (created.status !== 202) {
+        info("account", created.status === 201 ? "created by the Worker" : "already recorded");
+        break;
+      }
+      if (attempt >= 12) {
+        die("the account creation is still pending after 60 s (GET the platform connect view: its operations list says why)");
+      }
+      await sleep(5_000);
+    }
+  }
+
+  const refreshed = expectStatus(
+    await api("POST", "/v1/admin/payments/connect/refresh", { session: true, shop: true }),
+    [200],
+    "refresh the Connect status",
+  ).json.connect;
+  platformView = expectStatus(await api("GET", platformRoute, { session: true }), [200], "read connect").json.connect;
+  if (platformView.accountId === null) {
+    die("the shop has no connected account after the create and refresh routes");
+  }
+  info("account", platformView.accountId);
+  info("status", refreshed.status);
+  info("charges_enabled", String(refreshed.chargesEnabled));
+  info("payouts_enabled", String(refreshed.payoutsEnabled));
+  info("details_submitted", String(refreshed.detailsSubmitted));
+  if (refreshed.requirementsDue.length > 0) {
+    info("requirements due", refreshed.requirementsDue.join(", "));
+  }
+
+  // Read-only, from Stripe itself: whose account it is and how it pays out.
+  const stripeAccount = await stripe("GET", `/v1/accounts/${platformView.accountId}`);
+  const schedule = stripeAccount.settings?.payouts?.schedule ?? {};
+  info("stripe metadata", `tenant_id=${stripeAccount.metadata?.tenant_id ?? "(none: made before the routes)"}`);
+  info("payout schedule", `${schedule.interval ?? "?"}${schedule.monthly_anchor === undefined ? "" : `, day ${schedule.monthly_anchor}`}`);
+  if (stripeAccount.charges_enabled !== refreshed.chargesEnabled) {
+    die(`Stripe says charges_enabled ${stripeAccount.charges_enabled}, the shop says ${refreshed.chargesEnabled} right after a refresh`);
+  }
+
+  if (!refreshed.chargesEnabled) {
+    const link = expectStatus(
+      await api("POST", "/v1/admin/payments/connect/onboarding-link", { session: true, shop: true }),
+      [200],
+      "onboarding link",
+    );
     console.log(
       "\n  Stripe has not enabled charges yet. Finish the sandbox onboarding (Stripe test data) at:\n" +
-        `  ${link.url}\n  then re-run this script: the UPDATE below is printed with Stripe's flags.`,
+        `  ${link.json.onboarding.url}\n  (valid until ${link.json.onboarding.expiresAt}) then re-run this script.`,
     );
   }
+  return { chargesEnabled: refreshed.chargesEnabled, id: platformView.accountId };
+}
 
-  const flag = (value) => (value === true ? 1 : 0);
-  const sql =
-    `UPDATE tenants SET stripe_account_id = '${account.id}', ` +
-    `stripe_charges_enabled = ${flag(account.charges_enabled)}, ` +
-    `stripe_payouts_enabled = ${flag(account.payouts_enabled)}, ` +
-    `stripe_details_submitted = ${flag(account.details_submitted)}, ` +
-    `stripe_account_synced_at = NULL WHERE tenant_id = '${TENANT_ID}';`;
-  console.log("\n  Reviewer — set the Connect facts on staging D1 THROUGH THE PREFLIGHT:");
-  console.log(`  scripts/cf-preflight.sh staging -- d1 execute ${PINNED.d1.name} --remote --command "${sql}"`);
-  console.log(
-    "  (later flag changes arrive through the Connect webhook's account.updated once the id is set)",
+/**
+ * The rest of the v1 proof list. The login link opens the seller's own Stripe dashboard, so
+ * its URL is never printed: that it was issued, and to whom it was refused, is the proof.
+ */
+async function connectProof(account) {
+  step("Connect proof (login link, payout delay)");
+  if (!account.chargesEnabled) {
+    die("the proof needs an account with charges enabled (finish the onboarding, re-run)");
+  }
+  const refused = await api("POST", "/v1/admin/payments/connect/login-link", { session: true, shop: true });
+  if (refused.status !== 404) {
+    die(`the login link answered ${refused.status} to the platform user acting-as: it must be the opaque 404`);
+  }
+  info("login link", "refused to the platform user acting-as (404)");
+  const admin = await signInSliceAdmin("the login link goes to the shop's own admin only");
+  const issued = expectStatus(
+    await api("POST", "/v1/admin/payments/connect/login-link", { headers: { cookie: admin.cookie }, shop: true }),
+    [200],
+    "login link",
   );
-  return account;
+  let host = "?";
+  try {
+    host = new URL(issued.json.dashboard.url).host;
+  } catch {
+    die("the login link is not a URL");
+  }
+  info("login link", `issued to ${admin.email} (host ${host})`);
+
+  const route = `/v1/platform/tenants/${TENANT_ID}/connect/payout-delay`;
+  for (const [delayDays, stored] of [[7, 7], ["minimum", null]]) {
+    const result = expectStatus(await api("PUT", route, { json: { delayDays }, session: true }), [200], `payout delay ${delayDays}`);
+    if (result.json.connect.payoutDelayDays !== stored) {
+      die(`payout delay ${delayDays}: stored ${result.json.connect.payoutDelayDays}, expected ${stored}`);
+    }
+    const schedule = (await stripe("GET", `/v1/accounts/${account.id}`)).settings?.payouts?.schedule ?? {};
+    info(`payout delay ${delayDays}`, `stored ${stored}, Stripe delay_days ${schedule.delay_days}, interval ${schedule.interval}`);
+  }
+}
+
+/** Rows screened before 0034 hold no text: the re-screen route converges them, 25 per call. */
+async function rescreen() {
+  step("re-screen (until nothing is pending)");
+  for (let call = 1; call <= 40; call += 1) {
+    const result = expectStatus(
+      await api("POST", "/v1/platform/screening-terms/rescreen", { session: true }),
+      [200],
+      "rescreen",
+    ).json;
+    info(`call ${call}`, `rescreened ${result.rescreened}, pending ${result.pending}, unverified ${result.unverified}`);
+    if (result.pending === 0) {
+      return;
+    }
+    if (result.rescreened === 0) {
+      die(`${result.pending} product(s) stay pending and a call re-screened none`);
+    }
+  }
+  die("products are still pending after 40 re-screen calls");
 }
 
 async function openShop() {
@@ -709,28 +824,11 @@ function refundIdempotencyKey(target) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-/**
- * CP2-E: checkout is closed until the shop's own admin accepted the CURRENT platform terms.
- * The platform user (acting-as) can read the status but can never accept for the seller, so a
- * slice tenant admin is created (once) and accepts. The password comes only from the env.
- */
-async function ensureTermsAccepted() {
-  step("platform terms (the checkout gate)");
-  const status = expectStatus(
-    await api("GET", "/v1/admin/legal/status", { session: true, shop: true }),
-    [200],
-    "terms status",
-  );
-  if (status.json.accepted) {
-    info("accepted", `${status.json.currentVersion} at ${status.json.acceptedAt}`);
-    return;
-  }
+/** The slice tenant admin's session cookie; the user is created and granted when absent. */
+async function signInSliceAdmin(why) {
   const password = process.env.CHOPSHOP_SLICE_ADMIN_PASSWORD?.trim() ?? "";
   if (password.length < 12) {
-    die(
-      `the shop has not accepted platform terms ${status.json.currentVersion}: set ` +
-        "CHOPSHOP_SLICE_ADMIN_PASSWORD (≥ 12 chars) so the slice tenant admin is created and accepts",
-    );
+    die(`${why}: set CHOPSHOP_SLICE_ADMIN_PASSWORD (≥ 12 chars) so the slice tenant admin can sign`);
   }
   const email = `slice-admin+${TENANT_ID}@example.com`;
   expectStatus(
@@ -750,29 +848,89 @@ async function ensureTermsAccepted() {
     die(`slice tenant admin sign-in failed: HTTP ${signedIn.status} (an existing ${email} with another password?)`);
   }
   const adminUser = (await signedIn.json())?.user?.id;
-  const adminCookie = signedIn.headers.getSetCookie().map((value) => value.split(";", 1)[0]).join("; ");
+  const cookie = signedIn.headers.getSetCookie().map((value) => value.split(";", 1)[0]).join("; ");
   expectStatus(
     await api("POST", `/v1/platform/tenants/${TENANT_ID}/admins`, { json: { userId: adminUser }, session: true }),
     [200, 201],
     "grant tenant admin",
   );
-  const accepted = expectStatus(
-    await api("POST", "/v1/admin/legal/accept-terms", {
-      headers: { cookie: adminCookie },
-      json: { termsVersion: status.json.currentVersion },
-      shop: true,
-    }),
-    [200, 201],
-    "accept platform terms",
-  );
-  info("accepted", `${accepted.json.acceptance.termsVersion} at ${accepted.json.acceptance.acceptedAt} by ${email}`);
+  return { cookie, email };
+}
+
+async function readLegalStatus() {
+  return expectStatus(
+    await api("GET", "/v1/admin/legal/status", { session: true, shop: true }),
+    [200],
+    "legal status",
+  ).json;
+}
+
+/**
+ * The checkout gate (CP2-E terms, CP3-E readiness): the shop's own admin accepted the CURRENT
+ * platform terms (or is in grace) and adopted the legal pages, and the store settings hold a
+ * return address and the VAT answer. The platform user (acting-as) reads the status and may
+ * write the settings, but can never sign for the seller: what is missing is done as the slice
+ * tenant admin. Each step runs only when the status says it is missing (an adoption appends
+ * evidence, 20 per shop per hour).
+ */
+async function ensureLegallyReady() {
+  step("legal readiness (the checkout gate)");
+  let status = await readLegalStatus();
+  const termsFine = () => status.accepted === true || status.inGrace === true;
+  if (termsFine() && status.readiness.ready === true) {
+    info("terms", `${status.acceptedVersion} accepted at ${status.acceptedAt}`);
+    info("readiness", "ready");
+    return;
+  }
+  const admin = await signInSliceAdmin("the shop is not legally ready");
+  const asSeller = { headers: { cookie: admin.cookie }, shop: true };
+
+  if (!termsFine()) {
+    if (status.currentVersion === null) {
+      die("no platform terms version is published on staging");
+    }
+    const accepted = expectStatus(
+      await api("POST", "/v1/admin/legal/accept-terms", { ...asSeller, json: { termsVersion: status.currentVersion } }),
+      [200, 201],
+      "accept platform terms",
+    );
+    info("terms", `${accepted.json.acceptance.termsVersion} accepted at ${accepted.json.acceptance.acceptedAt} by ${admin.email}`);
+  }
+  if (!status.readiness.returnAddress || !status.readiness.vatAnswered) {
+    expectStatus(
+      await api("PUT", "/v1/admin/settings", { ...asSeller, json: { returnAddress: RETURN_ADDRESS, vatRegistered: false } }),
+      [200],
+      "PUT settings",
+    );
+    info("settings", "return address + VAT answer written");
+  }
+  if (!status.readiness.legalPagesAccepted) {
+    const adopted = expectStatus(
+      await api("POST", "/v1/admin/legal/accept-pages", {
+        ...asSeller,
+        json: { custom: false, pod: true, templateVersion: LEGAL_TEMPLATE_VERSION, texts: LEGAL_TEXTS },
+      }),
+      [201],
+      "adopt the legal pages",
+    );
+    info("legal pages", `${adopted.json.acceptance.acceptanceId} (sha256 ${adopted.json.acceptance.textsSha256.slice(0, 12)}…)`);
+  }
+
+  status = await readLegalStatus();
+  if (!termsFine() || status.readiness.ready !== true) {
+    const missing = Object.entries(status.readiness)
+      .filter(([key, value]) => key !== "ready" && value !== true)
+      .map(([key]) => key);
+    die(`the shop is still not ready: terms accepted ${status.accepted}, in grace ${status.inGrace}, missing ${missing.join(", ") || "nothing"}`);
+  }
+  info("readiness", "ready");
 }
 
 async function purchase(productId, account) {
-  await ensureTermsAccepted();
+  await ensureLegallyReady();
   step("purchase (checkout → PaymentIntent → Stripe confirm → webhook → receipt)");
-  if (!account.charges_enabled) {
-    die("the connected account cannot take charges yet (finish onboarding, apply the UPDATE, re-run)");
+  if (!account.chargesEnabled) {
+    die("the connected account cannot take charges yet (finish the onboarding, re-run)");
   }
   const checkout = expectStatus(
     await api("POST", "/v1/checkout", {
@@ -793,7 +951,7 @@ async function purchase(productId, account) {
 
   const payment = await api("POST", `/v1/checkout/${checkoutId}/payment`);
   if (payment.status === 404) {
-    die("payment route 404: is the UPDATE tenants … (stripe_charges_enabled = 1) applied on staging D1?");
+    die("payment route 404: the shop is closed for payment (legal readiness, or charges not enabled on its account)");
   }
   expectStatus(payment, [200, 201], "payment");
   const intentId = payment.json.payment.paymentIntentId;
@@ -841,11 +999,16 @@ async function refund(target) {
 await preflight();
 await signIn();
 await ensureTenant();
-const account = await ensureConnectAccount();
+await ensurePodFeature();
 await openShop();
+const account = await ensureConnect();
 await ensurePrintShop();
 const artworkId = await ensureArtwork();
 const productId = await ensureProduct(artworkId);
+await rescreen();
+if (args.connectProof) {
+  await connectProof(account);
+}
 let orderId = null;
 if (args.purchase) {
   orderId = await purchase(productId, account);
