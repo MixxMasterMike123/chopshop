@@ -631,3 +631,65 @@ describe("the retry stamps with a fresh clock, clamped to the row it writes", ()
     expect(again.status === "ok" ? again.mapping.updatedAt : "").toBe(row?.updated_at);
   });
 });
+
+// ── CP3-D: N from the platform setting; every verdict records its text ────
+
+describe("CP3-D: settings-driven overlay and the stored screened text", () => {
+  const stored = (over: Partial<StoredScreening>): StoredScreening => ({
+    earlierHits: [],
+    hits: [],
+    requiresApproval: false,
+    status: "advisory",
+    takenDown: false,
+    ...over,
+  });
+  const first = (count: number, reviewFirstProducts?: number) =>
+    overlayDecision(
+      null,
+      decideScreening({ hardBlock: false, prev: null, reviewFirstProducts: reviewFirstProducts ?? 2, shopPublishedCount: count, terms: [] }),
+      count,
+      reviewFirstProducts,
+    );
+
+  it("overlayDecision takes N from its argument, 2 when omitted (the existing callers)", () => {
+    expect(first(1)).toMatchObject({ requiresApproval: true, status: "pending" });
+    expect(first(2)).toMatchObject({ requiresApproval: false, status: "advisory" });
+    expect(first(2, 3)).toMatchObject({ requiresApproval: true, status: "pending" });
+    expect(first(0, 0)).toMatchObject({ requiresApproval: false, status: "advisory" });
+    // A carried flag is never re-decided by a different N.
+    expect(
+      overlayDecision(
+        stored({ requiresApproval: true, status: "pending" }),
+        decideScreening({ hardBlock: false, prev: { hits: [], status: "review" }, reviewFirstProducts: 0, shopPublishedCount: 9, terms: ["zorblax"] }),
+        9,
+        0,
+      ),
+    ).toMatchObject({ requiresApproval: true, status: "pending" });
+  });
+
+  it("a live edit that changes no hit still refreshes the stored text and stamps the current term version", async () => {
+    const tenant = "tenant-screening-cp3d";
+    await seedTenant(tenant, "screening-cp3d.podtest.test");
+    await seedProduct(tenant, { name: "Quiet lamp", productId: "cp3d-lamp", status: "active" });
+    expect((await publishAdminProduct(env.DB, adminOf(tenant), "cp3d-lamp", Date.now())).status).toBe("ok");
+    const before = await env.DB.prepare(
+      "SELECT status, version, screened_tokens, terms_version FROM product_screening WHERE product_id = 'cp3d-lamp'",
+    ).first<{ screened_tokens: string; status: string; terms_version: number; version: number }>();
+    expect(before).toMatchObject({ screened_tokens: " quiet lamp ", status: "pending" });
+
+    await updateAdminProduct(env.DB, adminOf(tenant), "cp3d-lamp", { name: "Silent lamp" }, Date.now());
+
+    const after = await env.DB.prepare(
+      "SELECT status, version, screened_tokens, screened_raw, terms_version FROM product_screening WHERE product_id = 'cp3d-lamp'",
+    ).first<{ screened_raw: string; screened_tokens: string; status: string; terms_version: number; version: number }>();
+    const current = await env.DB.prepare("SELECT screening_terms_version AS v FROM platform_settings WHERE id = 1")
+      .first<{ v: number }>();
+    expect(after).toMatchObject({
+      screened_raw: "Silent lamp",
+      screened_tokens: " silent lamp ",
+      status: "pending",
+      terms_version: current?.v,
+      version: (before?.version ?? 0) + 1,
+    });
+  });
+});

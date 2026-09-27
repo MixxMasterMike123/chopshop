@@ -1,3 +1,4 @@
+import { readDefaultCommissionBps } from "../platform/platform-settings";
 import type { TenantContext } from "../tenancy/resolve-tenant";
 import type { PaymentIntentView, StripeGateway } from "./stripe-client";
 import { StripeGatewayError } from "./stripe-client";
@@ -57,9 +58,10 @@ export interface CheckoutPaymentRow {
 /**
  * The platform's default commission: 500 bps = 5.00 %. Firebase resolves
  * `settings/platform.defaultCommissionBps ?? PLATFORM_DEFAULT_COMMISSION_BPS ??
- * 500` (functions/src/config/app-urls.ts:85); Cloudflare has no platform
- * settings table until CP3, so the code default is the whole chain for now and
- * a shop's own `tenants.commission_bps` overrides it.
+ * 500` (functions/src/config/app-urls.ts:85). Since CP3 the chain is
+ * `platform_settings.default_commission_bps` (migration 0034) ?? this constant,
+ * which is now only the FALLBACK for an absent settings row; a shop's own
+ * `tenants.commission_bps` overrides either.
  */
 export const DEFAULT_COMMISSION_BPS = 500;
 
@@ -519,7 +521,12 @@ export async function createCheckoutPayment(
 
     const charge = buildConnectCharge(
       checkout.total_minor,
-      resolveCommissionBps(account.commission_bps),
+      // CP3-D: the platform default comes from platform_settings (constant
+      // only when the row is absent); the shop's own value still wins.
+      resolveCommissionBps(
+        account.commission_bps,
+        (await readDefaultCommissionBps(db)) ?? DEFAULT_COMMISSION_BPS,
+      ),
       withheldMinor,
     );
     if (charge.feeExceedsGross) {

@@ -66,34 +66,156 @@ export const productScreeningTexts = (
     ...artworkFileNames,
   ].filter((s) => typeof s === "string" && s.trim() !== "");
 
+/**
+ * The two strings a product's texts are matched in — THE normalisation of
+ * product text (CP3-D stores both on the screening row so a blocklist change
+ * can be checked in SQL against exactly what the matcher saw):
+ *
+ *   tokens  every text tokenized and concatenated (word terms match here);
+ *   raw     every text NFC-normalised, joined by "\n" (symbol-only terms).
+ */
+export interface ScreeningHaystacks {
+  raw: string;
+  tokens: string;
+}
+
+export const screeningHaystacks = (texts: readonly string[]): ScreeningHaystacks => ({
+  raw: texts.map((s) => String(s ?? "").normalize("NFC")).join("\n"),
+  tokens: texts.map(tokenize).join(""),
+});
+
+/**
+ * How ONE blocklist term is matched — THE normalisation of a term. `null` = the
+ * term can never match (empty after trimming, or letters/digits that all fold
+ * away, e.g. a term written only in a non-Latin script).
+ *
+ *   symbolOnly  no letter or digit (™, ®): judged on the RAW term, because
+ *               NFKD would turn ™ into the word "tm", which "Logga™"
+ *               (→ "loggatm") never contains;
+ *   tok         the tokenized term (" word word "), matched in `tokens`;
+ *   raw         the trimmed NFC term, matched in `raw` (symbol-only terms);
+ *   key         what two terms that match identically share (dedupe key).
+ */
+export interface TermMatch {
+  key: string;
+  raw: string;
+  symbolOnly: boolean;
+  tok: string;
+}
+
+export const termMatch = (term: string): TermMatch | null => {
+  const trimmed = term.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  const symbolOnly = !/[\p{L}\p{N}]/u.test(trimmed);
+  const tok = symbolOnly ? "" : tokenize(trimmed);
+  if (!symbolOnly && tok === "") {
+    return null;
+  }
+  return { key: tok || trimmed, raw: trimmed.normalize("NFC"), symbolOnly, tok };
+};
+
 export const findScreeningHits = (
   texts: readonly string[],
   blocklist: readonly BlocklistEntry[],
 ): BlocklistEntry[] => {
-  const haystack = texts.map(tokenize).join("");
-  const raw = texts.map((s) => String(s ?? "").normalize("NFC")).join("\n");
+  const { raw, tokens } = screeningHaystacks(texts);
   const seen = new Set<string>();
   const hits: BlocklistEntry[] = [];
   for (const entry of blocklist) {
-    const term = entry.term.trim();
-    if (term === "") {
+    const match = termMatch(entry.term);
+    if (match === null) {
       continue;
     }
-    // Symbol-only terms (™, ®) are judged on the RAW term: NFKD would turn ™
-    // into the word "tm", which "Logga™" (→ "loggatm") never contains.
-    const symbolOnly = !/[\p{L}\p{N}]/u.test(term);
-    const tok = symbolOnly ? "" : tokenize(term);
-    const hit = symbolOnly
-      ? raw.includes(term.normalize("NFC"))
-      : tok !== "" && haystack.includes(tok);
-    const key = tok || term;
-    if (hit && !seen.has(key)) {
-      seen.add(key);
-      hits.push({ ...entry, term });
+    const hit = match.symbolOnly ? raw.includes(match.raw) : tokens.includes(match.tok);
+    if (hit && !seen.has(match.key)) {
+      seen.add(match.key);
+      hits.push({ ...entry, term: entry.term.trim() });
     }
   }
   return hits;
 };
+
+/**
+ * Firebase screenProductOnWrite.ts:119 — a hit blocks when the platform's
+ * global switch is on or the term itself is a hard block.
+ */
+export const isHardBlock = (
+  hits: readonly BlocklistEntry[],
+  globalHardBlock: boolean,
+): boolean => hits.length > 0 && (globalHardBlock || hits.some((hit) => hit.hardBlock));
+
+// ── the stored form of a term (CP3-D term routes) ───────────────────────────
+
+export const MAX_TERM_LENGTH = 200;
+
+/**
+ * A term as the platform types it → the form it is stored in, so that the
+ * stored term is exactly what the matcher looks for and two spellings the
+ * matcher cannot tell apart are one term:
+ *
+ *   word term    its tokenized form ("Håkan  Hellström" → "hakan hellstrom",
+ *                "AC/DC" → "ac dc"): the same fold product text gets;
+ *   symbol term  trimmed and NFC-normalised ("™").
+ *
+ * `null` when the term can never match (termMatch), is too long once
+ * normalised (NFKD can lengthen: "ß" → "ss"), or carries a control character.
+ */
+export function normalizeScreeningTerm(
+  input: unknown,
+): { symbolOnly: boolean; term: string } | null {
+  if (typeof input !== "string" || /[\u0000-\u001f\u007f]/.test(input)) {
+    return null;
+  }
+  const match = termMatch(input.normalize("NFC"));
+  if (match === null) {
+    return null;
+  }
+  const term = match.symbolOnly ? match.raw : match.tok.trim();
+  return term.length >= 1 && term.length <= MAX_TERM_LENGTH
+    ? { symbolOnly: match.symbolOnly, term }
+    : null;
+}
+
+/**
+ * The blocklist as the SQL safety check matches it (src/catalog/screening.ts
+ * `blockOnTermChangeStatement`): one entry per matcher key, in blocklist order,
+ * keeping the FIRST entry of a key — exactly the entry findScreeningHits
+ * records when two terms match identically. `b` = this hit would block
+ * (global switch or the term's own flag), `s` = symbol-only, `k` = the tokenized
+ * term, `r` = the raw term, `t` = the term as a hit records it.
+ */
+export interface SqlMatchTerm {
+  b: 0 | 1;
+  k: string;
+  r: string;
+  s: 0 | 1;
+  t: string;
+}
+
+export function sqlMatchTerms(
+  blocklist: readonly BlocklistEntry[],
+  globalHardBlock: boolean,
+): SqlMatchTerm[] {
+  const seen = new Set<string>();
+  const out: SqlMatchTerm[] = [];
+  for (const entry of blocklist) {
+    const match = termMatch(entry.term);
+    if (match === null || seen.has(match.key)) {
+      continue;
+    }
+    seen.add(match.key);
+    out.push({
+      b: globalHardBlock || entry.hardBlock ? 1 : 0,
+      k: match.tok,
+      r: match.raw,
+      s: match.symbolOnly ? 1 : 0,
+      t: entry.term.trim(),
+    });
+  }
+  return out;
+}
 
 /**
  * Does this mapping feed this product's screened artwork names?
@@ -216,7 +338,11 @@ export function decideScreening(input: ScreeningDecisionInput): ScreeningDecisio
 
 // ── the CF vocabulary + the D8 overlay ──────────────────────────────────────
 
-/** DECISIONS D8: the first N products of a shop need a platform approval. */
+/**
+ * DECISIONS D8: the first N products of a shop need a platform approval.
+ * Since CP3 N is `platform_settings.review_first_products` (migration 0034
+ * seeds 2); this constant is the fallback when that row is absent.
+ */
 export const REVIEW_FIRST_PRODUCTS = 2;
 
 export type ScreeningStatus =
@@ -282,11 +408,12 @@ export interface OverlaidDecision {
  * The machine's answer in CF terms, with D8 applied.
  *
  * `requiresApproval` is decided ONCE — on the product's first screening, when
- * the shop has fewer than REVIEW_FIRST_PRODUCTS other publicly-eligible
- * products (Firebase counted `productsPublic`, the live set; a pending product
- * is not live here, so a shop cannot skip the rule by publishing two dummies) —
- * and is then carried on the row until a platform approval clears it. While it
- * is set, every automatic outcome short of a block is `pending`.
+ * the shop has fewer than `reviewFirstProducts` (the platform setting, default
+ * REVIEW_FIRST_PRODUCTS) other publicly-eligible products (Firebase counted
+ * `productsPublic`, the live set; a pending product is not live here, so a
+ * shop cannot skip the rule by publishing two dummies) — and is then carried
+ * on the row until a platform approval clears it. While it is set, every
+ * automatic outcome short of a block is `pending`.
  *
  * Returns null when nothing changes (the machine's no-op).
  */
@@ -294,6 +421,7 @@ export function overlayDecision(
   prevRow: StoredScreening | null,
   decision: ScreeningDecision,
   shopPublishedCount: number,
+  reviewFirstProducts: number = REVIEW_FIRST_PRODUCTS,
 ): OverlaidDecision | null {
   const next = decision.screening;
   if (next === null) {
@@ -302,7 +430,7 @@ export function overlayDecision(
 
   const requiresApproval =
     prevRow === null
-      ? shopPublishedCount < REVIEW_FIRST_PRODUCTS
+      ? shopPublishedCount < reviewFirstProducts
       : prevRow.requiresApproval;
 
   const common = { earlierHits: next.earlierHits ?? [], hits: next.hits, requiresApproval };
