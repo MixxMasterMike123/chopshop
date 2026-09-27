@@ -45,6 +45,8 @@ The real bundle now builds: 864 statements, 286 KB, longest statement 47.7 KB, i
 
 **Rehearsal of the import (this commit, `CP3_S_REPORT.md` §10.7):** read-only target state from staging → plan from the real bundle → executed locally against every migration: 862 statements, none refused, the manifest's user figure. It found that melodie-mc would have been imported **unpublished** (no `published` field = published in Firebase), that its **commission of 5000 bps** was dropped without a word (D75), and that the VAT rate was not carried. All three fixed, 343 tests. Staging's `apparel_dtg` profile is the old 250 × 350; the export holds 300 × 400: correct it through the profiles route before the staging proof.
 
+**Branding images (D76):** not copied in CP3. Public objects have no delivery in the Worker yet, so the copy moves to CP4 with the product images. The imported shops have no logo, hero or favicon on staging until then.
+
 **Order from here:** Mikael applies 0032–0038 → Codex on `416b3bb1` and on the seed commit → attestation → `cf-deploy.sh staging` → seed script (the Connect proof list of `CP3_F_REPORT.md`) → target state by read-only queries → plan from the bundle with `--scrub-unmapped --target-state` → Mikael applies `plan.sql` → `verify.mjs` → CP3 closed.
 
 ## CP2 — Vertical slice (GO 2026-09-27 01:10, ✅ CLOSED 2026-09-27 13:00)
