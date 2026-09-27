@@ -263,7 +263,7 @@ Only objects referenced by a **carried** field are copied into live keys. Everyt
 - **PII** (orders, b2bCustomers, dac7Sellers, leads, dining*, users): the private bucket only, platform access only, and each archive is listed in `RETIRED.md` with its restore line.
 - A GDPR erasure request against archived PII is served by rewriting that archive part and recording the new sha256 in `manifest.json` (logged in `audit_events`).
 
-**Restore** (`scripts/cf-migrate/restore-archive.mjs`, to be written in CP3):
+**Restore** (`scripts/cf-port/migrate/restore-archive.mjs`, to be written in CP3):
 1. `sha256sum -c SHA256SUMS`. Any mismatch → stop.
 2. Decode the typed JSON.
 3. The target is one of:
@@ -277,10 +277,10 @@ Only objects referenced by a **carried** field are copied into live keys. Everyt
 ## (d) Phase rules as script preconditions
 
 Scripts (to be written in CP3, Sonnet per PLAN §9, dry-run by default with verify tables):
-- `scripts/cf-migrate/export.mjs`: read-only; Firestore + Storage → bundle + archive
-- `scripts/cf-migrate/import.mjs --env {staging|production} [--apply --plan <sha>]`
-- `scripts/cf-migrate/verify.mjs --env …`
-- `scripts/cf-migrate/restore-archive.mjs`
+- `scripts/cf-port/migrate/export.mjs`: read-only; Firestore + Storage → bundle + archive
+- `scripts/cf-port/migrate/import.mjs --env {staging|production} [--apply --plan <sha>]`
+- `scripts/cf-port/migrate/verify.mjs --env …`
+- `scripts/cf-port/migrate/restore-archive.mjs`
 
 Every rule below is a check the script performs and **refuses** on.
 

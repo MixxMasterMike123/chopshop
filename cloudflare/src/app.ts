@@ -178,6 +178,19 @@ import {
   handlePodPreviewRoute,
   STOREFRONT_POD_PREVIEWS_PREFIX,
 } from "./routes/pod-storefront";
+// CP3 route handlers: each builder adds its imports ONLY inside its own block.
+// CP3-IMPORTS-A — begin
+// CP3-IMPORTS-A — end
+// CP3-IMPORTS-B — begin
+// CP3-IMPORTS-B — end
+// CP3-IMPORTS-C — begin
+// CP3-IMPORTS-C — end
+// CP3-IMPORTS-D — begin
+// CP3-IMPORTS-D — end
+// CP3-IMPORTS-E — begin
+// CP3-IMPORTS-E — end
+// CP3-IMPORTS-F — begin
+// CP3-IMPORTS-F — end
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -1821,6 +1834,28 @@ function getOnly(handler: Endpoint): MiddlewareHandler<AppEnv> {
 }
 
 /**
+ * `getOnly` for any set of methods (CP3): the handler answers the listed RAW
+ * methods and every other method falls through to the next registration. CP3
+ * routes share paths with older handlers that answer a terminal 404 for the
+ * methods they do not own (`/v1/platform/users` and the tenant prefix are
+ * POST-only, `/v1/platform/printers` is PUT-only), so a CP3 route registers
+ * BEFORE them and claims only its own methods.
+ */
+function onMethods(
+  methods: readonly string[],
+  handler: Endpoint,
+): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    if (!methods.includes(c.req.method)) {
+      await next();
+      return;
+    }
+
+    return handler(c);
+  };
+}
+
+/**
  * Builds the router.
  *
  * ── ROUTING IS ON THE RAW PATHNAME ──────────────────────────────────────────
@@ -1997,6 +2032,26 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.all(FAKE_PRINTER_JOBS_PATH, (c) =>
     handleFakePrinterRoute(c.env, c.req.raw),
   );
+  // ── CP3 route mounts. They sit HERE, before the older platform handlers
+  // below, because those answer a terminal 404 for methods they do not own.
+  // Each CP3 builder appends ONLY inside its own anchor block, registers EXACT
+  // paths (no prefix wildcard), and wraps every route in `onMethods([...])` so
+  // other methods fall through. Id segments come from the RAW pathname and are
+  // decoded once by the handler (see ACTING_AS_ROUTE). The reviewer
+  // consolidates after merge. ─────────────────────────────────────────────
+  // CP3-ROUTES-A (tenants: directory, config, features, domains) — begin
+  // CP3-ROUTES-A — end
+  // CP3-ROUTES-B (identity: users, lifecycle, invites) — begin
+  // CP3-ROUTES-B — end
+  // CP3-ROUTES-C (printers: platform read, partial edit, catalogue) — begin
+  // CP3-ROUTES-C — end
+  // CP3-ROUTES-D (platform settings, screening terms, infringement reports) — begin
+  // CP3-ROUTES-D — end
+  // CP3-ROUTES-E (legal: terms versions, legal pages) — begin
+  // CP3-ROUTES-E — end
+  // CP3-ROUTES-F (Connect onboarding) — begin
+  // CP3-ROUTES-F — end
+
   app.all(PLATFORM_BOOTSTRAP_PATH, (c) =>
     handlePlatformBootstrapRoute(c.env, c.req.raw),
   );
