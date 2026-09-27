@@ -85,6 +85,14 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 | D58 | Infringement report INTAKE route: CP3 with the queue, or CP6 with the public page? | **CP3** (a queue without a writer cannot be tested end to end); the page stays CP6. |
 | D59 | Staging cannot hold `snapwear` as an active API printer (the dispatch target there is the fake printer). | **Staging imports `snapwear` inactive**, `fake-printer` untouched; production imports it active. Shop status maps `active → active`, `disabled → suspended`. An imported user whose mapped email already exists in the target is ADOPTED (id map points at the existing user). |
 
+## Surfaced by the CP3 builders' reviews (2026-09-27) — defaults applied, veto until the CP3 deploy
+
+| # | Decision | Recommended default |
+|---|---|---|
+| D60 | **Closing a shop is final.** After close no seller session exists, and the platform has no refund route of its own, so a buyer's refund could be stranded (CP3-A). | **Close is refused (409) while the shop has any order with a refundable balance.** Suspension is the tool for a shop with live orders. Revisit when a platform refund path exists. |
+| D61 | May the seller rename the shop or change the support email? Firebase let the shop admin edit both; CP3-A keeps them platform-only (`PATCH /v1/platform/tenants/:id`). | **Platform-only in CP3.** CP5 (admin) decides how the seller edits them. |
+| D62 | Feature keys stored in D1 (follows D22): the allowlist is `abandonedCheckout`, `contentStudio`, `discountCodes`, `marketingMaterials`, `pod`, `productReviews`. `affiliate` and `b2b` are not ported yet and are absent; each returns through a migration when its feature ports. `pod`, `contentStudio`, `marketingMaterials` default OFF, the rest ON. | **Accept.** Consequence: every POD shop needs an explicit `pod` row before any code checks the flag (the importer writes it; `slice-20260927` on staging needs one). |
+
 ## Affiliate rebuild (PORT-LATER — answer before that checkpoint, not now)
 
 | # | Decision | Recommended default |
