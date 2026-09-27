@@ -9,7 +9,8 @@ import {
   parseCheckoutConsent,
   sameConsent,
 } from "../legal/consent";
-import { hasAcceptedCurrentTerms } from "../legal/platform-terms";
+import { isLegallyReady } from "../legal/legal-pages";
+import { isTermsGateOpen } from "../legal/platform-terms";
 import {
   ELIGIBLE_PRODUCTS_FROM,
   PUBLIC_ELIGIBILITY_PREDICATE,
@@ -1051,11 +1052,16 @@ export async function createCheckout(
     return { status: "invalid_items" };
   }
 
-  // THE LEGAL GATE (src/legal/platform-terms.ts). A shop whose admin has not
-  // accepted the CURRENT platform terms takes no checkout at all, and says so
-  // with the same opaque 404 an unknown shop gets: nothing about the gate
+  // THE LEGAL GATES (src/legal/). A shop takes no checkout at all unless its
+  // admin accepted the CURRENT platform terms (or is inside the D47 grace
+  // period of the version before it) AND its legal pages are ready (return
+  // address, VAT answer, the seller's adoption of the pages). It says so with
+  // the same opaque 404 an unknown shop gets: nothing about either gate
   // reaches a buyer. First, so a gated shop resolves no line and writes nothing.
-  if (!(await hasAcceptedCurrentTerms(db, tenant.tenantId, now))) {
+  if (
+    !(await isTermsGateOpen(db, tenant.tenantId, now)) ||
+    !(await isLegallyReady(db, tenant.tenantId))
+  ) {
     return { status: "not_found" };
   }
 

@@ -10,7 +10,7 @@ import {
   withdrawalDisclosureSha256,
 } from "../src/legal/consent";
 import { hasAcceptedCurrentTerms } from "../src/legal/platform-terms";
-import { CURRENT_TERMS_VERSION } from "./legal-fixtures";
+import { CURRENT_TERMS_VERSION, legalReadinessStatements } from "./legal-fixtures";
 import {
   ADMIN,
   acceptPlatformTerms,
@@ -57,13 +57,13 @@ let engraved = "";
 
 beforeAll(async () => {
   await bootstrapPlatform(world);
-  shop = await createTenant(world, {
+  shop = await createTenant(world, { legallyReady: false,
     acceptTerms: false,
     host: "legal-shop.legal.slice.test",
     shopName: "Juridik Butik",
     tenantId: "legal-shop",
   });
-  other = await createTenant(world, {
+  other = await createTenant(world, { legallyReady: false,
     acceptTerms: false,
     host: "legal-other.legal.slice.test",
     shopName: "Annan Butik",
@@ -83,7 +83,15 @@ beforeAll(async () => {
   // The seller's "Specialtillverkad / personlig produkt" toggle (CP5's
   // ProductForm writes it; no CF route does yet).
   await env.DB.prepare("UPDATE products SET is_personalized = 1 WHERE product_id = ?").bind(engraved).run();
+  // CP3-E's second gate: both shops are legally ready (return address, VAT
+  // answer, legal pages adopted), so every 404 below is the TERMS gate's.
+  await env.DB.batch([
+    ...legalReadinessStatements(env.DB, shop.tenantId, shop.adminUserId),
+    ...legalReadinessStatements(env.DB, other.tenantId, other.adminUserId),
+  ]);
 }, 60_000);
+
+const READY = { legalPagesAccepted: true, ready: true, returnAddress: true, vatAnswered: true };
 
 beforeEach(() => {
   world.reset();
@@ -126,7 +134,11 @@ describe("seller: the platform-terms gate", () => {
     expect(await termsStatus(world, shop)).toEqual({
       accepted: false,
       acceptedAt: null,
+      acceptedVersion: null,
       currentVersion: CURRENT_TERMS_VERSION,
+      graceDeadline: null,
+      inGrace: false,
+      readiness: READY,
     });
 
     const gated = await postCheckout(shop, checkoutBody([{ productId: mug, quantity: 1 }], { terms: true }));
@@ -152,7 +164,11 @@ describe("seller: the platform-terms gate", () => {
     expect(await termsStatus(world, shop)).toEqual({
       accepted: true,
       acceptedAt,
+      acceptedVersion: CURRENT_TERMS_VERSION,
       currentVersion: CURRENT_TERMS_VERSION,
+      graceDeadline: null,
+      inGrace: false,
+      readiness: READY,
     });
     expect(await hasAcceptedCurrentTerms(env.DB, shop.tenantId, Date.now())).toBe(true);
     await expectJson(await postCheckout(shop, checkoutBody([{ productId: mug, quantity: 1 }], { terms: true })), 201, "open");
@@ -240,7 +256,7 @@ describe("seller: the platform-terms gate", () => {
   });
 
   it("a platform user acting as the shop can never accept on the seller's behalf", async () => {
-    const fresh = await createTenant(world, {
+    const fresh = await createTenant(world, { legallyReady: false,
       acceptTerms: false,
       host: "legal-acting.legal.slice.test",
       shopName: "Acting Butik",
