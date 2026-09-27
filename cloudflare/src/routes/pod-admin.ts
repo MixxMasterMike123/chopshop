@@ -151,6 +151,9 @@ export async function handleAdminPodProductRoute(
     return routeNotFoundResponse();
   }
   const deleted = await deleteMapping(env.DB, principal, mappingId, now);
+  if (deleted.status === "conflict") {
+    return errorResponse(409, "conflict", "Request conflicts with the current mapping state");
+  }
   return deleted.status === "ok"
     ? new Response(null, { status: 204 })
     : routeNotFoundResponse();

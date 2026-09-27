@@ -11,7 +11,13 @@ import {
 } from "../commerce/shipping";
 import { evaluatePodGate } from "../pod/pod-mappings";
 import type { ScreeningStatus } from "./screening-core";
-import { screeningStatementsFor } from "./screening";
+import {
+  isScreeningConflict,
+  readScreeningGuard,
+  screeningFenceStatement,
+  screeningStatementsFor,
+  withScreeningRetry,
+} from "./screening";
 
 export interface AdminProduct {
   allowPickup: boolean;
@@ -45,6 +51,7 @@ export type ProductStatus = "draft" | "active" | "archived";
  *   taken_down           a platform takedown stamp is set (A10)
  *   pod_mapping_missing  a POD product has a sellable unit with no active mapping
  *   pod_mapping_suspended a routing edit suspended one of its mappings
+ *   pod_too_large        more variants/mappings than one gate checks completely
  *   pod_unpriced         its printer SKU / slots have no price (A1)
  *   currency_mismatch    the printer prices in another currency
  *   price_below_floor    PRISGOLV (podPricing.js): a price under the break-even floor
@@ -53,6 +60,7 @@ export type AdminRefusalCode =
   | "currency_mismatch"
   | "pod_mapping_missing"
   | "pod_mapping_suspended"
+  | "pod_too_large"
   | "pod_unpriced"
   | "price_below_floor"
   | "taken_down";
@@ -100,6 +108,7 @@ interface ProductRow {
   sku: string;
   status: ProductStatus;
   takedown_at: string | null;
+  updated_at: number;
   weight_grams: number;
 }
 
@@ -144,7 +153,7 @@ const PRODUCT_SELECT = `SELECT
      product.b2c_price_minor, product.currency, product.status,
      product.weight_grams, product.allow_shipping, product.allow_pickup,
      product.shipping_json, product.is_pod, product.takedown_at,
-     screening.status AS screening_status
+     product.updated_at, screening.status AS screening_status
    FROM products AS product
    LEFT JOIN product_screening AS screening
      ON screening.product_id = product.product_id
@@ -574,6 +583,14 @@ export async function createAdminProduct(
   };
 }
 
+/**
+ * A product edit. Guarded by the product's screening fence (src/catalog/
+ * screening.ts, THE FENCE): if a platform decision or another edit lands
+ * between this edit's reads and its batch, the batch rolls back whole and the
+ * edit is re-run once from fresh reads — so an edit can never go live under a
+ * verdict that was reached for different content. A second conflict answers
+ * `conflict` (409) with nothing written.
+ */
 export async function updateAdminProduct(
   db: D1Database,
   principal: TenantAdminPrincipal,
@@ -581,6 +598,21 @@ export async function updateAdminProduct(
   input: UpdateProductInput,
   now: number,
 ): Promise<AdminCatalogResult> {
+  return withScreeningRetry<AdminCatalogResult>(
+    () => updateAdminProductOnce(db, principal, productId, input, now),
+    () => ({ status: "conflict" }),
+  );
+}
+
+async function updateAdminProductOnce(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  productId: string,
+  input: UpdateProductInput,
+  now: number,
+): Promise<AdminCatalogResult> {
+  // FIRST, before any content read (THE FENCE).
+  const guard = await readScreeningGuard(db, principal.tenantId, productId);
   const existing = await loadProduct(db, principal.tenantId, productId);
   if (existing === null) {
     return { status: "not_found" };
@@ -648,7 +680,11 @@ export async function updateAdminProduct(
         `UPDATE products
          SET sku = ?, name = ?, description = ?, b2c_price_minor = ?,
              status = ?, weight_grams = ?, allow_shipping = ?,
-             allow_pickup = ?, shipping_json = ?, updated_at = ?
+             allow_pickup = ?, shipping_json = ?,
+             -- Strictly increasing, never merely "now": a concurrent first
+             -- publish fences on this column (publishAdminProduct), and two
+             -- writes in one millisecond must still read as a change.
+             updated_at = max(?, updated_at + 1)
          WHERE tenant_id = ?
            AND product_id = ?`,
       )
@@ -702,13 +738,16 @@ export async function updateAdminProduct(
   let screeningStatus = current.screeningStatus;
   if (liveAfter) {
     const screening = await screeningStatementsFor(db, {
+      guard,
       now,
-      productId,
-      tenantId: principal.tenantId,
       texts: { description: next.description, name: next.name },
     });
     statements.push(...screening.statements);
     screeningStatus = screening.status;
+  } else {
+    // Not screened, still fenced: a publish or platform decision racing this
+    // edit must not commit around it.
+    statements.push(screeningFenceStatement(db, guard, now));
   }
 
   statements.push(
@@ -720,7 +759,7 @@ export async function updateAdminProduct(
   try {
     await db.batch(statements);
   } catch (error) {
-    if (isUniqueConstraintFailure(error)) {
+    if (!isScreeningConflict(error) && isUniqueConstraintFailure(error)) {
       return { status: "conflict" };
     }
     throw error;
@@ -746,6 +785,20 @@ export async function publishAdminProduct(
   productId: string,
   now: number,
 ): Promise<AdminCatalogResult> {
+  return withScreeningRetry<AdminCatalogResult>(
+    () => publishAdminProductOnce(db, principal, productId, now),
+    () => ({ status: "conflict" }),
+  );
+}
+
+async function publishAdminProductOnce(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  productId: string,
+  now: number,
+): Promise<AdminCatalogResult> {
+  // FIRST, before any content read (THE FENCE).
+  const guard = await readScreeningGuard(db, principal.tenantId, productId);
   const existing = await loadProduct(db, principal.tenantId, productId);
   if (existing === null) {
     return { status: "not_found" };
@@ -764,9 +817,8 @@ export async function publishAdminProduct(
   }
 
   const screening = await screeningStatementsFor(db, {
+    guard,
     now,
-    productId,
-    tenantId: principal.tenantId,
     texts: { description: existing.description, name: existing.name },
   });
 
@@ -798,6 +850,29 @@ export async function publishAdminProduct(
         now,
       ),
     ...screening.statements,
+    // The content fence. A product that was never screened has no row for a
+    // concurrent edit or mapping change to bump, so this publish also checks
+    // that the product row it screened is still the row it read: every writer
+    // of screened content moves products.updated_at strictly forward (text
+    // edits, mapping create/delete, platform decisions), and a moved value
+    // sets the row this batch just wrote to version 0 — tripping the version
+    // trigger and rolling the publish back for a retry from fresh reads.
+    db
+      .prepare(
+        `UPDATE product_screening SET version = 0
+         WHERE tenant_id = ? AND product_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM products
+             WHERE tenant_id = ? AND product_id = ? AND updated_at = ?
+           )`,
+      )
+      .bind(
+        principal.tenantId,
+        productId,
+        principal.tenantId,
+        productId,
+        existing.updated_at,
+      ),
     auditStatement(db, principal, "product.publish", productId, now, null),
   ]);
 

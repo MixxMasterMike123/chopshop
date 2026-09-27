@@ -1,6 +1,12 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
-import { screeningStatementsFor } from "../catalog/screening";
+import {
+  isScreeningConflict,
+  readScreeningGuard,
+  screeningFenceStatement,
+  screeningStatementsFor,
+  withScreeningRetry,
+} from "../catalog/screening";
 import type { PodQuote } from "./pod-quote";
 import { priceFloorMinor, quotePodCost } from "./pod-quote";
 import type { PrintArea, PrintSlot, Printer } from "./printers";
@@ -75,6 +81,7 @@ export type RefusalCode =
 
 export type ConflictCode =
   | "conflict"
+  | "pod_too_large"
   | "product_archived"
   | "sku_mismatch"
   | "slot_taken"
@@ -88,6 +95,24 @@ export type CreateMappingResult =
 
 /** docs/POD_PRINT_SPEC.md §2: the DPI floor when the artwork's profile is gone. */
 export const DEFAULT_MIN_DPI = 300;
+
+/**
+ * NO SILENT TRUNCATION (Codex CP2 P2). Every read a money or production
+ * decision depends on is either complete or refused — never a LIMIT that
+ * quietly drops rows (a truncated scope once froze a front+back garment as
+ * front-only; a truncated variant list once skipped a variant's price floor).
+ *
+ *   MAX_SCOPE_MAPPINGS   a scope's ACTIVE set fills distinct slots (createMapping
+ *                        refuses slot_taken), so it can never exceed the slot
+ *                        count; more rows is a broken invariant → refuse.
+ *   MAX_GATE_VARIANTS    the variants one publish gate prices; more → refused
+ *                        with `pod_too_large` rather than half-checked.
+ *   MAX_PRODUCT_MAPPINGS one product's active + suspended mappings across all
+ *                        its scopes; more → refused, never truncated.
+ */
+export const MAX_SCOPE_MAPPINGS = PRINT_SLOTS.length;
+export const MAX_GATE_VARIANTS = 200;
+export const MAX_PRODUCT_MAPPINGS = (MAX_GATE_VARIANTS + 1) * MAX_SCOPE_MAPPINGS;
 const MM_PER_INCH = 25.4;
 
 const ID_MAX_LENGTH = 128;
@@ -212,25 +237,39 @@ function toMapping(row: MappingRow): PodMapping {
   };
 }
 
-async function loadProductMappings(
+/**
+ * The product's ACTIVE and SUSPENDED mappings — every row a sale, a gate or a
+ * quote can depend on — complete, or null when there are more than
+ * MAX_PRODUCT_MAPPINGS (refuse, never truncate). Inactive rows are history and
+ * are not read here.
+ */
+async function loadLiveMappings(
   db: D1Database,
   tenantId: string,
   productId: string,
-  activeOnly: boolean,
-): Promise<PodMapping[]> {
+): Promise<PodMapping[] | null> {
   const result = await db
     .prepare(
       `SELECT ${MAPPING_COLUMNS}
        FROM pod_mappings
        WHERE tenant_id = ?
          AND product_id = ?
-         ${activeOnly ? "AND status = 'active'" : ""}
+         AND status IN ('active', 'suspended')
        ORDER BY created_at, id
-       LIMIT 200`,
+       LIMIT ${MAX_PRODUCT_MAPPINGS + 1}`,
     )
     .bind(tenantId, productId)
     .all<MappingRow>();
-  return result.results.map(toMapping);
+  return result.results.length > MAX_PRODUCT_MAPPINGS ? null : result.results.map(toMapping);
+}
+
+async function loadActiveMappings(
+  db: D1Database,
+  tenantId: string,
+  productId: string,
+): Promise<PodMapping[] | null> {
+  const live = await loadLiveMappings(db, tenantId, productId);
+  return live === null ? null : live.filter((mapping) => mapping.status === "active");
 }
 
 // ── scopes ──────────────────────────────────────────────────────────────────
@@ -346,44 +385,65 @@ async function isProductLive(db: D1Database, tenantId: string, productId: string
 
 interface SellableUnit {
   priceMinor: number;
+  /**
+   * A unit the product cannot be sold without: the product itself when it has
+   * no active variants, and every active variant. The BASE unit of a product
+   * WITH variants is optional — checkout still sells it (a line without a
+   * variantId is charged the base price), so it is floor-checked whenever a
+   * product-level mapping set makes it producible, and skipped otherwise (the
+   * freeze refuses it then).
+   */
+  required: boolean;
   variantId: string | null;
 }
 
 /**
- * What a buyer can put in a basket for this product. With active variants the
- * variants are the units (a POD garment is bought by size); without any, the
- * product itself is. A product-level purchase of a product that HAS variants
- * still reaches checkout, where it needs a product-level mapping set or is
- * refused at the freeze.
+ * Everything a buyer can put in a basket for this product, complete or null
+ * (more than MAX_GATE_VARIANTS active variants — refused, never half-checked).
+ *
+ * Firebase checked the BASE price against the floor on every publish
+ * (PublishPanel.jsx `validPrice`, ProductForm.jsx `mainPrice < podFloor`) in
+ * addition to each colourway override, because its storefront could sell the
+ * base product. So does this gate: the base unit is always in the list.
  */
 async function loadSellableUnits(
   db: D1Database,
   tenantId: string,
   productId: string,
   productPriceMinor: number,
-): Promise<SellableUnit[]> {
+): Promise<SellableUnit[] | null> {
   const variants = await db
     .prepare(
       `SELECT variant_id, price_minor
        FROM product_variants
        WHERE tenant_id = ? AND product_id = ? AND active = 1
        ORDER BY variant_id
-       LIMIT 100`,
+       LIMIT ${MAX_GATE_VARIANTS + 1}`,
     )
     .bind(tenantId, productId)
     .all<{ price_minor: number; variant_id: string }>();
-  return variants.results.length > 0
-    ? variants.results.map((variant) => ({
-        priceMinor: variant.price_minor,
-        variantId: variant.variant_id,
-      }))
-    : [{ priceMinor: productPriceMinor, variantId: null }];
+  if (variants.results.length > MAX_GATE_VARIANTS) {
+    return null;
+  }
+  return [
+    {
+      priceMinor: productPriceMinor,
+      required: variants.results.length === 0,
+      variantId: null,
+    },
+    ...variants.results.map((variant) => ({
+      priceMinor: variant.price_minor,
+      required: true,
+      variantId: variant.variant_id,
+    })),
+  ];
 }
 
 export type PodGateFailure =
   | "currency_mismatch"
   | "pod_mapping_missing"
   | "pod_mapping_suspended"
+  | "pod_too_large"
   | "pod_unpriced"
   | "price_below_floor";
 
@@ -414,7 +474,10 @@ export async function evaluatePodGate(
   }
   let mappings = options.mappings;
   if (mappings === undefined) {
-    const all = await loadProductMappings(db, tenantId, productId, false);
+    const all = await loadLiveMappings(db, tenantId, productId);
+    if (all === null) {
+      return "pod_too_large";
+    }
     // A suspended mapping means the product as designed cannot be made (a
     // routing edit took its slot, SKU or price away). It blocks the WHOLE
     // product until the seller re-posts or removes it — selling the remaining
@@ -431,6 +494,9 @@ export async function evaluatePodGate(
     productId,
     options.productPriceMinor ?? product.b2c_price_minor,
   );
+  if (units === null) {
+    return "pod_too_large";
+  }
 
   for (const unit of units) {
     const set = setFor(scopes, unit.variantId);
@@ -442,6 +508,11 @@ export async function evaluatePodGate(
       }
     }
     if (set === undefined) {
+      if (!unit.required) {
+        // The base purchase of a variant product with no product-level set:
+        // not producible, so not sellable (the freeze refuses it) — no floor.
+        continue;
+      }
       return "pod_mapping_missing";
     }
     const quote = await quoteSet(db, set, 1);
@@ -508,8 +579,11 @@ export async function quoteForProduct(
       return { status: "not_found" };
     }
   }
-  const scopes = groupByScope(await loadProductMappings(db, principal.tenantId, productId, true));
-  const set = setFor(scopes, variantId);
+  const active = await loadActiveMappings(db, principal.tenantId, productId);
+  if (active === null) {
+    return { status: "not_quotable" };
+  }
+  const set = setFor(groupByScope(active), variantId);
   const quote = set === undefined ? null : await sellerQuoteFor(db, set, product.vat_rate_bp);
   return quote === null ? { status: "not_quotable" } : { quote, status: "ok" };
 }
@@ -560,6 +634,11 @@ function isUniqueConstraintFailure(error: unknown): boolean {
  * is live (PLAN §2.4 — the artwork names it screens changed), and audits.
  * Posting an existing (product, artwork, printer, SKU) tuple re-activates it
  * with the requested slots.
+ *
+ * Guarded by the product's screening fence (src/catalog/screening.ts): a
+ * decision, an edit or another mapping change landing between the reads and
+ * the batch rolls the batch back whole; it is re-run once, then answered as a
+ * `conflict`.
  */
 export async function createMapping(
   db: D1Database,
@@ -567,7 +646,21 @@ export async function createMapping(
   input: CreateMappingInput,
   now: number,
 ): Promise<CreateMappingResult> {
+  return withScreeningRetry<CreateMappingResult>(
+    () => createMappingOnce(db, principal, input, now),
+    () => ({ code: "conflict", status: "conflict" }),
+  );
+}
+
+async function createMappingOnce(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  input: CreateMappingInput,
+  now: number,
+): Promise<CreateMappingResult> {
   const tenantId = principal.tenantId;
+  // FIRST, before any content read (THE FENCE).
+  const guard = await readScreeningGuard(db, tenantId, input.productId);
   const product = await loadProductFacts(db, tenantId, input.productId);
   if (product === null) {
     return { status: "not_found" };
@@ -631,19 +724,27 @@ export async function createMapping(
     slots.push({ heightMm: size.heightMm, slot, widthMm: size.widthMm });
   }
 
-  const all = await loadProductMappings(db, tenantId, input.productId, false);
-  const tuple = all.find(
-    (mapping) =>
-      mapping.artworkId === input.artworkId &&
-      mapping.printerId === input.printerId &&
-      mapping.sku === input.sku,
-  );
+  // The tuple by its UNIQUE key (any status — an inactive row is re-activated),
+  // and the live set complete (loadLiveMappings refuses rather than truncate).
+  const tupleRow = await db
+    .prepare(
+      `SELECT ${MAPPING_COLUMNS} FROM pod_mappings
+       WHERE tenant_id = ? AND product_id = ? AND artwork_id = ? AND printer_id = ? AND sku = ?
+       LIMIT 1`,
+    )
+    .bind(tenantId, input.productId, input.artworkId, input.printerId, input.sku)
+    .first<MappingRow>();
+  const tuple = tupleRow === null ? undefined : toMapping(tupleRow);
   if (tuple !== undefined && tuple.variantId !== input.variantId) {
     return { code: "variant_mismatch", status: "conflict" };
   }
+  const live = await loadLiveMappings(db, tenantId, input.productId);
+  if (live === null) {
+    return { code: "pod_too_large", status: "conflict" };
+  }
 
   const scope = scopeKey(input.variantId);
-  const others = all.filter(
+  const others = live.filter(
     (mapping) => mapping.status === "active" && mapping.mappingId !== tuple?.mappingId,
   );
   for (const mapping of others) {
@@ -683,8 +784,8 @@ export async function createMapping(
     return { code: "currency_mismatch", status: "refused" };
   }
 
-  const live = await isProductLive(db, tenantId, input.productId);
-  if (live) {
+  const productLive = await isProductLive(db, tenantId, input.productId);
+  if (productLive) {
     // A mapping edit on a LIVE product is a re-publish of that scope: the new
     // cost must not leave any price in it under the floor (PRISGOLV).
     const failure = await evaluatePodGate(db, tenantId, input.productId, {
@@ -724,22 +825,26 @@ export async function createMapping(
              WHERE tenant_id = ? AND id = ?`,
           )
           .bind(JSON.stringify(slots), iso, tenantId, mapping.mappingId),
+    // Every mapping write moves products.updated_at strictly forward: it is
+    // screened content (artwork names), and a concurrent FIRST publish of this
+    // product fences on that column (publishAdminProduct).
     db
       .prepare(
-        `UPDATE products SET is_pod = 1, updated_at = ?
-         WHERE tenant_id = ? AND product_id = ? AND is_pod = 0`,
+        `UPDATE products SET is_pod = 1, updated_at = max(?, updated_at + 1)
+         WHERE tenant_id = ? AND product_id = ?`,
       )
       .bind(now, tenantId, input.productId),
   ];
 
-  if (live) {
+  if (productLive) {
     const screening = await screeningStatementsFor(db, {
       artworkIds: nextActive.map((candidate) => candidate.artworkId),
+      guard,
       now,
-      productId: input.productId,
-      tenantId,
     });
     statements.push(...screening.statements);
+  } else {
+    statements.push(screeningFenceStatement(db, guard, now));
   }
 
   statements.push(
@@ -763,7 +868,7 @@ export async function createMapping(
   try {
     await db.batch(statements);
   } catch (error) {
-    if (isUniqueConstraintFailure(error)) {
+    if (!isScreeningConflict(error) && isUniqueConstraintFailure(error)) {
       return { code: "conflict", status: "conflict" };
     }
     throw error;
@@ -778,7 +883,17 @@ export async function listMappings(
   productId: string | null,
 ): Promise<PodMapping[]> {
   if (productId !== null) {
-    return loadProductMappings(db, principal.tenantId, productId, false);
+    // A DISPLAY list (every status, newest last); nothing is decided from it.
+    const rows = await db
+      .prepare(
+        `SELECT ${MAPPING_COLUMNS} FROM pod_mappings
+         WHERE tenant_id = ? AND product_id = ?
+         ORDER BY created_at, id
+         LIMIT 500`,
+      )
+      .bind(principal.tenantId, productId)
+      .all<MappingRow>();
+    return rows.results.map(toMapping);
   }
   const result = await db
     .prepare(
@@ -797,19 +912,41 @@ export async function listMappings(
  * DELETE /v1/admin/pod/mappings/:id — soft: status 'inactive'. The row stays so
  * the artwork (and with it the print master) remains referenced. Re-screens a
  * live product in the same batch; the catalog_version bump (a live POD product
- * that loses its last mapping leaves the storefront) is the trigger's.
+ * that loses its last mapping leaves the storefront) is the trigger's. Fenced
+ * and retried like createMapping; a second conflict answers `conflict` (409).
  */
 export async function deleteMapping(
   db: D1Database,
   principal: TenantAdminPrincipal,
   mappingId: string,
   now: number,
+): Promise<{ status: "conflict" | "not_found" | "ok" }> {
+  return withScreeningRetry<{ status: "conflict" | "not_found" | "ok" }>(
+    () => deleteMappingOnce(db, principal, mappingId, now),
+    () => ({ status: "conflict" }),
+  );
+}
+
+async function deleteMappingOnce(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  mappingId: string,
+  now: number,
 ): Promise<{ status: "not_found" | "ok" }> {
   const tenantId = principal.tenantId;
-  const row = await db
-    .prepare(`SELECT ${MAPPING_COLUMNS} FROM pod_mappings WHERE tenant_id = ? AND id = ? LIMIT 1`)
-    .bind(tenantId, mappingId)
-    .first<MappingRow>();
+  const loadRow = () =>
+    db
+      .prepare(`SELECT ${MAPPING_COLUMNS} FROM pod_mappings WHERE tenant_id = ? AND id = ? LIMIT 1`)
+      .bind(tenantId, mappingId)
+      .first<MappingRow>();
+  // The product id first (immutable on the row), then the guard, then every
+  // fact this batch depends on — the row included — read after the guard.
+  const located = await loadRow();
+  if (located === null) {
+    return { status: "not_found" };
+  }
+  const guard = await readScreeningGuard(db, tenantId, located.product_id);
+  const row = await loadRow();
   if (row === null) {
     return { status: "not_found" };
   }
@@ -825,19 +962,31 @@ export async function deleteMapping(
          WHERE tenant_id = ? AND id = ?`,
       )
       .bind(iso, tenantId, mappingId),
+    db
+      .prepare(
+        `UPDATE products SET updated_at = max(?, updated_at + 1)
+         WHERE tenant_id = ? AND product_id = ?`,
+      )
+      .bind(now, tenantId, row.product_id),
   ];
 
   if (await isProductLive(db, tenantId, row.product_id)) {
-    const remaining = (await loadProductMappings(db, tenantId, row.product_id, true)).filter(
-      (mapping) => mapping.mappingId !== mappingId,
-    );
+    // Complete by construction (DISTINCT artwork ids of the active rows).
+    const remaining = await db
+      .prepare(
+        `SELECT DISTINCT artwork_id FROM pod_mappings
+         WHERE tenant_id = ? AND product_id = ? AND status = 'active' AND id <> ?`,
+      )
+      .bind(tenantId, row.product_id, mappingId)
+      .all<{ artwork_id: string }>();
     const screening = await screeningStatementsFor(db, {
-      artworkIds: remaining.map((mapping) => mapping.artworkId),
+      artworkIds: remaining.results.map((entry) => entry.artwork_id),
+      guard,
       now,
-      productId: row.product_id,
-      tenantId,
     });
     statements.push(...screening.statements);
+  } else {
+    statements.push(screeningFenceStatement(db, guard, now));
   }
 
   statements.push(
@@ -869,7 +1018,7 @@ export interface ProductionLine {
 }
 
 interface ProductionRow extends MappingRow {
-  artwork_status: string;
+  artwork_status: string | null;
   print_object_key: string | null;
   print_sha256: string | null;
 }
@@ -889,6 +1038,12 @@ const SLOT_ORDER = new Map<PrintSlot, number>(PRINT_SLOTS.map((slot, index) => [
  *   - every artwork 'ready' with a print master under this tenant's own
  *     `pod/{tenant}/print/` prefix (artworkDeliverable's containment rule);
  *   - the SKU priced for every slot (A1).
+ *
+ * The scope's set is read COMPLETE (Codex CP2 P2): the variant's own set, else
+ * the product-level set, each queried exactly — never a product-wide page that
+ * could cut a set in half and freeze a front+back garment as front-only. A set
+ * larger than MAX_SCOPE_MAPPINGS breaks the one-mapping-per-slot invariant and
+ * is refused. Suspended mappings are checked on their own, across all scopes.
  */
 export async function resolveProductionLine(
   db: D1Database,
@@ -896,36 +1051,56 @@ export async function resolveProductionLine(
   item: { productId: string; quantity: number; variantId: string | null },
   dispatchTarget: string | null,
 ): Promise<ProductionLine | null> {
-  const result = await db
-    .prepare(
-      `SELECT mapping.id, mapping.product_id, mapping.variant_id, mapping.artwork_id,
-              mapping.printer_id, mapping.sku, mapping.slots_json, mapping.status,
-              mapping.suspended_reason, mapping.created_at, mapping.updated_at,
-              artwork.status AS artwork_status,
-              artwork.print_object_key, artwork.print_sha256
-       FROM pod_mappings AS mapping
-       INNER JOIN pod_artwork AS artwork
-         ON artwork.artwork_id = mapping.artwork_id
-        AND artwork.tenant_id = mapping.tenant_id
-       WHERE mapping.tenant_id = ?
-         AND mapping.product_id = ?
-         AND mapping.status IN ('active', 'suspended')
-       ORDER BY mapping.created_at, mapping.id
-       LIMIT 200`,
-    )
-    .bind(tenantId, item.productId)
-    .all<ProductionRow>();
-
   // Any suspended mapping: the product as designed cannot be produced
   // (evaluatePodGate's rule; the public predicate hides it too).
-  if (result.results.some((row) => row.status === "suspended")) {
+  const suspended = await db
+    .prepare(
+      `SELECT 1 AS present FROM pod_mappings
+       WHERE tenant_id = ? AND product_id = ? AND status = 'suspended'
+       LIMIT 1`,
+    )
+    .bind(tenantId, item.productId)
+    .first();
+  if (suspended !== null) {
     return null;
   }
-  const rows = new Map(result.results.map((row) => [row.id, row]));
-  const scopes = groupByScope(result.results.map(toMapping));
-  const set = setFor(scopes, item.variantId);
-  const routing = set === undefined ? null : setRouting(set);
-  if (set === undefined || routing === null) {
+
+  // LEFT JOIN: a mapping whose artwork row were missing must surface (and be
+  // refused below), not vanish from the set and leave a smaller one behind.
+  const scopeRows = async (variantId: string | null): Promise<ProductionRow[]> => {
+    const result = await db
+      .prepare(
+        `SELECT mapping.id, mapping.product_id, mapping.variant_id, mapping.artwork_id,
+                mapping.printer_id, mapping.sku, mapping.slots_json, mapping.status,
+                mapping.suspended_reason, mapping.created_at, mapping.updated_at,
+                artwork.status AS artwork_status,
+                artwork.print_object_key, artwork.print_sha256
+         FROM pod_mappings AS mapping
+         LEFT JOIN pod_artwork AS artwork
+           ON artwork.artwork_id = mapping.artwork_id
+          AND artwork.tenant_id = mapping.tenant_id
+         WHERE mapping.tenant_id = ?
+           AND mapping.product_id = ?
+           AND mapping.status = 'active'
+           AND mapping.variant_id IS ?
+         ORDER BY mapping.created_at, mapping.id
+         LIMIT ${MAX_SCOPE_MAPPINGS + 1}`,
+      )
+      .bind(tenantId, item.productId, variantId)
+      .all<ProductionRow>();
+    return result.results;
+  };
+  let scoped = item.variantId === null ? [] : await scopeRows(item.variantId);
+  if (scoped.length === 0) {
+    scoped = await scopeRows(null);
+  }
+  if (scoped.length === 0 || scoped.length > MAX_SCOPE_MAPPINGS) {
+    return null;
+  }
+  const rows = new Map(scoped.map((row) => [row.id, row]));
+  const set = scoped.map(toMapping);
+  const routing = setRouting(set);
+  if (routing === null) {
     return null;
   }
   if (dispatchTarget !== null && routing.printerId !== dispatchTarget) {
@@ -1017,7 +1192,9 @@ export async function publicPodFields(
   tenantId: string,
   productId: string,
 ): Promise<PublicPodFields> {
-  const mappings = await loadProductMappings(db, tenantId, productId, true);
+  // Display-only, of a product already proven public; an overflow (which the
+  // write path refuses) shows no POD fields rather than a partial set.
+  const mappings = (await loadActiveMappings(db, tenantId, productId)) ?? [];
   const printAreas: MappingSlot[] = [];
   const previewUrls: string[] = [];
   for (const mapping of mappings) {

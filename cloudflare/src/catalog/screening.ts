@@ -29,6 +29,25 @@ import {
  * Only LIVE products are screened (published = 1, status 'active'): the
  * Firebase `isLive` rule — a draft harms nobody. The first screening therefore
  * happens at publish, and every later mutation of a live product rescreens.
+ *
+ * ── THE FENCE (Codex CP2 P1) ────────────────────────────────────────────────
+ * A decision is computed from facts read BEFORE the batch, so something must
+ * stop the batch from committing when those facts moved in between — most
+ * sharply, a platform approval landing between the read and a seller edit
+ * that introduces a blocked term (the edit would otherwise go live under the
+ * approval of the previous content). The screening row is that lock:
+ *
+ *   1. every mutation of screened content or eligibility reads a
+ *      ScreeningGuard FIRST (readScreeningGuard), before any content read;
+ *   2. its batch carries exactly one statement that writes the row to
+ *      `version = <read version> + 1` (or INSERTs it, or — when there was no
+ *      row and the mutation is not screening — asserts there still is none);
+ *   3. any other writer in between has bumped the version (every writer
+ *      does), so that statement trips `product_screening_version_monotonic`
+ *      (or the primary key) and the WHOLE batch rolls back — nothing of the
+ *      mutation commits;
+ *   4. withScreeningRetry re-runs the mutation once from fresh reads; a second
+ *      conflict answers `conflict` (409).
  */
 
 interface ScreeningRow {
@@ -158,21 +177,101 @@ async function activeMappingArtworkIds(
 ): Promise<string[]> {
   const result = await db
     .prepare(
-      `SELECT artwork_id FROM pod_mappings
-       WHERE tenant_id = ? AND product_id = ? AND status = 'active'
-       LIMIT 200`,
+      `SELECT DISTINCT artwork_id FROM pod_mappings
+       WHERE tenant_id = ? AND product_id = ? AND status = 'active'`,
     )
     .bind(tenantId, productId)
     .all<{ artwork_id: string }>();
   return result.results.map((row) => row.artwork_id);
 }
 
+/**
+ * The optimistic lock of one product's screened content: the screening row as
+ * it was read at the START of a mutation (null = the product was never
+ * screened). See THE FENCE above.
+ */
+export interface ScreeningGuard {
+  productId: string;
+  row: (StoredScreening & { version: number }) | null;
+  tenantId: string;
+}
+
+export async function readScreeningGuard(
+  db: D1Database,
+  tenantId: string,
+  productId: string,
+): Promise<ScreeningGuard> {
+  return { productId, row: await loadScreeningRow(db, tenantId, productId), tenantId };
+}
+
+/** The D1 error a tripped fence raises (the version trigger or the PK). */
+export function isScreeningConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("screening version must increase") ||
+    (message.includes("UNIQUE constraint failed") &&
+      message.includes("product_screening.product_id"))
+  );
+}
+
+/**
+ * Run a guarded mutation; on a tripped fence run it ONCE more from fresh
+ * reads, and if the fence trips again answer `onConflict()` rather than
+ * committing anything under facts the mutation never saw.
+ */
+export async function withScreeningRetry<T>(
+  attempt: () => Promise<T>,
+  onConflict: () => T,
+): Promise<T> {
+  for (let round = 0; round < 2; round += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!isScreeningConflict(error)) {
+        throw error;
+      }
+    }
+  }
+  return onConflict();
+}
+
+/**
+ * The fence for a batch that does NOT (re)screen — a mutation of a product
+ * that is not live. With a row: bump its version (a concurrent writer that
+ * read the same version then trips). Without one: assert there still is none
+ * — `version = 0` on a row that appeared meanwhile (a first publish, a
+ * platform takedown) trips the version trigger.
+ */
+export function screeningFenceStatement(
+  db: D1Database,
+  guard: ScreeningGuard,
+  now: number,
+): D1PreparedStatement {
+  return guard.row === null
+    ? db
+        .prepare(
+          "UPDATE product_screening SET version = 0 WHERE tenant_id = ? AND product_id = ?",
+        )
+        .bind(guard.tenantId, guard.productId)
+    : db
+        .prepare(
+          `UPDATE product_screening SET version = ?, updated_at = ?
+           WHERE tenant_id = ? AND product_id = ?`,
+        )
+        .bind(
+          guard.row.version + 1,
+          new Date(now).toISOString(),
+          guard.tenantId,
+          guard.productId,
+        );
+}
+
 export interface ScreeningStatementsInput {
   /** Post-mutation artwork ids of the product's ACTIVE mappings (default: current). */
   artworkIds?: readonly string[];
+  /** Read at the START of the mutation, before any content it screens. */
+  guard: ScreeningGuard;
   now: number;
-  productId: string;
-  tenantId: string;
   /** Post-mutation screened text (default: the stored product row). */
   texts?: { description: string | null; name: string };
 }
@@ -188,17 +287,17 @@ export interface ScreeningStatements {
  * statement that records it, to be appended to the caller's batch.
  *
  * The caller decides liveness: call this only for a product that is (or is
- * becoming) live. The write is guarded on the version this function read, so a
- * platform decision that lands between the read and the batch is never
- * overwritten by a seller edit that did not see it; the edit then stays
- * unscreened until the next mutation, as a racing Firebase trigger would.
+ * becoming) live. The returned statement IS the batch's fence (THE FENCE
+ * above): it always writes the row — even when the decision is "no change" —
+ * at the guard's version + 1, so a batch computed from stale facts never
+ * commits.
  */
 export async function screeningStatementsFor(
   db: D1Database,
   input: ScreeningStatementsInput,
 ): Promise<ScreeningStatements> {
-  const { productId, tenantId } = input;
-  const prevRow = await loadScreeningRow(db, tenantId, productId);
+  const { productId, tenantId } = input.guard;
+  const prevRow = input.guard.row;
 
   let texts = input.texts;
   if (texts === undefined) {
@@ -209,7 +308,10 @@ export async function screeningStatementsFor(
       .bind(tenantId, productId)
       .first<{ description: string | null; name: string }>();
     if (product === null) {
-      return { statements: [], status: prevRow?.status ?? null };
+      return {
+        statements: [screeningFenceStatement(db, input.guard, input.now)],
+        status: prevRow?.status ?? null,
+      };
     }
     texts = product;
   }
@@ -235,7 +337,12 @@ export async function screeningStatementsFor(
   });
   const next = overlayDecision(prevRow, decision, shopPublishedCount);
   if (next === null) {
-    return { statements: [], status: prevRow?.status ?? null };
+    // The machine's no-op still fences: the unchanged verdict is only right
+    // for the facts it was computed from.
+    return {
+      statements: [screeningFenceStatement(db, input.guard, input.now)],
+      status: prevRow?.status ?? null,
+    };
   }
 
   const iso = new Date(input.now).toISOString();
@@ -246,8 +353,7 @@ export async function screeningStatementsFor(
             `INSERT INTO product_screening (
                product_id, tenant_id, status, reason, hits_json, earlier_hits_json,
                requires_approval, decided_by, decided_at, version, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'system', ?, 1, ?, ?)
-             ON CONFLICT(product_id) DO NOTHING`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'system', ?, 1, ?, ?)`,
           )
           .bind(
             productId,
@@ -266,8 +372,8 @@ export async function screeningStatementsFor(
             `UPDATE product_screening
              SET status = ?, reason = ?, hits_json = ?, earlier_hits_json = ?,
                  requires_approval = ?, decided_by = 'system', decided_at = ?,
-                 version = version + 1, updated_at = ?
-             WHERE tenant_id = ? AND product_id = ? AND version = ?`,
+                 version = ?, updated_at = ?
+             WHERE tenant_id = ? AND product_id = ?`,
           )
           .bind(
             next.status,
@@ -276,10 +382,13 @@ export async function screeningStatementsFor(
             JSON.stringify(next.earlierHits),
             next.requiresApproval ? 1 : 0,
             iso,
+            // An explicit target, not `version + 1`: if another writer bumped
+            // the row since the guard was read, this is <= the stored version
+            // and the monotonic trigger aborts the whole batch.
+            prevRow.version + 1,
             iso,
             tenantId,
             productId,
-            prevRow.version,
           );
 
   return { statements: [statement], status: next.status };
@@ -433,7 +542,9 @@ export async function decideByPlatform(
       )
       .bind(productId, product.tenant_id, status, reason, principal.userId, iso, iso, iso),
     db
-      .prepare("UPDATE products SET takedown_at = ?, updated_at = ? WHERE product_id = ?")
+      .prepare(
+        "UPDATE products SET takedown_at = ?, updated_at = max(?, updated_at + 1) WHERE product_id = ?",
+      )
       .bind(takedownAt, now, productId),
     db
       .prepare(

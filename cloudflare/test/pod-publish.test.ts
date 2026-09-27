@@ -10,7 +10,7 @@ import { getPublicProduct } from "../src/catalog/public-catalog";
 import { decideByPlatform } from "../src/catalog/screening";
 import { createCheckout } from "../src/commerce/checkout";
 import type { CreateCheckoutInput } from "../src/commerce/checkout";
-import { createMapping, deleteMapping, listMappings } from "../src/pod/pod-mappings";
+import { createMapping, deleteMapping, listMappings, MAX_GATE_VARIANTS } from "../src/pod/pod-mappings";
 import { replacePrinters } from "../src/pod/printers";
 import {
   handlePublicProductRequest,
@@ -508,5 +508,173 @@ describe("checkout freezes the production snapshot", () => {
     expect(JSON.stringify(body)).not.toContain("pod/");
     const snapshot = (await snapshotOf(String(body.checkout.checkoutId))) as { printer: string };
     expect(snapshot.printer).toBe("fake-printer");
+  });
+});
+
+// ── Codex CP2 P2: the base price of a variant product ───────────────────────
+
+describe("the base price of a variant product is floor-checked whenever it is sellable", () => {
+  it("a variant product with no product-level set: base not producible, not checked, not sellable", async () => {
+    await seedProduct(TENANT, {
+      priceMinor: 10_000,
+      productId: "base-low",
+      variants: [
+        { priceMinor: 39_900, sku: "BASE-LOW-S", variantId: "base-low-s" },
+        { priceMinor: 39_900, sku: "BASE-LOW-M", variantId: "base-low-m" },
+      ],
+    });
+    expect((await map("base-low", "art-front", ["front"], { sku: TEE_S, variantId: "base-low-s" })).status).toBe("ok");
+    expect((await map("base-low", "art-back", ["front"], { sku: TEE_M, variantId: "base-low-m" })).status).toBe("ok");
+    expect((await publishAdminProduct(env.DB, ADMIN, "base-low", Date.now())).status).toBe("ok");
+
+    await expect(
+      createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "base-low", quantity: 1 }]), Date.now()),
+    ).resolves.toEqual({ status: "invalid_items" });
+    await expect(
+      createCheckout(
+        env.DB,
+        TENANT_CONTEXT,
+        checkoutInput([{ productId: "base-low", quantity: 1, variantId: "base-low-s" }]),
+        Date.now(),
+      ),
+    ).resolves.toMatchObject({ status: "ok" });
+  });
+
+  it("a product-level set makes the base purchase producible — then its price must clear PRISGOLV", async () => {
+    // Live: adding the product-level set would make the 100 kr base sellable.
+    await expect(map("base-low", "art-back", ["front"], { sku: TEE_S })).resolves.toEqual({
+      code: "price_below_floor",
+      status: "refused",
+    });
+
+    // Not live: the mapping is accepted, and the publish gate refuses instead.
+    await unpublishAdminProduct(env.DB, ADMIN, "base-low", Date.now());
+    expect((await map("base-low", "art-back", ["front"], { sku: TEE_S })).status).toBe("ok");
+    await expect(publishAdminProduct(env.DB, ADMIN, "base-low", Date.now())).resolves.toEqual({
+      code: "price_below_floor",
+      status: "refused",
+    });
+    await expect(
+      updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 15_000 }, Date.now()),
+    ).resolves.toEqual({ code: "price_below_floor", status: "refused" });
+
+    // The floor itself is a legal base price…
+    expect((await updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 19_600 }, Date.now())).status).toBe("ok");
+    // …but at the floor the withholding (cost + the printer's parcel, × 1.25)
+    // can exceed a small basket's gross, which checkout refuses (A1) — the
+    // floor excludes the per-order parcel, as in Firebase. Priced above it:
+    expect((await updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 29_900 }, Date.now())).status).toBe("ok");
+    expect((await publishAdminProduct(env.DB, ADMIN, "base-low", Date.now())).status).toBe("ok");
+    const base = await createCheckout(
+      env.DB,
+      TENANT_CONTEXT,
+      checkoutInput([{ productId: "base-low", quantity: 1 }]),
+      Date.now(),
+    );
+    expect(base.status).toBe("ok");
+    const snapshot = (base.status === "ok" ? await snapshotOf(base.checkout.checkoutId) : null) as {
+      lines: Array<{ printFiles: Array<{ r2Key: string }>; sku: string }>;
+    };
+    expect(snapshot.lines[0]?.sku).toBe(TEE_S);
+    expect(snapshot.lines[0]?.printFiles.map((file) => file.r2Key)).toEqual([printKeyBack]);
+  });
+});
+
+// ── Codex CP2 P2: no silent truncation of a mapping set or a variant list ───
+
+describe("large products are read completely, or refused — never truncated", () => {
+  const VARIANTS = 101;
+  const pad = (index: number) => String(index).padStart(3, "0");
+  const last = `many-v${pad(VARIANTS - 1)}`;
+
+  beforeAll(async () => {
+    await seedProduct(TENANT, {
+      isPod: true,
+      priceMinor: 39_900,
+      productId: "many",
+      variants: Array.from({ length: VARIANTS }, (_, index) => ({
+        // The LAST variant (by id — the order a paged read would drop) is
+        // priced between the front-only floor (196 kr) and the front+back
+        // floor (250 kr): only a complete read of its set refuses it.
+        priceMinor: index === VARIANTS - 1 ? 20_000 : 39_900,
+        sku: `MANY-${pad(index)}`,
+        variantId: `many-v${pad(index)}`,
+      })),
+    });
+    // 202 ACTIVE mappings — past the old 200-row page — each variant with a
+    // front and a back artwork; the last variant's BACK is the very last row.
+    const base = Date.parse("2026-09-27T00:00:00.000Z");
+    const statements: D1PreparedStatement[] = [];
+    for (let index = 0; index < VARIANTS; index += 1) {
+      await seedArtwork(TENANT, { artworkId: `many-f-${pad(index)}` });
+      await seedArtwork(TENANT, { artworkId: `many-b-${pad(index)}` });
+      for (const [offset, side] of [[0, "f"], [1, "b"]] as const) {
+        const iso = new Date(base + index * 2 + offset).toISOString();
+        statements.push(
+          env.DB.prepare(
+            `INSERT INTO pod_mappings (
+               id, tenant_id, product_id, variant_id, artwork_id, printer_id, sku,
+               slots_json, status, suspended_reason, created_at, updated_at
+             ) VALUES (?, ?, 'many', ?, ?, 'fake-printer', ?, ?, 'active', NULL, ?, ?)`,
+          ).bind(
+            `many-map-${side}-${pad(index)}`,
+            TENANT,
+            `many-v${pad(index)}`,
+            `many-${side}-${pad(index)}`,
+            TEE_S,
+            JSON.stringify([
+              { heightMm: 399, slot: side === "f" ? "front" : "back", widthMm: 299 },
+            ]),
+            iso,
+            iso,
+          ),
+        );
+      }
+    }
+    await env.DB.batch(statements);
+  });
+
+  it("the publish gate prices EVERY variant against its COMPLETE set (the 101st, front+back)", async () => {
+    await expect(publishAdminProduct(env.DB, ADMIN, "many", Date.now())).resolves.toEqual({
+      code: "price_below_floor",
+      status: "refused",
+    });
+    await env.DB.prepare("UPDATE product_variants SET price_minor = 39900 WHERE variant_id = ?")
+      .bind(last)
+      .run();
+    expect((await publishAdminProduct(env.DB, ADMIN, "many", Date.now())).status).toBe("ok");
+  });
+
+  it("the freeze reads the line's scope completely: the last variant ships front AND back", async () => {
+    const result = await createCheckout(
+      env.DB,
+      TENANT_CONTEXT,
+      checkoutInput([{ productId: "many", quantity: 1, variantId: last }]),
+      Date.now(),
+    );
+    expect(result.status).toBe("ok");
+    const snapshot = (result.status === "ok" ? await snapshotOf(result.checkout.checkoutId) : null) as {
+      lines: Array<{ printFiles: Array<{ slot: string }>; productionCostMinor: number }>;
+    };
+    expect(snapshot.lines[0]?.printFiles.map((file) => file.slot)).toEqual(["front", "back"]);
+    // 60 blank + 40 + 40 prints + 40 cut — not the front-only 140 kr.
+    expect(snapshot.lines[0]?.productionCostMinor).toBe(18_000);
+  });
+
+  it("more variants than one gate checks completely is refused, not half-checked", async () => {
+    await seedProduct(TENANT, {
+      isPod: true,
+      priceMinor: 39_900,
+      productId: "too-many",
+      variants: Array.from({ length: MAX_GATE_VARIANTS + 1 }, (_, index) => ({
+        priceMinor: 39_900,
+        sku: `TOO-MANY-${index}`,
+        variantId: `too-many-v${String(index).padStart(3, "0")}`,
+      })),
+    });
+    await expect(publishAdminProduct(env.DB, ADMIN, "too-many", Date.now())).resolves.toEqual({
+      code: "pod_too_large",
+      status: "refused",
+    });
   });
 });

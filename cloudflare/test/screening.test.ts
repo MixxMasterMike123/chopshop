@@ -18,14 +18,24 @@ import {
   tokenize,
   toMachineState,
 } from "../src/catalog/screening-core";
-import { decideByPlatform, listScreeningQueue } from "../src/catalog/screening";
+import {
+  decideByPlatform,
+  listScreeningQueue,
+  readScreeningGuard,
+  screeningFenceStatement,
+} from "../src/catalog/screening";
+import { createMapping, listMappings } from "../src/pod/pod-mappings";
 import type { TenantContext } from "../src/tenancy/resolve-tenant";
 import {
   adminOf,
   catalogVersion,
   PLATFORM,
+  seedArtwork,
+  seedPrinter,
   seedProduct,
+  seedProfile,
   seedTenant,
+  TEE_S,
 } from "./pod-fixtures";
 
 // ── the pure port (functions/src/catalog/contentScreening.ts) ──────────────
@@ -332,11 +342,21 @@ describe("D8 on the live publish path", () => {
     expect(await publicIds()).toContain("d8-fourth");
   });
 
-  it("an edit to an unpublished product is not screened (a draft harms nobody)", async () => {
+  it("an edit to an unpublished product is not screened (a draft harms nobody) — but it is fenced", async () => {
     await unpublishAdminProduct(env.DB, admin, "d8-fourth", Date.now());
-    const before = (await screeningRow("d8-fourth"))?.version;
+    const before = await screeningRow("d8-fourth");
     await updateAdminProduct(env.DB, admin, "d8-fourth", { name: "Nike again" }, Date.now());
-    expect((await screeningRow("d8-fourth"))?.version).toBe(before);
+    const after = await screeningRow("d8-fourth");
+    // The verdict is untouched (no rescreen of a draft)…
+    expect(after).toMatchObject({
+      decided_by: before?.decided_by,
+      hits_json: before?.hits_json,
+      reason: before?.reason,
+      status: before?.status,
+    });
+    // …while the lock moved, so a publish that read the old version cannot
+    // commit around this edit (THE FENCE).
+    expect(after?.version).toBe((before?.version ?? 0) + 1);
   });
 
   it("a platform takedown blocks, stamps takedown_at, refuses re-publish and deletion", async () => {
@@ -365,5 +385,197 @@ describe("D8 on the live publish path", () => {
         .bind(new Date().toISOString(), new Date().toISOString(), new Date().toISOString())
         .run(),
     ).rejects.toThrow();
+  });
+});
+
+// ── THE FENCE (Codex CP2 P1): no mutation commits under facts it never saw ──
+
+/**
+ * A D1 handle whose batch() first lets something else commit — the
+ * interleaving a real race produces between a mutation's reads and its batch.
+ * The interleaved writer uses the REAL env.DB, so it is not itself raced.
+ */
+function racingDb(onBatch: (attempt: number) => Promise<void>): D1Database {
+  let attempt = 0;
+  return new Proxy(env.DB, {
+    get(target, prop) {
+      if (prop === "batch") {
+        return async (statements: D1PreparedStatement[]) => {
+          attempt += 1;
+          await onBatch(attempt);
+          return target.batch(statements);
+        };
+      }
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function"
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+}
+
+const RACE_TENANT = "tenant-race";
+const RACE_HOST = "race.podtest.test";
+const raceContext: TenantContext = { domainKind: "storefront", hostname: RACE_HOST, tenantId: RACE_TENANT };
+const raceAdmin = adminOf(RACE_TENANT);
+
+async function productName(productId: string): Promise<string | null> {
+  const row = await env.DB.prepare("SELECT name FROM products WHERE product_id = ?")
+    .bind(productId)
+    .first<{ name: string }>();
+  return row?.name ?? null;
+}
+
+async function auditCount(productId: string, action: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS total FROM audit_events WHERE resource_id = ? AND action = ?",
+  )
+    .bind(productId, action)
+    .first<{ total: number }>();
+  return row?.total ?? 0;
+}
+
+describe("the screening fence (a platform decision racing a seller mutation)", () => {
+  beforeAll(async () => {
+    await seedTenant(RACE_TENANT, RACE_HOST);
+    const iso = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO content_screening_terms (term, kind, hard_block, created_at) VALUES ('nike', 'brand', 1, ?)",
+    )
+      .bind(iso)
+      .run();
+    await seedProfile();
+    await seedPrinter();
+    await seedArtwork(RACE_TENANT, { artworkId: "race-clean", fileName: "clean.png" });
+    await seedArtwork(RACE_TENANT, { artworkId: "race-nike", fileName: "nike_logo.png" });
+  });
+
+  it("an approval between the edit's reads and its batch: the edit is re-run and blocked, never public under the old approval", async () => {
+    await seedProduct(RACE_TENANT, { name: "Plain tee", productId: "race-edit" });
+    expect(await publishAdminProduct(env.DB, raceAdmin, "race-edit", Date.now())).toMatchObject({
+      product: { screeningStatus: "pending" },
+    });
+
+    const racing = racingDb(async (attempt) => {
+      if (attempt === 1) {
+        await decideByPlatform(env.DB, PLATFORM, "race-edit", "approved", Date.now());
+      }
+    });
+    const result = await updateAdminProduct(racing, raceAdmin, "race-edit", { name: "Nike tee" }, Date.now());
+
+    // Before the fence: the version-guarded screening UPDATE matched nothing,
+    // the rename committed anyway, and "Nike tee" went public as 'approved'.
+    expect(result).toMatchObject({ product: { name: "Nike tee", screeningStatus: "blocked" }, status: "ok" });
+    expect(await screeningRow("race-edit")).toMatchObject({
+      hits_json: '["nike"]',
+      reason: "hard_block",
+      status: "blocked",
+    });
+    expect(await getPublicProduct(env.DB, raceContext, "race-edit")).toBeNull();
+    // The approval landed; the edit committed exactly once (the aborted
+    // attempt left nothing behind).
+    expect(await auditCount("race-edit", "screening.approve")).toBe(1);
+    expect(await auditCount("race-edit", "product.update")).toBe(1);
+  });
+
+  it("a decision that keeps racing: 409, and NOTHING of the edit commits", async () => {
+    await seedProduct(RACE_TENANT, { name: "Calm tee", productId: "race-persist" });
+    await publishAdminProduct(env.DB, raceAdmin, "race-persist", Date.now());
+    await decideByPlatform(env.DB, PLATFORM, "race-persist", "approved", Date.now());
+
+    const racing = racingDb(async () => {
+      await decideByPlatform(env.DB, PLATFORM, "race-persist", "approved", Date.now());
+    });
+    await expect(
+      updateAdminProduct(racing, raceAdmin, "race-persist", { name: "Nike hoodie" }, Date.now()),
+    ).resolves.toEqual({ status: "conflict" });
+
+    expect(await productName("race-persist")).toBe("Calm tee");
+    expect(await auditCount("race-persist", "product.update")).toBe(0);
+    expect((await screeningRow("race-persist"))?.status).toBe("approved");
+    expect((await getPublicProduct(env.DB, raceContext, "race-persist"))?.name).toBe("Calm tee");
+  });
+
+  it("a mapping created on a live product racing an approval is re-screened with its artwork's name", async () => {
+    await seedProduct(RACE_TENANT, { priceMinor: 39_900, productId: "race-map" });
+    expect((await createMapping(env.DB, raceAdmin, {
+      artworkId: "race-clean", printerId: "fake-printer", productId: "race-map", sku: TEE_S, slots: ["front"], variantId: null,
+    }, Date.now())).status).toBe("ok");
+    expect((await publishAdminProduct(env.DB, raceAdmin, "race-map", Date.now())).status).toBe("ok");
+
+    const racing = racingDb(async (attempt) => {
+      if (attempt === 1) {
+        await decideByPlatform(env.DB, PLATFORM, "race-map", "approved", Date.now());
+      }
+    });
+    const created = await createMapping(racing, raceAdmin, {
+      artworkId: "race-nike", printerId: "fake-printer", productId: "race-map", sku: TEE_S, slots: ["back"], variantId: null,
+    }, Date.now());
+    expect(created.status).toBe("ok");
+    expect((await screeningRow("race-map"))?.status).toBe("blocked");
+    expect(await getPublicProduct(env.DB, raceContext, "race-map")).toBeNull();
+  });
+
+  it("a mapping committed between a FIRST publish's reads and its batch: the publish is re-run and screens the new artwork", async () => {
+    await seedProduct(RACE_TENANT, { priceMinor: 39_900, productId: "race-first" });
+    expect((await createMapping(env.DB, raceAdmin, {
+      artworkId: "race-clean", printerId: "fake-printer", productId: "race-first", sku: TEE_S, slots: ["front"], variantId: null,
+    }, Date.now())).status).toBe("ok");
+
+    const racing = racingDb(async (attempt) => {
+      if (attempt === 1) {
+        const late = await createMapping(env.DB, raceAdmin, {
+          artworkId: "race-nike", printerId: "fake-printer", productId: "race-first", sku: TEE_S, slots: ["back"], variantId: null,
+        }, Date.now());
+        expect(late.status).toBe("ok");
+      }
+    });
+    const published = await publishAdminProduct(racing, raceAdmin, "race-first", Date.now());
+
+    // No screening row existed for the late mapping to bump; the publish's
+    // products.updated_at fence is what caught it.
+    expect(published).toMatchObject({ product: { screeningStatus: "blocked" }, status: "ok" });
+    expect((await screeningRow("race-first"))?.hits_json).toBe('["nike"]');
+    expect(await getPublicProduct(env.DB, raceContext, "race-first")).toBeNull();
+  });
+
+  it("a mapping change that keeps racing answers conflict and writes nothing", async () => {
+    await seedProduct(RACE_TENANT, { priceMinor: 39_900, productId: "race-map-persist" });
+    await createMapping(env.DB, raceAdmin, {
+      artworkId: "race-clean", printerId: "fake-printer", productId: "race-map-persist", sku: TEE_S, slots: ["front"], variantId: null,
+    }, Date.now());
+    await publishAdminProduct(env.DB, raceAdmin, "race-map-persist", Date.now());
+
+    const racing = racingDb(async () => {
+      await decideByPlatform(env.DB, PLATFORM, "race-map-persist", "approved", Date.now());
+    });
+    await expect(
+      createMapping(racing, raceAdmin, {
+        artworkId: "race-nike", printerId: "fake-printer", productId: "race-map-persist", sku: TEE_S, slots: ["back"], variantId: null,
+      }, Date.now()),
+    ).resolves.toEqual({ code: "conflict", status: "conflict" });
+    expect((await listMappings(env.DB, raceAdmin, "race-map-persist")).map((m) => m.artworkId)).toEqual(["race-clean"]);
+  });
+
+  it("the fence statements themselves: a stale version and an appeared row both abort", async () => {
+    await seedProduct(RACE_TENANT, { productId: "race-fence" });
+    const absent = await readScreeningGuard(env.DB, RACE_TENANT, "race-fence");
+    expect(absent.row).toBeNull();
+    // Nothing appeared: the absence assertion is a no-op.
+    await env.DB.batch([screeningFenceStatement(env.DB, absent, Date.now())]);
+
+    await decideByPlatform(env.DB, PLATFORM, "race-fence", "approved", Date.now());
+    await expect(env.DB.batch([screeningFenceStatement(env.DB, absent, Date.now())])).rejects.toThrow(
+      /screening version must increase/,
+    );
+
+    const stale = await readScreeningGuard(env.DB, RACE_TENANT, "race-fence");
+    await decideByPlatform(env.DB, PLATFORM, "race-fence", "approved", Date.now());
+    await expect(env.DB.batch([screeningFenceStatement(env.DB, stale, Date.now())])).rejects.toThrow(
+      /screening version must increase/,
+    );
+    const fresh = await readScreeningGuard(env.DB, RACE_TENANT, "race-fence");
+    await env.DB.batch([screeningFenceStatement(env.DB, fresh, Date.now())]);
+    expect((await screeningRow("race-fence"))?.version).toBe((fresh.row?.version ?? 0) + 1);
   });
 });

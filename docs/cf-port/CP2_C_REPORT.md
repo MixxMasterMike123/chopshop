@@ -164,3 +164,65 @@ Earlier full `npm run check` runs in this session were green on types + build; t
 5. **"404 opaque" vs 422**: a production-ineligible cart answers the checkout route's existing opaque 422 (`unprocessable`), identical to any unresolvable line. Keep, or special-case to 404?
 6. **Mapping delete on a live product with variants**: removing the product-level set of a product whose variants have their own sets keeps it public (variants still producible). Intended?
 7. **Seeding**: the SnapWear capability document for `PUT /v1/platform/printers` must be built from `docs/SnapWearDocs/snapwear-catalog.json` (models' front/back frames → `printAreasMm`, skus → `{model,label}`) plus the tier table (Firebase seed: blank per garment, 40 kr per print — expand per SKU). Who writes that script (CP2 seed or CP3)?
+
+## 12. Codex fixes (after b14c5d3 / e45297e)
+
+Three findings, all fixed in CP2-C files with regression tests. No schema change: every fence uses constraints the 0023–0025 migrations already declare.
+
+### P1: an approval racing a seller mutation (`src/catalog/screening.ts`)
+**Bug:** the screening UPDATE was guarded `WHERE version = <read>`. If a platform approval committed between the read and the seller's batch, the UPDATE hit zero rows, but the rest of the batch (the product text, the publication) still committed. An edit that introduced a hard-blocked term then stayed public under the approval of the previous content.
+
+**Fix (THE FENCE):**
+- Every mutation of screened content or eligibility reads a `ScreeningGuard` (the screening row and its version) first, before any content it screens. The four mutations are `updateAdminProduct`, `publishAdminProduct`, `createMapping` and `deleteMapping`.
+- Its batch carries exactly one fencing statement:
+  - the screening write targets `version = <read> + 1`, so any intervening writer (every writer bumps the version) trips `product_screening_version_monotonic`;
+  - the first screening is a plain INSERT, so the primary key trips if a row appeared;
+  - a mutation that does not screen (the product is not live) bumps the version, or asserts that no row exists (`SET version = 0` on a row that appeared trips the trigger).
+- A tripped fence raises, so D1 rolls back the whole batch and nothing of the mutation commits. `withScreeningRetry` then re-runs the mutation once from fresh reads. A second conflict answers `conflict`: 409 through the existing routes, and `DELETE /v1/admin/pod/mappings/:id` now maps it to 409 too.
+- **First publish (no row yet):** a concurrent edit or mapping change has no row to bump. So the publish batch also fences on `products.updated_at`, which every writer of screened content moves strictly forward (`max(now, updated_at + 1)`): text edits, mapping create/delete, and platform decisions. A moved value sets the freshly written row to version 0 and trips the same trigger.
+- **Side effect:** a live product's PRISGOLV write skew (a price edit racing a mapping change) is now fenced by the same lock.
+
+**Tests (`test/screening.test.ts`, "the screening fence"):** a D1 proxy commits a platform decision or a mapping inside the first `batch()` call, exactly between the mutation's reads and its write.
+- An approval racing a rename to a hard-blocked term: the edit is re-run and ends `blocked` and not public, with one `product.update` audit row.
+- An approval that keeps racing: `conflict`, with the name, audit rows and verdict untouched.
+- The same two cases for `createMapping`.
+- A mapping committed between a first publish's reads and its batch: the publish is re-run and screens the new artwork's file name.
+- The fence statements tested directly.
+- The earlier "draft edit is not screened" test now also asserts that the lock moved.
+
+### P2: the base price of a variant product (`src/pod/pod-mappings.ts`)
+**Bug:** with active variants, only the variants were floor-checked. Checkout still sells a line without `variantId` at the base price, and a product-level mapping set makes that producible, so a base price under PRISGOLV was sellable.
+
+**Fix: validate the base price, matching Firebase.** Firebase floor-checked the base price on every publish (`PublishPanel.jsx` `validPrice`; `ProductForm.jsx` `mainPrice < podFloor`) in addition to each colourway override, and its storefront could sell the base product. So checkout keeps accepting a variant-less line. The gate now always includes the base unit:
+- It is **required** when the product has no active variants.
+- It is **optional** when it does: floor-checked whenever a product-level set makes it producible, and skipped when no such set exists (the freeze then refuses the base purchase).
+
+The same rule applies at publish, on a PATCH of the base price, and when a mapping is created on a live product: adding a product-level set that would make a below-floor base sellable is refused.
+
+**Tests (`test/pod-publish.test.ts`):**
+- No product-level set: publishable, base checkout refused, variant checkout OK.
+- A product-level set on the live product: refused `price_below_floor`.
+- The same set after unpublish: accepted, and then the publish and a below-floor PATCH are refused.
+- Priced above the floor: publishes, and the base checkout freezes the product-level SKU.
+- Noted in the test: at exactly the floor, the withholding (which includes the printer's per-order parcel) can exceed a small basket's gross, which checkout refuses per A1. The floor excludes the parcel, as in Firebase.
+
+### P2: silent truncation (`src/pod/pod-mappings.ts`, `src/catalog/screening.ts`)
+**Bug:** `LIMIT 200` over a product's active mappings could cut a variant's set in half, and `setRouting()` accepted the subset: a front+back garment could be frozen and charged as front-only. The same class of bug hid in the gate's `LIMIT 100` on variants, where the 101st variant's floor was never checked.
+
+**Fix: no read that a money or production decision depends on truncates silently.**
+- **The freeze** checks suspended mappings separately. It then reads the line's scope exactly: the variant's own active set, else the product-level set, via `variant_id IS ?`. It uses a LEFT JOIN on the artwork, so a mapping whose artwork row is missing surfaces and is refused instead of vanishing from the set. The limit is `MAX_SCOPE_MAPPINGS` (the slot count, 5); since each active mapping in a scope fills distinct slots, more rows is a broken invariant and is refused.
+- **The gate, quote and create paths** read active + suspended mappings completely, or refuse above `MAX_PRODUCT_MAPPINGS = (MAX_GATE_VARIANTS + 1) × 5`. Variants are read completely, or refused above `MAX_GATE_VARIANTS = 200`. Both refusals use the new code `pod_too_large`.
+- **createMapping** looks up the re-activation tuple by its UNIQUE key instead of scanning a page.
+- The artwork-name reads for screening use `SELECT DISTINCT`, with no LIMIT.
+- Only the admin display list keeps a page (500), and nothing is decided from it.
+
+**Tests (`test/pod-publish.test.ts`, "large products"):** a product with 101 variants and 202 active mappings. The last variant's back is the very last row, and that variant is priced between the front-only floor and the front+back floor.
+- The gate refuses it; once repriced, it publishes.
+- The freeze of that variant carries front and back at 180 kr, not front-only at 140 kr.
+- 201 variants: refused with `pod_too_large`.
+
+### Counts
+- CP2-C tests: 88 → **99** (+11): screening 45 → 51, pod-publish 17 → 22, pod-mappings 26 (unchanged).
+- My suites: `screening`, `pod-mappings`, `pod-publish`, `admin-catalog`, `public-catalog`, `checkout`: **all green**.
+- Full `npx vitest run` in the shared tree, 2026-09-27 ~02:40: `Test Files 43 passed | 2 failed (45)`, `Tests 1584 passed | 34 failed (1618)`. All 34 failures are in CP2-A's `test/money-crons.test.ts` (14) and `test/refunds.test.ts` (20). They are mid-edit in the working tree (`src/commerce/refunds.ts`, `stripe-client.ts`, `crons.ts`, and a new `0026`).
+- `tsc` shows 9 errors, all in `src/commerce/crons.ts`, `test/money-fixtures.ts` and `test/refunds.test.ts`, and none in CP2-C files. `npm run check` is therefore red on CP2-A's in-progress work, not on these fixes.

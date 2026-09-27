@@ -60,6 +60,7 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 | D38 | Dispute money moves run in the 15-min reconciliation cron, not inline in the webhook (CP2-A deviation 2); `warning_closed`/`prevented` disputes return the reversal to the shop (deviation 4). | **Accept for CP2**; inline handling is a one-line route change later if the 15-min delay ever matters. |
 | D39 | Stripe webhook endpoint must be created with `connect: true` for `account.updated` to arrive (CP2-A Q2); staging endpoint `we_1UK0jh…` was created without it. | **Recreate the staging endpoint with `connect: true`** at the CP2 deploy (re-pin id + secret); production endpoint created with it at CP7. |
 | D40 | Alerts are D1 rows only (no ops email yet) — CP2-A Q8, CP2-B Q5. | **CP2-D adds an alert digest email** through EMAIL_QUEUE to a platform address (needs Resend). |
+| D41 | **Price floor vs withholding (CP2-C):** the amount withheld for the printer includes SnapWear's per-order parcel cost, but the PRISGOLV floor formula (ported from `podPricing.js`) does not — so a product priced exactly at the floor can make a small basket un-checkoutable (withholding > basket). Same gap exists in Firebase. | **Include the per-order parcel cost in the floor** (floor = per-item cost + parcel ÷ 1 item, so a single-item order still clears), documented as a deliberate change from Firebase; CP2-D. |
 
 ## Affiliate rebuild (PORT-LATER — answer before that checkpoint, not now)
 
