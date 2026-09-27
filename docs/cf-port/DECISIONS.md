@@ -135,6 +135,8 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 
 ## Answered
 
+| D85 | **`melodiemc.com` is Kent's artist website and is not a ChopShop domain.** PLAN §10 CP7 ("DNS (melodiemc.com first)") and D7b (a wildcard record on that zone) assumed it was the shop's. | ✅ 2026-09-27 — Mikael. That zone is never used or changed by the port. The shop `melodie-mc` has no domain of its own yet; the platform domain and name are undecided. CP7's first domain is named when Mikael names it. |
+| D86 | Which SnapWear articles the platform offers (the catalogue holds 8 garments, 323 articles). | ✅ 2026-09-27 — Mikael: every garment, every size, a selection of colours. Kent names the colours per garment; the selection is applied through the catalogue route (`POST /v1/platform/printers/:id/catalog/apply`). |
 | D9 | `refundApplicationFee=false`: the platform fee is not refunded when an order is refunded (Firebase refunds it today). | ✅ 2026-09-27 — Mikael: "This I like … good update". |
 | — | The legal readiness gate at checkout (CP3-E): platform terms accepted, legal pages adopted, return address, VAT answer, or the shop takes no checkout. | ✅ 2026-09-27 — Mikael: accepted, "as long as it keeps us as a provider safer". |
 | D75 | melodie-mc's own commission in Firebase is 5000 bps (50 %), above the 8 % Cloudflare accepts (D45, D71). | ✅ 2026-09-27 — Mikael: melodie-mc is the beta testing ground, the value is left from trying settings. **The shop gets the platform default.** The importer still refuses a production plan on any commission above the cap; the acceptance is given per shop: `--commission-default-for melodie-mc`. |
