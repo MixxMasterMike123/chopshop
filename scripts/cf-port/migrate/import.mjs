@@ -6,7 +6,7 @@
  *
  *   node scripts/cf-port/migrate/import.mjs --env staging --bundle <dir> --out <dir>
  *        [--email-map <file>] [--scrub-unmapped] [--connect-map <file>]
- *        [--target-state <file>]
+ *        [--target-state <file>] [--commission-default-for <shopId>]...
  *
  * NEVER talks to D1, Cloudflare, R2, Stripe, Google or Firebase. Reads only
  * local files (the bundle, the optional map/state files) and writes only
@@ -92,7 +92,7 @@ function step(message) {
 }
 
 function parseArgs(argv) {
-  const out = { bundle: null, connectMap: null, emailMap: null, env: null, out: null, scrubUnmapped: false, targetState: null };
+  const out = { bundle: null, commissionDefaultFor: [], connectMap: null, emailMap: null, env: null, out: null, scrubUnmapped: false, targetState: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--env') out.env = argv[++i] ?? die('--env needs a value');
@@ -102,6 +102,7 @@ function parseArgs(argv) {
     else if (arg === '--scrub-unmapped') out.scrubUnmapped = true;
     else if (arg === '--connect-map') out.connectMap = argv[++i] ?? die('--connect-map needs a value');
     else if (arg === '--target-state') out.targetState = argv[++i] ?? die('--target-state needs a value');
+    else if (arg === '--commission-default-for') out.commissionDefaultFor.push(argv[++i] ?? die('--commission-default-for needs a shop id'));
     else die(`unknown argument ${arg}`);
   }
   if (out.env !== 'staging' && out.env !== 'production') die('--env must be "staging" or "production"');
@@ -144,9 +145,9 @@ function parseTargetState(raw) {
  * `write` is true (defaults to true for the CLI, false for tests that only
  * want the computed plan).
  */
-export function runImport({ bundleDir, connectMapPath = null, emailMapPath = null, env, now = null, scrubUnmapped = false, targetStatePath = null }) {
+export function runImport({ bundleDir, commissionDefaultFor = [], connectMapPath = null, emailMapPath = null, env, now = null, scrubUnmapped = false, targetStatePath = null }) {
   try {
-    return runImportUnsafe({ bundleDir, connectMapPath, emailMapPath, env, now, scrubUnmapped, targetStatePath });
+    return runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emailMapPath, env, now, scrubUnmapped, targetStatePath });
   } catch (error) {
     // A refusal raised deep inside a transform (e.g. UnmappedEmailError) is a
     // REFUSAL, not a crash: surface it through the same { ok:false, problems }
@@ -156,7 +157,7 @@ export function runImport({ bundleDir, connectMapPath = null, emailMapPath = nul
   }
 }
 
-function runImportUnsafe({ bundleDir, connectMapPath, emailMapPath, env, now, scrubUnmapped, targetStatePath }) {
+function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emailMapPath, env, now, scrubUnmapped, targetStatePath }) {
   const problems = [];
   const reportLines = [];
 
@@ -207,6 +208,7 @@ function runImportUnsafe({ bundleDir, connectMapPath, emailMapPath, env, now, sc
   // changed option changes the run id (and the plan).
   const optionsFingerprint = sha256Hex(
     canonicalStringify({
+      commissionDefaultFor: [...commissionDefaultFor].sort(),
       connectMap: connectMapRaw ?? {},
       emailMap: emailMapRaw ?? {},
       scrubUnmapped,
@@ -247,6 +249,7 @@ function runImportUnsafe({ bundleDir, connectMapPath, emailMapPath, env, now, sc
     };
     const resolvedConnect = resolveConnectFacts(connectFacts, connectMap, env);
     const result = transformShop({
+      acceptCommissionDefault: commissionDefaultFor.includes(doc.id),
       connectFacts: { ...connectFacts, ...resolvedConnect },
       doc,
       emailMap,
@@ -264,6 +267,13 @@ function runImportUnsafe({ bundleDir, connectMapPath, emailMapPath, env, now, sc
     shopRows.push(...result.rows);
     importedTenantIds.push(doc.id);
     expectedTenants[doc.id] = result.report.expected;
+  }
+  for (const shopId of commissionDefaultFor) {
+    if (!importedTenantIds.includes(shopId)) {
+      problems.push(`REFUSED: --commission-default-for ${shopId}: no such shop is imported by this plan`);
+    } else if (!reportLines.some((l) => l.startsWith(`shops/${shopId}: payments.commissionBps is `))) {
+      problems.push(`REFUSED: --commission-default-for ${shopId}: that shop's commission needs no acceptance`);
+    }
   }
   addSection('tenants+tenant_domains+tenant_settings+tenant_features', shopRows);
 
@@ -556,6 +566,7 @@ async function main() {
     bundleDir: resolvedBundle,
     connectMapPath: args.connectMap ? path.resolve(args.connectMap) : null,
     emailMapPath: args.emailMap ? path.resolve(args.emailMap) : null,
+    commissionDefaultFor: args.commissionDefaultFor,
     env: args.env,
     scrubUnmapped: args.scrubUnmapped,
     targetStatePath: args.targetState ? path.resolve(args.targetState) : null,

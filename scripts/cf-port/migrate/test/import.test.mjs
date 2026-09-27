@@ -550,3 +550,28 @@ test('a commission or a VAT rate that is not a usable number is never written', 
     );
   }
 });
+
+test('D75: --commission-default-for accepts the platform default for the named shop, and only where it is needed', async () => {
+  await withFixture(
+    async (bundleDir) => {
+      const refused = runImport({ bundleDir, env: 'production' });
+      assert.equal(refused.ok, false);
+      assert.ok(refused.problems.some((p) => p.includes('pass --commission-default-for test-shop-a')));
+
+      const accepted = runImport({ bundleDir, commissionDefaultFor: ['test-shop-a'], env: 'production' });
+      assert.equal(accepted.ok, true, JSON.stringify(accepted.problems));
+      assert.equal(accepted.planJson.expected.tenants['test-shop-a'].commissionBps, null);
+      assert.ok(accepted.reportLines.some((l) => l.includes('accepted for this shop by --commission-default-for')));
+      assert.notEqual(accepted.planJson.runId, refused.planJson?.runId);
+
+      // The acceptance of one shop accepts no other, and a name that fits nothing is an error.
+      const other = runImport({ bundleDir, commissionDefaultFor: ['test-shop-b'], env: 'production' });
+      assert.equal(other.ok, false);
+      assert.ok(other.problems.some((p) => p.includes("--commission-default-for test-shop-b: that shop's commission needs no acceptance")));
+      assert.ok(other.problems.some((p) => p.includes('shops/test-shop-a: payments.commissionBps is 5000')));
+      const unknown = runImport({ bundleDir, commissionDefaultFor: ['test-shop-a', 'no-such-shop'], env: 'production' });
+      assert.ok(unknown.problems.some((p) => p.includes('--commission-default-for no-such-shop: no such shop')));
+    },
+    { schemaPatch: (schema) => { schema.shops['test-shop-a'].data.payments.commissionBps = 5000; } },
+  );
+});

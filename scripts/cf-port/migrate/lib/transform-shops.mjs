@@ -17,7 +17,9 @@
  *     cap every Cloudflare route enforces (MAX_COMMISSION_BPS, D45/D71). NULL
  *     = the platform default. A value above the cap is NOT carried and is
  *     reported; on production it refuses the plan (D75), so no shop goes live
- *     on a rate that was changed without a decision.
+ *     on a rate that was changed without a decision. The decision is given
+ *     per shop (`acceptCommissionDefault`, the CLI's --commission-default-for):
+ *     then the platform default applies and the plan is not refused.
  *   storeIdentity.vatRate (a fraction, 0.25) → vat_rate_bp (2500). Absent =
  *     the column's own default, 2500. A value that is not a whole number of
  *     basis points in 0..10000 refuses the plan.
@@ -153,7 +155,7 @@ function sanitizeIdentity(identity) {
  *   report: object
  * }}
  */
-export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scrubUnmapped, targetState = null }) {
+export function transformShop({ acceptCommissionDefault = false, connectFacts, doc, emailMap, env, nowMillis, scrubUnmapped, targetState = null }) {
   const tenantId = doc.id;
   if (ARCHIVED_SHOP_IDS.has(tenantId)) {
     return { report: { reason: 'D21: robowatz is archived, not imported', tenantId }, rows: [], skipped: 'archived', tenantId };
@@ -183,8 +185,12 @@ export function transformShop({ connectFacts, doc, emailMap, env, nowMillis, scr
       commissionBps = commissionSource;
     } else {
       const line = `payments.commissionBps is ${JSON.stringify(commissionSource)}, outside 0–${MAX_COMMISSION_BPS} (D71): NOT carried, the platform default applies to this shop (D75)`;
-      moneyLines.push(line);
-      if (env === 'production') refusals.push(line);
+      if (acceptCommissionDefault) {
+        moneyLines.push(`${line} — accepted for this shop by --commission-default-for`);
+      } else {
+        moneyLines.push(line);
+        if (env === 'production') refusals.push(`${line}; to accept it, pass --commission-default-for ${tenantId}`);
+      }
     }
   }
 
