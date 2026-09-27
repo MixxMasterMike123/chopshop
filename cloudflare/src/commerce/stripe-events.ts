@@ -1,3 +1,4 @@
+import { disabledReasonFrom, requirementsFrom } from "./connect-gateway";
 import { holdDispatchStatement, releaseDispatchHolds } from "./dispatch-hold";
 import { raiseAlertStatement } from "./money-alerts";
 import type { HandleWebhookEventResult } from "./payment-events";
@@ -832,6 +833,16 @@ export async function replayDeferredPaymentEvents(
  * merges FAIL-CLOSED — each flag stays on only if both events say on. A
  * wrongly-off flag costs a delayed sale until the next update; a wrongly-on
  * one would let money flow to an account Stripe restricted.
+ *
+ * THE SELLER'S FACTS (CP3-F review round 1). `requirements.currently_due` and
+ * `requirements.disabled_reason` travel in the SAME two statements, under the
+ * SAME conditions as the flags, so an older event can never overwrite the
+ * list of a newer one. Newer: the event's list and reason win. Tie: merged
+ * fail-closed like the flags — a disabled reason reported by either event
+ * survives, the longer requirement list is kept — and any disagreement marks
+ * the shop for the authoritative resync. An event without a `requirements`
+ * object leaves both as they are (it says nothing about them). Values are
+ * capped by connect-gateway.ts (the 0038 CHECKs are the backstop).
  */
 async function handleAccountUpdated(
   db: D1Database,
@@ -873,6 +884,16 @@ async function handleAccountUpdated(
   const charges = flag(object.charges_enabled);
   const payouts = flag(object.payouts_enabled);
   const details = flag(object.details_submitted);
+  const requirements =
+    typeof object.requirements === "object" &&
+    object.requirements !== null &&
+    !Array.isArray(object.requirements)
+      ? (object.requirements as Record<string, unknown>)
+      : null;
+  const factsKnown = requirements === null ? 0 : 1;
+  const requirementsJson =
+    requirements === null ? null : JSON.stringify(requirementsFrom(requirements.currently_due));
+  const disabledReason = requirements === null ? null : disabledReasonFrom(requirements.disabled_reason);
 
   try {
     await db.batch([
@@ -888,15 +909,35 @@ async function handleAccountUpdated(
            SET stripe_account_resync_needed = CASE
                  WHEN stripe_charges_enabled <> ?1 OR stripe_payouts_enabled <> ?2
                    OR stripe_details_submitted <> ?3 THEN 1
+                 WHEN ?8 = 1 AND (COALESCE(stripe_requirements_due_json, '[]') IS NOT ?9
+                   OR stripe_disabled_reason IS NOT ?10) THEN 1
                  ELSE stripe_account_resync_needed END,
                stripe_charges_enabled = MIN(stripe_charges_enabled, ?1),
                stripe_payouts_enabled = MIN(stripe_payouts_enabled, ?2),
                stripe_details_submitted = MIN(stripe_details_submitted, ?3),
+               stripe_requirements_due_json = CASE
+                 WHEN ?8 = 1 AND (stripe_requirements_due_json IS NULL
+                   OR json_array_length(stripe_requirements_due_json) < json_array_length(?9)) THEN ?9
+                 ELSE stripe_requirements_due_json END,
+               stripe_disabled_reason = CASE
+                 WHEN ?8 = 1 THEN COALESCE(stripe_disabled_reason, ?10)
+                 ELSE stripe_disabled_reason END,
                updated_at = MAX(updated_at, ?4)
            WHERE tenant_id = ?5 AND stripe_account_id = ?6
              AND stripe_account_synced_at = ?7`,
         )
-        .bind(charges, payouts, details, now, tenant.tenant_id, accountId, eventAt),
+        .bind(
+          charges,
+          payouts,
+          details,
+          now,
+          tenant.tenant_id,
+          accountId,
+          eventAt,
+          factsKnown,
+          requirementsJson,
+          disabledReason,
+        ),
       // Newer than anything applied: the event's account state wins, and any
       // pending resync is moot (this IS a later, ordered truth).
       db
@@ -905,13 +946,28 @@ async function handleAccountUpdated(
            SET stripe_charges_enabled = ?,
                stripe_payouts_enabled = ?,
                stripe_details_submitted = ?,
+               stripe_requirements_due_json = CASE WHEN ? = 1 THEN ? ELSE stripe_requirements_due_json END,
+               stripe_disabled_reason = CASE WHEN ? = 1 THEN ? ELSE stripe_disabled_reason END,
                stripe_account_synced_at = ?,
                stripe_account_resync_needed = 0,
                updated_at = MAX(updated_at, ?)
            WHERE tenant_id = ? AND stripe_account_id = ?
              AND (stripe_account_synced_at IS NULL OR stripe_account_synced_at < ?)`,
         )
-        .bind(charges, payouts, details, eventAt, now, tenant.tenant_id, accountId, eventAt),
+        .bind(
+          charges,
+          payouts,
+          details,
+          factsKnown,
+          requirementsJson,
+          factsKnown,
+          disabledReason,
+          eventAt,
+          now,
+          tenant.tenant_id,
+          accountId,
+          eventAt,
+        ),
       // The reason is informational (from the read above); the two guarded
       // UPDATEs alone decide what is applied.
       recordEventStatement(

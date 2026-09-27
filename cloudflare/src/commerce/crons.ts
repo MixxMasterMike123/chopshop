@@ -1,4 +1,6 @@
 import { nudgeOutbox } from "../outbox/nudge";
+import type { ConnectGateway } from "./connect-gateway";
+import { disabledReasonFrom, requirementsFrom, resolveConnectGateway } from "./connect-gateway";
 import { pendingPrinterCancellationIds, releaseDispatchHolds } from "./dispatch-hold";
 import { raiseAlert } from "./money-alerts";
 import { DAY_MS, refreshPayoutStates } from "./payouts";
@@ -326,7 +328,7 @@ export async function runReconciliation(
   await detectWaitingDeferred(db, now, summary, alert);
 
   if (gateway !== null) {
-    await resyncConnectAccounts(db, gateway, now, summary, alert);
+    await resyncConnectAccounts(db, gateway, now, summary, alert, resolveConnectGateway(env));
     await recoverDisputes(db, gateway, now, summary, alert);
     await reconcileRefunds(db, gateway, now, summary, alert);
     await reconcilePaymentIntents(db, gateway, now, summary, alert);
@@ -506,6 +508,14 @@ async function resyncConnectAccounts(
   now: number,
   summary: ReconciliationSummary,
   alert: Alert,
+  // CP3-F review round 1: the Connect onboarding gateway's status read also
+  // returns the requirement list and the disabled reason (the money gateway's
+  // AccountView carries the flags only). When it is available — every
+  // deployed Worker with a Stripe key — the resync reads through it and writes
+  // those two facts in the SAME guarded statement as the flags; when it is not
+  // (a test env with only the money fake) the money gateway reads the flags
+  // and the two facts stay as they are.
+  connect: ConnectGateway | null = null,
 ): Promise<void> {
   const rows = await db
     .prepare(
@@ -518,9 +528,38 @@ async function resyncConnectAccounts(
     .all<{ stripe_account_id: string; stripe_account_synced_at: number | null; tenant_id: string }>();
 
   for (const row of rows.results) {
-    let account;
+    let account: { charges_enabled: boolean; details_submitted: boolean; payouts_enabled: boolean };
+    let facts: { disabledReason: string | null; requirementsJson: string } | null = null;
     try {
-      account = await gateway.retrieveAccount(row.stripe_account_id);
+      // Reviewer (consolidation): the CAPABILITY FLAGS gate payments, so their
+      // re-read must not depend on the newer Connect gateway being able to
+      // read this account. When that read fails for any reason, the money
+      // gateway — the one this resync was proven with — reads the flags alone
+      // and the seller's two facts stay as they are.
+      let read = null;
+      if (connect !== null) {
+        try {
+          read = await connect.retrieveAccount(row.stripe_account_id);
+          if (read.accountId !== row.stripe_account_id) {
+            read = null;
+          }
+        } catch {
+          read = null;
+        }
+      }
+      if (read === null) {
+        account = await gateway.retrieveAccount(row.stripe_account_id);
+      } else {
+        account = {
+          charges_enabled: read.chargesEnabled,
+          details_submitted: read.detailsSubmitted,
+          payouts_enabled: read.payoutsEnabled,
+        };
+        facts = {
+          disabledReason: disabledReasonFrom(read.disabledReason),
+          requirementsJson: JSON.stringify(requirementsFrom(read.requirementsDue)),
+        };
+      }
     } catch {
       summary.accounts.errors += 1;
       await alert(db, {
@@ -540,6 +579,8 @@ async function resyncConnectAccounts(
          SET stripe_charges_enabled = ?,
              stripe_payouts_enabled = ?,
              stripe_details_submitted = ?,
+             stripe_requirements_due_json = CASE WHEN ? = 1 THEN ? ELSE stripe_requirements_due_json END,
+             stripe_disabled_reason = CASE WHEN ? = 1 THEN ? ELSE stripe_disabled_reason END,
              stripe_account_synced_at = MAX(COALESCE(stripe_account_synced_at, 0), ?),
              stripe_account_resync_needed = 0,
              updated_at = MAX(updated_at, ?)
@@ -551,6 +592,10 @@ async function resyncConnectAccounts(
         account.charges_enabled ? 1 : 0,
         account.payouts_enabled ? 1 : 0,
         account.details_submitted ? 1 : 0,
+        facts === null ? 0 : 1,
+        facts?.requirementsJson ?? null,
+        facts === null ? 0 : 1,
+        facts?.disabledReason ?? null,
         secondWatermark(now),
         now,
         row.tenant_id,
