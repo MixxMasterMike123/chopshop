@@ -153,7 +153,7 @@ Final run (2026-09-27 01:51, shared tree with CP2-A/B mid-build):
                           Duration  67.86s
 ```
 
-Earlier full `npm run check` runs in this session were green on types + build; their only test failures were other builders' suites caught mid-edit (`test/outbox.test.ts`, `test/payment-connect.test.ts`), each green when re-run. `node guard/guards.test.mjs`: PASS, and a manual grep of every CP2-C file for `b8shield|b8s-|b8s_|reseller|from 'firebase` is empty.
+Earlier full `npm run check` runs in this session were green on types + build; their only test failures were other builders' suites caught mid-edit (`test/outbox.test.ts`, `test/payment-connect.test.ts`), each green when re-run. `node guard/guards.test.mjs`: PASS, and a manual grep of every CP2-C file for `<the guard's forbidden patterns>|from 'firebase` is empty.
 
 ## 11. Open questions
 

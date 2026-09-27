@@ -1,5 +1,31 @@
+import { printerJobId } from "../dispatch/snapwear-wire";
+import { raiseAlertStatement } from "./money-alerts";
+import type {
+  HandleWebhookEventResult,
+  WebhookOutcome,
+} from "./payment-events";
+import {
+  findRecordedEvent,
+  isDuplicateDelivery,
+  REASON_AMOUNT_MISMATCH,
+  REASON_CHECKOUT_NOT_PAYABLE,
+  REASON_METADATA_MISMATCH,
+  REASON_UNKNOWN_INTENT,
+  recordEventStatement,
+  recordOnly,
+} from "./payment-events";
 import { mintReceiptCapability } from "./receipts";
+import { handleStripeEvent } from "./stripe-events";
 import type { StripeWebhookVerifier, VerifiedStripeEvent } from "./stripe-client";
+
+export type { HandleWebhookEventResult, WebhookOutcome };
+export {
+  REASON_AMOUNT_MISMATCH,
+  REASON_CHECKOUT_NOT_PAYABLE,
+  REASON_METADATA_MISMATCH,
+  REASON_UNHANDLED_TYPE,
+  REASON_UNKNOWN_INTENT,
+} from "./payment-events";
 
 /**
  * Turning a succeeded PaymentIntent into a durable order, and burning the
@@ -39,12 +65,17 @@ import type { StripeWebhookVerifier, VerifiedStripeEvent } from "./stripe-client
 
 /** The `checkouts` columns this handler needs to build an order. */
 interface CheckoutOrderRow {
+  /** Frozen by the payment route (0019); NULL on a row that predates it. */
+  application_fee_minor: number | null;
   checkout_id: string;
+  connect_account_id: string | null;
   currency: string;
   customer_email: string;
   delivery_method: string;
   discount_code_id: string | null;
   discount_minor: number;
+  /** Owned by the POD checkout (CP2-C); copied opaquely onto the order. */
+  production_snapshot_json: string | null;
   shipping_country: string | null;
   shipping_minor: number;
   status: string;
@@ -53,6 +84,7 @@ interface CheckoutOrderRow {
   total_minor: number;
   vat_minor: number;
   vat_rate_bp: number;
+  withheld_minor: number | null;
 }
 
 interface CheckoutItemSnapshot {
@@ -67,20 +99,12 @@ interface CheckoutItemSnapshot {
 }
 
 /**
- * The event types this worker acts on.
- *
- * `payment_intent.payment_failed` is deliberately NOT handled and is deliberately
- * NAMED here rather than left to the default branch, because a reader deserves to
- * know it was considered. Production does something real with it: it marks the
- * `checkouts` doc `failed`, and the purpose is the opposite of what the name
- * suggests — it stops the abandoned-cart sweep from mailing a buyer whose card
- * was declined, since "a failed attempt is not an abandoned-but-recoverable cart
- * in the reminder sense". There is no checkout sweep and no abandoned-cart email
- * on this side yet, so a 'failed' transition here would be a status nothing
- * reads, written by the one handler that must stay boringly correct. It becomes
- * a one-line addition the moment the sweep lands.
+ * The event this module turns into an order. Every other event type — failed
+ * and canceled intents, refunds, disputes, Connect account updates, and
+ * anything unknown — is dispatched to stripe-events.ts, which records the fact
+ * and never creates an order.
  */
-const HANDLED_EVENT_TYPE = "payment_intent.succeeded";
+const ORDER_EVENT_TYPE = "payment_intent.succeeded";
 
 /**
  * Statuses a checkout may be in when its payment succeeds.
@@ -108,29 +132,6 @@ const PAYABLE_CHECKOUT_STATUS = "open";
  */
 const INITIAL_ORDER_STATUS = "paid";
 
-/**
- * Why a delivery produced no order. Enumerated codes, never provider text.
- *
- * These land in `payment_events.reason_code` and are the only explanation an
- * operator gets. They are deliberately coarse — the detail lives in the row's
- * `object_id` and the timestamps — because this table is a ledger, not a log.
- */
-export const REASON_UNHANDLED_TYPE = "unhandled_event_type";
-export const REASON_UNKNOWN_INTENT = "unknown_payment_intent";
-export const REASON_CHECKOUT_NOT_PAYABLE = "checkout_not_payable";
-export const REASON_AMOUNT_MISMATCH = "amount_mismatch";
-export const REASON_METADATA_MISMATCH = "metadata_mismatch";
-
-export type WebhookOutcome = "processed" | "ignored" | "rejected";
-
-export interface HandleWebhookEventResult {
-  outcome: WebhookOutcome;
-  /** Present only when this delivery created the order. */
-  orderId?: string;
-  reasonCode?: string;
-  /** True when the event id had already been recorded — a clean replay. */
-  replayed: boolean;
-}
 
 /**
  * Order numbers.
@@ -194,7 +195,9 @@ async function loadCheckoutByIntent(
       `SELECT
          checkout_id, tenant_id, status, customer_email, currency,
          delivery_method, shipping_country, subtotal_minor, shipping_minor,
-         vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor
+         vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
+         connect_account_id, application_fee_minor, withheld_minor,
+         production_snapshot_json
        FROM checkouts
        WHERE payment_intent_id = ?
        LIMIT 1`,
@@ -225,117 +228,6 @@ async function loadCheckoutItems(
 }
 
 /**
- * Has this exact event already been recorded?
- *
- * The read is the FAST path, not the guarantee. `payment_events.event_id` is a
- * PRIMARY KEY and the insert rides in the same batch as every effect, so two
- * deliveries racing past this read cannot both commit: one batch wins and the
- * other fails the primary key, whereupon the caller re-reads and answers 200.
- * The read exists so the ordinary duplicate — Stripe re-delivering an event it
- * already delivered successfully — costs one SELECT instead of a failed batch.
- */
-async function findRecordedEvent(
-  db: D1Database,
-  eventId: string,
-): Promise<{ outcome: string; reason_code: string | null } | null> {
-  return db
-    .prepare(
-      "SELECT outcome, reason_code FROM payment_events WHERE event_id = ? LIMIT 1",
-    )
-    .bind(eventId)
-    .first<{ outcome: string; reason_code: string | null }>();
-}
-
-function recordEventStatement(
-  db: D1Database,
-  event: VerifiedStripeEvent,
-  tenantId: string | null,
-  objectId: string | null,
-  outcome: WebhookOutcome,
-  reasonCode: string | null,
-  now: number,
-): D1PreparedStatement {
-  return db
-    .prepare(
-      `INSERT INTO payment_events (
-        event_id, tenant_id, provider, event_type, object_id,
-        outcome, reason_code, received_at, created_at
-      ) VALUES (?, ?, 'stripe', ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      event.id,
-      tenantId,
-      event.type,
-      objectId,
-      outcome,
-      reasonCode,
-      now,
-      now,
-    );
-}
-
-/**
- * Whether a batch failed because another delivery got there first.
- *
- * Narrowed to the two constraints that mean exactly that — the event ledger's
- * primary key and the order's one-per-checkout uniqueness — rather than matching
- * any UNIQUE violation. A broad match would swallow a genuine collision, such as
- * the order-number uniqueness this batch also relies on, and report a lost
- * order as a harmless replay. That is the failure a broad `catch` hides best and
- * costs most.
- */
-function isDuplicateDelivery(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  if (!message.includes("UNIQUE constraint failed")) {
-    // SQLite reports a primary-key collision on a rowid table this way.
-    return message.includes("payment_events.event_id");
-  }
-
-  return (
-    message.includes("payment_events.event_id") ||
-    message.includes("orders.checkout_id") ||
-    message.includes("orders.payment_intent_id")
-  );
-}
-
-/**
- * Records a delivery that produced no order.
- *
- * Its own single-statement write rather than a batch, because there is exactly
- * one statement — and it is still guarded, since two racing duplicate deliveries
- * of an unhandled event would both try to write the ledger row.
- */
-async function recordOnly(
-  db: D1Database,
-  event: VerifiedStripeEvent,
-  tenantId: string | null,
-  objectId: string | null,
-  outcome: WebhookOutcome,
-  reasonCode: string,
-  now: number,
-): Promise<HandleWebhookEventResult> {
-  try {
-    await recordEventStatement(
-      db,
-      event,
-      tenantId,
-      objectId,
-      outcome,
-      reasonCode,
-      now,
-    ).run();
-  } catch (error) {
-    if (!isDuplicateDelivery(error)) {
-      throw error;
-    }
-
-    return { outcome, reasonCode, replayed: true };
-  }
-
-  return { outcome, reasonCode, replayed: false };
-}
-
-/**
  * The PaymentIntent fields this handler reads off a verified event.
  *
  * Narrow on purpose, and narrowed by SHAPE rather than by trusting Stripe's
@@ -347,8 +239,19 @@ interface WebhookIntent {
   amount: number;
   currency: string;
   id: string;
+  /** The charge that paid it (`latest_charge`, an id or an expanded object). */
+  latestChargeId: string | null;
   metadataCheckoutId: string | null;
   metadataTenantId: string | null;
+}
+
+/** A Stripe object id of the conventional shape, else null. */
+function stripeIdOrNull(value: unknown): string | null {
+  const id =
+    typeof value === "object" && value !== null
+      ? (value as { id?: unknown }).id
+      : value;
+  return typeof id === "string" && /^[A-Za-z0-9_]{3,255}$/.test(id) ? id : null;
 }
 
 function readIntent(event: VerifiedStripeEvent): WebhookIntent | null {
@@ -382,6 +285,7 @@ function readIntent(event: VerifiedStripeEvent): WebhookIntent | null {
     amount,
     currency,
     id,
+    latestChargeId: stripeIdOrNull(candidate.latest_charge),
     metadataCheckoutId:
       typeof metadata.checkout_id === "string" ? metadata.checkout_id : null,
     metadataTenantId:
@@ -415,19 +319,11 @@ export async function handleStripeWebhookEvent(
     };
   }
 
-  if (event.type !== HANDLED_EVENT_TYPE) {
-    // Acknowledged and recorded, never refused. An event type this worker does
-    // not act on is not an error — Stripe endpoints commonly receive more than
-    // they subscribe to — and answering 4xx would make Stripe retry it forever.
-    return recordOnly(
-      db,
-      event,
-      null,
-      null,
-      "ignored",
-      REASON_UNHANDLED_TYPE,
-      now,
-    );
+  if (event.type !== ORDER_EVENT_TYPE) {
+    // Every other type: failed/canceled intents, refunds, disputes, Connect
+    // account updates — and anything unknown, which is acknowledged and
+    // recorded, never refused (a 4xx would make Stripe retry it forever).
+    return handleStripeEvent(db, event, now);
   }
 
   const intent = readIntent(event);
@@ -549,6 +445,17 @@ export async function handleStripeWebhookEvent(
   const orderId = crypto.randomUUID();
   const orderNumber = generateOrderNumber(now);
 
+  // The frozen production snapshot, copied OPAQUELY (the shape is the POD
+  // checkout's contract): the whole object onto the order, each `lines[]`
+  // entry onto its order line (lineNo = item_index + 1), and one dispatch
+  // outbox row per line. A snapshot this handler cannot read is NOT a reason to
+  // refuse a paid order — the order is created without it and an alert in the
+  // same batch tells a human the lines were not queued for the printer.
+  const production = readProductionSnapshot(
+    checkout.production_snapshot_json,
+    new Set(items.map((item) => item.item_index + 1)),
+  );
+
   // The buyer's receipt capability (src/commerce/receipts.ts): its hash and
   // expiry ride on the order row, and the raw token is parked for exactly one
   // hand-off to the confirmation poll. Minted here, in the order's own batch,
@@ -577,8 +484,12 @@ export async function handleStripeWebhookEvent(
           subtotal_minor, shipping_minor, vat_minor, vat_rate_bp,
           discount_minor, discount_code_id, total_minor, captured_minor,
           refunded_total_minor, stripe_event_id, paid_at, created_at, updated_at,
-          receipt_token_hash, receipt_token_expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+          receipt_token_hash, receipt_token_expires_at,
+          charged_minor, application_fee_minor, withheld_minor,
+          connect_account_id, stripe_charge_id, production_snapshot_json,
+          payout_state
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?, ?, ?, ?, 'pending')`,
       )
       .bind(
         orderId,
@@ -609,6 +520,17 @@ export async function handleStripeWebhookEvent(
         now,
         receipt.tokenHash,
         receipt.expiresAt,
+        // The money facts payouts and refunds run on, frozen here. The charge
+        // equals the total (the amount check above proved it). The fee and the
+        // withholding are the ones the intent was CREATED with, frozen on the
+        // checkout by the payment route; a checkout that predates that (no
+        // Connect facts) records 0 and no destination, which is the truth.
+        checkout.total_minor,
+        checkout.application_fee_minor ?? 0,
+        checkout.withheld_minor ?? 0,
+        checkout.connect_account_id,
+        intent.latestChargeId,
+        production.status === "ok" ? production.json : null,
       ),
     db
       .prepare(
@@ -633,8 +555,8 @@ export async function handleStripeWebhookEvent(
           `INSERT INTO order_items (
             order_item_id, order_id, tenant_id, item_index, product_id,
             variant_id, sku, name, quantity, unit_price_minor,
-            line_total_minor, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            line_total_minor, created_at, updated_at, production_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           crypto.randomUUID(),
@@ -650,6 +572,9 @@ export async function handleStripeWebhookEvent(
           item.line_total_minor,
           now,
           now,
+          production.status === "ok"
+            ? (production.lines.get(item.item_index + 1) ?? null)
+            : null,
         ),
     );
   }
@@ -672,6 +597,57 @@ export async function handleStripeWebhookEvent(
       ),
   );
 
+  // ── THE OUTBOX (PLAN §2.2) ───────────────────────────────────────────────
+  // Every external effect this order causes is a row in the SAME batch, so an
+  // order can never exist without its effects queued, nor an effect without
+  // its order. The consumer (src/outbox, src/dispatch) claims them; nothing
+  // here performs them.
+  //   dispatch  one per production line, with the stable printer job id
+  //             `{orderId}-{lineNo}` so a resubmission is deduplicated by the
+  //             printer. Only when there is a snapshot.
+  //   email     the order confirmation, one per order.
+  if (production.status === "ok") {
+    for (const lineNo of production.lines.keys()) {
+      statements.push(
+        outboxStatement(db, {
+          aggregateId: orderId,
+          dedupeKey: `dispatch:${orderId}:${lineNo}`,
+          eventType: "dispatch",
+          now,
+          // Key order as the shared contract writes it.
+          payload: { orderId, lineNo, jobId: printerJobId(orderId, lineNo) },
+          tenantId: checkout.tenant_id,
+        }),
+      );
+    }
+  } else if (production.status === "invalid") {
+    statements.push(
+      raiseAlertStatement(
+        db,
+        {
+          kind: "production_snapshot_invalid",
+          message: `order ${orderId}: the checkout's production snapshot could not be read; no dispatch was queued`,
+          resourceId: orderId,
+          resourceType: "order",
+          severity: "critical",
+          tenantId: checkout.tenant_id,
+        },
+        now,
+      ),
+    );
+  }
+
+  statements.push(
+    outboxStatement(db, {
+      aggregateId: orderId,
+      dedupeKey: `email:order_confirmation:${orderId}`,
+      eventType: "email",
+      now,
+      payload: { orderId, kind: "order_confirmation" },
+      tenantId: checkout.tenant_id,
+    }),
+  );
+
   // The checkout is spent. Guarded on `status = 'open'` so that if some other
   // path closed it between the read and here, this batch fails rather than
   // reopening a settled question — the same `changes === 0` discipline the
@@ -680,16 +656,23 @@ export async function handleStripeWebhookEvent(
   // A guarded UPDATE inside a batch cannot report `changes` usefully, so the
   // guard is belt-and-braces behind the order's UNIQUE checkout_id, which is
   // what actually makes a second order impossible.
+  //
+  // The intent's terminal state is recorded with it: the retention sweep reads
+  // it (a succeeded intent's checkout is never canceled, only purged once the
+  // order holds its snapshot).
   statements.push(
     db
       .prepare(
         `UPDATE checkouts
-         SET status = 'completed', updated_at = ?
+         SET status = 'completed',
+             payment_intent_status = 'succeeded',
+             payment_intent_status_at = ?,
+             updated_at = ?
          WHERE checkout_id = ?
            AND tenant_id = ?
            AND status = 'open'`,
       )
-      .bind(now, checkout.checkout_id, checkout.tenant_id),
+      .bind(now, now, checkout.checkout_id, checkout.tenant_id),
   );
 
   // ── THE DISCOUNT BURN ────────────────────────────────────────────────────
@@ -777,6 +760,114 @@ export async function handleStripeWebhookEvent(
   }
 
   return { orderId, outcome: "processed", replayed: false };
+}
+
+type ProductionSnapshotRead =
+  | { json: string; lines: Map<number, string>; status: "ok" }
+  | { status: "absent" }
+  | { status: "invalid" };
+
+const MAX_SNAPSHOT_BYTES = 262_144;
+const MAX_LINE_BYTES = 65_536;
+
+/**
+ * Reads the checkout's production snapshot just far enough to copy it:
+ * an object with a `lines` array whose entries are objects carrying a unique
+ * integer `lineNo` that names one of the order's lines (item_index + 1).
+ * Everything else about a line is the POD checkout's business and is copied
+ * verbatim. Bounded by the order columns' own CHECKs, so a snapshot this
+ * accepts can never make the order batch abort, and every dispatch row it
+ * yields points at a line that exists.
+ */
+function readProductionSnapshot(
+  json: string | null,
+  orderLineNos: ReadonlySet<number>,
+): ProductionSnapshotRead {
+  if (json === null) {
+    return { status: "absent" };
+  }
+
+  if (json.length > MAX_SNAPSHOT_BYTES) {
+    return { status: "invalid" };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return { status: "invalid" };
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { status: "invalid" };
+  }
+
+  const rawLines = (parsed as { lines?: unknown }).lines;
+  if (!Array.isArray(rawLines)) {
+    return { status: "invalid" };
+  }
+
+  const lines = new Map<number, string>();
+  for (const line of rawLines) {
+    if (typeof line !== "object" || line === null || Array.isArray(line)) {
+      return { status: "invalid" };
+    }
+
+    const lineNo = (line as { lineNo?: unknown }).lineNo;
+    if (
+      typeof lineNo !== "number" ||
+      !Number.isSafeInteger(lineNo) ||
+      !orderLineNos.has(lineNo) ||
+      lines.has(lineNo)
+    ) {
+      return { status: "invalid" };
+    }
+
+    const lineJson = JSON.stringify(line);
+    if (lineJson.length > MAX_LINE_BYTES) {
+      return { status: "invalid" };
+    }
+
+    lines.set(lineNo, lineJson);
+  }
+
+  return { json, lines, status: "ok" };
+}
+
+/**
+ * One `outbox_events` row, in the shared column contract (0001 + 0021): the
+ * consumer owns everything after `pending`.
+ */
+function outboxStatement(
+  db: D1Database,
+  row: {
+    aggregateId: string;
+    dedupeKey: string;
+    eventType: "dispatch" | "email";
+    now: number;
+    payload: Record<string, unknown>;
+    tenantId: string;
+  },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO outbox_events (
+        outbox_id, tenant_id, event_type, aggregate_type, aggregate_id,
+        dedupe_key, payload_json, status, next_attempt_at, created_at,
+        updated_at
+      ) VALUES (?, ?, ?, 'order', ?, ?, ?, 'pending', ?, ?, ?)`,
+    )
+    .bind(
+      crypto.randomUUID(),
+      row.tenantId,
+      row.eventType,
+      row.aggregateId,
+      row.dedupeKey,
+      JSON.stringify(row.payload),
+      row.now,
+      row.now,
+      row.now,
+    );
 }
 
 /**

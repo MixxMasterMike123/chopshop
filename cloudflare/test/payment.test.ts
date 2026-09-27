@@ -164,14 +164,27 @@ async function postPayment(
   return worker.fetch(request, options.env ?? paymentEnv());
 }
 
+/**
+ * Every shop here can take a payment: CP2-A made the PaymentIntent a Connect
+ * destination charge and refuses a shop without a charges-enabled connected
+ * account (fail closed; test/payment-connect.test.ts owns that contract).
+ */
 async function seedTenant(tenantId: string, hostname: string): Promise<void> {
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO tenants (
         tenant_id, status, shop_name, support_email, default_locale,
-        default_currency, created_at, updated_at
-      ) VALUES (?, 'active', ?, ?, 'sv-SE', 'SEK', ?, ?)`,
-    ).bind(tenantId, `Shop ${tenantId}`, `ops-${tenantId}@example.test`, NOW, NOW),
+        default_currency, created_at, updated_at,
+        stripe_account_id, stripe_charges_enabled, stripe_payouts_enabled
+      ) VALUES (?, 'active', ?, ?, 'sv-SE', 'SEK', ?, ?, ?, 1, 1)`,
+    ).bind(
+      tenantId,
+      `Shop ${tenantId}`,
+      `ops-${tenantId}@example.test`,
+      NOW,
+      NOW,
+      `acct_${tenantId.replace(/[^A-Za-z0-9]/g, "")}`,
+    ),
     env.DB.prepare(
       `INSERT INTO tenant_domains (
         domain_id, tenant_id, hostname, kind, status, created_at, updated_at
@@ -344,13 +357,20 @@ describe("payment intent creation", () => {
     expect(body.payment.clientSecret).toBe(minted.client_secret);
 
     // The amount is the row's total, the currency is the row's, and metadata is
-    // exactly the two join keys — no email, no lines, nothing else.
+    // exactly the two join keys — no email, no lines, nothing else. Since CP2-A
+    // it is a Connect destination charge: the platform default 5 % of 23 710,
+    // floored to the öre (1 185), to the shop's account, no on_behalf_of, and
+    // the shop name as the statement suffix.
     expect(stripe.createCalls).toHaveLength(1);
     expect(stripe.createCalls[0]).toEqual({
       amount: 23_710,
+      applicationFeeAmount: 1_185,
       currency: "sek",
       idempotencyKey: paymentIdempotencyKey(checkoutId),
       metadata: { checkout_id: checkoutId, tenant_id: TENANT_A },
+      onBehalfOf: null,
+      statementDescriptorSuffix: "SHOP TENANTP",
+      transferDestination: "acct_tenantpaya",
     });
 
     await expect(readPaymentIntentId(checkoutId)).resolves.toBe(minted.id);

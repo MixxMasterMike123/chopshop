@@ -1642,12 +1642,14 @@ describe("refusals that create no order", () => {
 });
 
 describe("unhandled event types", () => {
+  // CP2-A handles payment_intent.payment_failed/canceled, refund.*,
+  // charge.refunded, charge.dispute.* and account.updated
+  // (test/stripe-events.test.ts); these stay unhandled.
   it.each([
-    ["payment_intent.payment_failed"],
-    ["charge.refunded"],
-    ["account.updated"],
-    ["charge.dispute.created"],
     ["customer.subscription.created"],
+    ["invoice.paid"],
+    ["payout.paid"],
+    ["charge.captured"],
   ])("acknowledges %s as a recorded no-op", async (type) => {
     const seeded = await seedPayableCheckout({ tenantId: TENANT_A });
     const eventId = nextEventId();
@@ -1679,7 +1681,7 @@ describe("unhandled event types", () => {
     const payload = buildEventPayload({
       eventId,
       paymentIntentId: nextIntentId(),
-      type: "charge.refunded",
+      type: "invoice.paid",
     });
 
     await postWebhook(payload);

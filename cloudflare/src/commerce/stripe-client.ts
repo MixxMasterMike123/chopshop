@@ -41,6 +41,12 @@ export interface PaymentIntentView {
 
 export interface CreatePaymentIntentParams {
   amount: number;
+  /**
+   * The platform's cut, in the charge's minor unit: commission + the frozen
+   * production withholding (src/commerce/payment.ts). Stripe's
+   * `application_fee_amount`.
+   */
+  applicationFeeAmount: number;
   currency: string;
   /**
    * Stripe's own idempotency key. Derived deterministically from the checkout
@@ -49,6 +55,16 @@ export interface CreatePaymentIntentParams {
    */
   idempotencyKey: string;
   metadata: Record<string, string>;
+  /**
+   * `on_behalf_of`, or null to omit it. payment.ts passes null
+   * (CONNECT_ON_BEHALF_OF = false): the platform stays the VAT merchant of
+   * record, exactly as the Firebase "Marknadsplats" model.
+   */
+  onBehalfOf: string | null;
+  /** Sanitised shop name, or null to omit the suffix entirely. */
+  statementDescriptorSuffix: string | null;
+  /** The shop's connected account: `transfer_data.destination`. */
+  transferDestination: string;
 }
 
 /**
@@ -56,10 +72,10 @@ export interface CreatePaymentIntentParams {
  *
  * The route depends on this interface and never on the SDK, so tests inject a
  * fake with realistic idempotent-create semantics and NO test ever reaches the
- * real Stripe API. It carries exactly two operations because exactly two are
- * used: creating the one intent a checkout may ever have, and re-reading it.
- * Cancel, confirm, capture and refund are deliberately absent — they belong to
- * checkpoints that own those state transitions.
+ * real Stripe API. The payment route uses exactly these two operations:
+ * creating the one intent a checkout may ever have, and re-reading it. The
+ * money paths that own cancel, refund and transfer transitions use the wider
+ * StripeMoneyGateway below, through the same seam.
  */
 export interface StripeGateway {
   createPaymentIntent(
@@ -67,6 +83,118 @@ export interface StripeGateway {
   ): Promise<PaymentIntentView>;
   retrievePaymentIntent(paymentIntentId: string): Promise<PaymentIntentView>;
 }
+
+/**
+ * A Refund, narrowed to what refund settlement reads (src/commerce/refunds.ts).
+ * `status` is Stripe's: pending | requires_action | succeeded | failed |
+ * canceled.
+ */
+export interface RefundView {
+  amount: number;
+  charge: string | null;
+  id: string;
+  metadata: Record<string, string>;
+  payment_intent: string | null;
+  status: string;
+}
+
+export interface CreateRefundParams {
+  amount: number;
+  /** = the refund operation id: one operation can never become two refunds. */
+  idempotencyKey: string;
+  metadata: Record<string, string>;
+  paymentIntentId: string;
+  /** D9: false — the platform fee is not refundable. */
+  refundApplicationFee: boolean;
+  /** Always true for a destination charge: claw the principal back. */
+  reverseTransfer: boolean;
+}
+
+export interface ChargeView {
+  id: string;
+  payment_intent: string | null;
+  /** The destination-charge transfer, or null when there is none. */
+  transfer: string | null;
+}
+
+export interface TransferReversalView {
+  amount: number;
+  id: string;
+}
+
+export interface TransferView {
+  amount: number;
+  id: string;
+}
+
+/**
+ * One PaymentIntent as the reconciliation cron sees it. `chargeCreated` is the
+ * latest charge's creation time (unix seconds) when Stripe expanded it — the
+ * closest thing to "when did this succeed" a PaymentIntent carries.
+ */
+export interface PaymentIntentSummary {
+  amount: number;
+  chargeCreated: number | null;
+  created: number;
+  currency: string;
+  id: string;
+  metadata: Record<string, string>;
+  status: string;
+}
+
+export interface PaymentIntentPage {
+  data: PaymentIntentSummary[];
+  hasMore: boolean;
+}
+
+/**
+ * Everything CP2's money paths call on Stripe, on top of the payment route's
+ * two operations. Same seam, same symbol (STRIPE_GATEWAY_OVERRIDE): a test
+ * injects ONE fake that implements whatever it exercises, and
+ * resolveStripeMoneyGateway only accepts an override that implements all of
+ * it. No method here ever reaches Stripe from a test.
+ */
+export interface StripeMoneyGateway extends StripeGateway {
+  cancelPaymentIntent(
+    paymentIntentId: string,
+    idempotencyKey: string,
+  ): Promise<PaymentIntentView>;
+  createRefund(params: CreateRefundParams): Promise<RefundView>;
+  createTransfer(params: {
+    amount: number;
+    currency: string;
+    destination: string;
+    idempotencyKey: string;
+    metadata: Record<string, string>;
+  }): Promise<TransferView>;
+  createTransferReversal(params: {
+    idempotencyKey: string;
+    metadata: Record<string, string>;
+    /** false: a dispute reversal leaves the fee with the platform (Firebase). */
+    refundApplicationFee: boolean;
+    transferId: string;
+  }): Promise<TransferReversalView>;
+  listPaymentIntents(params: {
+    createdGte: number;
+    limit: number;
+    startingAfter: string | null;
+  }): Promise<PaymentIntentPage>;
+  /** At most 100 — a charge with more refunds than that does not exist here. */
+  listRefunds(paymentIntentId: string): Promise<RefundView[]>;
+  retrieveCharge(chargeId: string): Promise<ChargeView>;
+}
+
+const MONEY_METHODS = [
+  "cancelPaymentIntent",
+  "createPaymentIntent",
+  "createRefund",
+  "createTransfer",
+  "createTransferReversal",
+  "listPaymentIntents",
+  "listRefunds",
+  "retrieveCharge",
+  "retrievePaymentIntent",
+] as const;
 
 /**
  * The test seam, and deliberately the ONLY one.
@@ -299,10 +427,88 @@ export function isStripeConfigured(env: Env): boolean {
  * buyer or in a log line that a support ticket might quote verbatim.
  */
 export class StripeGatewayError extends Error {
-  constructor() {
+  /**
+   * True when Stripe ANSWERED and refused (a 4xx other than 408/409/429): the
+   * request was processed and nothing was created. False for everything whose
+   * outcome is unknown — network failures, timeouts, 5xx, rate limits — where
+   * the operation may or may not have happened and only an idempotent retry or
+   * a later read can tell. Money paths branch on this and nothing else; it
+   * still carries no Stripe text.
+   */
+  readonly rejected: boolean;
+
+  constructor(rejected = false) {
     super("stripe gateway request failed");
     this.name = "StripeGatewayError";
+    this.rejected = rejected;
   }
+}
+
+/** Maps an SDK failure to the detail-free error, keeping only "refused?". */
+function gatewayError(error: unknown): StripeGatewayError {
+  if (error instanceof StripeGatewayError) {
+    return error;
+  }
+
+  const status =
+    typeof error === "object" && error !== null
+      ? (error as { statusCode?: unknown }).statusCode
+      : undefined;
+  const rejected =
+    typeof status === "number" &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 409 &&
+    status !== 429;
+
+  return new StripeGatewayError(rejected);
+}
+
+function stringOrNull(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const id = (value as { id?: unknown }).id;
+    return typeof id === "string" ? id : null;
+  }
+
+  return null;
+}
+
+function metadataOf(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (typeof value !== "object" || value === null) {
+    return out;
+  }
+
+  for (const [key, inner] of Object.entries(value)) {
+    if (typeof inner === "string") {
+      out[key] = inner;
+    }
+  }
+
+  return out;
+}
+
+function refundView(refund: {
+  amount: number;
+  charge?: unknown;
+  id: string;
+  metadata?: unknown;
+  payment_intent?: unknown;
+  status?: string | null;
+}): RefundView {
+  return {
+    amount: refund.amount,
+    charge: stringOrNull(refund.charge),
+    id: refund.id,
+    metadata: metadataOf(refund.metadata),
+    payment_intent: stringOrNull(refund.payment_intent),
+    status: refund.status ?? "pending",
+  };
 }
 
 /**
@@ -339,7 +545,33 @@ export function resolveStripeGateway(env: Env): StripeGateway {
   return createStripeGateway(env);
 }
 
-export function createStripeGateway(env: Env): StripeGateway {
+/**
+ * The money paths' gateway: refunds, dispute recovery, retention and
+ * reconciliation. Reads the SAME override symbol as resolveStripeGateway and
+ * accepts it only when it implements every money operation; a partial fake is
+ * not silently promoted, it falls through to the real client — which, under
+ * test, the outbound-network backstop refuses.
+ */
+export function resolveStripeMoneyGateway(env: Env): StripeMoneyGateway {
+  const override = (env as unknown as Record<PropertyKey, unknown>)[
+    STRIPE_GATEWAY_OVERRIDE
+  ];
+
+  if (
+    typeof override === "object" &&
+    override !== null &&
+    MONEY_METHODS.every(
+      (method) =>
+        typeof (override as Record<string, unknown>)[method] === "function",
+    )
+  ) {
+    return override as StripeMoneyGateway;
+  }
+
+  return createStripeGateway(env);
+}
+
+export function createStripeGateway(env: Env): StripeMoneyGateway {
   if (!isStripeConfigured(env)) {
     // Unreachable through the route, which gates on isStripeConfigured first.
     // Kept strict anyway, exactly like createAuth: a future caller that forgets
@@ -367,6 +599,16 @@ export function createStripeGateway(env: Env): StripeGateway {
         return await stripe.paymentIntents.create(
           {
             amount: params.amount,
+            // ── STRIPE CONNECT: a DESTINATION charge (PLAN §2.3) ───────────
+            // The "Marknadsplats" model production runs
+            // (functions/src/payment/connectParams.ts): the whole charge
+            // transfers to the shop's account and the platform keeps
+            // application_fee_amount, taken off the GROSS total. `on_behalf_of`
+            // is omitted unless the caller passes one (payment.ts does not):
+            // adding it moves the merchant of record and changes who owes the
+            // VAT.
+            // ───────────────────────────────────────────────────────────────
+            application_fee_amount: params.applicationFeeAmount,
             // Stripe's card-present/wallet selection. Matches production, which
             // enables automatic payment methods rather than enumerating them, so
             // the method set is configured in the Stripe dashboard rather than
@@ -374,25 +616,21 @@ export function createStripeGateway(env: Env): StripeGateway {
             automatic_payment_methods: { enabled: true },
             currency: params.currency,
             metadata: params.metadata,
-            // ── STRIPE CONNECT SEAM ────────────────────────────────────────
-            // transfer_data / application_fee_amount / transfer_group go HERE
-            // when connected accounts exist. Staging has none, so this is a
-            // platform-direct charge and Connect is deliberately out of scope
-            // for this checkpoint.
-            //
-            // Production runs the "Marknadsplats" model: a DESTINATION charge
-            // with application_fee_amount taken off the GROSS total and
-            // explicitly NO `on_behalf_of`, which keeps the platform the VAT
-            // merchant of record. Whatever lands here must preserve that — an
-            // on_behalf_of added by reflex would move the merchant of record and
-            // change who owes the tax.
-            // ───────────────────────────────────────────────────────────────
+            ...(params.onBehalfOf === null
+              ? {}
+              : { on_behalf_of: params.onBehalfOf }),
+            ...(params.statementDescriptorSuffix === null
+              ? {}
+              : {
+                  statement_descriptor_suffix: params.statementDescriptorSuffix,
+                }),
+            transfer_data: { destination: params.transferDestination },
           },
           { idempotencyKey: params.idempotencyKey },
         );
-      } catch {
-        // Deliberately catch-all and detail-free. See StripeGatewayError.
-        throw new StripeGatewayError();
+      } catch (error) {
+        // Detail-free. See StripeGatewayError.
+        throw gatewayError(error);
       }
     },
 
@@ -401,8 +639,133 @@ export function createStripeGateway(env: Env): StripeGateway {
     ): Promise<PaymentIntentView> {
       try {
         return await stripe.paymentIntents.retrieve(paymentIntentId);
-      } catch {
-        throw new StripeGatewayError();
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async cancelPaymentIntent(
+      paymentIntentId: string,
+      idempotencyKey: string,
+    ): Promise<PaymentIntentView> {
+      try {
+        return await stripe.paymentIntents.cancel(
+          paymentIntentId,
+          { cancellation_reason: "abandoned" },
+          { idempotencyKey },
+        );
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async createRefund(params: CreateRefundParams): Promise<RefundView> {
+      try {
+        return refundView(
+          await stripe.refunds.create(
+            {
+              amount: params.amount,
+              metadata: params.metadata,
+              payment_intent: params.paymentIntentId,
+              refund_application_fee: params.refundApplicationFee,
+              reverse_transfer: params.reverseTransfer,
+            },
+            { idempotencyKey: params.idempotencyKey },
+          ),
+        );
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async listRefunds(paymentIntentId: string): Promise<RefundView[]> {
+      try {
+        const page = await stripe.refunds.list({
+          limit: 100,
+          payment_intent: paymentIntentId,
+        });
+        return page.data.map(refundView);
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async retrieveCharge(chargeId: string): Promise<ChargeView> {
+      try {
+        const charge = await stripe.charges.retrieve(chargeId);
+        return {
+          id: charge.id,
+          payment_intent: stringOrNull(charge.payment_intent),
+          transfer: stringOrNull(charge.transfer),
+        };
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async createTransferReversal(params): Promise<TransferReversalView> {
+      try {
+        const reversal = await stripe.transfers.createReversal(
+          params.transferId,
+          {
+            metadata: params.metadata,
+            refund_application_fee: params.refundApplicationFee,
+          },
+          { idempotencyKey: params.idempotencyKey },
+        );
+        return { amount: reversal.amount, id: reversal.id };
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async createTransfer(params): Promise<TransferView> {
+      try {
+        const transfer = await stripe.transfers.create(
+          {
+            amount: params.amount,
+            currency: params.currency,
+            destination: params.destination,
+            metadata: params.metadata,
+          },
+          { idempotencyKey: params.idempotencyKey },
+        );
+        return { amount: transfer.amount, id: transfer.id };
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async listPaymentIntents(params): Promise<PaymentIntentPage> {
+      try {
+        const page = await stripe.paymentIntents.list({
+          created: { gte: params.createdGte },
+          expand: ["data.latest_charge"],
+          limit: params.limit,
+          ...(params.startingAfter === null
+            ? {}
+            : { starting_after: params.startingAfter }),
+        });
+        return {
+          data: page.data.map((intent) => {
+            const charge = intent.latest_charge;
+            return {
+              amount: intent.amount,
+              chargeCreated:
+                typeof charge === "object" && charge !== null
+                  ? charge.created
+                  : null,
+              created: intent.created,
+              currency: intent.currency,
+              id: intent.id,
+              metadata: metadataOf(intent.metadata),
+              status: intent.status,
+            };
+          }),
+          hasMore: page.has_more,
+        };
+      } catch (error) {
+        throw gatewayError(error);
       }
     },
   };

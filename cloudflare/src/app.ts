@@ -119,7 +119,44 @@ import {
 } from "./routes/render-jobs";
 import { isRenderJobsConfigured } from "./pod/render-jobs";
 import { handleFakePrinterRoute } from "./routes/fake-printer";
+import {
+  ADMIN_ORDER_REFUNDS_ROUTE,
+  ADMIN_ORDER_ROUTE,
+  handleAdminOrderRefundsRoute,
+  handleAdminOrderRoute,
+} from "./routes/money-orders";
 import { FAKE_PRINTER_JOBS_PATH } from "./dispatch/fake-printer";
+// CP2-B (outbox/dispatch) route handlers.
+import {
+  ADMIN_ORDER_CANCEL_ROUTE,
+  handleAdminOrderCancelRoute,
+} from "./routes/dispatch-admin";
+import {
+  handlePlatformDispatchListRoute,
+  handlePlatformDispatchResolveRoute,
+  PLATFORM_DISPATCH_PATH,
+  PLATFORM_DISPATCH_RESOLVE_ROUTE,
+} from "./routes/dispatch-platform";
+
+// CP2-C (POD product path) route handlers.
+import {
+  ADMIN_POD_MAPPING_PATH_PREFIX,
+  ADMIN_POD_MAPPINGS_PATH,
+  ADMIN_POD_PRINTERS_PATH,
+  ADMIN_POD_QUOTE_PATH,
+  handleAdminPodProductRoute,
+} from "./routes/pod-admin";
+import {
+  handlePlatformPrintersRoute,
+  handlePlatformScreeningRoute,
+  PLATFORM_PRINTERS_PATH,
+  PLATFORM_SCREENING_PATH,
+  PLATFORM_SCREENING_PATH_PREFIX,
+} from "./routes/pod-platform";
+import {
+  handlePodPreviewRoute,
+  STOREFRONT_POD_PREVIEWS_PREFIX,
+} from "./routes/pod-storefront";
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -1945,10 +1982,66 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // ── CP2 route mounts. Each CP2 builder appends ONLY inside its own anchor
   // block; the reviewer consolidates after merge. ──────────────────────────
   // CP2-ROUTES-A (money: refunds, payouts) — begin
+  // Exact patterns only (no prefix wildcard), so CP2-B's
+  // /v1/admin/orders/:orderId/cancel stays theirs. The order segment is taken
+  // from the RAW pathname and decoded once by the handler (see ACTING_AS_ROUTE).
+  app.all(ADMIN_ORDER_ROUTE, (c) =>
+    handleAdminOrderRoute(
+      c.env,
+      c.req.raw,
+      new URL(c.req.url).pathname.split("/")[4] ?? "",
+    ),
+  );
+  app.all(ADMIN_ORDER_REFUNDS_ROUTE, (c) =>
+    handleAdminOrderRefundsRoute(
+      c.env,
+      c.req.raw,
+      new URL(c.req.url).pathname.split("/")[4] ?? "",
+    ),
+  );
   // CP2-ROUTES-A — end
   // CP2-ROUTES-B (outbox/dispatch: manual resolution, cancellation) — begin
+  // Exact patterns only; the id segment is taken from the RAW pathname and
+  // decoded once by the handler (see ACTING_AS_ROUTE).
+  app.all(ADMIN_ORDER_CANCEL_ROUTE, (c) =>
+    handleAdminOrderCancelRoute(
+      c.env,
+      c.req.raw,
+      new URL(c.req.url).pathname.split("/")[4] ?? "",
+    ),
+  );
+  app.all(PLATFORM_DISPATCH_PATH, (c) =>
+    handlePlatformDispatchListRoute(c.env, c.req.raw),
+  );
+  app.all(PLATFORM_DISPATCH_RESOLVE_ROUTE, (c) =>
+    handlePlatformDispatchResolveRoute(
+      c.env,
+      c.req.raw,
+      new URL(c.req.url).pathname.split("/")[4] ?? "",
+    ),
+  );
   // CP2-ROUTES-B — end
   // CP2-ROUTES-C (POD product path: mappings, publish, quote) — begin
+  // Exact paths or prefixes no earlier route claims (the admin POD artwork
+  // routes are exact paths + the artwork prefix; /v1/storefront is exact).
+  const adminPodProduct: Endpoint = (c) =>
+    handleAdminPodProductRoute(c.env, c.req.raw);
+  app.all(ADMIN_POD_PRINTERS_PATH, adminPodProduct);
+  app.all(ADMIN_POD_QUOTE_PATH, adminPodProduct);
+  app.all(ADMIN_POD_MAPPINGS_PATH, adminPodProduct);
+  app.all(`${ADMIN_POD_MAPPING_PATH_PREFIX}*`, adminPodProduct);
+  app.all(PLATFORM_PRINTERS_PATH, (c) =>
+    handlePlatformPrintersRoute(c.env, c.req.raw),
+  );
+  const platformScreening: Endpoint = (c) =>
+    handlePlatformScreeningRoute(c.env, c.req.raw);
+  app.all(PLATFORM_SCREENING_PATH, platformScreening);
+  app.all(`${PLATFORM_SCREENING_PATH_PREFIX}*`, platformScreening);
+  // A storefront route: tenant by hostname, same public-entrypoint rule.
+  app.all(
+    `${STOREFRONT_POD_PREVIEWS_PREFIX}*`,
+    storefront((c) => handlePodPreviewRoute(c.env, c.req.raw)),
+  );
   // CP2-ROUTES-C — end
 
   const platformTenants: Endpoint = (c) =>

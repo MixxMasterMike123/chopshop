@@ -24,8 +24,208 @@ export interface CheckoutPaymentRow {
   currency: string;
   expires_at: number;
   payment_intent_id: string | null;
+  /** Owned by the POD checkout (CP2-C); NULL for a non-POD basket. */
+  production_snapshot_json: string | null;
   status: string;
   total_minor: number;
+}
+
+// ── STRIPE CONNECT: THE DESTINATION CHARGE (PLAN §2.3, LAUNCH_TODO A1) ──────
+//
+// Every checkout is a destination charge to the shop's connected account:
+//   transfer_data.destination = tenants.stripe_account_id
+//   application_fee_amount    = commission + production withholding
+//   statement_descriptor_suffix = the shop name, sanitised
+// A shop without a usable connected account cannot take a payment at all
+// (fail closed): there is no legacy single-account charge on Cloudflare,
+// because a POD line on such a charge would leave the platform fronting the
+// printer with no way to hold the cost back (Firebase's 409
+// pod-requires-connect), and a non-POD one would put the whole sale on the
+// platform's balance.
+//
+// The formulas are Firebase's, ported exactly:
+//   functions/src/payment/connectFee.ts        computeApplicationFeeOre,
+//                                              resolveCommissionBps
+//   functions/src/payment/connectParams.ts     buildConnectChargeParams
+//                                              (fee = % cut + withheld;
+//                                              fee > gross ⇒ refuse, never clamp)
+//   functions/src/payment/createPaymentIntent.ts:555-569  statement suffix
+// The withholding itself is computed by the POD checkout when it freezes the
+// production snapshot (`totals.withholdMinor`, the Firebase
+// computeProductionWithholding result in öre); this module only adds it.
+
+/**
+ * The platform's default commission: 500 bps = 5.00 %. Firebase resolves
+ * `settings/platform.defaultCommissionBps ?? PLATFORM_DEFAULT_COMMISSION_BPS ??
+ * 500` (functions/src/config/app-urls.ts:85); Cloudflare has no platform
+ * settings table until CP3, so the code default is the whole chain for now and
+ * a shop's own `tenants.commission_bps` overrides it.
+ */
+export const DEFAULT_COMMISSION_BPS = 500;
+
+/**
+ * `on_behalf_of` stays OFF. The locked money model (Firebase "Marknadsplats",
+ * memory payments-stripe-connect) keeps the PLATFORM the VAT merchant of
+ * record; `on_behalf_of` would make the connected account the settlement
+ * merchant and move the VAT liability. Changing this is a legal/tax decision,
+ * not a code one — it is a single named constant so the decision is visible.
+ */
+export const CONNECT_ON_BEHALF_OF = false;
+
+/** Firebase resolveCommissionBps: a valid per-shop integer wins, clamped. */
+export function resolveCommissionBps(
+  shopCommissionBps: unknown,
+  platformDefaultBps: number = DEFAULT_COMMISSION_BPS,
+): number {
+  if (Number.isInteger(shopCommissionBps)) {
+    return Math.max(0, Math.min(10_000, shopCommissionBps as number));
+  }
+
+  return Math.max(0, Math.min(10_000, Math.floor(platformDefaultBps) || 0));
+}
+
+/**
+ * Firebase computeApplicationFeeOre: floor(amount × bps / 10000), clamped to
+ * [0, amount]. Integer in, integer out; the floor rounds to the öre in the
+ * shop's favour, as production does.
+ */
+export function computeCommissionMinor(amountMinor: number, bps: number): number {
+  if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
+    return 0;
+  }
+
+  const safeBps = Number.isFinite(bps)
+    ? Math.max(0, Math.min(10_000, Math.floor(bps)))
+    : 0;
+  const fee = Math.floor((amountMinor * safeBps) / 10_000);
+  return Math.max(0, Math.min(fee, amountMinor));
+}
+
+export interface ConnectCharge {
+  applicationFeeMinor: number;
+  commissionMinor: number;
+  /** % cut + withheld production exceed the gross: the checkout is refused. */
+  feeExceedsGross: boolean;
+  withheldMinor: number;
+}
+
+/**
+ * Firebase buildConnectChargeParams, minus the legacy branch: the fee is the
+ * commission PLUS the withheld production cost, and a fee above the gross is a
+ * refusal (a product priced below its production floor), never a clamp —
+ * clamping would pay the shop 0 and still under-collect production.
+ */
+export function buildConnectCharge(
+  amountMinor: number,
+  commissionBps: number,
+  withheldMinor: number,
+): ConnectCharge {
+  const commissionMinor = computeCommissionMinor(amountMinor, commissionBps);
+  const withheld =
+    Number.isSafeInteger(withheldMinor) && withheldMinor > 0 ? withheldMinor : 0;
+  const applicationFeeMinor = commissionMinor + withheld;
+  return {
+    applicationFeeMinor,
+    commissionMinor,
+    feeExceedsGross: applicationFeeMinor > Math.max(0, amountMinor),
+    withheldMinor: withheld,
+  };
+}
+
+/**
+ * The per-shop card-statement suffix, exactly Firebase's sanitisation
+ * (createPaymentIntent.ts:555-569): diacritics decomposed away (å→a),
+ * only [A-Za-z0-9 ], spaces collapsed, at most 12 characters, uppercase.
+ * Stripe appends it to the platform prefix and truncates the whole at 22, it
+ * refuses <>\'"* and requires at least one letter — so a name that leaves no
+ * letter yields null and the suffix is omitted rather than failing the charge.
+ */
+export function statementDescriptorSuffix(shopName: string): string | null {
+  const suffix = shopName
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 12)
+    .trim()
+    .toUpperCase();
+
+  return /[A-Za-z]/.test(suffix) ? suffix : null;
+}
+
+/**
+ * The production withholding the frozen snapshot asks for, in minor units.
+ *
+ * No snapshot ⇒ 0 (a non-POD basket withholds nothing). A snapshot that is
+ * present but unreadable, or whose `totals.withholdMinor` is not a
+ * non-negative integer, ⇒ null: the caller refuses the payment rather than
+ * guess, because charging without the withholding would leave the platform
+ * paying the printer out of its own pocket.
+ */
+export function readWithholdMinor(snapshotJson: string | null): number | null {
+  if (snapshotJson === null) {
+    return 0;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(snapshotJson);
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+
+  const totals = (parsed as { totals?: unknown }).totals;
+  if (typeof totals !== "object" || totals === null) {
+    return null;
+  }
+
+  const withhold = (totals as { withholdMinor?: unknown }).withholdMinor;
+  return typeof withhold === "number" &&
+    Number.isSafeInteger(withhold) &&
+    withhold >= 0
+    ? withhold
+    : null;
+}
+
+interface TenantConnectRow {
+  commission_bps: number | null;
+  shop_name: string | null;
+  stripe_account_id: string | null;
+  stripe_charges_enabled: number;
+}
+
+/**
+ * The shop's connected account, or null when it cannot take a destination
+ * charge. Firebase's `useConnect = chargesEnabled && stripeAccountId`.
+ */
+async function loadConnectAccount(
+  db: D1Database,
+  tenantId: string,
+): Promise<TenantConnectRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT stripe_account_id, stripe_charges_enabled, commission_bps, shop_name
+       FROM tenants
+       WHERE tenant_id = ?
+       LIMIT 1`,
+    )
+    .bind(tenantId)
+    .first<TenantConnectRow>();
+
+  if (
+    row === null ||
+    row.stripe_account_id === null ||
+    row.stripe_charges_enabled !== 1
+  ) {
+    return null;
+  }
+
+  return row;
 }
 
 export interface PaymentIntentResult {
@@ -108,7 +308,8 @@ async function loadCheckout(
 ): Promise<CheckoutPaymentRow | null> {
   const row = await db
     .prepare(
-      `SELECT status, currency, total_minor, payment_intent_id, expires_at
+      `SELECT status, currency, total_minor, payment_intent_id, expires_at,
+              production_snapshot_json
        FROM checkouts
        WHERE tenant_id = ?
          AND checkout_id = ?
@@ -151,21 +352,49 @@ async function attachPaymentIntent(
   db: D1Database,
   tenant: TenantContext,
   checkoutId: string,
-  paymentIntentId: string,
+  intent: PaymentIntentView,
+  connect: { accountId: string; charge: ConnectCharge },
   now: number,
 ): Promise<boolean> {
+  // The Connect facts are frozen in the SAME guarded write that attaches the
+  // intent, so the fee on the row is always the fee this intent was created
+  // with: the webhook copies it onto the order, refunds and payouts read it
+  // from there, and no later change to the shop's commission can reach an
+  // intent that already exists. The intent's status and its timestamp start
+  // the retention clock (crons.ts).
   const outcome = await db
     .prepare(
       `UPDATE checkouts
-       SET payment_intent_id = ?, updated_at = ?
+       SET payment_intent_id = ?,
+           connect_account_id = ?,
+           application_fee_minor = ?,
+           withheld_minor = ?,
+           payment_intent_status = ?,
+           payment_intent_status_at = ?,
+           updated_at = ?
        WHERE tenant_id = ?
          AND checkout_id = ?
          AND payment_intent_id IS NULL`,
     )
-    .bind(paymentIntentId, now, tenant.tenantId, checkoutId)
+    .bind(
+      intent.id,
+      connect.accountId,
+      connect.charge.applicationFeeMinor,
+      connect.charge.withheldMinor,
+      normalizeIntentStatus(intent.status),
+      now,
+      now,
+      tenant.tenantId,
+      checkoutId,
+    )
     .run();
 
   return outcome.meta.changes === 1;
+}
+
+/** Stripe's status, if it fits the column's shape; otherwise NULL. */
+function normalizeIntentStatus(status: string): string | null {
+  return /^[a-z_]{1,40}$/.test(status) ? status : null;
 }
 
 /**
@@ -250,6 +479,15 @@ export async function createCheckoutPayment(
     return { status: "not_available" };
   }
 
+  // Fail closed BEFORE Stripe: a shop that cannot take a destination charge
+  // cannot take a payment, and that includes re-serving an intent created
+  // while it still could — charges_enabled going false means Stripe has
+  // stopped this account from accepting money.
+  const account = await loadConnectAccount(db, tenant.tenantId);
+  if (account === null) {
+    return { status: "not_available" };
+  }
+
   try {
     // Already attached: re-read the live intent rather than trusting a status
     // frozen in D1. Stripe is the authority on an intent's state, and the
@@ -267,9 +505,42 @@ export async function createCheckoutPayment(
       );
     }
 
+    const withheldMinor = readWithholdMinor(checkout.production_snapshot_json);
+    if (withheldMinor === null) {
+      console.error(
+        JSON.stringify({
+          checkoutId,
+          message: "payment refused: production snapshot has no readable withholding",
+          tenantId: tenant.tenantId,
+        }),
+      );
+      return { status: "not_available" };
+    }
+
+    const charge = buildConnectCharge(
+      checkout.total_minor,
+      resolveCommissionBps(account.commission_bps),
+      withheldMinor,
+    );
+    if (charge.feeExceedsGross) {
+      // Firebase answers 409 production-exceeds-gross here. The route's one
+      // failure answer is the opaque 404; the operator signal is this line.
+      // Ids only — no amounts, which would state the platform's margin.
+      console.error(
+        JSON.stringify({
+          checkoutId,
+          message: "payment refused: platform fee would exceed the charge",
+          tenantId: tenant.tenantId,
+        }),
+      );
+      return { status: "not_available" };
+    }
+
+    const accountId = account.stripe_account_id as string;
     const intent = await callGateway(async () =>
       gateway.createPaymentIntent({
         amount: checkout.total_minor,
+        applicationFeeAmount: charge.applicationFeeMinor,
         // Stripe wants a lowercase ISO code; the column stores the catalogue's
         // uppercase one.
         currency: checkout.currency.toLowerCase(),
@@ -288,10 +559,19 @@ export async function createCheckoutPayment(
         // Stripe's schedule rather than the tenant's. An address that never
         // leaves D1 cannot leak from a Stripe account.
         // ──────────────────────────────────────────────────────────────────
+        // Still join keys only. The fee's BREAKDOWN (commission vs withheld
+        // production) is never put in metadata: whether a connected account
+        // can read a destination charge's metadata in its Express dashboard is
+        // an open check (LAUNCH_TODO B9c), and the seller sees ONE number.
         metadata: {
           checkout_id: checkoutId,
           tenant_id: tenant.tenantId,
         },
+        onBehalfOf: CONNECT_ON_BEHALF_OF ? accountId : null,
+        statementDescriptorSuffix: statementDescriptorSuffix(
+          account.shop_name ?? tenant.tenantId,
+        ),
+        transferDestination: accountId,
       }),
     );
 
@@ -299,7 +579,8 @@ export async function createCheckoutPayment(
       db,
       tenant,
       checkoutId,
-      intent.id,
+      intent,
+      { accountId, charge },
       now,
     );
 

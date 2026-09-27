@@ -36,7 +36,7 @@ While the other builders were mid-edit, `tsc` was briefly red in their files: fi
 
 **Other checks:**
 - `node --test guard/guards.test.mjs` passes.
-- The forbidden-string scan (`b8shield`, `b8s-`, `b8s_`, `reseller`, `firebase`) over every file below is clean.
+- The forbidden-string scan (the four forbidden legacy-brand patterns (see guard/guards.test.mjs), `firebase`) over every file below is clean.
 
 **Mutation checks: 16 of 16 killed.** Each mutation was applied, the relevant suite run, and the source restored byte-identical (hash-checked). Killed:
 1. A claim ignoring `max_attempts`.
