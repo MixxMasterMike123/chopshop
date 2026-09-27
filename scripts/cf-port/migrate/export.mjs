@@ -32,7 +32,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -698,9 +698,33 @@ async function runExport({
     return { exportedAt, plan, settingsPlan, warnings, wrote: false, outDir };
   }
 
+  // ── every READ happens before the first WRITE (reviewer, round 2) ──────
+  // The first real run wrote 40 collections and then failed on the Auth
+  // listing, leaving a partial bundle on disk. Auth is now read before
+  // anything is written, and the bundle is built in `<bundle>.partial` and
+  // renamed only when complete, so a directory named like a bundle is always
+  // a whole, checksummed bundle.
+  step('reading Auth users');
+  const authUsers = [];
+  let pageToken = undefined;
+  for (;;) {
+    const page = await auth.listUsers(1000, pageToken);
+    for (const user of page.users) {
+      authUsers.push(pickAuthUserFields(user));
+    }
+    if (!page.pageToken) break;
+    pageToken = page.pageToken;
+  }
+  authUsers.sort((a, b) => (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0));
+  info('auth users read', authUsers.length);
+
   // ── write the bundle ──────────────────────────────────────────────────
-  step(`writing bundle to ${outDir}`);
-  ensureDir(outDir);
+  const workDir = `${outDir}.partial`;
+  if (existsSync(workDir)) {
+    die(`an unfinished bundle is in the way: ${workDir} (left by a failed run — inspect it and remove it)`);
+  }
+  step(`writing bundle to ${workDir}`);
+  ensureDir(workDir);
 
   const rootCollectionsSummary = [];
   const consistencyWarnings = [];
@@ -711,7 +735,7 @@ async function runExport({
 
   async function writeOneCollection(name, docs, fate) {
     if (fate === 'drop') return; // never written
-    const dirForParts = fate === 'verify-only' ? path.join(outDir, '_verify') : path.join(outDir, name);
+    const dirForParts = fate === 'verify-only' ? path.join(workDir, '_verify') : path.join(workDir, name);
     ensureDir(dirForParts);
 
     const sortedDocs = [...docs].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -723,7 +747,7 @@ async function runExport({
         canonicalStringify({ path: doc.path, id: doc.id, createTime: doc.createTime, updateTime: doc.updateTime, data: doc.data }),
       );
       const content = lines.length > 0 ? lines.join('\n') + '\n' : '';
-      writeFileSecure(path.join(outDir, '_verify', `${name}.jsonl`), Buffer.from(content, 'utf8'));
+      writeFileSecure(path.join(workDir, '_verify', `${name}.jsonl`), Buffer.from(content, 'utf8'));
       rootCollectionsSummary.push({ name, fate, count: docs.length, row: fateForCollection(name)?.row ?? null });
       return;
     }
@@ -764,7 +788,7 @@ async function runExport({
   // settings: one collection, per-document fate; export whole collection,
   // recording per-doc fate in the collection manifest.
   if (settingsPlan && settingsPlan.length > 0) {
-    const settingsDir = path.join(outDir, 'settings');
+    const settingsDir = path.join(workDir, 'settings');
     ensureDir(settingsDir);
     const allDocs = Object.values(settingsResults)
       .map((r) => r.doc)
@@ -787,21 +811,9 @@ async function runExport({
     rootCollectionsSummary.push({ name: 'settings', fate: 'mixed', count: allDocs.length, row: null });
   }
 
-  // Auth users.
-  step('exporting Auth users');
-  const authDir = path.join(outDir, '_auth');
+  // Auth users (read above, before the first write).
+  const authDir = path.join(workDir, '_auth');
   ensureDir(authDir);
-  const authUsers = [];
-  let pageToken = undefined;
-  for (;;) {
-    const page = await auth.listUsers(1000, pageToken);
-    for (const user of page.users) {
-      authUsers.push(pickAuthUserFields(user));
-    }
-    if (!page.pageToken) break;
-    pageToken = page.pageToken;
-  }
-  authUsers.sort((a, b) => (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0));
   const authLines = authUsers.map((u) => canonicalStringify(u));
   writeFileSecure(path.join(authDir, 'users.jsonl'), Buffer.from(authLines.length > 0 ? authLines.join('\n') + '\n' : '', 'utf8'));
   info('auth users exported', authUsers.length);
@@ -868,10 +880,11 @@ async function runExport({
     authUserCount: authUsers.length,
     notIncluded,
   };
-  writeFileSecure(path.join(outDir, 'manifest.json'), Buffer.from(JSON.stringify(rootManifest, null, 2) + '\n', 'utf8'));
+  writeFileSecure(path.join(workDir, 'manifest.json'), Buffer.from(JSON.stringify(rootManifest, null, 2) + '\n', 'utf8'));
 
-  const allFiles = listFilesRecursive(outDir);
-  writeShaSums(outDir, allFiles);
+  const allFiles = listFilesRecursive(workDir);
+  writeShaSums(workDir, allFiles);
+  renameSync(workDir, outDir);
 
   step('done');
   info('bundle', outDir);
@@ -883,6 +896,50 @@ async function runExport({
   }
 
   return { exportedAt, plan, settingsPlan, warnings, consistencyWarnings, recounts, wrote: true, outDir };
+}
+
+/**
+ * Reads the Auth user list through the Identity Toolkit REST API
+ * (`accounts:batchGet`, a GET) instead of firebase-admin's Auth client.
+ * Reason (first real run, 2026-09-27): with personal Application Default
+ * Credentials that API requires a quota project, and firebase-admin 11 has no
+ * way to send one — every call answered 403. google-auth-library sends the
+ * `x-goog-user-project` header; it is set explicitly to the pinned project.
+ *
+ * The returned object has the one method runExport() uses, `listUsers`, and
+ * gives each user the firebase-admin field names. Only the fields the
+ * allowlist keeps are copied out of the response: the password hash and salt
+ * that the API returns are never assigned to anything.
+ */
+function createAuthReader(googleAuth) {
+  const toIso = (millis) => (millis === undefined || millis === null ? null : new Date(Number(millis)).toISOString());
+  return {
+    async listUsers(maxResults, pageToken) {
+      const client = await googleAuth.getClient();
+      // The query is built in one expression, without mutating calls: the
+      // write-call scan (test/no-write-calls.test.mjs) stays strict.
+      const query = new URLSearchParams({
+        maxResults: String(maxResults),
+        ...(pageToken ? { nextPageToken: pageToken } : {}),
+      });
+      const response = await client.request({
+        headers: { 'x-goog-user-project': PROJECT_ID },
+        method: 'GET',
+        url: `https://identitytoolkit.googleapis.com/v1/projects/${PROJECT_ID}/accounts:batchGet?${query}`,
+      });
+      const users = (response.data.users ?? []).map((raw) => ({
+        uid: raw.localId,
+        email: raw.email,
+        emailVerified: raw.emailVerified,
+        disabled: raw.disabled,
+        displayName: raw.displayName,
+        metadata: { creationTime: toIso(raw.createdAt), lastSignInTime: toIso(raw.lastLoginAt) },
+        providerData: (raw.providerUserInfo ?? []).map((provider) => ({ providerId: provider.providerId })),
+      }));
+      // An empty page ends the listing even if the API still hands out a token.
+      return { pageToken: users.length === 0 ? undefined : response.data.nextPageToken, users };
+    },
+  };
 }
 
 function defaultOutDir() {
@@ -919,7 +976,7 @@ async function main() {
   const functionsRequire = createRequire(path.join(REPO_ROOT, 'functions', 'package.json'));
   const admin = functionsRequire('firebase-admin');
   const { getFirestore, FieldPath } = functionsRequire('firebase-admin/firestore');
-  const { getAuth } = functionsRequire('firebase-admin/auth');
+  const { GoogleAuth } = functionsRequire('google-auth-library');
 
   // REVIEW ROUND 1 FIX 5: name the project EXPLICITLY. admin.initializeApp()
   // with no options lets ADC decide the project, which can silently resolve
@@ -934,7 +991,7 @@ async function main() {
   console.log(`\n▸ project ${PROJECT_ID}, database ${DATABASE_NAME}`);
   admin.initializeApp({ projectId: PROJECT_ID }); // ADC, project pinned explicitly
   const db = getFirestore(DATABASE_NAME);
-  const auth = getAuth();
+  const auth = createAuthReader(new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] }));
 
   await runExport({
     db,
@@ -956,6 +1013,7 @@ if (isMain) {
 }
 
 export {
+  createAuthReader,
   runExport,
   parseArgs,
   assertOutsideRepo,

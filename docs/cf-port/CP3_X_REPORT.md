@@ -396,3 +396,29 @@ Round 1's nine fixes were verified by reading the code and re-running the suite 
 | 4 | The dry run lists the `settings` documents by id (`listDocuments()`, no field data), so each document's fate and any document the manifest does not know appear in the plan. | `export.mjs` |
 
 Known limits, accepted for the staging export and to be revisited before the production freeze export: the live re-count of a DISCOVERED second-level subcollection family is recorded as `null` (no such family is known to exist); the discovery depth (2) and concurrency (16) are reasoned, not measured; the fiscal year is assumed to equal the calendar year.
+
+## First real run (reviewer, 2026-09-27 17:02 CEST)
+
+**Dry run** against production: 42 collections found; every count equals the manifest census (products 217, the public product projection 205, orders 9, shops 5, translations 1365 / 1364 / 1365); no unknown collection, no unknown subcollection, no third-level finding.
+
+**First `--apply` failed and exposed two defects, both fixed by the reviewer:**
+
+| Defect | Fix |
+|---|---|
+| The Auth listing answered 403: with personal Application Default Credentials the Identity Toolkit API requires a quota project, and firebase-admin 11 cannot send one. | `createAuthReader()` calls `accounts:batchGet` (a GET) through google-auth-library with `x-goog-user-project` set to the pinned project. The password hash and salt in the response are never assigned to anything. `test/auth-reader.test.mjs` (+4). |
+| The run had already written 40 collections when it failed, so a directory named like a bundle existed without manifest or checksums. | Every read happens before the first write (Auth is read first), and the bundle is built in `<bundle>.partial` and renamed only when complete. The incomplete directory of the failed run was deleted. |
+
+**Second `--apply` succeeded:**
+
+| Fact | Value |
+|---|---|
+| Bundle | `~/chopshop-export/export-2026-09-27T15-02-15.414Z` (outside the repo, directory mode 700, 4.7 MB) |
+| Documents written | 4 994 in 40 collection directories |
+| Auth users | 8 (the `users` collection holds 6 documents; the importer reconciles the two) |
+| `verify-bundle` | 240 checks pass, 0 fail |
+| `shasum -a 256 -c SHA256SUMS` | every file OK |
+| Warnings / consistency warnings | 0 / 0 |
+| Live re-count | 39 of 39 match |
+| Exporter | `9dda6390`, `dirty: true` (the CP3 builders' files were in the tree) |
+
+This is a STAGING export: the database was not frozen. The production export (CP7) runs after the write freeze, from a clean checkout. Tests: 76 / 76.
