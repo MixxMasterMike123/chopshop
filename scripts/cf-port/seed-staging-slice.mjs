@@ -5,7 +5,7 @@
  *
  *   CHOPSHOP_API_URL=https://chopshop-api-stg.kent-ee2.workers.dev \
  *   CHOPSHOP_PLATFORM_EMAIL=… CHOPSHOP_PLATFORM_PASSWORD=… \
- *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] \
+ *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] [SLICE_KEY_SALT=r2] \
  *   node scripts/cf-port/seed-staging-slice.mjs [--tenant slice-YYYYMMDD]
  *        [--purchase] [--refund <orderId>:<amountMinor>]
  *
@@ -146,6 +146,13 @@ if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(TENANT_ID)) {
   die(`tenant id ${TENANT_ID} is not a valid tenant id`);
 }
 const SHOP_NAME = `Slice ${TENANT_ID.replace(/^slice-/, "")}`;
+const ACCOUNT_KEY_SALT = (() => {
+  const salt = process.env.SLICE_KEY_SALT?.trim() ?? "";
+  if (!/^[a-z0-9-]{0,32}$/.test(salt)) {
+    die("SLICE_KEY_SALT must be at most 32 characters of a-z, 0-9 and -");
+  }
+  return salt === "" ? "" : `-${salt}`;
+})();
 
 // ── the API ─────────────────────────────────────────────────────────────────
 
@@ -419,7 +426,10 @@ async function ensureConnectAccount() {
         metadata: { chopshop_slice_tenant: TENANT_ID },
         type: "express",
       },
-      `chopshop-slice-account-${TENANT_ID}`,
+      // Stripe replays a key's FIRST answer for 24 h, refusals included (found 2026-09-27: a
+      // policy 400 kept coming back after the policy was changed). SLICE_KEY_SALT gives the
+      // request a fresh key; the metadata lookup above still prevents a second account.
+      `chopshop-slice-account-${TENANT_ID}${ACCOUNT_KEY_SALT}`,
     );
     info("account", `${account.id} created`);
   } else {
