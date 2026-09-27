@@ -10,6 +10,12 @@ import {
   parseAuthEmailJob,
   renderAuthEmail,
 } from "../src/email/auth-email-job";
+import {
+  claimAuthEmailDelivery,
+  fingerprintAuthEmailJob,
+  recordAuthEmailDelivery,
+} from "../src/email/email-delivery-store";
+import type { AuthEmailJob } from "../src/email/auth-email-job";
 import { RESEND_FETCH_OVERRIDE } from "../src/email/email-queue-consumer";
 import { processOutboxRowById } from "../src/outbox/effects";
 import {
@@ -77,7 +83,8 @@ function fakeResend() {
     calls,
     fetch: async (request: Request) => {
       calls.push(request);
-      return Response.json({ id: `re_${calls.length}` });
+      // Unique across the file: provider_message_id is UNIQUE in the ledger.
+      return Response.json({ id: `re_${crypto.randomUUID()}` });
     },
   };
 }
@@ -344,5 +351,117 @@ describe("the email ledger (0022)", () => {
     await expect(insert(crypto.randomUUID(), "order_confirmation", "b".repeat(64))).resolves.toBeDefined();
     await expect(insert(crypto.randomUUID(), "newsletter", "b".repeat(64))).rejects.toThrow(/CHECK/);
     await expect(insert(crypto.randomUUID(), "password_reset", null)).rejects.toThrow(/fingerprint is required/);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("the ledger fingerprint covers the order content (Codex P2)", () => {
+  // Pinned with the fingerprint algorithm as it was BEFORE order content was
+  // added: every auth job already in a ledger or on a queue must keep matching.
+  const GOLDEN: Array<[AuthEmailJob, string]> = [
+    [
+      {
+        actionUrl: `${env.AUTH_BASE_URL}/api/auth/reset-password/golden-token?callbackURL=https%3A%2F%2Fweb.test.invalid%2Freset-password`,
+        createdAt: 1_790_000_000_000,
+        deliveryId: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+        expiresAt: 1_790_003_600_000,
+        kind: "password_reset",
+        locale: "sv",
+        recipient: "golden@example.test",
+        version: 1,
+      },
+      "7f096b83a07b922932421624754f78c952ea42438731e8b3983517350c9a2ef3",
+    ],
+    [
+      {
+        actionUrl: `${env.AUTH_BASE_URL}/api/auth/verify-email?token=golden&callbackURL=%2F`,
+        createdAt: 1_790_000_000_000,
+        deliveryId: "6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b",
+        expiresAt: 1_790_003_600_000,
+        kind: "email_verification",
+        locale: "en",
+        recipient: "golden@example.test",
+        tenantId: "tenant-golden",
+        version: 1,
+      },
+      "ce5167592b004c180b3efd653f37c6517a8d5f7b8530d3ad0ebba031b323dc32",
+    ],
+  ];
+
+  async function confirmation(
+    overrides: Partial<Parameters<typeof createOrderConfirmationEmailJob>[0]["order"]> = {},
+    deliveryKey = "email:order_confirmation:fingerprint",
+  ) {
+    return createOrderConfirmationEmailJob({
+      createdAt: 1_790_000_000_000,
+      deliveryId: await deliveryIdFromKey(deliveryKey),
+      expiresAt: 1_790_000_000_000 + HOUR_MS,
+      order: {
+        currency: "SEK",
+        deliveryMethod: "pickup",
+        discountMinor: 0,
+        items: [{ lineTotalMinor: 29_900, name: "Tröja", quantity: 1 }],
+        orderNumber: "MC-2001",
+        shippingCountry: null,
+        shippingMinor: 0,
+        shopName: "Melodie MC",
+        subtotalMinor: 29_900,
+        totalMinor: 29_900,
+        vatMinor: 5_980,
+        ...overrides,
+      },
+      recipient: "kund@example.test",
+      tenantId: TENANT,
+    });
+  }
+
+  it("leaves every auth job's fingerprint byte-identical", async () => {
+    for (const [job, fingerprint] of GOLDEN) {
+      expect(await fingerprintAuthEmailJob(job)).toBe(fingerprint);
+    }
+  });
+
+  it("gives confirmations that differ only in totals, lines or order number different fingerprints", async () => {
+    const base = await fingerprintAuthEmailJob(await confirmation());
+    const variants = [
+      await confirmation({ vatMinor: 5_979 }),
+      await confirmation({ discountMinor: 900, totalMinor: 29_000 }),
+      await confirmation({ items: [{ lineTotalMinor: 29_900, name: "Tröja XL", quantity: 1 }] }),
+      await confirmation({ orderNumber: "MC-2002" }),
+      await confirmation({ shopName: null }),
+    ];
+    const fingerprints = await Promise.all(variants.map(fingerprintAuthEmailJob));
+    expect(new Set([base, ...fingerprints]).size).toBe(variants.length + 1);
+    // …and is still deterministic for the same content.
+    expect(await fingerprintAuthEmailJob(await confirmation())).toBe(base);
+  });
+
+  it("refuses a tampered confirmation as a fingerprint conflict, and the consumer never sends it", async () => {
+    const deliveryKey = `email:order_confirmation:tamper-${crypto.randomUUID()}`;
+    const createdAt = Date.now();
+    const original = createOrderConfirmationEmailJob({
+      ...(await confirmation({}, deliveryKey)),
+      createdAt,
+      expiresAt: createdAt + HOUR_MS,
+    });
+    const tampered: OrderConfirmationEmailJob = {
+      ...original,
+      order: { ...original.order, discountMinor: 29_900, totalMinor: 0, vatMinor: 0 },
+    };
+    await recordAuthEmailDelivery(env.DB, original, createdAt);
+
+    expect(await claimAuthEmailDelivery(env.DB, tampered, createdAt)).toEqual({ status: "conflict" });
+
+    const resend = fakeResend();
+    const { acks, batch } = emailBatch([
+      JSON.parse(JSON.stringify(tampered)),
+      JSON.parse(JSON.stringify(original)),
+    ]);
+    await worker.queue(batch, { ...env, [RESEND_FETCH_OVERRIDE]: resend.fetch } as unknown as Env);
+
+    expect(acks).toEqual(["m0", "m1"]);
+    expect(resend.calls).toHaveLength(1);
+    const sent = await resend.calls[0]!.json<{ text: string }>();
+    expect(sent.text).toContain(`Totalt: ${formatOrderMoney(29_900, "SEK")}`);
   });
 });

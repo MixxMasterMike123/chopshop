@@ -352,3 +352,65 @@ A row moved by the automatic re-submit in between gets 409 and **nothing** is wr
 5. **Human action is an alert row only.** The `printer_cancellation` effect is not an email to ops (CP1-C question 5 still stands), and there is no route yet to mark a printer cancellation as carried out. The line then stays `accepted`, with the order's `cancelled_at` and the open alert telling the story.
 6. **The confirmation email's retry window.** It is built with `createdAt` = the outbox row's creation, so an outage longer than about 24 hours fails it with an alert instead of mailing late. Acceptable, or should a late confirmation be re-issued under a new id?
 7. **SnapWear stub in production.** Paid POD orders retry for about 4.5 hours, then fail with alerts, until A6 is built. That is fail-closed and loud.
+
+---
+
+## Codex fixes (on top of 9542636)
+
+Both fixes are in, each with regression tests. `npm run check` is fully green: types:check ✓, tsc ✓, vitest **1604 tests / 45 files**. No git, no wrangler, and no CP2-A (`src/commerce/**`) or CP2-C file touched.
+
+| File | Before | After |
+|---|---|---|
+| `test/outbox-email.test.ts` | 12 | 15 |
+| `test/dispatch.test.ts` | 40 | 53 |
+
+**Changed files:**
+- `src/email/auth-email-job.ts`
+- `src/email/email-delivery-store.ts`: only the fingerprint function and its import. This is where `fingerprintAuthEmailJob` lives; outside my original file list, but required by the fix.
+- `src/dispatch/dispatch-effect.ts`
+- `src/dispatch/resolution.ts`
+- `test/outbox-email.test.ts`
+- `test/dispatch.test.ts`
+
+**Mutation checks: 5 of 5 killed**, sources restored byte-identical:
+1. Exhaustion leaving the line `pending`.
+2. An acknowledged failure skipping the line.
+3. The fingerprint without the order.
+4. The fingerprint missing the order number.
+5. An `order` key added to auth-job fingerprints.
+
+### [P2] The ledger fingerprint covers the order content
+- `canonicalOrderContent(order)` (in `auth-email-job.ts`) lists every rendered field in a fixed key order: currency, delivery method and country, every line (name, quantity, line total), the order number, shop name and all five totals.
+- `fingerprintAuthEmailJob` adds it under an `order` key **only for `order_confirmation` jobs**. For the auth kinds the key is absent, so their canonical string and fingerprint are byte-identical to before.
+
+Tests (`describe "the ledger fingerprint covers the order content (Codex P2)"`):
+- **Auth fingerprints unchanged.** Two auth jobs have golden fingerprints pinned; the values were computed with the pre-change algorithm and verified against the unchanged code before the fix.
+- **Different content, different fingerprint.** Confirmations differing only in VAT, discount/total, a line name, the order number or the shop name all get distinct fingerprints; the same content is deterministic.
+- **Tampering is refused.** A tampered copy (same delivery id, discount = total, total 0) is refused by `claimAuthEmailDelivery` as `{ status: "conflict" }`. Through the real `-email` consumer it is acked unsent, while the genuine copy is sent exactly once with the true total.
+
+Both new behaviour tests failed on the unchanged code (the bug reproduced) and pass now.
+
+### [P2] The line follows an exhausted dispatch row
+`retryLater` now **always** carries the order line. All pre-submission exhaustion paths — `printer_not_configured`, `storage_not_configured`, `storage_error`, `presign_failed` — pass it, as does the call-time `printer_client_error`. The line update is one statement in the transition's own batch, under its fence:
+
+```sql
+dispatch_state = CASE
+  WHEN (SELECT attempts >= max_attempts FROM outbox_events WHERE outbox_id = ?) THEN 'failed'
+  WHEN dispatch_state = 'submitting' THEN 'pending'
+  ELSE dispatch_state END
+```
+
+That is the same condition under which `fail()` makes the row `failed`, read from the same pre-transition row, so the row and the line cannot disagree.
+
+`resolveDispatch` now updates the line on **every** resolution, including an acknowledged failure (failed → failed), which previously skipped it:
+- `failed` → line `failed`. For an order whose cancellation was requested it is `cancelled`, the 0022 meaning of "never accepted and cancelled"; PATH 2d pins this.
+- `accepted` → line `accepted` + `printer_job_ref`.
+
+Tests (`describe "the line follows an exhausted row (Codex P2)"`):
+- For each of the five paths: on the last attempt, the row goes `failed`, the line goes `failed`, one `dispatch_failed` alert is raised, and there are zero printer jobs. With attempts left, the row stays `pending` and the line is `pending` after a call, or untouched before one.
+- The sweeper's settlement of an exhausted in-flight dispatch: `unknown` for both row and line if it may have been sent, `failed` for both if not.
+- Resolving `failed` on an `unknown` row, and acknowledging a `failed` row whose line was left `pending`: both lines become `failed`.
+- Resolving `accepted` gives the line `accepted` with the printer reference.
+
+### Commit-boundary note
+Commit 9542636 does not contain `src/routes/dispatch-admin.ts` or `src/routes/dispatch-platform.ts`; they are untracked in the tree. The `CP2-ROUTES-B` mounts in `src/app.ts` import them, so they must be committed with the reviewer's `app.ts` consolidation.

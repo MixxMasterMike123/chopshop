@@ -6,6 +6,7 @@ import { DISPATCH_PRINT_URL_TTL_SECONDS } from "../src/dispatch/dispatch-effect"
 import { FAKE_PRINTER_FETCH_OVERRIDE } from "../src/dispatch/printer-client";
 import { printerJobId } from "../src/dispatch/snapwear-wire";
 import { handleFakePrinterRoute } from "../src/routes/fake-printer";
+import { R2_PRESIGNER_OVERRIDE } from "../src/pod/render-farm-client";
 import { processOutboxRowById } from "../src/outbox/effects";
 import { nudgeOutbox } from "../src/outbox/nudge";
 import {
@@ -890,6 +891,131 @@ describe("platform: dispatches needing a human", () => {
     const response = await resolve(dispatchId, { note: "late", outcome: "failed" });
     expect(response.status).toBe(409);
     expect((await outboxRow(dispatchId)).status).toBe("done");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("the line follows an exhausted row (Codex P2)", () => {
+  async function onLastAttempt(outboxId: string): Promise<void> {
+    await env.DB.prepare("UPDATE outbox_events SET attempts = max_attempts - 1 WHERE outbox_id = ?")
+      .bind(outboxId)
+      .run();
+  }
+
+  const failingBucket = new Proxy(env.PRIVATE_BUCKET, {
+    get(target, property) {
+      if (property === "head") {
+        return () => Promise.reject(new Error("R2 unavailable"));
+      }
+      const value = Reflect.get(target, property) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  const PATHS: Array<[string, Record<PropertyKey, unknown>, string, string | null]> = [
+    // [label, env overrides, error code, printer the order was routed to]
+    ["a printer-client exception (the SnapWear stub)", { DISPATCH_TARGET: "snapwear" }, "printer_client_error", "snapwear"],
+    ["no usable printer (before any call)", { DISPATCH_TARGET: undefined }, "printer_not_configured", null],
+    ["storage not configured (before any call)", { PRIVATE_BUCKET: undefined }, "storage_not_configured", null],
+    ["a storage error (before any call)", { PRIVATE_BUCKET: failingBucket }, "storage_error", null],
+    [
+      "a presigning failure (before any call)",
+      {
+        [R2_PRESIGNER_OVERRIDE]: {
+          presignGet: () => Promise.reject(new Error("no signature")),
+          presignPut: () => Promise.reject(new Error("no signature")),
+        },
+      },
+      "presign_failed",
+      null,
+    ],
+  ];
+
+  for (const [label, overrides, code, printer] of PATHS) {
+    it(`exhausting on ${label} fails the row AND the line, with one alert`, async () => {
+      const order = await seedOrder(TENANT_A, printer === null ? {} : { printer });
+      const dispatchId = order.dispatchIds[0]!;
+      await onLastAttempt(dispatchId);
+
+      const result = await dispatch(quietEnv(overrides).env, dispatchId);
+
+      expect(result).toEqual({ kind: "ran", outcome: { kind: "failed" } });
+      expect(await outboxRow(dispatchId)).toMatchObject({ last_error: code, status: "failed" });
+      expect((await lineRow(order.orderId)).dispatch_state).toBe("failed");
+      expect((await alertsFor(dispatchId)).map((alert) => alert.kind)).toEqual(["dispatch_failed"]);
+      expect(await printerJobs(order.orderId)).toHaveLength(0);
+    });
+
+    it(`${label} with attempts left keeps the row pending and the line not failed`, async () => {
+      const order = await seedOrder(TENANT_A, printer === null ? {} : { printer });
+      const dispatchId = order.dispatchIds[0]!;
+
+      await dispatch(quietEnv(overrides).env, dispatchId);
+
+      expect(await outboxRow(dispatchId)).toMatchObject({ last_error: code, status: "pending" });
+      // Before the call the line was never touched; after it, it is pending again.
+      expect((await lineRow(order.orderId)).dispatch_state).toBe(
+        code === "printer_client_error" ? "pending" : null,
+      );
+    });
+  }
+
+  it("the sweeper settles an exhausted in-flight dispatch with its line: unknown if it may have been sent, failed if not", async () => {
+    const sent = await seedOrder(TENANT_A);
+    const unsent = await seedOrder(TENANT_A);
+    const now = Date.now();
+    for (const order of [sent, unsent]) {
+      await onLastAttempt(order.dispatchIds[0]!);
+    }
+    const sentClaim = { claimedBy: newClaimToken(), outboxId: sent.dispatchIds[0]! };
+    await claimById(env.DB, { ...sentClaim, now });
+    await markSubmitting(env.DB, sentClaim, { now });
+    await env.DB.prepare("UPDATE order_items SET dispatch_state = 'submitting' WHERE order_id = ?")
+      .bind(sent.orderId)
+      .run();
+    await claimById(env.DB, { claimedBy: newClaimToken(), now, outboxId: unsent.dispatchIds[0]! });
+
+    await runOutboxSweep(quietEnv().env, now + CLAIM_TTL_MS + 1_000);
+
+    expect((await outboxRow(sent.dispatchIds[0]!)).status).toBe("unknown");
+    expect((await lineRow(sent.orderId)).dispatch_state).toBe("unknown");
+    expect((await outboxRow(unsent.dispatchIds[0]!)).status).toBe("failed");
+    expect((await lineRow(unsent.orderId)).dispatch_state).toBe("failed");
+  });
+
+  it("resolving as failed sets the line failed — on an unknown row and on an acknowledged failed one", async () => {
+    const unknownOrder = await seedOrder(TENANT_A);
+    const unknownId = unknownOrder.dispatchIds[0]!;
+    await dispatch(quietEnv({ [FAKE_PRINTER_FETCH_OVERRIDE]: losingTransport() }).env, unknownId);
+    expect((await lineRow(unknownOrder.orderId)).dispatch_state).toBe("unknown");
+
+    expect((await resolve(unknownId, { note: "Not at the printer", outcome: "failed" })).status).toBe(200);
+    expect((await lineRow(unknownOrder.orderId)).dispatch_state).toBe("failed");
+
+    // A failed row whose line still shows where the last attempt left it.
+    const failedOrder = await seedOrder(TENANT_A, { printer: "snapwear" });
+    const failedId = failedOrder.dispatchIds[0]!;
+    await dispatch(quietEnv().env, failedId);
+    await env.DB.prepare("UPDATE order_items SET dispatch_state = 'pending' WHERE order_id = ?")
+      .bind(failedOrder.orderId)
+      .run();
+
+    expect((await resolve(failedId, { note: "Acknowledged", outcome: "failed" })).status).toBe(200);
+    expect((await lineRow(failedOrder.orderId)).dispatch_state).toBe("failed");
+  });
+
+  it("resolving as accepted sets the line accepted with the printer reference", async () => {
+    const order = await seedOrder(TENANT_A, { printer: "snapwear" });
+    const dispatchId = order.dispatchIds[0]!;
+    await dispatch(quietEnv().env, dispatchId);
+
+    expect(
+      (await resolve(dispatchId, { note: "Placed by hand", outcome: "accepted", printerJobRef: "SW-77" })).status,
+    ).toBe(200);
+    expect(await lineRow(order.orderId)).toMatchObject({
+      dispatch_state: "accepted",
+      printer_job_ref: "SW-77",
+    });
   });
 });
 

@@ -379,23 +379,32 @@ async function failTerminal(
   return outcomeOf(result, now);
 }
 
+/**
+ * A retryable failure. The line follows the row IN THE SAME BATCH: back to
+ * `pending` when the row is (a line shown `submitting` must not stay so), and
+ * `failed` when this attempt was the last one and the row becomes `failed` —
+ * whether the failure came before the printer call or from the call itself.
+ * (`fail` moves the row to `failed` exactly when attempts >= max_attempts; the
+ * CASE reads the same row before the transition, so the two cannot disagree.)
+ */
 async function retryLater(
   ctx: EffectContext,
   error: string,
-  line: { orderItemId: string; tenantId: string } | null = null,
+  line: { orderItemId: string; tenantId: string },
 ): Promise<OutboxRunOutcome> {
   const now = ctx.clock();
   const result = await fail(ctx.env.DB, ctx.claim, {
-    // A line shown as `submitting` goes back to `pending` with its row.
-    withTransition: (guard) =>
-      line === null
-        ? []
-        : [
-            lineStateStatement(ctx.env.DB, line, guard, {
-              binds: [],
-              sql: "dispatch_state = CASE WHEN dispatch_state = 'submitting' THEN 'pending' ELSE dispatch_state END",
-            }),
-          ],
+    withTransition: (guard) => [
+      lineStateStatement(ctx.env.DB, line, guard, {
+        binds: [ctx.row.outbox_id],
+        sql: `dispatch_state = CASE
+                WHEN (SELECT e.attempts >= e.max_attempts FROM outbox_events AS e
+                      WHERE e.outbox_id = ?) THEN 'failed'
+                WHEN dispatch_state = 'submitting' THEN 'pending'
+                ELSE dispatch_state
+              END`,
+      }),
+    ],
     backoffMs: outboxRetryDelayMs(ctx.row.attempts),
     error,
     now,
@@ -484,7 +493,7 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
   // backoff, alert when exhausted) rather than judging the order by it.
   const client = resolvePrinterClient(env);
   if (client === null) {
-    return retryLater(ctx, "printer_not_configured");
+    return retryLater(ctx, "printer_not_configured", lineRef);
   }
 
   const built = buildDispatchJob(env, tenantId, payload, line);
@@ -496,7 +505,7 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
   if (storage.kind !== "ok") {
     return storage.kind === "terminal"
       ? failTerminal(ctx, storage.error, lineRef)
-      : retryLater(ctx, storage.error);
+      : retryLater(ctx, storage.error, lineRef);
   }
 
   let job: PrinterJob;
@@ -514,7 +523,7 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
       mockupUrls: [],
     };
   } catch {
-    return retryLater(ctx, "presign_failed");
+    return retryLater(ctx, "presign_failed", lineRef);
   }
 
   const submitting = await markSubmitting(env.DB, claim, {

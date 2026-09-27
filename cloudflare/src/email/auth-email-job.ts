@@ -436,6 +436,32 @@ function parseOrderConfirmationEmailJob(value: unknown): OrderConfirmationEmailJ
   };
 }
 
+/**
+ * The order content in a FIXED key order, for the delivery ledger's job
+ * fingerprint (email-delivery-store.ts). The confirmation renders all of it, so
+ * all of it is covered: a queued copy whose order number, lines or totals differ
+ * from what the producer recorded is a fingerprint conflict, never a send.
+ */
+export function canonicalOrderContent(order: OrderConfirmationContent) {
+  return {
+    currency: order.currency,
+    deliveryMethod: order.deliveryMethod,
+    discountMinor: order.discountMinor,
+    items: order.items.map((item) => ({
+      lineTotalMinor: item.lineTotalMinor,
+      name: item.name,
+      quantity: item.quantity,
+    })),
+    orderNumber: order.orderNumber,
+    shippingCountry: order.shippingCountry,
+    shippingMinor: order.shippingMinor,
+    shopName: order.shopName,
+    subtotalMinor: order.subtotalMinor,
+    totalMinor: order.totalMinor,
+    vatMinor: order.vatMinor,
+  };
+}
+
 /** Minor units → "1 234,50 kr" (sv-SE), the way the storefront shows money. */
 export function formatOrderMoney(minor: number, currency: string): string {
   return new Intl.NumberFormat("sv-SE", { currency, style: "currency" }).format(minor / 100);

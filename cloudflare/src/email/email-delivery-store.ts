@@ -1,4 +1,8 @@
-import { hashEmailRecipient, type AuthEmailJob } from "./auth-email-job";
+import {
+  canonicalOrderContent,
+  hashEmailRecipient,
+  type AuthEmailJob,
+} from "./auth-email-job";
 
 const LEASE_DURATION_MS = 60_000;
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -34,6 +38,10 @@ export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string
     recipient: job.recipient,
     tenantId: job.tenantId ?? null,
     version: job.version,
+    // An order confirmation's rendered content is part of the job it is. The
+    // key is ABSENT for the auth kinds, so their canonical string — and every
+    // fingerprint already in a ledger — is byte-identical to before.
+    ...(job.kind === "order_confirmation" ? { order: canonicalOrderContent(job.order) } : {}),
   });
   return bytesToHex(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)),

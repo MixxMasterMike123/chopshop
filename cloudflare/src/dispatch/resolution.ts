@@ -274,7 +274,9 @@ export async function resolveDispatch(
       .bind(iso(nowMs), outboxId, ...stillAsSeen.binds),
   ];
 
-  if (!acknowledgeOnly && typeof lineNo === "number" && row.tenant_id !== null) {
+  // The line ALWAYS follows the human's decision — including an acknowledged
+  // failure, whose line may still show where the last attempt left it.
+  if (typeof lineNo === "number" && row.tenant_id !== null) {
     statements.push(
       input.outcome === "accepted"
         ? db
