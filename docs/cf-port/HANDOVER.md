@@ -2,6 +2,10 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
+## CP3 — Platform minimal + data import to staging (GO 2026-09-27 13:10, in progress)
+
+**Mikael:** "CP3 go, defaults" — D12–D23 on the recommended defaults (print-shop users + uid-keyed printer tiers archived; impersonationAudit archive only; legacy leftovers archived; only referenced legacy images copied; translations rebuilt as static JSON; mockups regenerated; 7 artworks imported as needs-reprocessing; 3D derivatives public; all shops imported to staging scrubbed; robowatz archived; effective feature values; DAC7 = CP9 in November). **Carried in from CP2's close:** design diff on the slice pages (CP4), and two "operable without scripts" gaps found by the staging run — no route manages a tenant's hostname, and no Connect onboarding endpoints exist (the seed script used the Stripe API + two raw D1 statements). **Started 13:15:** read-only gap analysis (what CP2 already built vs PLAN §10 CP3 scope, frontend scope, which manifest rows the CP3 importer handles) → builder briefs.
+
 ## CP2 — Vertical slice (GO 2026-09-27 01:10, ✅ CLOSED 2026-09-27 13:00)
 
 **Mikael:** "Skip all Codex reviews until 01:55 … GO!" — CP2 build started under the recommended defaults for D8–D11 (assumed; veto window until the CP2 deploy). Codex reviews resume 01:55 and gate the deploy as always. **Split (three Opus builders in parallel, disjoint files, route mounts via anchors in `src/app.ts`):** CP2-A money (refunds reserve-first, Stripe event handlers, Connect PI params, payout facts, retention sweep, reconciliation), CP2-B outbox with claims + dispatch state machine + cancellation ×4 + 15-min sweeper cron + manual resolution, CP2-C POD product path (mappings, screening D8, quotePodCost, publish gate, production snapshot at checkout, storefront POD fields). Then CP2-D: seed script + failure-injection suite + reconcile-to-the-öre report.

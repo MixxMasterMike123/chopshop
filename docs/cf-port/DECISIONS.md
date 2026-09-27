@@ -24,7 +24,7 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 | D10 | The 9 refunded test orders + 4 `orderProduction` docs: archive only (not in the CF admin, DAC7, bookkeeping)? | **Archive only.** |
 | D11 | Guest withdrawal + guest checkout stay; B2C accounts PORT-LATER. Email source of truth for users = Firebase Auth email (not `users.email`). | **Yes** / **Auth email wins.** |
 
-## Blocks CP3 (platform minimal / data import to staging)
+## Blocks CP3 (platform minimal / data import to staging) — **✅ ANSWERED 2026-09-27 13:10: Mikael "CP3 go, defaults" — D12–D23 all on the recommended defaults below. D36, D41–D49 stand on their defaults (no veto received).**
 
 | # | Decision | Recommended default |
 |---|---|---|
