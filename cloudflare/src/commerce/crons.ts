@@ -1,5 +1,6 @@
 import { raiseAlert } from "./money-alerts";
 import { DAY_MS, refreshPayoutStates } from "./payouts";
+import { replayDeferredPaymentEvents } from "./stripe-events";
 import {
   applyRefundFact,
   refundFactFrom,
@@ -8,6 +9,7 @@ import {
 import type {
   PaymentIntentView,
   StripeMoneyGateway,
+  TransferReversalView,
 } from "./stripe-client";
 import {
   isStripeConfigured,
@@ -250,11 +252,18 @@ async function cancelOrRead(
 
 export interface ReconciliationSummary {
   alertsRaised: number;
+  deferred: { replayed: number; waiting: number };
   dispatch: { stranded: number };
   disputes: { blocked: number; errors: number; recovered: number; retransferred: number; failed: number };
   paymentIntents: { errors: number; listed: number; missingOrders: number };
   payouts: { examined: number; updated: number };
-  refunds: { errors: number; released: number; settled: number; unsettled: number };
+  refunds: {
+    errors: number;
+    incompleteListings: number;
+    released: number;
+    settled: number;
+    unsettled: number;
+  };
   retention: { snapshotsWithoutTerminalIntent: number };
   stripe: "configured" | "unconfigured";
 }
@@ -267,11 +276,12 @@ export async function runReconciliation(
   const gateway = gatewayFor(env);
   const summary: ReconciliationSummary = {
     alertsRaised: 0,
+    deferred: { replayed: 0, waiting: 0 },
     dispatch: { stranded: 0 },
     disputes: { blocked: 0, errors: 0, failed: 0, recovered: 0, retransferred: 0 },
     paymentIntents: { errors: 0, listed: 0, missingOrders: 0 },
     payouts: { examined: 0, updated: 0 },
-    refunds: { errors: 0, released: 0, settled: 0, unsettled: 0 },
+    refunds: { errors: 0, incompleteListings: 0, released: 0, settled: 0, unsettled: 0 },
     retention: { snapshotsWithoutTerminalIntent: 0 },
     stripe: gateway === null ? "unconfigured" : "configured",
   };
@@ -280,6 +290,10 @@ export async function runReconciliation(
       summary.alertsRaised += 1;
     }
   };
+
+  // First, and without Stripe: facts that arrived before their order (0026).
+  // A replayed dispute may queue a recovery the step below then performs.
+  await replayDeferred(db, now, summary, alert);
 
   if (gateway !== null) {
     await recoverDisputes(db, gateway, now, summary, alert);
@@ -308,11 +322,56 @@ export async function runReconciliation(
   return summary;
 }
 
-type Alert = (
+// ── deferred payment events (0026) ──────────────────────────────────────────
+
+/**
+ * Replays facts parked before their order existed — for intents whose order
+ * now exists and whose own replay (the order webhook's, or the deferring
+ * handler's) did not run to completion. A fact still waiting 30 minutes after
+ * it arrived means a paid order that never appeared: alerted per intent.
+ */
+async function replayDeferred(
   db: D1Database,
-  alert: Parameters<typeof raiseAlert>[1],
   now: number,
-) => Promise<void>;
+  summary: ReconciliationSummary,
+  alert: Alert,
+): Promise<void> {
+  const ready = await db
+    .prepare(
+      `SELECT DISTINCT d.payment_intent_id
+       FROM deferred_payment_events AS d
+       WHERE d.applied_at IS NULL
+         AND EXISTS (SELECT 1 FROM orders AS o WHERE o.payment_intent_id = d.payment_intent_id)
+       LIMIT ?`,
+    )
+    .bind(RECONCILE_BATCH)
+    .all<{ payment_intent_id: string }>();
+  for (const row of ready.results) {
+    summary.deferred.replayed += (await replayDeferredPaymentEvents(db, row.payment_intent_id, now)).applied;
+  }
+
+  const waiting = await db
+    .prepare(
+      `SELECT payment_intent_id, tenant_id, COUNT(*) AS n
+       FROM deferred_payment_events
+       WHERE applied_at IS NULL AND created_at <= ?
+       GROUP BY payment_intent_id, tenant_id
+       LIMIT ?`,
+    )
+    .bind(iso(now - STRANDED_MS), RECONCILE_BATCH)
+    .all<{ n: number; payment_intent_id: string; tenant_id: string }>();
+  for (const row of waiting.results) {
+    summary.deferred.waiting += row.n;
+    await alert(db, {
+      kind: "payment_event_deferred_30m",
+      message: `payment intent ${row.payment_intent_id}: refund or dispute events have waited over 30 minutes for an order that does not exist`,
+      resourceId: row.payment_intent_id,
+      resourceType: "payment_intent",
+      severity: "critical",
+      tenantId: row.tenant_id,
+    }, now);
+  }
+}
 
 // ── dispute recovery: the money moves the dispute webhooks queued ───────────
 
@@ -322,12 +381,24 @@ interface RecoveryRow {
   dispute_id: string | null;
   dispute_recovery: string;
   dispute_retransferred_minor: number;
+  dispute_reversal_id: string | null;
   order_id: string;
   stripe_charge_id: string | null;
   stripe_transfer_id: string | null;
   tenant_id: string;
   transfer_reversed_minor: number;
 }
+
+/** The transfer_group a won dispute's re-transfer carries, to find it again. */
+export function retransferGroup(disputeId: string): string {
+  return `dispute_retransfer_${disputeId}`;
+}
+
+type Alert = (
+  db: D1Database,
+  alert: Parameters<typeof raiseAlert>[1],
+  now: number,
+) => Promise<void>;
 
 /**
  * Performs the Stripe calls the dispute handlers recorded as pending, exactly
@@ -339,13 +410,20 @@ interface RecoveryRow {
  *                     idempotency key `dispute-reversal:{disputeId}`.
  *                     ok → recovered; Stripe refused → shortfall + alert (the
  *                     shop's balance could not cover it); no transfer → alert.
- *  retransfer_pending the dispute closed in the shop's favour after a
- *                     reversal: transfer exactly what was reversed back,
- *                     idempotency key `dispute-retransfer:{disputeId}`.
+ *  retransfer_pending the dispute closed in the shop's favour: transfer back
+ *                     exactly what was reversed, idempotency key
+ *                     `dispute-retransfer:{disputeId}`, transfer_group
+ *                     retransferGroup(disputeId). Nothing reversed ⇒
+ *                     won_no_reversal.
  *
- * Every commit is guarded so a replay after a lost D1 write converges: the
- * idempotency key returns the same Stripe object, and the guarded UPDATE
- * applies it once.
+ * STRIPE IS ASKED FIRST (Codex CP2-A P1). A reversal or re-transfer whose
+ * answer was lost, or whose D1 write never landed, still EXISTS at Stripe.
+ * Before creating one, the run lists the transfer's reversals (metadata
+ * dispute_id) or the transfers of the dispute's transfer_group, and records
+ * what it finds instead. So a lost answer can neither be repeated after the
+ * 24-hour idempotency window nor be mistaken for "nothing was reversed" when
+ * the dispute is later won. A listing that is not complete never proves an
+ * absence: the row waits for the next run.
  */
 async function recoverDisputes(
   db: D1Database,
@@ -358,7 +436,8 @@ async function recoverDisputes(
     .prepare(
       `SELECT order_id, tenant_id, dispute_id, dispute_recovery, currency,
               stripe_charge_id, stripe_transfer_id, connect_account_id,
-              transfer_reversed_minor, dispute_retransferred_minor
+              transfer_reversed_minor, dispute_retransferred_minor,
+              dispute_reversal_id
        FROM orders
        WHERE dispute_recovery IN ('reversal_pending', 'retransfer_pending')
        ORDER BY dispute_updated_at ASC
@@ -367,38 +446,90 @@ async function recoverDisputes(
     .bind(RECONCILE_BATCH)
     .all<RecoveryRow>();
 
+  const failed = async (
+    row: RecoveryRow,
+    from: string,
+    to: "no_transfer" | "retransfer_failed" | "shortfall",
+    message: string,
+  ) => {
+    await db
+      .prepare(
+        `UPDATE orders SET dispute_recovery = ?, dispute_updated_at = ?,
+                updated_at = MAX(updated_at, ?)
+         WHERE order_id = ? AND dispute_recovery = ?`,
+      )
+      .bind(to, now, now, row.order_id, from)
+      .run();
+    summary.disputes.failed += 1;
+    await alert(db, {
+      kind: "dispute_recovery_failed",
+      message,
+      resourceId: row.order_id,
+      resourceType: "order",
+      severity: "critical",
+      tenantId: row.tenant_id,
+    }, now);
+  };
+
   for (const row of rows.results) {
     const disputeId = row.dispute_id ?? row.order_id;
 
-    if (row.dispute_recovery === "reversal_pending") {
-      let transferId = row.stripe_transfer_id;
-      if (transferId === null && row.stripe_charge_id !== null) {
-        try {
-          transferId = (await gateway.retrieveCharge(row.stripe_charge_id)).transfer;
-        } catch {
-          summary.disputes.errors += 1;
+    // ── the transfer, and what Stripe already reversed of it for us ────────
+    let transferId = row.stripe_transfer_id;
+    if (transferId === null && row.stripe_charge_id !== null) {
+      try {
+        transferId = (await gateway.retrieveCharge(row.stripe_charge_id)).transfer;
+      } catch {
+        summary.disputes.errors += 1;
+        continue;
+      }
+    }
+
+    let reversalsComplete = true;
+    if (transferId !== null && row.dispute_reversal_id === null) {
+      let listing;
+      try {
+        listing = await gateway.listTransferReversals(transferId);
+      } catch {
+        summary.disputes.errors += 1;
+        continue;
+      }
+
+      reversalsComplete = listing.complete;
+      const made = listing.data.find((reversal) => reversal.metadata.dispute_id === disputeId);
+      if (made !== undefined) {
+        // An earlier run's reversal: record it (once) instead of making one.
+        const recorded = await recordReversal(db, row.order_id, transferId, made, now);
+        if (recorded) {
+          row.dispute_reversal_id = made.id;
+          row.transfer_reversed_minor += made.amount;
+          summary.disputes.recovered += 1;
+        }
+        if (row.dispute_recovery === "reversal_pending") {
           continue;
         }
       }
+    }
+
+    if (row.dispute_recovery === "reversal_pending") {
+      if (row.dispute_reversal_id !== null) {
+        continue;
+      }
 
       if (transferId === null) {
-        await db
-          .prepare(
-            `UPDATE orders SET dispute_recovery = 'no_transfer', dispute_updated_at = ?,
-                    updated_at = MAX(updated_at, ?)
-             WHERE order_id = ? AND dispute_recovery = 'reversal_pending'`,
-          )
-          .bind(now, now, row.order_id)
-          .run();
-        summary.disputes.failed += 1;
-        await alert(db, {
-          kind: "dispute_recovery_failed",
-          message: `order ${row.order_id}: dispute ${disputeId} has no destination transfer to reverse; reconcile manually`,
-          resourceId: row.order_id,
-          resourceType: "order",
-          severity: "critical",
-          tenantId: row.tenant_id,
-        }, now);
+        await failed(
+          row,
+          "reversal_pending",
+          "no_transfer",
+          `order ${row.order_id}: dispute ${disputeId} has no destination transfer to reverse; reconcile manually`,
+        );
+        continue;
+      }
+
+      if (!reversalsComplete) {
+        // Cannot rule out a reversal hidden past the page bound; creating one
+        // blind could double it. Next run.
+        summary.disputes.errors += 1;
         continue;
       }
 
@@ -413,87 +544,90 @@ async function recoverDisputes(
           refundApplicationFee: false,
           transferId,
         });
-        // If the dispute was won between the read and here, the reversal
-        // still happened: it is recorded and queued straight back.
-        await db
-          .prepare(
-            `UPDATE orders
-             SET transfer_reversed_minor = transfer_reversed_minor + ?,
-                 dispute_reversal_id = ?,
-                 stripe_transfer_id = COALESCE(stripe_transfer_id, ?),
-                 dispute_recovery = CASE dispute_recovery
-                   WHEN 'reversal_pending' THEN 'recovered'
-                   WHEN 'won_no_reversal' THEN 'retransfer_pending'
-                   ELSE dispute_recovery END,
-                 dispute_updated_at = ?,
-                 updated_at = MAX(updated_at, ?)
-             WHERE order_id = ? AND dispute_reversal_id IS NULL`,
-          )
-          .bind(reversal.amount, reversal.id, transferId, now, now, row.order_id)
-          .run();
+        await recordReversal(db, row.order_id, transferId, reversal, now);
         summary.disputes.recovered += 1;
       } catch (error) {
         if (error instanceof StripeGatewayError && error.rejected) {
           await db
-            .prepare(
-              `UPDATE orders SET dispute_recovery = 'shortfall', dispute_updated_at = ?,
-                      stripe_transfer_id = COALESCE(stripe_transfer_id, ?),
-                      updated_at = MAX(updated_at, ?)
-               WHERE order_id = ? AND dispute_recovery = 'reversal_pending'`,
-            )
-            .bind(now, transferId, now, row.order_id)
+            .prepare("UPDATE orders SET stripe_transfer_id = COALESCE(stripe_transfer_id, ?) WHERE order_id = ?")
+            .bind(transferId, row.order_id)
             .run();
-          summary.disputes.failed += 1;
-          await alert(db, {
-            kind: "dispute_recovery_failed",
-            message: `order ${row.order_id}: Stripe refused the transfer reversal for dispute ${disputeId} (possible shortfall on the connected account)`,
-            resourceId: row.order_id,
-            resourceType: "order",
-            severity: "critical",
-            tenantId: row.tenant_id,
-          }, now);
+          await failed(
+            row,
+            "reversal_pending",
+            "shortfall",
+            `order ${row.order_id}: Stripe refused the transfer reversal for dispute ${disputeId} (possible shortfall on the connected account)`,
+          );
         } else {
+          // Unknown outcome: stays reversal_pending; the next run asks Stripe
+          // first, so a reversal that did happen is found, not repeated.
           summary.disputes.errors += 1;
         }
       }
       continue;
     }
 
-    // retransfer_pending
+    // ── retransfer_pending ──────────────────────────────────────────────────
     const amount = row.transfer_reversed_minor - row.dispute_retransferred_minor;
-    if (amount <= 0 || row.connect_account_id === null) {
+    if (amount <= 0) {
+      if (!reversalsComplete) {
+        summary.disputes.errors += 1;
+        continue;
+      }
+
+      // Stripe holds no reversal for this dispute (or there is no transfer at
+      // all): nothing was taken from the shop, so nothing goes back.
       await db
         .prepare(
-          `UPDATE orders SET dispute_recovery = 'retransfer_failed', dispute_updated_at = ?,
+          `UPDATE orders SET dispute_recovery = 'won_no_reversal', dispute_updated_at = ?,
                   updated_at = MAX(updated_at, ?)
-           WHERE order_id = ? AND dispute_recovery = 'retransfer_pending'`,
+           WHERE order_id = ? AND dispute_recovery = 'retransfer_pending'
+             AND transfer_reversed_minor <= dispute_retransferred_minor`,
         )
         .bind(now, now, row.order_id)
         .run();
-      summary.disputes.failed += 1;
-      await alert(db, {
-        kind: "dispute_recovery_failed",
-        message: `order ${row.order_id}: dispute ${disputeId} closed in the shop's favour but nothing can be re-transferred automatically`,
-        resourceId: row.order_id,
-        resourceType: "order",
-        severity: "critical",
-        tenantId: row.tenant_id,
-      }, now);
+      continue;
+    }
+
+    if (row.connect_account_id === null) {
+      await failed(
+        row,
+        "retransfer_pending",
+        "retransfer_failed",
+        `order ${row.order_id}: dispute ${disputeId} closed in the shop's favour but has no destination to re-transfer to`,
+      );
+      continue;
+    }
+
+    let earlier;
+    try {
+      earlier = await gateway.listTransfersByGroup(retransferGroup(disputeId));
+    } catch {
+      summary.disputes.errors += 1;
+      continue;
+    }
+
+    const found = earlier.data.find((transfer) => transfer.metadata.dispute_id === disputeId);
+    if (found === undefined && !earlier.complete) {
+      summary.disputes.errors += 1;
       continue;
     }
 
     try {
-      const transfer = await gateway.createTransfer({
-        amount,
-        currency: row.currency.toLowerCase(),
-        destination: row.connect_account_id,
-        idempotencyKey: `dispute-retransfer:${disputeId}`,
-        metadata: {
-          dispute_id: disputeId,
-          order_id: row.order_id,
-          reason: "dispute_won_retransfer",
-        },
-      });
+      const transfer =
+        found ??
+        (await gateway.createTransfer({
+          amount,
+          currency: row.currency.toLowerCase(),
+          destination: row.connect_account_id,
+          idempotencyKey: `dispute-retransfer:${disputeId}`,
+          metadata: {
+            dispute_id: disputeId,
+            order_id: row.order_id,
+            reason: "dispute_won_retransfer",
+          },
+          transferGroup: retransferGroup(disputeId),
+        }));
       await db
         .prepare(
           `UPDATE orders
@@ -511,28 +645,49 @@ async function recoverDisputes(
       summary.disputes.retransferred += 1;
     } catch (error) {
       if (error instanceof StripeGatewayError && error.rejected) {
-        await db
-          .prepare(
-            `UPDATE orders SET dispute_recovery = 'retransfer_failed', dispute_updated_at = ?,
-                    updated_at = MAX(updated_at, ?)
-             WHERE order_id = ? AND dispute_recovery = 'retransfer_pending'`,
-          )
-          .bind(now, now, row.order_id)
-          .run();
-        summary.disputes.failed += 1;
-        await alert(db, {
-          kind: "dispute_recovery_failed",
-          message: `order ${row.order_id}: Stripe refused re-transferring the reversed funds for dispute ${disputeId}`,
-          resourceId: row.order_id,
-          resourceType: "order",
-          severity: "critical",
-          tenantId: row.tenant_id,
-        }, now);
+        await failed(
+          row,
+          "retransfer_pending",
+          "retransfer_failed",
+          `order ${row.order_id}: Stripe refused re-transferring the reversed funds for dispute ${disputeId}`,
+        );
       } else {
         summary.disputes.errors += 1;
       }
     }
   }
+}
+
+/**
+ * Records a reversal made for the order's dispute, once (guarded on no
+ * reversal recorded yet). If the dispute closed in the shop's favour meanwhile
+ * the state is already retransfer_pending and stays there, now with an amount
+ * to return; an open or lost dispute moves to recovered.
+ */
+async function recordReversal(
+  db: D1Database,
+  orderId: string,
+  transferId: string,
+  reversal: TransferReversalView,
+  now: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE orders
+       SET transfer_reversed_minor = transfer_reversed_minor + ?,
+           dispute_reversal_id = ?,
+           stripe_transfer_id = COALESCE(stripe_transfer_id, ?),
+           dispute_recovery = CASE dispute_recovery
+             WHEN 'reversal_pending' THEN 'recovered'
+             WHEN 'won_no_reversal' THEN 'retransfer_pending'
+             ELSE dispute_recovery END,
+           dispute_updated_at = ?,
+           updated_at = MAX(updated_at, ?)
+       WHERE order_id = ? AND dispute_reversal_id IS NULL`,
+    )
+    .bind(reversal.amount, reversal.id, transferId, now, now, orderId)
+    .run();
+  return result.meta.changes === 1;
 }
 
 // ── refunds ─────────────────────────────────────────────────────────────────
@@ -580,7 +735,10 @@ async function reconcileRefunds(
     ...unexplained.results.map((order) => order.payment_intent_id),
   ]);
   const seenOperationIds = new Set<string>();
-  const listedIntents = new Set<string>();
+  // Intents whose refunds were listed TO COMPLETION: only for these may an
+  // operation's absence at Stripe prove it was never received (Codex CP2-A
+  // P2 — a truncated listing once looked exhaustive).
+  const completelyListed = new Set<string>();
 
   for (const intentId of intents) {
     let refunds;
@@ -591,8 +749,13 @@ async function reconcileRefunds(
       continue;
     }
 
-    listedIntents.add(intentId);
-    for (const refund of refunds) {
+    if (refunds.complete) {
+      completelyListed.add(intentId);
+    } else {
+      summary.refunds.incompleteListings += 1;
+    }
+
+    for (const refund of refunds.data) {
       const fact = refundFactFrom(refund);
       if (fact === null) {
         continue;
@@ -616,7 +779,7 @@ async function reconcileRefunds(
   for (const op of staleOps.results) {
     if (
       op.state === "reserved" &&
-      listedIntents.has(op.payment_intent_id) &&
+      completelyListed.has(op.payment_intent_id) &&
       !seenOperationIds.has(op.id) &&
       (await releaseReservation(db, op.id, now))
     ) {

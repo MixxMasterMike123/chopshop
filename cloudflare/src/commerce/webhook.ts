@@ -15,7 +15,10 @@ import {
   recordOnly,
 } from "./payment-events";
 import { mintReceiptCapability } from "./receipts";
-import { handleStripeEvent } from "./stripe-events";
+import {
+  handleStripeEvent,
+  replayDeferredPaymentEvents,
+} from "./stripe-events";
 import type { StripeWebhookVerifier, VerifiedStripeEvent } from "./stripe-client";
 
 export type { HandleWebhookEventResult, WebhookOutcome };
@@ -310,6 +313,12 @@ export async function handleStripeWebhookEvent(
   // effects — whatever they were — and must produce none a second time.
   const recorded = await findRecordedEvent(db, event.id);
   if (recorded !== null) {
+    if (event.type === ORDER_EVENT_TYPE) {
+      // A redelivered success: its first delivery may have committed the
+      // order and died before replaying facts parked for it.
+      await replayDeferredSafely(db, readIntent(event)?.id ?? null, now);
+    }
+
     return {
       outcome: recorded.outcome as WebhookOutcome,
       ...(recorded.reason_code === null
@@ -756,10 +765,41 @@ export async function handleStripeWebhookEvent(
     // committed first. Nothing of this batch landed — D1 batches are atomic — so
     // there is no partial state to repair, and the honest answer is a 200 that
     // says the work is already done.
+    await replayDeferredSafely(db, intent.id, now);
     return { outcome: "processed", replayed: true };
   }
 
+  // Refunds and disputes that arrived before this order (Stripe does not
+  // deliver in order) were parked; they apply now, before anything else
+  // happens to the order — a full refund supersedes its dispatch here.
+  await replayDeferredSafely(db, intent.id, now);
   return { orderId, outcome: "processed", replayed: false };
+}
+
+/**
+ * The order is committed whatever happens here, so a failed replay must not
+ * turn the delivery into a 500: the parked facts stay unapplied and the next
+ * redelivery or reconciliation run (every 15 minutes) replays them.
+ */
+async function replayDeferredSafely(
+  db: D1Database,
+  paymentIntentId: string | null,
+  now: number,
+): Promise<void> {
+  if (paymentIntentId === null) {
+    return;
+  }
+
+  try {
+    await replayDeferredPaymentEvents(db, paymentIntentId, now);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        error: error instanceof Error ? error.name : "unknown",
+        message: "deferred payment events could not be replayed yet",
+      }),
+    );
+  }
 }
 
 type ProductionSnapshotRead =

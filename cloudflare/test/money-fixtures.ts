@@ -8,6 +8,7 @@ import type {
   ChargeView,
   CreatePaymentIntentParams,
   CreateRefundParams,
+  Listing,
   PaymentIntentPage,
   PaymentIntentSummary,
   PaymentIntentView,
@@ -17,6 +18,7 @@ import type {
   TransferView,
 } from "../src/commerce/stripe-client";
 import {
+  collectPages,
   STRIPE_API_VERSION,
   STRIPE_GATEWAY_OVERRIDE,
   StripeGatewayError,
@@ -78,6 +80,17 @@ export class FakeMoneyStripe implements StripeMoneyGateway {
   private readonly refundsByKey = new Map<string, RefundView>();
   private readonly reversalsByKey = new Map<string, TransferReversalView>();
   private readonly transfersByKey = new Map<string, TransferView>();
+  /** Every reversal made, per transfer (what listTransferReversals shows). */
+  readonly reversalsByTransfer = new Map<string, TransferReversalView[]>();
+  /** Every transfer made, per transfer_group. */
+  readonly transfersByGroup = new Map<string, TransferView[]>();
+  /** Create the reversal / transfer at "Stripe", then lose the answer. */
+  loseReversalResponse = false;
+  loseTransferResponse = false;
+  /** Listing page size and bound — lets a suite force an incomplete listing. */
+  listPageSize = 100;
+  listMaxPages = 20;
+  readonly listRefundCalls: string[] = [];
   /** Remaining reversible amount per transfer. */
   readonly transferRemaining = new Map<string, number>();
 
@@ -232,9 +245,30 @@ export class FakeMoneyStripe implements StripeMoneyGateway {
     return updated;
   }
 
-  async listRefunds(paymentIntentId: string): Promise<RefundView[]> {
+  /** Serves `all` in pages through the production pager (collectPages). */
+  private async paged<T extends { id: string }>(all: T[]): Promise<Listing<T>> {
+    return collectPages(async (startingAfter) => {
+      const start =
+        startingAfter === null ? 0 : all.findIndex((item) => item.id === startingAfter) + 1;
+      const data = all.slice(start, start + this.listPageSize);
+      return { data, hasMore: start + this.listPageSize < all.length };
+    }, this.listMaxPages);
+  }
+
+  async listRefunds(paymentIntentId: string): Promise<Listing<RefundView>> {
+    this.listRefundCalls.push(paymentIntentId);
     this.fail(this.listBehaviour);
-    return [...this.refunds.values()].filter((r) => r.payment_intent === paymentIntentId);
+    return this.paged([...this.refunds.values()].filter((r) => r.payment_intent === paymentIntentId));
+  }
+
+  async listTransferReversals(transferId: string): Promise<Listing<TransferReversalView>> {
+    this.fail(this.listBehaviour);
+    return this.paged(this.reversalsByTransfer.get(transferId) ?? []);
+  }
+
+  async listTransfersByGroup(group: string): Promise<Listing<TransferView>> {
+    this.fail(this.listBehaviour);
+    return this.paged(this.transfersByGroup.get(group) ?? []);
   }
 
   async retrieveCharge(chargeId: string): Promise<ChargeView> {
@@ -258,9 +292,16 @@ export class FakeMoneyStripe implements StripeMoneyGateway {
     if (remaining <= 0) {
       throw new StripeGatewayError(true);
     }
-    const reversal = { amount: remaining, id: next("trr") };
+    const reversal = { amount: remaining, id: next("trr"), metadata: params.metadata };
     this.transferRemaining.set(params.transferId, 0);
     this.reversalsByKey.set(params.idempotencyKey, reversal);
+    this.reversalsByTransfer.set(params.transferId, [
+      ...(this.reversalsByTransfer.get(params.transferId) ?? []),
+      reversal,
+    ]);
+    if (this.loseReversalResponse) {
+      throw new StripeGatewayError(false);
+    }
     return reversal;
   }
 
@@ -273,8 +314,15 @@ export class FakeMoneyStripe implements StripeMoneyGateway {
     if (existing !== undefined) {
       return existing;
     }
-    const transfer = { amount: params.amount, id: next("tr") };
+    const transfer = { amount: params.amount, id: next("tr"), metadata: params.metadata };
     this.transfersByKey.set(params.idempotencyKey, transfer);
+    this.transfersByGroup.set(params.transferGroup, [
+      ...(this.transfersByGroup.get(params.transferGroup) ?? []),
+      transfer,
+    ]);
+    if (this.loseTransferResponse) {
+      throw new StripeGatewayError(false);
+    }
     return transfer;
   }
 
@@ -507,12 +555,12 @@ const signer = new Stripe("sk_test_signing_helper_only", {
 export async function postEvent(
   type: string,
   object: Record<string, unknown>,
-  options: { env?: Env; eventId?: string } = {},
+  options: { created?: number; env?: Env; eventId?: string } = {},
 ): Promise<{ eventId: string; response: Response }> {
   const eventId = options.eventId ?? next("evt");
   const payload = JSON.stringify({
     api_version: STRIPE_API_VERSION,
-    created: Math.floor(Date.now() / 1_000),
+    created: options.created ?? Math.floor(Date.now() / 1_000),
     data: { object },
     id: eventId,
     livemode: false,

@@ -17,6 +17,7 @@ export type MoneyAlertKind =
   | "dispute_recovery_failed"
   | "dispatch_stranded_30m"
   | "order_missing_for_succeeded_pi"
+  | "payment_event_deferred_30m"
   | "payout_blocked_dispute"
   | "production_snapshot_invalid"
   | "refund_failed_after_success"

@@ -1,8 +1,8 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
-import { dispatchCancellationStatements } from "../dispatch/cancellation";
 import { raiseAlertStatement } from "./money-alerts";
 import { disputeBlocksRefund } from "./payouts";
+import { fullRefundStopStatements } from "./refund-dispatch-stop";
 import type { RefundView, StripeMoneyGateway } from "./stripe-client";
 import { StripeGatewayError } from "./stripe-client";
 
@@ -126,10 +126,15 @@ const STATUS_AFTER_REFUND_SQL = `CASE
     ELSE status
   END`;
 
-/** The four statements that apply one operation transition to its order. */
+/**
+ * The statements that apply one operation transition to its order, in batch
+ * order: the money; then — if the order is now refunded to the charge by THIS
+ * transition — the dispatch cancellation, while the status is still the one
+ * the return-case guard must see; then the status history and the status.
+ */
 function orderEffectStatements(
   db: D1Database,
-  op: { id: string; orderId: string; transitionId: string },
+  op: { id: string; orderId: string; tenantId: string; transitionId: string },
   actorUserId: string | null,
   now: number,
 ): D1PreparedStatement[] {
@@ -164,6 +169,15 @@ function orderEffectStatements(
          WHERE order_id = ?3 AND ${transitioned}`,
       )
       .bind(op.id, op.transitionId, op.orderId, now),
+    // A full refund stops production — decided in THIS batch, from the money
+    // the UPDATE above just wrote (refund-dispatch-stop.ts).
+    ...fullRefundStopStatements(db, {
+      nowMs: now,
+      operationId: op.id,
+      orderId: op.orderId,
+      tenantId: op.tenantId,
+      transitionId: op.transitionId,
+    }),
     // The status history row is written BEFORE the status moves, so
     // `from_status` is the old one; both are no-ops when nothing changes.
     db
@@ -211,49 +225,6 @@ const OPERATION_COLUMNS =
   "id, tenant_id, order_id, amount_minor, state, stripe_refund_id, created_by";
 
 /**
- * A refund that makes the order FULLY refunded stops its production, in the
- * refund's own batch (PLAN §2.3: "cancel/refund before claim → superseded in
- * the same batch"). The statements are CP2-B's (src/dispatch/cancellation.ts):
- * state-conditional, idempotent, and guarded against a produced or shipped
- * order (a return case is never cancelled automatically). A partial refund —
- * goodwill, one damaged item — leaves production alone.
- *
- * Decided from a read of the order just before the batch; the one race it
- * does not cover (two concurrent partial refunds that together reach the full
- * amount) leaves production running for a human to cancel, never the reverse.
- */
-async function productionStopStatements(
-  db: D1Database,
-  op: { amount_minor: number; order_id: string; state: RefundState; tenant_id: string },
-  to: RefundState,
-  now: number,
-): Promise<D1PreparedStatement[]> {
-  if (to !== "succeeded" || op.state === "succeeded") {
-    return [];
-  }
-
-  const order = await db
-    .prepare(
-      "SELECT charged_minor, refund_succeeded_minor FROM orders WHERE order_id = ? LIMIT 1",
-    )
-    .bind(op.order_id)
-    .first<{ charged_minor: number; refund_succeeded_minor: number }>();
-  if (
-    order === null ||
-    order.charged_minor <= 0 ||
-    order.refund_succeeded_minor + op.amount_minor < order.charged_minor
-  ) {
-    return [];
-  }
-
-  return dispatchCancellationStatements(db, {
-    nowMs: now,
-    orderId: op.order_id,
-    tenantId: op.tenant_id,
-  });
-}
-
-/**
  * Moves one operation to `to`, applying its money effect in the same batch.
  * Returns true when THIS call performed the transition.
  */
@@ -272,9 +243,6 @@ async function transitionOperation(
 
   const transitionId = crypto.randomUUID();
   const placeholders = allowed.map(() => "?").join(", ");
-  // Before the order's status moves, so the return-case guard inside them
-  // still sees the order as it was.
-  const stopProduction = await productionStopStatements(db, op, to, now);
   const results = await db.batch([
     db
       .prepare(
@@ -287,10 +255,9 @@ async function transitionOperation(
          WHERE id = ? AND state IN (${placeholders})`,
       )
       .bind(to, transitionId, stripeRefundId, iso(now), op.id, ...allowed),
-    ...stopProduction,
     ...orderEffectStatements(
       db,
-      { id: op.id, orderId: op.order_id, transitionId },
+      { id: op.id, orderId: op.order_id, tenantId: op.tenant_id, transitionId },
       op.created_by,
       now,
     ),
@@ -482,17 +449,6 @@ export async function applyRefundFact(
 
     const operationId = crypto.randomUUID();
     const transitionId = crypto.randomUUID();
-    const stopProduction = await productionStopStatements(
-      db,
-      {
-        amount_minor: fact.amount,
-        order_id: order.order_id,
-        state: "reserved",
-        tenant_id: order.tenant_id,
-      },
-      target,
-      now,
-    );
     try {
       await db.batch([
         db
@@ -514,10 +470,14 @@ export async function applyRefundFact(
             iso(now),
             iso(now),
           ),
-        ...stopProduction,
         ...orderEffectStatements(
           db,
-          { id: operationId, orderId: order.order_id, transitionId },
+          {
+            id: operationId,
+            orderId: order.order_id,
+            tenantId: order.tenant_id,
+            transitionId,
+          },
           null,
           now,
         ),

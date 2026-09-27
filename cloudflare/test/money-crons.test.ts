@@ -359,6 +359,7 @@ describe("reconciliation: dispute recovery (the money the webhook queued)", () =
         destination: accountId,
         idempotencyKey: "dispute-retransfer:dp_won_1",
         metadata: { dispute_id: "dp_won_1", order_id: order.orderId, reason: "dispute_won_retransfer" },
+        transferGroup: "dispute_retransfer_dp_won_1",
       },
     ]);
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({
@@ -679,11 +680,21 @@ describe("reconciliation: Stripe ↔ orders ↔ dispatch ↔ payouts", () => {
     await refreshPayoutStates(env.DB, now + 14 * DAY_MS + MIN);
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({ payout_state: "eligible" });
 
-    await postEvent("account.updated", { charges_enabled: true, id: accountId, payouts_enabled: false });
+    // Distinct event times: account.updated applies strictly newer events.
+    const second = Math.floor(Date.now() / 1_000) + 3_600;
+    await postEvent(
+      "account.updated",
+      { charges_enabled: true, id: accountId, payouts_enabled: false },
+      { created: second },
+    );
     await refreshPayoutStates(env.DB, now + 14 * DAY_MS + 2 * MIN);
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({ payout_state: "blocked" });
 
-    await postEvent("account.updated", { charges_enabled: true, id: accountId, payouts_enabled: true });
+    await postEvent(
+      "account.updated",
+      { charges_enabled: true, id: accountId, payouts_enabled: true },
+      { created: second + 1 },
+    );
     await refreshPayoutStates(env.DB, now + 14 * DAY_MS + 3 * MIN);
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({ payout_state: "eligible" });
   });

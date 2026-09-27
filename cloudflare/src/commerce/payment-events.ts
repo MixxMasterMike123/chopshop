@@ -30,6 +30,9 @@ export const REASON_UNKNOWN_ORDER = "unknown_order";
 export const REASON_UNKNOWN_ACCOUNT = "unknown_account";
 export const REASON_ALREADY_APPLIED = "already_applied";
 export const REASON_REFUND_AMOUNT_MISMATCH = "refund_amount_mismatch";
+/** Parked in deferred_payment_events until the order exists (0026). */
+export const REASON_DEFERRED_UNTIL_ORDER = "deferred_until_order";
+export const REASON_STALE_EVENT = "stale_event";
 
 export interface HandleWebhookEventResult {
   outcome: WebhookOutcome;

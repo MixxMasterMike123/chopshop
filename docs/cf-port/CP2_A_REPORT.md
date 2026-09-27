@@ -351,3 +351,158 @@ Summary: `{ alertsRaised, dispatch, disputes, paymentIntents, payouts, refunds, 
 8. **Missing-order alerts only detect.** The alert could self-heal by replaying the event from Stripe's events API (authentic over our key).
 9. **Alert e-mail** (PLAN §2.2 "alerts (+ email)") is not wired; rows only.
 10. **Platform default commission** is the code constant 500; CP3's settings table should own it.
+
+---
+
+## Codex fixes (on top of ee6e7c7 / a5ed618 / e45297e)
+
+All six findings are fixed, each with a regression test. There was no git state change and no wrangler call.
+
+`npm run check` is green at **1651 tests / 46 files**:
+- 1604 at HEAD;
+- **+33 mine**: the new `test/money-codex-fixes.test.ts` (32) and one row added to the `nextRecovery` table in `test/stripe-events.test.ts`;
+- the rest are CP2-B/CP2-C in-progress tests.
+
+The guard passes and the forbidden-string scan of my files is clean.
+
+```
+ Test Files  46 passed (46)
+      Tests  1651 passed (1651)
+```
+
+**Mutation checks: 15 of 15 killed.** Each one re-introduced the original defect (or a drift) against the new suite, and the sources were restored byte-identical afterwards:
+
+| Finding | Mutations killed |
+|---|---|
+| P1-1 | no deferral; no replay after the order batch; no immediate replay after deferring (the race); reconciliation not replaying |
+| P1-2 | the stop decided before the money update (the old read-before bug); the guard ignored; the mirrored statements drifting from CP2-B's (`unknown` not flagged) |
+| P1-3 | won on a pending reversal ⇒ `won_no_reversal` (the old rule); no Stripe-first reversal lookup; no transfer_group lookup; a blind reversal on an incomplete listing |
+| P2-4 | no event-time ordering; a same-second tie not merged fail-closed |
+| P2-5 | releasing on absence from an incomplete listing |
+| P2-6 | blocked rows always re-selected (the old starvation) |
+
+### P1-1 — refund or dispute events that arrive before their order
+
+This is the one schema change: new migration **`0026_deferred_payment_events.sql`**.
+- Columns: `event_id PK, tenant_id, payment_intent_id, kind refund|charge_refunded|dispute, fact_json, created_at, applied_at` (ISO).
+- `fact_json` holds the normalised fact only (ids, amounts, statuses), never the raw payload, which carries billing details.
+- Triggers:
+  - `tenant_id` must match the checkout that owns the intent;
+  - facts are immutable, and `applied_at` is set once;
+  - only an applied row may be deleted.
+
+The handlers (`stripe-events.ts`) now tell the two cases apart:
+- A checkout owns the intent but no order exists yet: the event is **deferred**. The parked fact and a ledger row (`processed` / `deferred_until_order`) are written in one batch.
+- No checkout owns the intent: it is still `ignored` (another integration's intent).
+
+`replayDeferredPaymentEvents(db, pi, now)` applies the parked facts in arrival order, through the same idempotent appliers the live events use (refund state machine, dispute fact, `charge.refunded` figure), and marks each one applied. It runs at four points:
+1. In the order webhook, **right after the order batch commits**. It also runs on the duplicate path and on a redelivered success, and a failed replay never turns the delivery into a 500.
+2. In the deferring handler, **immediately after deferring**. This closes the race where the order commits between the handler's read and its write: D1 serialises batches, so one of the two replays always sees the fact.
+3. In every **reconciliation** run (new first step, which needs no Stripe).
+4. A fact still waiting 30 minutes later raises a critical `payment_event_deferred_30m` alert (a paid order that never appeared).
+
+Tests:
+- refund first, then success ⇒ **fully refunded, dispatch superseded**;
+- pending and succeeded both arriving early apply in order;
+- `charge.refunded` first, then reconciliation settles the refund;
+- a dispute first ⇒ the payout is blocked once the order exists;
+- a foreign intent is still ignored;
+- **the forced race**, where the order webhook runs to completion inside the deferral's batch;
+- reconciliation replays a leftover fact and alerts on an orphan.
+
+### P1-2 — the full-refund dispatch stop is decided inside the settlement batch
+
+New module `src/commerce/refund-dispatch-stop.ts`.
+- `fullRefundStopStatements` is added to every settlement batch after the money UPDATE and before the status moves.
+- Its SQL guard is: this batch moved the operation into `succeeded` (transition-id fence), AND the order's `refund_succeeded_minor >= charged_minor`, evaluated in-batch.
+- So whichever of two concurrent settlements completes the charge is the one that supersedes dispatch.
+
+CP2-B's `dispatchCancellationStatements` takes no guard, so it is **mirrored**:
+- `guardedDispatchCancellationStatements` is their five statements plus `AND <guard>`;
+- `RETURN_CASE_ORDER_STATUSES` and `printerCancellationInsert` are imported from their modules, not copied;
+- `src/dispatch/**` is not edited.
+
+A **parity suite** runs their statements and mine (with a guard that always holds) on identical orders and requires identical effects on:
+- the outbox status, `cancel_requested` and `last_error`;
+- the line state;
+- the `dispatch_cancel_unconfirmed` alerts;
+- the `printer_cancellation` rows.
+
+It covers dispatch `pending`, `claimed`, `submitting`, `unknown`, `failed` and `done`, plus shipped and printed orders. **If CP2-B changes their statements, this suite fails until the mirror follows.**
+
+The pre-read version (`productionStopStatements`) is deleted.
+
+Tests:
+- the forced interleaving: two settlements of 12 000 + 8 000 on a 20 000 charge ⇒ `refunded` + superseded;
+- 6 000 + 7 000 racing ⇒ dispatch left alone;
+- a guard that does not hold changes nothing.
+
+### P1-3 — a lost dispute reversal is found, never repeated or forgotten (no schema change)
+
+- **`nextRecovery`:** a favourable close on `reversal_pending` now goes to `retransfer_pending`, not `won_no_reversal`. `reversal_pending` means "a reversal MAY exist"; only never-attempted or Stripe-refused states go straight to `won_no_reversal`.
+- **`recoverDisputes` asks Stripe first:**
+  - It lists the transfer's reversals (`listTransferReversals`, matching `metadata.dispute_id`) and records a reversal it finds instead of creating one.
+  - In `retransfer_pending` with nothing recorded, it settles on `won_no_reversal` only when that listing is **complete**.
+  - Re-transfers now carry `transfer_group = dispute_retransfer_{disputeId}` and are looked up by it (`listTransfersByGroup`) before being created. This covers a lost answer and the 24-hour idempotency window.
+  - An incomplete listing never leads to a blind create; the row waits for the next run.
+
+Tests:
+- lost answer, then won ⇒ found, exactly 20 000 re-transferred, one reversal call in total;
+- a reversal from an earlier run whose D1 write was lost ⇒ recorded, not repeated;
+- won with no reversal ⇒ nothing moves and the payout unblocks;
+- a lost re-transfer answer is found by its group and not sent twice;
+- an incomplete listing causes no reversal.
+
+`test/stripe-events.test.ts` has two expectations updated for this contract change (won on a pending reversal is now `retransfer_pending`, with the payout blocked until the cron has looked).
+
+### P2-4 — `account.updated` ordering (no schema change)
+
+- `VerifiedStripeEvent` gains `created`.
+- The flags are applied only from an event **strictly newer** than the last one applied. `tenants.stripe_account_synced_at` now holds **that event's `created`, in ms**, not the processing time.
+- An older event is recorded with reason `stale_event` and changes nothing.
+- Stripe's `created` has one-second resolution. A same-second tie merges **fail-closed**: each flag stays on only if both events say on.
+- An event without `created` is `rejected`.
+
+Tests cover both orders, a tie in both orders, and a missing `created`. `test/money-crons.test.ts`'s payout test now sends distinct event times (its two events used to share a second).
+
+### P2-5 — paged refund listings
+
+- `listRefunds` returns `Listing { data, complete }` and is paged to completion by the shared `collectPages`: 100 per page, bounded at 20 pages.
+- `listTransferReversals` and `listTransfersByGroup` use the same pager.
+- Reconciliation still applies what IS listed, but releases a `reserved` operation for absence **only** when the intent's listing was complete. The count of incomplete listings appears in the summary as `refunds.incompleteListings`; the operation then raises `refund_unsettled_30m`.
+- The test fake serves its listings through the production `collectPages`, with a configurable page size and bound.
+
+Tests: the pager (complete, stopped short, empty, exact fit); an incomplete listing does not release but does settle what it listed; a complete listing releases.
+
+### P2-6 — the payout refresh cannot be starved
+
+- `derivedPayoutStateSql` is `derivePayoutState` expressed in SQL.
+- `refreshPayoutStates` is now ONE `UPDATE … WHERE order_id IN (SELECT … WHERE payout_state <> derived … LIMIT n)`. Only rows whose stored state is wrong are selected, and every selected row is corrected, so nothing is re-selected without changing.
+
+Tests:
+- **600 persistently blocked older orders + one newer order past its window ⇒ the newer one becomes `eligible` in one run**, and fewer than 500 rows are touched;
+- a **SQL = JS parity matrix**: 2 shops × 4 stored states × 6 dispute statuses (incl. an unknown one) × 5 recovery states × 2 ages = 480 orders, each stored state equal to `derivePayoutState`, and a second run corrects nothing.
+
+The refresh scans the non-`paid` orders every 15 minutes. That is fine at pilot scale; an index on a stored "next change at" column is the upgrade path.
+
+### Files (this round)
+
+- **New:**
+  - `migrations/0026_deferred_payment_events.sql`
+  - `src/commerce/refund-dispatch-stop.ts`
+  - `test/money-codex-fixes.test.ts`
+- **Changed:**
+  - `src/commerce/stripe-events.ts` (deferral, replay, ordered `account.updated`, `nextRecovery`)
+  - `src/commerce/refunds.ts` (in-batch stop; pre-read removed)
+  - `src/commerce/crons.ts` (replay step, Stripe-first dispute recovery, complete-listing release)
+  - `src/commerce/payouts.ts` (SQL-derived refresh)
+  - `src/commerce/stripe-client.ts` (`Listing`, `collectPages`, `listTransferReversals`, `listTransfersByGroup`, `transferGroup`, `VerifiedStripeEvent.created`)
+  - `src/commerce/webhook.ts` (replay after the order batch)
+  - `src/commerce/payment-events.ts` (reasons `deferred_until_order`, `stale_event`)
+  - `src/commerce/money-alerts.ts` (kind `payment_event_deferred_30m`)
+  - `test/money-fixtures.ts`, `test/money-crons.test.ts`, `test/stripe-events.test.ts`
+
+### For the reviewer
+
+- **`REQUIRED_MIGRATION` should move to `0026_deferred_payment_events.sql`.** I left it and the readiness tests untouched, as before.
+- **Remaining window:** between the order batch committing and its immediate replay, a dispatch could only be claimed by a queue nudge or sweeper tick that lands inside those milliseconds. Closing it fully would put the parked refunds into the order batch itself. Note CP2-B's dispatcher also re-checks `cancel_requested` before its HTTP call.

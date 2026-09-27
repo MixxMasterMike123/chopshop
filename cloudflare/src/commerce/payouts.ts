@@ -166,56 +166,56 @@ export const PAYOUT_FACT_COLUMNS = `o.charged_minor, o.refund_succeeded_minor,
   o.paid_at, o.payout_state`;
 
 /**
- * Brings stored `payout_state` in line with the facts for the orders whose
- * state can have changed: pending ones past their window, blocked ones, and
- * unblocked ones that an open dispute or a disabled account should block.
- * Bounded per run; the reconciliation cron calls it every 15 minutes.
+ * derivePayoutState, as SQL over an `orders` row (alias `o`) — the SAME rules,
+ * so the refresh can select exactly the rows whose stored state is wrong.
+ * test/money-crons.test.ts pins SQL = JS over the whole input matrix.
+ */
+export function derivedPayoutStateSql(nowParam: string, windowMs: number): string {
+  const closed = [...CLOSED_DISPUTE_STATUSES].map((s) => `'${s}'`).join(", ");
+  const inFlight = [...RECOVERY_IN_FLIGHT].map((s) => `'${s}'`).join(", ");
+  return `CASE
+    WHEN o.payout_state = 'paid' THEN 'paid'
+    WHEN (o.dispute_status IS NOT NULL AND o.dispute_status NOT IN (${closed}))
+      OR o.dispute_recovery IN (${inFlight})
+      OR COALESCE((SELECT t.stripe_payouts_enabled FROM tenants AS t
+                   WHERE t.tenant_id = o.tenant_id), 0) <> 1
+      THEN 'blocked'
+    WHEN ${nowParam} >= o.paid_at + ${windowMs} THEN 'eligible'
+    ELSE 'pending'
+  END`;
+}
+
+/**
+ * Brings stored `payout_state` in line with the facts.
+ *
+ * Only rows whose stored state DIFFERS from the derived one are touched, and
+ * every touched row is corrected, so it drops out of the next selection. The
+ * first version selected "the 500 oldest pending-past-window or blocked
+ * orders" and re-read the same persistently blocked ones every run, starving
+ * newer orders behind them (Codex CP2-A P2). Now a run either corrects `limit`
+ * stale rows or all of them; nothing can be selected twice without changing.
  */
 export async function refreshPayoutStates(
   db: D1Database,
   now: number,
   limit = 500,
 ): Promise<{ examined: number; updated: number }> {
-  const closed = [...CLOSED_DISPUTE_STATUSES].map((s) => `'${s}'`).join(", ");
-  const rows = await db
+  const derived = derivedPayoutStateSql("?1", WITHDRAWAL_WINDOW_MS);
+  const result = await db
     .prepare(
-      `SELECT o.order_id, ${PAYOUT_FACT_COLUMNS}, t.stripe_payouts_enabled
-       FROM orders AS o
-       JOIN tenants AS t ON t.tenant_id = o.tenant_id
-       WHERE o.payout_state <> 'paid'
-         AND (
-           (o.payout_state = 'pending' AND o.paid_at <= ?)
-           OR o.payout_state = 'blocked'
-           OR (o.payout_state <> 'blocked' AND (
-             t.stripe_payouts_enabled = 0
-             OR (o.dispute_status IS NOT NULL AND o.dispute_status NOT IN (${closed}))
-             OR o.dispute_recovery IN ('pending_outcome', 'reversal_pending', 'retransfer_pending')
-           ))
-         )
-       ORDER BY o.paid_at ASC
-       LIMIT ?`,
+      `UPDATE orders AS o
+       SET payout_state = ${derived},
+           updated_at = MAX(o.updated_at, ?1)
+       WHERE o.order_id IN (
+         SELECT o.order_id FROM orders AS o
+         WHERE o.payout_state <> 'paid'
+           AND o.payout_state <> ${derived}
+         ORDER BY o.paid_at ASC
+         LIMIT ?2
+       )`,
     )
-    .bind(now - WITHDRAWAL_WINDOW_MS, limit)
-    .all<PayoutFacts & { order_id: string; stripe_payouts_enabled: number }>();
+    .bind(now, limit)
+    .run();
 
-  const statements: D1PreparedStatement[] = [];
-  for (const row of rows.results) {
-    const next = derivePayoutState(row, now, row.stripe_payouts_enabled === 1);
-    if (next !== row.payout_state) {
-      statements.push(
-        db
-          .prepare(
-            `UPDATE orders SET payout_state = ?, updated_at = MAX(updated_at, ?)
-             WHERE order_id = ? AND payout_state = ?`,
-          )
-          .bind(next, now, row.order_id, row.payout_state),
-      );
-    }
-  }
-
-  if (statements.length > 0) {
-    await db.batch(statements);
-  }
-
-  return { examined: rows.results.length, updated: statements.length };
+  return { examined: result.meta.changes, updated: result.meta.changes };
 }

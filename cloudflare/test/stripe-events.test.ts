@@ -135,7 +135,9 @@ describe("nextRecovery (the Firebase dispute rules)", () => {
     ["reversal_pending", "under_review", "reversal_pending"],
     ["recovered", "under_review", "recovered"],
     ["recovered", "won", "retransfer_pending"],
-    ["reversal_pending", "won", "won_no_reversal"],
+    // A reversal MAY have been made (answer lost): the cron asks Stripe.
+    ["reversal_pending", "won", "retransfer_pending"],
+    ["reversal_pending", "warning_closed", "retransfer_pending"],
     ["shortfall", "won", "won_no_reversal"],
     ["no_transfer", "won", "won_no_reversal"],
     [null, "won", "won_no_reversal"],
@@ -225,16 +227,19 @@ describe("charge.dispute.*", () => {
     });
   });
 
-  it("closed won before the cron reversed anything: nothing moves, the payout unblocks", async () => {
+  it("closed won while the reversal is still pending: the cron must check Stripe first", async () => {
     const order = await paidOrder();
     await postEvent("charge.dispute.created", dispute(order, "needs_response", { id: "dp_won_early" }));
 
     await postEvent("charge.dispute.closed", dispute(order, "won", { id: "dp_won_early" }));
 
+    // Not "won_no_reversal": a reversal may exist at Stripe whose answer was
+    // lost. The payout stays blocked until the cron has looked
+    // (test/money-crons.test.ts settles both outcomes).
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({
-      dispute_recovery: "won_no_reversal",
+      dispute_recovery: "retransfer_pending",
       dispute_status: "won",
-      payout_state: "pending",
+      payout_state: "blocked",
     });
   });
 
@@ -262,7 +267,7 @@ describe("charge.dispute.*", () => {
     await postEvent("charge.dispute.updated", dispute(order, "under_review", { id: "dp_late" }));
 
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({
-      dispute_recovery: "won_no_reversal",
+      dispute_recovery: "retransfer_pending",
       dispute_status: "won",
     });
   });

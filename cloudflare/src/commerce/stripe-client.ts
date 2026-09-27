@@ -120,11 +120,51 @@ export interface ChargeView {
 export interface TransferReversalView {
   amount: number;
   id: string;
+  metadata: Record<string, string>;
 }
 
 export interface TransferView {
   amount: number;
   id: string;
+  metadata: Record<string, string>;
+}
+
+/**
+ * A listing read to completion — or not. `complete: false` means the page
+ * bound was hit with more still at Stripe: a caller may act on what IS listed,
+ * but must never conclude from something's ABSENCE (Codex CP2-A P2).
+ */
+export interface Listing<T> {
+  complete: boolean;
+  data: T[];
+}
+
+/** Pages per listing: 20 × 100 objects, far beyond one order's refunds. */
+export const MAX_LIST_PAGES = 20;
+
+/**
+ * Walks a cursor-paged Stripe listing (`starting_after` = the last id) until
+ * Stripe says there is no more, or `maxPages` pages were read.
+ */
+export async function collectPages<T extends { id: string }>(
+  fetchPage: (startingAfter: string | null) => Promise<{ data: T[]; hasMore: boolean }>,
+  maxPages: number = MAX_LIST_PAGES,
+): Promise<Listing<T>> {
+  const data: T[] = [];
+  let startingAfter: string | null = null;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const result = await fetchPage(startingAfter);
+    data.push(...result.data);
+    const last = result.data[result.data.length - 1];
+    if (!result.hasMore || last === undefined) {
+      return { complete: true, data };
+    }
+
+    startingAfter = last.id;
+  }
+
+  return { complete: false, data };
 }
 
 /**
@@ -166,6 +206,8 @@ export interface StripeMoneyGateway extends StripeGateway {
     destination: string;
     idempotencyKey: string;
     metadata: Record<string, string>;
+    /** Lets a later run find this transfer again (listTransfersByGroup). */
+    transferGroup: string;
   }): Promise<TransferView>;
   createTransferReversal(params: {
     idempotencyKey: string;
@@ -179,8 +221,12 @@ export interface StripeMoneyGateway extends StripeGateway {
     limit: number;
     startingAfter: string | null;
   }): Promise<PaymentIntentPage>;
-  /** At most 100 — a charge with more refunds than that does not exist here. */
-  listRefunds(paymentIntentId: string): Promise<RefundView[]>;
+  /** Every refund of the intent, paged to completion (bounded). */
+  listRefunds(paymentIntentId: string): Promise<Listing<RefundView>>;
+  /** Every reversal of one transfer, paged to completion (bounded). */
+  listTransferReversals(transferId: string): Promise<Listing<TransferReversalView>>;
+  /** Every transfer carrying this transfer_group, paged (bounded). */
+  listTransfersByGroup(transferGroup: string): Promise<Listing<TransferView>>;
   retrieveCharge(chargeId: string): Promise<ChargeView>;
 }
 
@@ -192,6 +238,8 @@ const MONEY_METHODS = [
   "createTransferReversal",
   "listPaymentIntents",
   "listRefunds",
+  "listTransferReversals",
+  "listTransfersByGroup",
   "retrieveCharge",
   "retrievePaymentIntent",
 ] as const;
@@ -235,6 +283,12 @@ export const STRIPE_GATEWAY_OVERRIDE: unique symbol = Symbol(
  * other branch — the casts are exactly where a wrong assumption would hide.
  */
 export interface VerifiedStripeEvent {
+  /**
+   * When Stripe created the event (unix seconds). Stripe does not deliver in
+   * order, so a handler whose effect is "the latest state" (account.updated)
+   * orders by this, never by arrival.
+   */
+  created?: number;
   data: { object: unknown };
   id: string;
   type: string;
@@ -678,13 +732,61 @@ export function createStripeGateway(env: Env): StripeMoneyGateway {
       }
     },
 
-    async listRefunds(paymentIntentId: string): Promise<RefundView[]> {
+    async listRefunds(paymentIntentId: string): Promise<Listing<RefundView>> {
       try {
-        const page = await stripe.refunds.list({
-          limit: 100,
-          payment_intent: paymentIntentId,
+        return await collectPages(async (startingAfter) => {
+          const page = await stripe.refunds.list({
+            limit: 100,
+            payment_intent: paymentIntentId,
+            ...(startingAfter === null ? {} : { starting_after: startingAfter }),
+          });
+          return { data: page.data.map(refundView), hasMore: page.has_more };
         });
-        return page.data.map(refundView);
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async listTransferReversals(
+      transferId: string,
+    ): Promise<Listing<TransferReversalView>> {
+      try {
+        return await collectPages(async (startingAfter) => {
+          const page = await stripe.transfers.listReversals(transferId, {
+            limit: 100,
+            ...(startingAfter === null ? {} : { starting_after: startingAfter }),
+          });
+          return {
+            data: page.data.map((reversal) => ({
+              amount: reversal.amount,
+              id: reversal.id,
+              metadata: metadataOf(reversal.metadata),
+            })),
+            hasMore: page.has_more,
+          };
+        });
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async listTransfersByGroup(transferGroup: string): Promise<Listing<TransferView>> {
+      try {
+        return await collectPages(async (startingAfter) => {
+          const page = await stripe.transfers.list({
+            limit: 100,
+            transfer_group: transferGroup,
+            ...(startingAfter === null ? {} : { starting_after: startingAfter }),
+          });
+          return {
+            data: page.data.map((transfer) => ({
+              amount: transfer.amount,
+              id: transfer.id,
+              metadata: metadataOf(transfer.metadata),
+            })),
+            hasMore: page.has_more,
+          };
+        });
       } catch (error) {
         throw gatewayError(error);
       }
@@ -713,7 +815,11 @@ export function createStripeGateway(env: Env): StripeMoneyGateway {
           },
           { idempotencyKey: params.idempotencyKey },
         );
-        return { amount: reversal.amount, id: reversal.id };
+        return {
+          amount: reversal.amount,
+          id: reversal.id,
+          metadata: metadataOf(reversal.metadata),
+        };
       } catch (error) {
         throw gatewayError(error);
       }
@@ -727,10 +833,15 @@ export function createStripeGateway(env: Env): StripeMoneyGateway {
             currency: params.currency,
             destination: params.destination,
             metadata: params.metadata,
+            transfer_group: params.transferGroup,
           },
           { idempotencyKey: params.idempotencyKey },
         );
-        return { amount: transfer.amount, id: transfer.id };
+        return {
+          amount: transfer.amount,
+          id: transfer.id,
+          metadata: metadataOf(transfer.metadata),
+        };
       } catch (error) {
         throw gatewayError(error);
       }
