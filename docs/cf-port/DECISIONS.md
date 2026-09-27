@@ -135,6 +135,8 @@ One place for every decision Mikael owes, grouped by what it blocks. Each has a 
 
 ## Answered
 
+| D9 | `refundApplicationFee=false`: the platform fee is not refunded when an order is refunded (Firebase refunds it today). | ✅ 2026-09-27 — Mikael: "This I like … good update". |
+| — | The legal readiness gate at checkout (CP3-E): platform terms accepted, legal pages adopted, return address, VAT answer, or the shop takes no checkout. | ✅ 2026-09-27 — Mikael: accepted, "as long as it keeps us as a provider safer". |
 | D75 | melodie-mc's own commission in Firebase is 5000 bps (50 %), above the 8 % Cloudflare accepts (D45, D71). | ✅ 2026-09-27 — Mikael: melodie-mc is the beta testing ground, the value is left from trying settings. **The shop gets the platform default.** The importer still refuses a production plan on any commission above the cap; the acceptance is given per shop: `--commission-default-for melodie-mc`. |
 | D1 | approveAffiliate hotfix deployed to Firebase (`f807625`) | ✅ 2026-09-26 — Mikael: "You do it"; `Successful update operation` |
 | D5 | Workers Paid on Kent's account | ✅ 2026-09-26 — "Paid plan activated" |
