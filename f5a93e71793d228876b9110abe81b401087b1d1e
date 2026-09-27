@@ -1,0 +1,5 @@
+codex: PASS
+
+fable: PASS
+
+codex coverage: b14c5d3, 9542636, 4543f11, b660297, ee55cac reviewed by codex; 428ffdc + 201bc2e reviewed by Opus adversarial reviewers (codex quota) — DEBT: codex re-review of 428ffdc, 201bc2e, 0f92394, f5a93e7 after 06:58 before any production deploy
