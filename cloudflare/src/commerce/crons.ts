@@ -1,3 +1,5 @@
+import { nudgeOutbox } from "../outbox/nudge";
+import { pendingPrinterCancellationIds, releaseDispatchHolds } from "./dispatch-hold";
 import { raiseAlert } from "./money-alerts";
 import { DAY_MS, refreshPayoutStates } from "./payouts";
 import { replayDeferredPaymentEvents } from "./stripe-events";
@@ -10,6 +12,7 @@ import type {
   PaymentIntentView,
   StripeMoneyGateway,
   TransferReversalView,
+  TransferView,
 } from "./stripe-client";
 import {
   isStripeConfigured,
@@ -252,7 +255,8 @@ async function cancelOrRead(
 
 export interface ReconciliationSummary {
   alertsRaised: number;
-  deferred: { replayed: number; waiting: number };
+  accounts: { errors: number; resynced: number };
+  deferred: { errors: number; released: number; replayed: number; waiting: number };
   dispatch: { stranded: number };
   disputes: { blocked: number; errors: number; recovered: number; retransferred: number; failed: number };
   paymentIntents: { errors: number; listed: number; missingOrders: number };
@@ -276,7 +280,8 @@ export async function runReconciliation(
   const gateway = gatewayFor(env);
   const summary: ReconciliationSummary = {
     alertsRaised: 0,
-    deferred: { replayed: 0, waiting: 0 },
+    accounts: { errors: 0, resynced: 0 },
+    deferred: { errors: 0, released: 0, replayed: 0, waiting: 0 },
     dispatch: { stranded: 0 },
     disputes: { blocked: 0, errors: 0, failed: 0, recovered: 0, retransferred: 0 },
     paymentIntents: { errors: 0, listed: 0, missingOrders: 0 },
@@ -293,13 +298,25 @@ export async function runReconciliation(
 
   // First, and without Stripe: facts that arrived before their order (0026).
   // A replayed dispute may queue a recovery the step below then performs.
-  await replayDeferred(db, now, summary, alert);
+  const deferred = await replayDeferred(env, now);
+  summary.deferred = { ...summary.deferred, ...deferred };
+  await detectWaitingDeferred(db, now, summary, alert);
 
   if (gateway !== null) {
+    await resyncConnectAccounts(db, gateway, now, summary, alert);
     await recoverDisputes(db, gateway, now, summary, alert);
     await reconcileRefunds(db, gateway, now, summary, alert);
     await reconcilePaymentIntents(db, gateway, now, summary, alert);
+
+    // Refunds just settled may explain what held an order's print job.
+    const released = await releaseDispatchHolds(db, { now, paymentIntentId: null });
+    summary.deferred.released += released.length;
+    await nudgeOutbox(env, released);
   }
+
+  // A full refund of an accepted job queued a printer cancellation: tell the
+  // outbox consumer now rather than at its next sweep.
+  await nudgeOutbox(env, await pendingPrinterCancellationIds(db, null));
 
   // Payout states after the money moves above, so they see the new facts.
   summary.payouts = await refreshPayoutStates(db, now);
@@ -324,18 +341,31 @@ export async function runReconciliation(
 
 // ── deferred payment events (0026) ──────────────────────────────────────────
 
+export interface ReplayDeferredSummary {
+  errors: number;
+  released: number;
+  replayed: number;
+}
+
 /**
- * Replays facts parked before their order existed — for intents whose order
- * now exists and whose own replay (the order webhook's, or the deferring
- * handler's) did not run to completion. A fact still waiting 30 minutes after
- * it arrived means a paid order that never appeared: alerted per intent.
+ * Replays facts parked before their order existed, for every intent whose
+ * order now exists, then releases dispatch rows no longer held and nudges
+ * them. D1 only, and safe to run as often as wanted.
+ *
+ * Exported for `scheduled()` to run BEFORE the outbox sweep (review round,
+ * P2): a fully refunded order's refund is applied — and its dispatch
+ * superseded — before the sweep could claim it. (The hold in dispatch-hold.ts
+ * already makes the claim impossible; this makes the order right, promptly.)
+ *
+ * Each intent is isolated: one that throws is counted and skipped, never the
+ * rest of the tick (review round, P3).
  */
-async function replayDeferred(
-  db: D1Database,
+export async function replayDeferred(
+  env: Env,
   now: number,
-  summary: ReconciliationSummary,
-  alert: Alert,
-): Promise<void> {
+): Promise<ReplayDeferredSummary> {
+  const db = env.DB;
+  const summary: ReplayDeferredSummary = { errors: 0, released: 0, replayed: 0 };
   const ready = await db
     .prepare(
       `SELECT DISTINCT d.payment_intent_id
@@ -346,10 +376,48 @@ async function replayDeferred(
     )
     .bind(RECONCILE_BATCH)
     .all<{ payment_intent_id: string }>();
+
+  const toNudge: string[] = [];
+  const orderIds: string[] = [];
   for (const row of ready.results) {
-    summary.deferred.replayed += (await replayDeferredPaymentEvents(db, row.payment_intent_id, now)).applied;
+    try {
+      const result = await replayDeferredPaymentEvents(db, row.payment_intent_id, now);
+      summary.replayed += result.applied;
+      toNudge.push(...result.released);
+      if (result.orderId !== null) {
+        orderIds.push(result.orderId);
+      }
+    } catch (error) {
+      summary.errors += 1;
+      console.error(
+        JSON.stringify({
+          error: error instanceof Error ? error.name : "unknown",
+          message: "deferred payment events could not be replayed for one intent",
+        }),
+      );
+    }
   }
 
+  // Holds whose facts were applied by an earlier replay that died before
+  // releasing them.
+  const released = await releaseDispatchHolds(db, { now, paymentIntentId: null });
+  toNudge.push(...released);
+  summary.released = new Set(toNudge).size;
+
+  await nudgeOutbox(env, [...toNudge, ...(await pendingPrinterCancellationIds(db, orderIds))]);
+  return summary;
+}
+
+/**
+ * A fact still waiting 30 minutes after it arrived means a paid order that
+ * never appeared: alerted per intent.
+ */
+async function detectWaitingDeferred(
+  db: D1Database,
+  now: number,
+  summary: ReconciliationSummary,
+  alert: Alert,
+): Promise<void> {
   const waiting = await db
     .prepare(
       `SELECT payment_intent_id, tenant_id, COUNT(*) AS n
@@ -373,6 +441,78 @@ async function replayDeferred(
   }
 }
 
+// ── Connect account resync (0027) ───────────────────────────────────────────
+
+/**
+ * Shops whose last two `account.updated` events could not be ordered (same
+ * second, different flags): the account is retrieved from Stripe — the
+ * current truth, whatever order events arrive in — and its flags written.
+ * Guarded on the event time read before the call, so an ordered event that
+ * lands meanwhile is never overwritten. A failed retrieval raises an alert
+ * (one while open) and is retried every run.
+ */
+async function resyncConnectAccounts(
+  db: D1Database,
+  gateway: StripeMoneyGateway,
+  now: number,
+  summary: ReconciliationSummary,
+  alert: Alert,
+): Promise<void> {
+  const rows = await db
+    .prepare(
+      `SELECT tenant_id, stripe_account_id, stripe_account_synced_at
+       FROM tenants
+       WHERE stripe_account_resync_needed = 1 AND stripe_account_id IS NOT NULL
+       LIMIT ?`,
+    )
+    .bind(RECONCILE_BATCH)
+    .all<{ stripe_account_id: string; stripe_account_synced_at: number | null; tenant_id: string }>();
+
+  for (const row of rows.results) {
+    let account;
+    try {
+      account = await gateway.retrieveAccount(row.stripe_account_id);
+    } catch {
+      summary.accounts.errors += 1;
+      await alert(db, {
+        kind: "connect_account_resync_failed",
+        message: `shop ${row.tenant_id}: its Stripe account's capabilities could not be re-read after two same-second updates; payments may be wrongly disabled`,
+        resourceId: row.tenant_id,
+        resourceType: "tenant",
+        severity: "critical",
+        tenantId: row.tenant_id,
+      }, now);
+      continue;
+    }
+
+    const result = await db
+      .prepare(
+        `UPDATE tenants
+         SET stripe_charges_enabled = ?,
+             stripe_payouts_enabled = ?,
+             stripe_details_submitted = ?,
+             stripe_account_synced_at = MAX(COALESCE(stripe_account_synced_at, 0), ?),
+             stripe_account_resync_needed = 0,
+             updated_at = MAX(updated_at, ?)
+         WHERE tenant_id = ? AND stripe_account_id = ?
+           AND stripe_account_resync_needed = 1
+           AND stripe_account_synced_at IS ?`,
+      )
+      .bind(
+        account.charges_enabled ? 1 : 0,
+        account.payouts_enabled ? 1 : 0,
+        account.details_submitted ? 1 : 0,
+        now,
+        now,
+        row.tenant_id,
+        row.stripe_account_id,
+        row.stripe_account_synced_at,
+      )
+      .run();
+    summary.accounts.resynced += result.meta.changes;
+  }
+}
+
 // ── dispute recovery: the money moves the dispute webhooks queued ───────────
 
 interface RecoveryRow {
@@ -383,6 +523,7 @@ interface RecoveryRow {
   dispute_retransferred_minor: number;
   dispute_reversal_id: string | null;
   order_id: string;
+  paid_at: number;
   stripe_charge_id: string | null;
   stripe_transfer_id: string | null;
   tenant_id: string;
@@ -437,7 +578,7 @@ async function recoverDisputes(
       `SELECT order_id, tenant_id, dispute_id, dispute_recovery, currency,
               stripe_charge_id, stripe_transfer_id, connect_account_id,
               transfer_reversed_minor, dispute_retransferred_minor,
-              dispute_reversal_id
+              dispute_reversal_id, paid_at
        FROM orders
        WHERE dispute_recovery IN ('reversal_pending', 'retransfer_pending')
        ORDER BY dispute_updated_at ASC
@@ -599,17 +740,44 @@ async function recoverDisputes(
       continue;
     }
 
-    let earlier;
+    // An earlier re-transfer whose answer was lost: by this dispute's
+    // transfer_group, and — for one made before transfers carried a group —
+    // by metadata among the transfers to the shop since the order was paid.
+    let found: TransferView | undefined;
+    let verified = true;
     try {
-      earlier = await gateway.listTransfersByGroup(retransferGroup(disputeId));
+      const byGroup = await gateway.listTransfersByGroup(retransferGroup(disputeId));
+      found = byGroup.data.find((transfer) => transfer.metadata.dispute_id === disputeId);
+      verified = byGroup.complete;
+      if (found === undefined) {
+        const toShop = await gateway.listTransfersToDestination({
+          createdGte: Math.floor(row.paid_at / 1_000),
+          destination: row.connect_account_id,
+        });
+        found = toShop.data.find(
+          (transfer) =>
+            transfer.metadata.dispute_id === disputeId &&
+            transfer.metadata.reason === "dispute_won_retransfer",
+        );
+        verified = verified && toShop.complete;
+      }
     } catch {
       summary.disputes.errors += 1;
       continue;
     }
 
-    const found = earlier.data.find((transfer) => transfer.metadata.dispute_id === disputeId);
-    if (found === undefined && !earlier.complete) {
+    if (found === undefined && !verified) {
+      // Cannot rule out an earlier re-transfer past the listing bound; sending
+      // again blind could pay the shop twice. A human decides.
       summary.disputes.errors += 1;
+      await alert(db, {
+        kind: "dispute_recovery_failed",
+        message: `order ${row.order_id}: could not verify that dispute ${disputeId}'s funds were not already re-transferred (listing incomplete)`,
+        resourceId: row.order_id,
+        resourceType: "order",
+        severity: "warning",
+        tenantId: row.tenant_id,
+      }, now);
       continue;
     }
 
@@ -620,7 +788,10 @@ async function recoverDisputes(
           amount,
           currency: row.currency.toLowerCase(),
           destination: row.connect_account_id,
-          idempotencyKey: `dispute-retransfer:${disputeId}`,
+          // v2: the request now carries transfer_group; reusing the v1 key of
+          // an earlier group-less attempt would be refused by Stripe (400,
+          // same key with different parameters) within 24 hours.
+          idempotencyKey: `dispute-retransfer:v2:${disputeId}`,
           metadata: {
             dispute_id: disputeId,
             order_id: row.order_id,

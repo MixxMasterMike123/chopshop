@@ -25,7 +25,7 @@ import { printerCancellationInsert } from "../dispatch/dispatch-effect";
  * addition — `AND <guard>` — in the same order, with the same state
  * conditions, the same return-case guard (RETURN_CASE_ORDER_STATUSES is
  * imported, not copied) and CP2-B's own `printerCancellationInsert`, which
- * does accept a guard. test/refund-dispatch-stop.test.ts runs both sets on
+ * does accept a guard. test/money-codex-fixes.test.ts ("P1-2 parity") runs both sets on
  * identical orders in every dispatch state and requires identical results, so
  * a change on CP2-B's side that is not mirrored here fails that parity suite.
  */

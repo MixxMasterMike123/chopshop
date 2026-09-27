@@ -1,5 +1,7 @@
 import { authorizeTenantAdminRequest } from "../auth/request-authorization";
 import { readAdminOrder } from "../commerce/admin-orders";
+import { pendingPrinterCancellationIds } from "../commerce/dispatch-hold";
+import { nudgeOutbox } from "../outbox/nudge";
 import { parseRefundRequestInput, requestRefund } from "../commerce/refunds";
 import {
   isStripeConfigured,
@@ -110,6 +112,13 @@ export async function handleAdminOrderRefundsRoute(
     input,
     Date.now(),
   );
+
+  // A full refund of a job the printer already accepted queued a
+  // printer_cancellation in the settlement batch: nudge it now, rather than
+  // leave it for the next 15-minute sweep while the job may be printing.
+  if (outcome.status === "created") {
+    await nudgeOutbox(env, await pendingPrinterCancellationIds(env.DB, [orderId]));
+  }
 
   switch (outcome.status) {
     case "created":

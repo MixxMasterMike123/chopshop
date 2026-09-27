@@ -14,6 +14,7 @@
  */
 
 export type MoneyAlertKind =
+  | "connect_account_resync_failed"
   | "dispute_recovery_failed"
   | "dispatch_stranded_30m"
   | "order_missing_for_succeeded_pi"

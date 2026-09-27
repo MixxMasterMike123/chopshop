@@ -19,6 +19,7 @@ export const OUTBOX_SWEEP_CRON = "*/15 * * * *";
 type CronStep = (env: Env, now: number) => Promise<unknown>;
 
 interface CommerceCrons {
+  replayDeferred?: CronStep;
   runReconciliation?: CronStep;
   runRetentionSweep?: CronStep;
 }
@@ -81,11 +82,23 @@ export async function handleScheduled(
   const failures: string[] = [];
   const now = () => Date.now();
 
+  // Parked payment facts (refunds/disputes that arrived before their order)
+  // are replayed BEFORE the sweep, so a fully refunded order is never handed
+  // to a printer by the sweep that runs in the same tick (CP2-A review P2-1;
+  // the dispatch hold in src/commerce/dispatch-hold.ts is the belt to this
+  // brace).
+  const commerce = await loadCommerceCrons();
+  const replay = commerce?.replayDeferred;
+  if (typeof replay === "function") {
+    if (!(await runStep("replayDeferred", () => replay(env, now())))) {
+      failures.push("replayDeferred");
+    }
+  }
+
   if (!(await runStep("outbox_sweep", () => runOutboxSweep(env, now())))) {
     failures.push("outbox_sweep");
   }
 
-  const commerce = await loadCommerceCrons();
   for (const name of ["runReconciliation", "runRetentionSweep"] as const) {
     const step = commerce?.[name];
     if (typeof step !== "function") {

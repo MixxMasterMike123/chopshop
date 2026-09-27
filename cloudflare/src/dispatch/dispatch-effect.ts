@@ -25,6 +25,7 @@ import {
   type PrinterSubmitResult,
   resolvePrinterClient,
 } from "./printer-client";
+import { dispatchHeldForPayment } from "../commerce/dispatch-hold";
 import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-wire";
 
 /**
@@ -524,6 +525,13 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     };
   } catch {
     return retryLater(ctx, "presign_failed", lineRef);
+  }
+
+  // Never hand a job to a printer while payment facts for the order are still
+  // unapplied or Stripe's refunded total exceeds what is settled here (CP2-A
+  // dispatch hold): the row is retried once the hold releases and nudges it.
+  if (await dispatchHeldForPayment(env.DB, row.aggregate_id)) {
+    return retryLater(ctx, "payment_facts_pending", lineRef);
   }
 
   const submitting = await markSubmitting(env.DB, claim, {

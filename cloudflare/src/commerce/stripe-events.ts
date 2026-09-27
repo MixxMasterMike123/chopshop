@@ -1,3 +1,4 @@
+import { holdDispatchStatement, releaseDispatchHolds } from "./dispatch-hold";
 import { raiseAlertStatement } from "./money-alerts";
 import type { HandleWebhookEventResult } from "./payment-events";
 import {
@@ -283,6 +284,12 @@ async function handleRefundEvent(
   }
 
   const result = await applyRefundFact(db, fact, now);
+  if (result.result !== "unknown_order" && fact.paymentIntentId !== null) {
+    // A settled refund may be the one that explains a `charge.refunded`
+    // figure a hold was waiting on.
+    await releaseDispatchHolds(db, { now, paymentIntentId: fact.paymentIntentId });
+  }
+
   if (result.result === "unknown_order" && fact.paymentIntentId !== null) {
     const deferred = await deferUntilOrder(
       db,
@@ -361,14 +368,22 @@ async function handleChargeRefunded(
     await applyRefundFact(db, refund, now);
   }
 
-  return commitWithLedger(
+  // Stripe says money went back that no refund event has explained yet: the
+  // order's print job is held (same batch) until reconciliation lists and
+  // settles those refunds — or released at once if they already are.
+  const outcome = await commitWithLedger(
     db,
     event,
-    [chargeRefundedStatement(db, fact, order.order_id, now)],
+    [
+      chargeRefundedStatement(db, fact, order.order_id, now),
+      holdDispatchStatement(db, { now, paymentIntentId: intentId }),
+    ],
     order.tenant_id,
     chargeId,
     now,
   );
+  await releaseDispatchHolds(db, { now, paymentIntentId: intentId });
+  return outcome;
 }
 
 interface ChargeRefundedFact {
@@ -707,6 +722,9 @@ async function deferUntilOrder(
           JSON.stringify(deferred.fact),
           new Date(now).toISOString(),
         ),
+      // An order that committed between this handler's read and now must
+      // not dispatch before the fact is applied.
+      holdDispatchStatement(db, { now, paymentIntentId }),
       recordEventStatement(
         db,
         event,
@@ -742,10 +760,10 @@ export async function replayDeferredPaymentEvents(
   db: D1Database,
   paymentIntentId: string,
   now: number,
-): Promise<{ applied: number }> {
+): Promise<{ applied: number; orderId: string | null; released: string[] }> {
   const order = await orderForIntent(db, paymentIntentId);
   if (order === null) {
-    return { applied: 0 };
+    return { applied: 0, orderId: null, released: [] };
   }
 
   const rows = await db
@@ -783,7 +801,11 @@ export async function replayDeferredPaymentEvents(
     applied += marked.meta.changes;
   }
 
-  return { applied };
+  // Everything parked is applied: the order's print job may go — unless a
+  // full refund among the facts already superseded it, or refunds Stripe
+  // reported are still unexplained (the release re-checks both).
+  const released = await releaseDispatchHolds(db, { now, paymentIntentId });
+  return { applied, orderId: order.order_id, released };
 }
 
 // ── account.updated ─────────────────────────────────────────────────────────
@@ -816,6 +838,12 @@ async function handleAccountUpdated(
     return recordOnly(db, event, null, accountId, "rejected", REASON_MALFORMED_OBJECT, now);
   }
 
+  // An event from the Connect endpoint names the account it happened on; it
+  // must be the account the payload describes.
+  if (event.endpoint === "connect" && event.account !== accountId) {
+    return recordOnly(db, event, null, accountId, "rejected", REASON_MALFORMED_OBJECT, now);
+  }
+
   const tenant = await db
     .prepare(
       "SELECT tenant_id, stripe_account_synced_at FROM tenants WHERE stripe_account_id = ? LIMIT 1",
@@ -842,7 +870,29 @@ async function handleAccountUpdated(
 
   try {
     await db.batch([
-      // Newer than anything applied: the event's account state wins.
+      // The same second as the last applied event: the two cannot be ordered.
+      // Merge fail-closed NOW, and — when they disagree — mark the shop for an
+      // authoritative resync: the reconciliation cron retrieves the account
+      // from Stripe and writes its real flags (0027). Runs FIRST, so it can
+      // only match a tie with an EARLIER event; the next statement then sees
+      // synced_at = eventAt and does not match.
+      db
+        .prepare(
+          `UPDATE tenants
+           SET stripe_account_resync_needed = CASE
+                 WHEN stripe_charges_enabled <> ?1 OR stripe_payouts_enabled <> ?2
+                   OR stripe_details_submitted <> ?3 THEN 1
+                 ELSE stripe_account_resync_needed END,
+               stripe_charges_enabled = MIN(stripe_charges_enabled, ?1),
+               stripe_payouts_enabled = MIN(stripe_payouts_enabled, ?2),
+               stripe_details_submitted = MIN(stripe_details_submitted, ?3),
+               updated_at = MAX(updated_at, ?4)
+           WHERE tenant_id = ?5 AND stripe_account_id = ?6
+             AND stripe_account_synced_at = ?7`,
+        )
+        .bind(charges, payouts, details, now, tenant.tenant_id, accountId, eventAt),
+      // Newer than anything applied: the event's account state wins, and any
+      // pending resync is moot (this IS a later, ordered truth).
       db
         .prepare(
           `UPDATE tenants
@@ -850,25 +900,12 @@ async function handleAccountUpdated(
                stripe_payouts_enabled = ?,
                stripe_details_submitted = ?,
                stripe_account_synced_at = ?,
+               stripe_account_resync_needed = 0,
                updated_at = MAX(updated_at, ?)
            WHERE tenant_id = ? AND stripe_account_id = ?
              AND (stripe_account_synced_at IS NULL OR stripe_account_synced_at < ?)`,
         )
         .bind(charges, payouts, details, eventAt, now, tenant.tenant_id, accountId, eventAt),
-      // The same second as the last applied event: merge fail-closed. (After
-      // the UPDATE above has run, a row it changed now has synced_at =
-      // eventAt too; MIN with its own new values changes nothing.)
-      db
-        .prepare(
-          `UPDATE tenants
-           SET stripe_charges_enabled = MIN(stripe_charges_enabled, ?),
-               stripe_payouts_enabled = MIN(stripe_payouts_enabled, ?),
-               stripe_details_submitted = MIN(stripe_details_submitted, ?),
-               updated_at = MAX(updated_at, ?)
-           WHERE tenant_id = ? AND stripe_account_id = ?
-             AND stripe_account_synced_at = ?`,
-        )
-        .bind(charges, payouts, details, now, tenant.tenant_id, accountId, eventAt),
       // The reason is informational (from the read above); the two guarded
       // UPDATEs alone decide what is applied.
       recordEventStatement(

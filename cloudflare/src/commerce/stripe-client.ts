@@ -156,15 +156,29 @@ export async function collectPages<T extends { id: string }>(
   for (let page = 0; page < maxPages; page += 1) {
     const result = await fetchPage(startingAfter);
     data.push(...result.data);
-    const last = result.data[result.data.length - 1];
-    if (!result.hasMore || last === undefined) {
+    if (!result.hasMore) {
       return { complete: true, data };
+    }
+
+    // Stripe says there is more but gave no cursor to continue from: the
+    // listing cannot be completed, and must not claim it was.
+    const last = result.data[result.data.length - 1];
+    if (last === undefined) {
+      return { complete: false, data };
     }
 
     startingAfter = last.id;
   }
 
   return { complete: false, data };
+}
+
+/** A connected account's capabilities, as `accounts.retrieve` returns them. */
+export interface AccountView {
+  charges_enabled: boolean;
+  details_submitted: boolean;
+  id: string;
+  payouts_enabled: boolean;
 }
 
 /**
@@ -227,6 +241,13 @@ export interface StripeMoneyGateway extends StripeGateway {
   listTransferReversals(transferId: string): Promise<Listing<TransferReversalView>>;
   /** Every transfer carrying this transfer_group, paged (bounded). */
   listTransfersByGroup(transferGroup: string): Promise<Listing<TransferView>>;
+  /** Transfers to one connected account created at or after `createdGte` (s). */
+  listTransfersToDestination(params: {
+    createdGte: number;
+    destination: string;
+  }): Promise<Listing<TransferView>>;
+  /** The account's CURRENT capabilities (authoritative, order-independent). */
+  retrieveAccount(accountId: string): Promise<AccountView>;
   retrieveCharge(chargeId: string): Promise<ChargeView>;
 }
 
@@ -240,6 +261,8 @@ const MONEY_METHODS = [
   "listRefunds",
   "listTransferReversals",
   "listTransfersByGroup",
+  "listTransfersToDestination",
+  "retrieveAccount",
   "retrieveCharge",
   "retrievePaymentIntent",
 ] as const;
@@ -284,11 +307,25 @@ export const STRIPE_GATEWAY_OVERRIDE: unique symbol = Symbol(
  */
 export interface VerifiedStripeEvent {
   /**
+   * The connected account the event happened on. Present on events Stripe
+   * delivers to a CONNECT endpoint (`connect: true`); absent on the
+   * platform's own events.
+   */
+  account?: string;
+  /**
    * When Stripe created the event (unix seconds). Stripe does not deliver in
    * order, so a handler whose effect is "the latest state" (account.updated)
    * orders by this, never by arrival.
    */
   created?: number;
+  /**
+   * Which endpoint's signing secret verified it — set by the verifier, never
+   * read from the payload. Stripe delivers platform events (money) and
+   * connected-account events (`account.updated`) on two different endpoints,
+   * each with its own secret; the webhook treats them differently. Absent
+   * (a test verifier) means platform.
+   */
+  endpoint?: "connect" | "platform";
   data: { object: unknown };
   id: string;
   type: string;
@@ -403,6 +440,18 @@ export function resolveStripeWebhookVerifier(env: Env): StripeWebhookVerifier {
   return createStripeWebhookVerifier(env);
 }
 
+/**
+ * Whether the Connect endpoint's signing secret exists. Optional: without it,
+ * an event signed for the Connect endpoint fails verification (400) exactly
+ * as before it existed.
+ */
+export function isStripeConnectWebhookConfigured(env: Env): boolean {
+  return (
+    typeof env.STRIPE_CONNECT_WEBHOOK_SECRET === "string" &&
+    env.STRIPE_CONNECT_WEBHOOK_SECRET.length >= MINIMUM_WEBHOOK_SECRET_LENGTH
+  );
+}
+
 export function createStripeWebhookVerifier(env: Env): StripeWebhookVerifier {
   if (!isStripeWebhookConfigured(env)) {
     // Unreachable through the route, which gates on isStripeWebhookConfigured
@@ -413,6 +462,16 @@ export function createStripeWebhookVerifier(env: Env): StripeWebhookVerifier {
   }
 
   const secret = env.STRIPE_WEBHOOK_SECRET as string;
+  // TWO ENDPOINTS, ONE ROUTE. Stripe sends the platform's own events and its
+  // connected accounts' events to different endpoints (`connect: false` /
+  // `connect: true`), each signed with its own secret, and both are pointed
+  // at /v1/webhooks/stripe. The platform secret is tried first; the Connect
+  // secret only if it is configured and the platform one did not verify. The
+  // result is stamped with which one did, so the handler can refuse to act on
+  // anything but `account.updated` from the Connect endpoint.
+  const connectSecret = isStripeConnectWebhookConfigured(env)
+    ? (env.STRIPE_CONNECT_WEBHOOK_SECRET as string)
+    : null;
 
   // A client is needed only for its `webhooks` namespace; no request is ever
   // dispatched from it. The API key is not required for verification — it is
@@ -430,24 +489,37 @@ export function createStripeWebhookVerifier(env: Env): StripeWebhookVerifier {
       payload: string,
       signatureHeader: string,
     ): Promise<VerifiedStripeEvent> {
-      try {
-        // ASYNC, and it must be. See StripeWebhookVerifier: the synchronous
-        // form throws under workerd because Web Crypto has no synchronous
-        // digest. This also enforces Stripe's default 300-second timestamp
-        // tolerance, probed and confirmed enforced — an old signature is
-        // rejected with "Timestamp outside the tolerance zone", which is the
-        // replay protection the scheme provides beyond the HMAC itself.
-        const event = await stripe.webhooks.constructEventAsync(
-          payload,
-          signatureHeader,
-          secret,
-        );
+      // ASYNC, and it must be. See StripeWebhookVerifier: the synchronous
+      // form throws under workerd because Web Crypto has no synchronous
+      // digest. This also enforces Stripe's default 300-second timestamp
+      // tolerance, probed and confirmed enforced — an old signature is
+      // rejected with "Timestamp outside the tolerance zone", which is the
+      // replay protection the scheme provides beyond the HMAC itself.
+      const verify = async (key: string): Promise<VerifiedStripeEvent | null> => {
+        try {
+          const event = await stripe.webhooks.constructEventAsync(
+            payload,
+            signatureHeader,
+            key,
+          );
+          return event as unknown as VerifiedStripeEvent;
+        } catch {
+          return null;
+        }
+      };
 
-        return event as unknown as VerifiedStripeEvent;
-      } catch {
-        // Catch-all and detail-free. See StripeSignatureError.
-        throw new StripeSignatureError();
+      const platform = await verify(secret);
+      if (platform !== null) {
+        return { ...platform, endpoint: "platform" };
       }
+
+      const connect = connectSecret === null ? null : await verify(connectSecret);
+      if (connect !== null) {
+        return { ...connect, endpoint: "connect" };
+      }
+
+      // Catch-all and detail-free. See StripeSignatureError.
+      throw new StripeSignatureError();
     },
   };
 }
@@ -787,6 +859,43 @@ export function createStripeGateway(env: Env): StripeMoneyGateway {
             hasMore: page.has_more,
           };
         });
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async listTransfersToDestination(params): Promise<Listing<TransferView>> {
+      try {
+        return await collectPages(async (startingAfter) => {
+          const page = await stripe.transfers.list({
+            created: { gte: params.createdGte },
+            destination: params.destination,
+            limit: 100,
+            ...(startingAfter === null ? {} : { starting_after: startingAfter }),
+          });
+          return {
+            data: page.data.map((transfer) => ({
+              amount: transfer.amount,
+              id: transfer.id,
+              metadata: metadataOf(transfer.metadata),
+            })),
+            hasMore: page.has_more,
+          };
+        });
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async retrieveAccount(accountId: string): Promise<AccountView> {
+      try {
+        const account = await stripe.accounts.retrieve(accountId);
+        return {
+          charges_enabled: account.charges_enabled === true,
+          details_submitted: account.details_submitted === true,
+          id: account.id,
+          payouts_enabled: account.payouts_enabled === true,
+        };
       } catch (error) {
         throw gatewayError(error);
       }

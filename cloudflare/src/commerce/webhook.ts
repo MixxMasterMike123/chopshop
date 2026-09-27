@@ -1,4 +1,5 @@
 import { printerJobId } from "../dispatch/snapwear-wire";
+import { initialDispatchAttemptSql } from "./dispatch-hold";
 import { raiseAlertStatement } from "./money-alerts";
 import type {
   HandleWebhookEventResult,
@@ -8,9 +9,11 @@ import {
   findRecordedEvent,
   isDuplicateDelivery,
   REASON_AMOUNT_MISMATCH,
+  REASON_DEFERRED_UNTIL_ORDER,
   REASON_CHECKOUT_NOT_PAYABLE,
   REASON_METADATA_MISMATCH,
   REASON_UNKNOWN_INTENT,
+  REASON_WRONG_ENDPOINT,
   recordEventStatement,
   recordOnly,
 } from "./payment-events";
@@ -317,6 +320,17 @@ export async function handleStripeWebhookEvent(
       // A redelivered success: its first delivery may have committed the
       // order and died before replaying facts parked for it.
       await replayDeferredSafely(db, readIntent(event)?.id ?? null, now);
+    } else if (recorded.reason_code === REASON_DEFERRED_UNTIL_ORDER) {
+      // A redelivered PARKED event (refund/dispute that came before its
+      // order): Stripe retrying it is one more chance to apply it, so a
+      // replay that failed elsewhere is retried here too.
+      const parked = await db
+        .prepare(
+          "SELECT payment_intent_id FROM deferred_payment_events WHERE event_id = ? LIMIT 1",
+        )
+        .bind(event.id)
+        .first<{ payment_intent_id: string }>();
+      await replayDeferredSafely(db, parked?.payment_intent_id ?? null, now);
     }
 
     return {
@@ -326,6 +340,14 @@ export async function handleStripeWebhookEvent(
         : { reasonCode: recorded.reason_code }),
       replayed: true,
     };
+  }
+
+  // The Connect endpoint (connect: true) exists for connected accounts'
+  // `account.updated`. Anything else it delivers — a connected account's own
+  // charges or refunds — is not this platform's money: acknowledged, recorded,
+  // never acted on.
+  if (event.endpoint === "connect" && event.type !== "account.updated") {
+    return recordOnly(db, event, null, null, "ignored", REASON_WRONG_ENDPOINT, now);
   }
 
   if (event.type !== ORDER_EVENT_TYPE) {
@@ -622,6 +644,10 @@ export async function handleStripeWebhookEvent(
           aggregateId: orderId,
           dedupeKey: `dispatch:${orderId}:${lineNo}`,
           eventType: "dispatch",
+          // HELD (dispatch-hold.ts) when a refund or dispute for this intent
+          // was parked before the order existed: the job may not go out
+          // until that fact is applied, whatever runs first.
+          held: { orderId },
           now,
           // Key order as the shared contract writes it.
           payload: { orderId, lineNo, jobId: printerJobId(orderId, lineNo) },
@@ -884,18 +910,23 @@ function outboxStatement(
     aggregateId: string;
     dedupeKey: string;
     eventType: "dispatch" | "email";
+    /** Insert held when the order has unsettled payment facts. */
+    held?: { orderId: string };
     now: number;
     payload: Record<string, unknown>;
     tenantId: string;
   },
 ): D1PreparedStatement {
+  const nextAttempt = row.held === undefined ? "?" : initialDispatchAttemptSql();
+  const nextAttemptBinds =
+    row.held === undefined ? [row.now] : [row.held.orderId, row.held.orderId, row.now];
   return db
     .prepare(
       `INSERT INTO outbox_events (
         outbox_id, tenant_id, event_type, aggregate_type, aggregate_id,
         dedupe_key, payload_json, status, next_attempt_at, created_at,
         updated_at
-      ) VALUES (?, ?, ?, 'order', ?, ?, ?, 'pending', ?, ?, ?)`,
+      ) VALUES (?, ?, ?, 'order', ?, ?, ?, 'pending', ${nextAttempt}, ?, ?)`,
     )
     .bind(
       crypto.randomUUID(),
@@ -904,7 +935,7 @@ function outboxStatement(
       row.aggregateId,
       row.dedupeKey,
       JSON.stringify(row.payload),
-      row.now,
+      ...nextAttemptBinds,
       row.now,
       row.now,
     );

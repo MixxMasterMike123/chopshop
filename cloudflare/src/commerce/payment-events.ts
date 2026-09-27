@@ -33,6 +33,8 @@ export const REASON_REFUND_AMOUNT_MISMATCH = "refund_amount_mismatch";
 /** Parked in deferred_payment_events until the order exists (0026). */
 export const REASON_DEFERRED_UNTIL_ORDER = "deferred_until_order";
 export const REASON_STALE_EVENT = "stale_event";
+/** A non-Connect event verified by the Connect endpoint's secret. */
+export const REASON_WRONG_ENDPOINT = "ignored_wrong_endpoint";
 
 export interface HandleWebhookEventResult {
   outcome: WebhookOutcome;

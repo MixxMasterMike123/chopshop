@@ -5,6 +5,7 @@ import Stripe from "stripe";
 import worker from "../src/index";
 import { createAuth } from "../src/auth/create-auth";
 import type {
+  AccountView,
   ChargeView,
   CreatePaymentIntentParams,
   CreateRefundParams,
@@ -84,6 +85,12 @@ export class FakeMoneyStripe implements StripeMoneyGateway {
   readonly reversalsByTransfer = new Map<string, TransferReversalView[]>();
   /** Every transfer made, per transfer_group. */
   readonly transfersByGroup = new Map<string, TransferView[]>();
+  /** Every transfer made, per destination, with its creation time (s). */
+  readonly transfersByDestination = new Map<string, Array<TransferView & { created: number }>>();
+  /** Connected accounts as `accounts.retrieve` would return them. */
+  readonly accounts = new Map<string, AccountView>();
+  accountBehaviour: Behaviour = "ok";
+  readonly retrieveAccountCalls: string[] = [];
   /** Create the reversal / transfer at "Stripe", then lose the answer. */
   loseReversalResponse = false;
   loseTransferResponse = false;
@@ -271,6 +278,36 @@ export class FakeMoneyStripe implements StripeMoneyGateway {
     return this.paged(this.transfersByGroup.get(group) ?? []);
   }
 
+  async listTransfersToDestination(params: {
+    createdGte: number;
+    destination: string;
+  }): Promise<Listing<TransferView>> {
+    this.fail(this.listBehaviour);
+    return this.paged(
+      (this.transfersByDestination.get(params.destination) ?? [])
+        .filter((transfer) => transfer.created >= params.createdGte)
+        .map(({ created: _created, ...transfer }) => transfer),
+    );
+  }
+
+  /** A transfer made outside this run (e.g. by an older version). */
+  addTransfer(destination: string, transfer: TransferView, created = Math.floor(Date.now() / 1_000)): void {
+    this.transfersByDestination.set(destination, [
+      ...(this.transfersByDestination.get(destination) ?? []),
+      { ...transfer, created },
+    ]);
+  }
+
+  async retrieveAccount(accountId: string): Promise<AccountView> {
+    this.retrieveAccountCalls.push(accountId);
+    this.fail(this.accountBehaviour);
+    const account = this.accounts.get(accountId);
+    if (account === undefined) {
+      throw new StripeGatewayError(true);
+    }
+    return account;
+  }
+
   async retrieveCharge(chargeId: string): Promise<ChargeView> {
     const charge = this.charges.get(chargeId);
     if (charge === undefined) {
@@ -320,6 +357,7 @@ export class FakeMoneyStripe implements StripeMoneyGateway {
       ...(this.transfersByGroup.get(params.transferGroup) ?? []),
       transfer,
     ]);
+    this.addTransfer(params.destination, transfer);
     if (this.loseTransferResponse) {
       throw new StripeGatewayError(false);
     }
@@ -555,10 +593,19 @@ const signer = new Stripe("sk_test_signing_helper_only", {
 export async function postEvent(
   type: string,
   object: Record<string, unknown>,
-  options: { created?: number; env?: Env; eventId?: string } = {},
+  options: {
+    /** The connected account, as the Connect endpoint's events carry it. */
+    account?: string;
+    created?: number;
+    env?: Env;
+    eventId?: string;
+    /** Sign with this secret instead of the platform endpoint's. */
+    secret?: string;
+  } = {},
 ): Promise<{ eventId: string; response: Response }> {
   const eventId = options.eventId ?? next("evt");
   const payload = JSON.stringify({
+    ...(options.account === undefined ? {} : { account: options.account }),
     api_version: STRIPE_API_VERSION,
     created: options.created ?? Math.floor(Date.now() / 1_000),
     data: { object },
@@ -569,7 +616,7 @@ export async function postEvent(
   });
   const signature = await signer.webhooks.generateTestHeaderStringAsync({
     payload,
-    secret: env.STRIPE_WEBHOOK_SECRET,
+    secret: options.secret ?? env.STRIPE_WEBHOOK_SECRET,
   });
   const response = await worker.fetch(
     new Request(`https://hooks.money.test${WEBHOOK_PATH}`, {

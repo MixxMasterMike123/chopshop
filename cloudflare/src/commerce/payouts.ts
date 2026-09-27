@@ -168,7 +168,7 @@ export const PAYOUT_FACT_COLUMNS = `o.charged_minor, o.refund_succeeded_minor,
 /**
  * derivePayoutState, as SQL over an `orders` row (alias `o`) — the SAME rules,
  * so the refresh can select exactly the rows whose stored state is wrong.
- * test/money-crons.test.ts pins SQL = JS over the whole input matrix.
+ * test/money-codex-fixes.test.ts ("P2-6") pins SQL = JS over the whole input matrix.
  */
 export function derivedPayoutStateSql(nowParam: string, windowMs: number): string {
   const closed = [...CLOSED_DISPUTE_STATUSES].map((s) => `'${s}'`).join(", ");

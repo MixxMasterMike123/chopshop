@@ -506,3 +506,156 @@ The refresh scans the non-`paid` orders every 15 minutes. That is fine at pilot 
 
 - **`REQUIRED_MIGRATION` should move to `0026_deferred_payment_events.sql`.** I left it and the readiness tests untouched, as before.
 - **Remaining window:** between the order batch committing and its immediate replay, a dispatch could only be claimed by a queue nudge or sweeper tick that lands inside those milliseconds. Closing it fully would put the parked refunds into the order batch itself. Note CP2-B's dispatcher also re-checks `cancel_requested` before its HTTP call.
+
+---
+
+## Codex fixes — round 2 (adversarial review of 428ffdc: 2 × P2, 5 × P3, 1 design change)
+
+Every finding is fixed with a regression test. The reviewer's two scratch tests are ported and assert the fixed behaviour. There was no git state change and no wrangler call.
+
+`npm run check` is green at **1681 tests / 47 files**:
+- **+21 mine**, in the new `test/money-review-fixes.test.ts`;
+- the rest are CP2-C's in-progress tests.
+
+The guard passes and the forbidden-string scan of my files is clean.
+
+```
+ Test Files  47 passed (47)
+      Tests  1681 passed (1681)
+```
+
+**Mutation checks: 13 of 13 killed.** Each one re-introduced a defect against the new suite, and the sources were restored byte-identical afterwards.
+
+| Finding | Mutations killed |
+|---|---|
+| P2-1 | no hold at order insert (the reviewer's case then actually prints); no recorded-path replay; no hold in the deferral batch; release without re-checking the condition |
+| P2-2 | tie never marked for resync; reconciliation never resyncs |
+| P3-3 | replay not isolated |
+| P3-4 | no metadata lookup |
+| P3-6 | an empty page with `has_more` counted as complete |
+| P3-7 | the refund route not nudging |
+| DESIGN | the Connect secret never tried; no wrong-endpoint filter; a Connect account mismatch accepted |
+
+### P2-1 — a deferred full refund can no longer be printed by the next sweep
+
+New module `src/commerce/dispatch-hold.ts`. An order is **held** while either:
+- a parked fact for its payment intent is unapplied, or
+- Stripe's `amount_refunded` exceeds what is settled + reserved here.
+
+A held dispatch row carries `next_attempt_at = DISPATCH_HOLD_UNTIL_MS` (year 9999). CP2-B's claimable guard requires `next_attempt_at <= now`, so **neither the consumer nor the sweeper can claim it, whatever order the crons run in.** Changing `next_attempt_at` on a pending or unknown row is not a transition, so CP2-B's triggers allow it.
+
+Where the hold is applied, all in my code:
+- **The order batch** inserts dispatch rows already held when a parked fact exists (a SQL `CASE` evaluated in-batch).
+- **The deferral batch** holds an order that committed between the handler's read and its write.
+- **A live `charge.refunded`** holds when it leaves refunds unexplained.
+
+**Release** is one statement that re-checks the same condition. It runs:
+- after every replay;
+- after a refund event settles (for that intent);
+- after reconciliation's refund step;
+- in `replayDeferred`.
+
+Released rows are nudged wherever `env` is at hand.
+
+**(b) The recorded path replays.** A redelivered event whose ledger row says `deferred_until_order` looks up its parked intent and replays.
+
+**(c) `replayDeferred(env, now)` is exported from `src/commerce/crons.ts`** for `scheduled()` to call BEFORE the outbox sweep. It replays every ready intent, releases, nudges, and returns `{ errors, released, replayed }`. `runReconciliation` also calls it first.
+
+**Exported for CP2-B**, as defence in depth for a row claimed *before* its hold landed:
+- `noUnappliedDeferredEventsGuard(orderId): SqlGuard` — TRUE ⇔ the order may dispatch;
+- `dispatchHeldForPayment(db, orderId): Promise<boolean>` — the same condition as a read.
+
+**The one-line change for CP2-B's dispatch effect.** In `src/dispatch/dispatch-effect.ts`, `runDispatchEffect`, insert immediately before `const submitting = await markSubmitting(env.DB, claim, {`:
+
+```ts
+  if (await dispatchHeldForPayment(env.DB, row.aggregate_id)) return retryLater(ctx, "payment_facts_pending", lineRef);
+```
+
+This also needs the import `import { dispatchHeldForPayment } from "../commerce/dispatch-hold";`. For an atomic version, `markSubmitting` would take an extra guard and AND in `noUnappliedDeferredEventsGuard(row.aggregate_id)`.
+
+**The `scheduled()` wiring (reviewer).** In `src/outbox/scheduled.ts`, run `replayDeferred(env, now())` as a step before `runOutboxSweep`, loaded the same guarded way as the other commerce steps.
+
+Tests:
+- **the reviewer's case**: a failed post-order replay, then `handleScheduled` running the sweep first ⇒ the order is `refunded`, dispatch `superseded` with 0 attempts, 0 fake-printer jobs, 0 printer cancellations;
+- a redelivered parked event replays;
+- `replayDeferred` applies and supersedes;
+- a partial parked refund releases and nudges;
+- the deferral batch holds an order committed mid-race, even when its own replay then fails;
+- `charge.refunded` holds, and the refund that explains it releases;
+- the exported guard flips from 0 to 1 once the fact is applied.
+
+### P2-2 — a same-second `account.updated` tie is repaired
+
+New migration **`0027_connect_account_resync.sql`** adds `tenants.stripe_account_resync_needed` (0/1, partial index).
+
+A tie whose flags **disagree** still merges fail-closed, and now also sets the mark. The tie statement runs first in the batch, so it can only match a tie with an earlier event.
+
+`runReconciliation` then:
+- calls `accounts.retrieve` through the gateway seam (`retrieveAccount`);
+- writes the flags, guarded on the event time it read, so an ordered event that landed meanwhile is never overwritten;
+- clears the mark.
+
+A failed retrieve raises a critical `connect_account_resync_failed` alert (one while open) and is retried every run. A strictly newer ordered event clears a pending mark.
+
+The same-second case in `test/money-crons.test.ts` is **restored**: two events in one second leave the payout blocked, and after reconciliation's resync it is eligible.
+
+Tests:
+- **the reviewer's burst**: 0/0 and marked, then 1/1 and cleared, with no second retrieve;
+- a failing retrieve alerts and keeps the mark;
+- an identical duplicate needs no resync;
+- a newer event clears the mark, and the resync never overwrites it.
+
+### P3 items
+
+- **P3-3:** `replayDeferred` wraps each intent in try/catch, counts `errors`, and continues. Test: one broken intent, and the other is still applied.
+- **P3-4:** the re-transfer idempotency key is now `dispute-retransfer:v2:{disputeId}`.
+  - The lookup is first by `transfer_group`, then by `metadata.dispute_id` + `reason` among `listTransfersToDestination(shop, created ≥ paid_at)` (new gateway read, paged).
+  - If neither lookup is complete and nothing is found, there is no blind send: a warning alert is raised.
+  - Test: an older group-less re-transfer is found, and no new transfer is sent.
+- **P3-5:** 0027 runs `UPDATE tenants SET stripe_account_synced_at = NULL`, so the first event after deploy applies. The test pins the statement in the migration.
+- **P3-6:** `collectPages` treats `has_more` with an empty page as **incomplete**. Test added.
+- **P3-7:** the refund route nudges the order's pending `printer_cancellation` rows after a settled refund. Reconciliation and `replayDeferred` nudge pending printer cancellations and released holds.
+  - The webhook path has no `env`, so it relies on the sweeper, or on the next replay/reconciliation nudge.
+  - The header comments in `refund-dispatch-stop.ts` and `payouts.ts` now name the real test file (`test/money-codex-fixes.test.ts`).
+  - Test: a full refund of an accepted job nudges its printer cancellation (recording queue).
+
+### DESIGN — the Connect endpoint's second signing secret
+
+- **Config:** `STRIPE_CONNECT_WEBHOOK_SECRET` is an optional Worker secret, declared in `src/env.d.ts`.
+- **Verification:** the verifier (`stripe-client.ts`) tries the platform secret first, then the Connect secret if configured. Both go through `constructEventAsync`.
+- **Stamping:** the verified event is stamped `endpoint: "platform" | "connect"` by the verifier, never read from the payload, and `VerifiedStripeEvent` now also carries `account`.
+- **Filtering:** a Connect-verified event other than `account.updated` gets 200 and ledger `ignored` / `ignored_wrong_endpoint`, with no effect.
+- **Account check:** a Connect `account.updated` must carry `event.account` equal to the account it describes, or it is `rejected`.
+- **Without the secret:** Connect-signed deliveries fail verification with 400, as before.
+
+Tests:
+- a Connect-signed `account.updated` is applied;
+- a refund event signed by the Connect secret is ignored and moves no money;
+- an account mismatch is rejected;
+- no Connect secret ⇒ 400;
+- a platform-signed event still works with both configured, and an unknown secret ⇒ 400.
+
+### Files (this round)
+
+- **New:**
+  - `migrations/0027_connect_account_resync.sql`
+  - `src/commerce/dispatch-hold.ts`
+  - `test/money-review-fixes.test.ts`
+- **Changed:**
+  - `src/commerce/webhook.ts` (held dispatch insert, recorded-path replay, Connect endpoint filter)
+  - `src/commerce/stripe-events.ts` (deferral hold, release after replay/refund/`charge.refunded`, tie resync mark, Connect account check)
+  - `src/commerce/crons.ts` (exported isolated `replayDeferred`, account resync, v2 re-transfer key + metadata lookup, nudges)
+  - `src/commerce/stripe-client.ts` (dual-secret verifier, `endpoint`/`account` on events, `collectPages` fix, `retrieveAccount`, `listTransfersToDestination`)
+  - `src/commerce/payment-events.ts` (`ignored_wrong_endpoint`)
+  - `src/commerce/money-alerts.ts` (`connect_account_resync_failed`)
+  - `src/commerce/refund-dispatch-stop.ts` and `src/commerce/payouts.ts` (comments)
+  - `src/routes/money-orders.ts` (nudge)
+  - `src/env.d.ts`
+  - `test/money-fixtures.ts`, `test/money-crons.test.ts`
+
+### For the reviewer
+
+1. Bump `REQUIRED_MIGRATION` to `0027_connect_account_resync.sql`.
+2. Wire `replayDeferred` into `scheduled()` before the sweep.
+3. Apply the one-line dispatch-effect check above.
+4. Set `STRIPE_CONNECT_WEBHOOK_SECRET` for the Connect staging endpoint (`wrangler secret put`, through the preflight).

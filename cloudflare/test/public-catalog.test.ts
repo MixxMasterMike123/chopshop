@@ -443,7 +443,7 @@ describe("GET /ready", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       database: "ready",
-      migration: "0026_deferred_payment_events.sql",
+      migration: "0027_connect_account_resync.sql",
       status: "ok",
     });
   });

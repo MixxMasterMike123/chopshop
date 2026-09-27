@@ -75,6 +75,14 @@ interface Env {
   // order-creation surface.
   STRIPE_WEBHOOK_SECRET: string | undefined;
 
+  // Worker SECRET, optional: the signing secret of the second Stripe webhook
+  // endpoint, created with `connect: true`, which delivers the CONNECTED
+  // accounts' events (`account.updated`). Both endpoints point at
+  // /v1/webhooks/stripe; the verifier tries the platform secret first, then
+  // this one. Absent ⇒ Connect-signed deliveries fail verification (400).
+  // Events verified by it are acted on only when they are `account.updated`.
+  STRIPE_CONNECT_WEBHOOK_SECRET?: string;
+
   // ── THE POD / RENDER-FARM CONFIGURATION ──────────────────────────────────
   // Six values, and the ENTIRE POD surface answers a fail-closed 404 until all
   // six exist (isPodConfigured in src/pod/render-farm-client.ts). Partial

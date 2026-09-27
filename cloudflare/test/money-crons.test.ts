@@ -357,7 +357,7 @@ describe("reconciliation: dispute recovery (the money the webhook queued)", () =
         amount: 20_000,
         currency: "sek",
         destination: accountId,
-        idempotencyKey: "dispute-retransfer:dp_won_1",
+        idempotencyKey: "dispute-retransfer:v2:dp_won_1",
         metadata: { dispute_id: "dp_won_1", order_id: order.orderId, reason: "dispute_won_retransfer" },
         transferGroup: "dispute_retransfer_dp_won_1",
       },
@@ -680,7 +680,9 @@ describe("reconciliation: Stripe ↔ orders ↔ dispatch ↔ payouts", () => {
     await refreshPayoutStates(env.DB, now + 14 * DAY_MS + MIN);
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({ payout_state: "eligible" });
 
-    // Distinct event times: account.updated applies strictly newer events.
+    // BOTH events in the SAME second (review round: distinct seconds had
+    // hidden that a tie was never repaired). The tie merges fail-closed —
+    // payouts stay off — and marks the shop for a resync...
     const second = Math.floor(Date.now() / 1_000) + 3_600;
     await postEvent(
       "account.updated",
@@ -693,9 +695,20 @@ describe("reconciliation: Stripe ↔ orders ↔ dispatch ↔ payouts", () => {
     await postEvent(
       "account.updated",
       { charges_enabled: true, id: accountId, payouts_enabled: true },
-      { created: second + 1 },
+      { created: second },
     );
     await refreshPayoutStates(env.DB, now + 14 * DAY_MS + 3 * MIN);
+    await expect(orderMoney(order.orderId)).resolves.toMatchObject({ payout_state: "blocked" });
+
+    // ...which reconciliation performs from Stripe's current account state.
+    stripe.accounts.set(accountId, {
+      charges_enabled: true,
+      details_submitted: true,
+      id: accountId,
+      payouts_enabled: true,
+    });
+    const summary = await runReconciliation(moneyEnv(stripe), now + 14 * DAY_MS + 4 * MIN);
+    expect(summary.accounts.resynced).toBe(1);
     await expect(orderMoney(order.orderId)).resolves.toMatchObject({ payout_state: "eligible" });
   });
 
