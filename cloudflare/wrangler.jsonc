@@ -82,7 +82,9 @@
         "R2_JURISDICTION": "eu",
         // Printer dispatch target — must equal pinned.<env>.json → dispatchTarget (the preflight
         // checks it). "fake-printer" exists only in staging; production is always "snapwear".
-        "DISPATCH_TARGET": "fake-printer"
+        "DISPATCH_TARGET": "fake-printer",
+        // Recipient of the 15-minute alert digest (D40). A var, not a secret: an address. Absent ⇒ no digest.
+        "PLATFORM_ALERT_EMAIL": "micke.ohlen@gmail.com"
       },
       "d1_databases": [
         {
@@ -153,7 +155,9 @@
         "R2_JURISDICTION": "eu",
         // Printer dispatch target — must equal pinned.<env>.json → dispatchTarget (the preflight
         // checks it). "fake-printer" exists only in staging; production is always "snapwear".
-        "DISPATCH_TARGET": "snapwear"
+        "DISPATCH_TARGET": "snapwear",
+        // Recipient of the 15-minute alert digest (D40). A var, not a secret: an address. Absent ⇒ no digest.
+        "PLATFORM_ALERT_EMAIL": "micke.ohlen@gmail.com"
       },
       "d1_databases": [
         {

@@ -1,4 +1,5 @@
 export type AuthEmailKind =
+  | "alert_digest"
   | "email_verification"
   | "order_confirmation"
   | "password_reset";
@@ -64,7 +65,51 @@ export interface OrderConfirmationEmailJob extends EmailJobBase {
   tenantId: string;
 }
 
-export type AuthEmailJob = AuthActionEmailJob | OrderConfirmationEmailJob;
+/**
+ * One kind of open alert, as the platform digest shows it (D40). Ids and
+ * counts only: an alert's message is never copied (it may name a shop's
+ * order), and nothing here is an amount or customer data.
+ */
+export interface AlertDigestKind {
+  count: number;
+  kind: string;
+  newCount: number;
+  /** created_at of the oldest open alert of this kind (ISO-8601 UTC). */
+  oldestAt: string;
+  /** Up to MAX_DIGEST_RESOURCE_IDS resource ids, oldest first. */
+  resourceIds: string[];
+  severity: "critical" | "info" | "warning";
+}
+
+export interface AlertDigestContent {
+  /** The 15-minute bucket this digest belongs to (ISO-8601 UTC). */
+  bucketStart: string;
+  kinds: AlertDigestKind[];
+  /** Open alerts raised since the previous digest. */
+  newCount: number;
+  /** Every open alert. */
+  openCount: number;
+  /** Kinds beyond MAX_DIGEST_KINDS, not listed. */
+  omittedKinds: number;
+}
+
+/**
+ * The platform alert digest (D40, CP2-D2): a Swedish summary of the open
+ * alerts to PLATFORM_ALERT_EMAIL, enqueued by runAlertDigest
+ * (src/commerce/crons.ts). No tenant (a platform mail: the ledger row's
+ * tenant_id is NULL), no link. Its delivery id is derived from the 15-minute
+ * bucket and its content is frozen in platform_state (0029), so a retried
+ * tick produces the identical job and the ledger sends it at most once.
+ */
+export interface AlertDigestEmailJob extends EmailJobBase {
+  actionUrl: "";
+  digest: AlertDigestContent;
+  kind: "alert_digest";
+  order?: undefined;
+  tenantId?: undefined;
+}
+
+export type AuthEmailJob = AuthActionEmailJob | AlertDigestEmailJob | OrderConfirmationEmailJob;
 
 export interface AuthEmailMessage {
   html: string;
@@ -157,6 +202,10 @@ export function parseAuthEmailJob(
     return parseOrderConfirmationEmailJob(value);
   }
 
+  if ((value as { kind?: unknown }).kind === "alert_digest") {
+    return parseAlertDigestEmailJob(value);
+  }
+
   const job = value as Partial<AuthActionEmailJob>;
   if (
     job.version !== 1 ||
@@ -226,6 +275,10 @@ function escapeHtml(value: string): string {
 export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
   if (job.kind === "order_confirmation") {
     return renderOrderConfirmationEmail(job);
+  }
+
+  if (job.kind === "alert_digest") {
+    return renderAlertDigestEmail(job);
   }
 
   const copy =
@@ -529,6 +582,213 @@ function renderOrderConfirmationEmail(job: OrderConfirmationEmailJob): AuthEmail
   return {
     html,
     subject: `Orderbekräftelse ${order.orderNumber}`,
+    text,
+  };
+}
+
+// ── the platform alert digest (CP2-D2, DECISIONS D40) ────────────────────────
+
+export const MAX_DIGEST_KINDS = 30;
+export const MAX_DIGEST_RESOURCE_IDS = 5;
+const MAX_DIGEST_COUNT = 1_000_000;
+const ISO_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const ALERT_KIND_PATTERN = /^[a-z0-9_.]{1,64}$/;
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= MAX_DIGEST_COUNT;
+}
+
+function isIso(value: unknown): value is string {
+  return typeof value === "string" && ISO_PATTERN.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function validatedDigestContent(value: unknown): AlertDigestContent {
+  if (
+    !isPlainRecord(value) ||
+    !isIso(value.bucketStart) ||
+    !isCount(value.newCount) ||
+    !isCount(value.openCount) ||
+    !isCount(value.omittedKinds) ||
+    value.newCount > value.openCount ||
+    !Array.isArray(value.kinds) ||
+    value.kinds.length > MAX_DIGEST_KINDS
+  ) {
+    throw new Error("Invalid alert digest content");
+  }
+
+  const kinds = value.kinds.map((entry: unknown): AlertDigestKind => {
+    if (
+      !isPlainRecord(entry) ||
+      typeof entry.kind !== "string" ||
+      !ALERT_KIND_PATTERN.test(entry.kind) ||
+      (entry.severity !== "critical" && entry.severity !== "warning" && entry.severity !== "info") ||
+      !isCount(entry.count) ||
+      !isCount(entry.newCount) ||
+      entry.newCount > entry.count ||
+      entry.count < 1 ||
+      !isIso(entry.oldestAt) ||
+      !Array.isArray(entry.resourceIds) ||
+      entry.resourceIds.length > MAX_DIGEST_RESOURCE_IDS ||
+      !entry.resourceIds.every((id: unknown) => isBoundedText(id, 200))
+    ) {
+      throw new Error("Invalid alert digest content");
+    }
+    return {
+      count: entry.count,
+      kind: entry.kind,
+      newCount: entry.newCount,
+      oldestAt: entry.oldestAt,
+      resourceIds: [...(entry.resourceIds as string[])],
+      severity: entry.severity,
+    };
+  });
+
+  return {
+    bucketStart: value.bucketStart,
+    kinds,
+    newCount: value.newCount,
+    omittedKinds: value.omittedKinds,
+    openCount: value.openCount,
+  };
+}
+
+function validatedDigestJobFrame(
+  input: Record<string, unknown>,
+  now: number,
+): Omit<AlertDigestEmailJob, "actionUrl" | "digest" | "kind"> {
+  if (
+    input.version !== 1 ||
+    typeof input.deliveryId !== "string" ||
+    !DELIVERY_ID_PATTERN.test(input.deliveryId) ||
+    input.locale !== "sv" ||
+    !Number.isSafeInteger(input.createdAt) ||
+    !Number.isSafeInteger(input.expiresAt) ||
+    (input.createdAt as number) > now + 5 * 60 * 1000 ||
+    (input.expiresAt as number) <= (input.createdAt as number) ||
+    (input.expiresAt as number) - (input.createdAt as number) > MAX_JOB_LIFETIME_MS ||
+    // A platform mail: never bound to a tenant.
+    input.tenantId !== undefined
+  ) {
+    throw new Error("Invalid auth email job");
+  }
+
+  return {
+    createdAt: input.createdAt as number,
+    deliveryId: input.deliveryId,
+    expiresAt: input.expiresAt as number,
+    locale: "sv",
+    recipient: normalizedEmail(String(input.recipient ?? "")),
+    version: 1,
+  };
+}
+
+/**
+ * Builds the digest job. Every field is supplied by the caller (none is
+ * minted here), so the same frozen inputs always produce the same job — the
+ * property the ledger's fingerprint relies on. Throws on an invalid recipient.
+ */
+export function createAlertDigestEmailJob(input: {
+  createdAt: number;
+  deliveryId: string;
+  digest: AlertDigestContent;
+  expiresAt: number;
+  recipient: string;
+}): AlertDigestEmailJob {
+  const frame = validatedDigestJobFrame({ ...input, locale: "sv", version: 1 }, Date.now());
+  return {
+    ...frame,
+    actionUrl: "",
+    digest: validatedDigestContent(input.digest),
+    kind: "alert_digest",
+  };
+}
+
+function parseAlertDigestEmailJob(value: unknown): AlertDigestEmailJob {
+  const job = value as Record<string, unknown>;
+  if (job.actionUrl !== "") {
+    throw new Error("Invalid auth email job");
+  }
+  const frame = validatedDigestJobFrame(job, Date.now());
+  return {
+    ...frame,
+    actionUrl: "",
+    digest: validatedDigestContent(job.digest),
+    kind: "alert_digest",
+  };
+}
+
+/**
+ * The digest content in a FIXED key order, for the delivery ledger's job
+ * fingerprint (email-delivery-store.ts): all of it is rendered, so all of it
+ * is covered.
+ */
+export function canonicalAlertDigestContent(digest: AlertDigestContent) {
+  return {
+    bucketStart: digest.bucketStart,
+    kinds: digest.kinds.map((entry) => ({
+      count: entry.count,
+      kind: entry.kind,
+      newCount: entry.newCount,
+      oldestAt: entry.oldestAt,
+      resourceIds: [...entry.resourceIds],
+      severity: entry.severity,
+    })),
+    newCount: digest.newCount,
+    omittedKinds: digest.omittedKinds,
+    openCount: digest.openCount,
+  };
+}
+
+const SEVERITY_SV: Record<AlertDigestKind["severity"], string> = {
+  critical: "kritisk",
+  info: "info",
+  warning: "varning",
+};
+
+/** "2026-09-27T08:15:00.000Z" → "2026-09-27 08:15 UTC". */
+function digestTime(value: string): string {
+  return `${value.slice(0, 10)} ${value.slice(11, 16)} UTC`;
+}
+
+function renderAlertDigestEmail(job: AlertDigestEmailJob): AuthEmailMessage {
+  const { digest } = job;
+  const intro = `${digest.newCount} nya larm sedan förra sammanställningen, ${digest.openCount} öppna totalt.`;
+  const lines = digest.kinds.map((entry) => ({
+    head: `${entry.kind} (${SEVERITY_SV[entry.severity]}): ${entry.count} öppna, ${entry.newCount} nya, äldst ${digestTime(entry.oldestAt)}`,
+    resources:
+      entry.resourceIds.length === 0
+        ? null
+        : `Resurser: ${entry.resourceIds.join(", ")}${entry.count > entry.resourceIds.length ? " …" : ""}`,
+  }));
+  const omitted =
+    digest.omittedKinds > 0 ? `Ytterligare ${digest.omittedKinds} larmtyper visas inte.` : null;
+  const footer =
+    "Larmen hanteras i plattformens admin. Sammanställningen innehåller inga belopp eller kunduppgifter.";
+
+  const text = [
+    intro,
+    "",
+    ...lines.flatMap((line) => (line.resources === null ? [line.head] : [line.head, `  ${line.resources}`])),
+    ...(omitted === null ? [] : ["", omitted]),
+    "",
+    footer,
+  ].join("\n");
+
+  const html = [
+    `<p>${escapeHtml(intro)}</p>`,
+    `<ul>${lines
+      .map(
+        (line) =>
+          `<li>${escapeHtml(line.head)}${line.resources === null ? "" : `<br>${escapeHtml(line.resources)}`}</li>`,
+      )
+      .join("")}</ul>`,
+    ...(omitted === null ? [] : [`<p>${escapeHtml(omitted)}</p>`]),
+    `<p>${escapeHtml(footer)}</p>`,
+  ].join("");
+
+  return {
+    html,
+    subject: `Plattformslarm: ${digest.newCount} nya, ${digest.openCount} öppna`,
     text,
   };
 }

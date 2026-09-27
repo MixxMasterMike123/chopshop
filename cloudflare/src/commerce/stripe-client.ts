@@ -251,6 +251,62 @@ export interface StripeMoneyGateway extends StripeGateway {
   retrieveCharge(chargeId: string): Promise<ChargeView>;
 }
 
+/**
+ * An Application Fee Refund (`fee_refund`), narrowed to what the withholding
+ * release reads (src/commerce/withholding-release.ts). Stripe creates it
+ * synchronously: an object returned by the create call has already moved the
+ * money from the platform's balance to the connected account's.
+ */
+export interface ApplicationFeeRefundView {
+  amount: number;
+  /** The application fee it refunds (`fee_…`). */
+  fee: string | null;
+  id: string;
+  metadata: Record<string, string>;
+}
+
+/**
+ * The application-fee calls of D36 (CP2-D2), a SEPARATE seam from
+ * StripeMoneyGateway on purpose: the money suites' shared fake implements
+ * StripeMoneyGateway, and a fee refund must never be attempted by a fake that
+ * did not opt into it. resolveStripeFeeRefundGateway reads the same override
+ * symbol and accepts it only when it implements these three methods; an
+ * override WITHOUT them answers null (the step is skipped under that test),
+ * never the real client. Production has no override and always gets the real
+ * client.
+ */
+export interface StripeFeeRefundGateway {
+  /**
+   * `POST /v1/application_fees/{id}/refunds` with `amount` — refunds PART of
+   * the fee to the connected account it was collected from. Stripe refuses
+   * (4xx) more than the fee's unrefunded remainder.
+   */
+  createApplicationFeeRefund(params: {
+    amount: number;
+    applicationFeeId: string;
+    /** = the withholding release id: one release can never become two. */
+    idempotencyKey: string;
+    metadata: Record<string, string>;
+  }): Promise<ApplicationFeeRefundView>;
+  /** Every refund of one application fee, paged to completion (bounded). */
+  listApplicationFeeRefunds(applicationFeeId: string): Promise<Listing<ApplicationFeeRefundView>>;
+  /**
+   * The application fee (`fee_…`) the order's charge carries — read from the
+   * charge, or from the intent's latest charge when the charge id is unknown.
+   * Null when the charge has none.
+   */
+  retrieveChargeApplicationFee(params: {
+    chargeId: string | null;
+    paymentIntentId: string;
+  }): Promise<string | null>;
+}
+
+const FEE_REFUND_METHODS = [
+  "createApplicationFeeRefund",
+  "listApplicationFeeRefunds",
+  "retrieveChargeApplicationFee",
+] as const;
+
 const MONEY_METHODS = [
   "cancelPaymentIntent",
   "createPaymentIntent",
@@ -697,7 +753,46 @@ export function resolveStripeMoneyGateway(env: Env): StripeMoneyGateway {
   return createStripeGateway(env);
 }
 
-export function createStripeGateway(env: Env): StripeMoneyGateway {
+/**
+ * The fee-refund gateway (D36), or null. See StripeFeeRefundGateway: an
+ * override that does not implement the fee methods is NOT promoted to the real
+ * client — it yields null, so a suite whose fake predates the release can
+ * never reach Stripe or have a release executed behind its back. Without an
+ * override (every deployed worker) the real client is returned.
+ */
+export function resolveStripeFeeRefundGateway(env: Env): StripeFeeRefundGateway | null {
+  const override = (env as unknown as Record<PropertyKey, unknown>)[
+    STRIPE_GATEWAY_OVERRIDE
+  ];
+
+  if (override !== undefined) {
+    return typeof override === "object" &&
+      override !== null &&
+      FEE_REFUND_METHODS.every(
+        (method) => typeof (override as Record<string, unknown>)[method] === "function",
+      )
+      ? (override as StripeFeeRefundGateway)
+      : null;
+  }
+
+  return createStripeGateway(env);
+}
+
+function feeRefundView(refund: {
+  amount: number;
+  fee?: unknown;
+  id: string;
+  metadata?: unknown;
+}): ApplicationFeeRefundView {
+  return {
+    amount: refund.amount,
+    fee: stringOrNull(refund.fee),
+    id: refund.id,
+    metadata: metadataOf(refund.metadata),
+  };
+}
+
+export function createStripeGateway(env: Env): StripeMoneyGateway & StripeFeeRefundGateway {
   if (!isStripeConfigured(env)) {
     // Unreachable through the route, which gates on isStripeConfigured first.
     // Kept strict anyway, exactly like createAuth: a future caller that forgets
@@ -909,6 +1004,54 @@ export function createStripeGateway(env: Env): StripeMoneyGateway {
           payment_intent: stringOrNull(charge.payment_intent),
           transfer: stringOrNull(charge.transfer),
         };
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async retrieveChargeApplicationFee(params): Promise<string | null> {
+      try {
+        if (params.chargeId !== null) {
+          const charge = await stripe.charges.retrieve(params.chargeId);
+          return stringOrNull(charge.application_fee);
+        }
+        const intent = await stripe.paymentIntents.retrieve(params.paymentIntentId, {
+          expand: ["latest_charge"],
+        });
+        const charge = intent.latest_charge;
+        return typeof charge === "object" && charge !== null
+          ? stringOrNull(charge.application_fee)
+          : null;
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async createApplicationFeeRefund(params): Promise<ApplicationFeeRefundView> {
+      try {
+        return feeRefundView(
+          await stripe.applicationFees.createRefund(
+            params.applicationFeeId,
+            { amount: params.amount, metadata: params.metadata },
+            { idempotencyKey: params.idempotencyKey },
+          ),
+        );
+      } catch (error) {
+        throw gatewayError(error);
+      }
+    },
+
+    async listApplicationFeeRefunds(
+      applicationFeeId: string,
+    ): Promise<Listing<ApplicationFeeRefundView>> {
+      try {
+        return await collectPages(async (startingAfter) => {
+          const page = await stripe.applicationFees.listRefunds(applicationFeeId, {
+            limit: 100,
+            ...(startingAfter === null ? {} : { starting_after: startingAfter }),
+          });
+          return { data: page.data.map(feeRefundView), hasMore: page.has_more };
+        });
       } catch (error) {
         throw gatewayError(error);
       }

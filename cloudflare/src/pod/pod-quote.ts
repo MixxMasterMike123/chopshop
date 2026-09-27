@@ -7,7 +7,7 @@ import type { PrintSlot } from "./printers";
  *
  * Nothing in this module may be reachable from a tenant response except the
  * two finished numbers the quote route hands out: `inkopMinor` (=
- * productionCostMinor for one unit) and `priceFloorMinor`.
+ * productionCostMinor for one unit) and `priceFloorMinor` (podPriceFloorMinor).
  */
 
 /**
@@ -46,6 +46,13 @@ export interface QuoteBreakdown {
 export interface PodQuote {
   /** SERVER-ONLY. Never serialize this to a tenant or buyer response. */
   breakdown: QuoteBreakdown;
+  /**
+   * SERVER-ONLY. The printer's flat per-ORDER parcel cost, ex VAT
+   * (`printers.shipping_cost_minor`), when the tier was read with its printer;
+   * null otherwise. The checkout adds it once per order (A4: one order, one
+   * printer, one parcel); the price floor counts it once per ITEM (D41).
+   */
+  parcelMinor: number | null;
   productionCostMinor: number;
 }
 
@@ -58,6 +65,8 @@ export interface TierFacts {
   blank_cost_minor: number;
   currency: string;
   print_costs_json: string;
+  /** The printer's per-order parcel cost, when the read joined it (D41). */
+  shipping_cost_minor?: number;
 }
 
 /**
@@ -98,6 +107,7 @@ export function quoteFromTier(
 
   const unitMinor = tier.blank_cost_minor + prints + PLATFORM_CUT_MINOR;
   return {
+    parcelMinor: isCost(tier.shipping_cost_minor) ? tier.shipping_cost_minor : null,
     breakdown: {
       blankMinor: tier.blank_cost_minor,
       currency: tier.currency,
@@ -127,8 +137,9 @@ export function quoteFromTier(
  * unpriced slot as 0 — any requested slot has no print price. A 0 there would
  * under-withhold the production cost on every such sale (A1).
  *
- * Shipping is NOT in the per-item quote (Firebase quoted items only too); it is
+ * Shipping is NOT in the per-item cost (Firebase quoted items only too); it is
  * a per-ORDER, per-printer amount added once in the checkout snapshot totals.
+ * The quote carries it separately as `parcelMinor`, for the D41 floor only.
  */
 export async function quotePodCost(
   db: D1Database,
@@ -145,7 +156,8 @@ export async function quotePodCost(
 
   const tier = await db
     .prepare(
-      `SELECT tier.blank_cost_minor, tier.print_costs_json, printer.currency
+      `SELECT tier.blank_cost_minor, tier.print_costs_json, printer.currency,
+              printer.shipping_cost_minor
        FROM printer_sku_tiers AS tier
        INNER JOIN printers AS printer ON printer.id = tier.printer_id
        WHERE tier.printer_id = ?
@@ -159,7 +171,10 @@ export async function quotePodCost(
 }
 
 /**
- * PRISGOLV — the break-even price floor, INCL. VAT, in minor units.
+ * PRISGOLV — the break-even price floor, INCL. VAT, in minor units, over a
+ * given cost: the Firebase formula, kept exact and unchanged. The publish and
+ * price-edit gates call podPriceFloorMinor below, which applies it to the
+ * per-item cost PLUS the printer's parcel (D41).
  *
  * src/wagons/pod-wagon/podPricing.js L69–73:
  *
@@ -194,6 +209,60 @@ export function priceFloorMinor(costMinor: number, vatRateBp: number): number | 
   const denominator = 100 * (10_000 - FEE_RATE_BP);
   const floorKr = Math.floor((numerator + denominator - 1) / denominator);
   return floorKr * 100;
+}
+
+/**
+ * THE FLOOR THE GATES USE (DECISIONS D41) — a DELIBERATE DIVERGENCE FROM
+ * FIREBASE, whose PublishPanel/ProductForm floor is `priceFloor(cost, vat)`
+ * above over the per-item cost alone.
+ *
+ * Why: the checkout withholds `withholdMinorFor(Σ line costs + the printer's
+ * per-order parcel)` (checkout.ts freezeProductionSnapshot) and refuses a
+ * basket whose withholding exceeds its total. A product priced exactly at the
+ * per-item floor could therefore not be bought on its own: at 140 kr ex cost
+ * and a 49 kr parcel the per-item floor is 196 kr while the withholding is
+ * 236,25 kr. (The same gap exists in Firebase.)
+ *
+ * So the floor is the same exact-öre formula over (per-item cost + ONE
+ * parcel), i.e. the break-even price of a ONE-ITEM order, which by
+ * construction clears its own withholding:
+ *
+ *   floorKr = ceil( ((cost + parcel)·(10000 + v) + FEE_FIXED_MINOR·10000)
+ *                   / (100 · (10000 − FEE_RATE_BP)) )
+ *   v = max(tenant VAT, PRODUCTION_VAT_BP)
+ *
+ * `v` is at least the platform's production VAT (25 %), because that is the
+ * VAT the withholding itself carries whatever the tenant's own rate: a shop
+ * that is not VAT-registered (tenant VAT 0) pays the production VAT without
+ * deducting it, and at 0 % the per-item formula would put the floor BELOW the
+ * withholding. For a 25 % tenant (the POD norm) `v` is exactly Firebase's.
+ *
+ * Then, at price P = the floor, 0.92·P − 5 kr ≥ (cost + parcel)·1.25 ≥
+ * withholding − ½ öre, so withholding ≤ P and commission + withholding < P
+ * for any commission up to the 8 % the floor assumes.
+ *
+ * `quote` must be a quantity-1 quote read with its printer (quotePodCost);
+ * a quote without its parcel is not floor-able (null, fail closed).
+ */
+export function podPriceFloorMinor(
+  quote: Pick<PodQuote, "parcelMinor" | "productionCostMinor">,
+  vatRateBp: number,
+): number | null {
+  if (
+    quote.parcelMinor === null ||
+    !Number.isSafeInteger(quote.parcelMinor) ||
+    quote.parcelMinor < 0 ||
+    !Number.isSafeInteger(quote.productionCostMinor) ||
+    quote.productionCostMinor < 0 ||
+    !Number.isSafeInteger(vatRateBp) ||
+    vatRateBp < 0
+  ) {
+    return null;
+  }
+  return priceFloorMinor(
+    quote.productionCostMinor + quote.parcelMinor,
+    Math.max(vatRateBp, PRODUCTION_VAT_BP),
+  );
 }
 
 /**

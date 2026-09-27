@@ -12,8 +12,10 @@ import {
  *
  * Since CP2 it also carries `order_confirmation` jobs, enqueued by the outbox
  * email effect (src/outbox/email-effect.ts) with a delivery id DERIVED from the
- * outbox dedupe key. They take the same path — parse, ledger claim, one send —
- * through the same functions; only the template differs (auth-email-job.ts).
+ * outbox dedupe key, and since CP2-D2 the platform `alert_digest` (D40,
+ * src/commerce/alert-digest.ts) with a delivery id derived from its 15-minute
+ * bucket. They take the same path — parse, ledger claim, one send — through
+ * the same functions; only the template differs (auth-email-job.ts).
  *
  * ── EXACTLY-ONCE ON TOP OF AT-LEAST-ONCE ─────────────────────────────────────
  * Queues deliver at least once, so every message first CLAIMS its ledger row

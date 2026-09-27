@@ -12,13 +12,18 @@
  *          − refund_succeeded        (each refund reversed its share of the
  *                                     transfer: transfer = gross ⇒ = refund)
  *          − application_fee         (D9: never returned, so never added back)
+ *          + withholding_released    (D36: the production part of the fee,
+ *                                     refunded to the shop when production
+ *                                     was cancelled before submission)
  *          − transfer_reversed       (dispute recovery reversals)
  *          + dispute_retransferred   (a won dispute's funds sent back)
  *
  * It can be NEGATIVE: a fully refunded order leaves the shop owing the
- * non-refundable fee, and a lost dispute leaves it owing the fee too. That is
- * the honest figure — the connected account's balance goes negative the same
- * way (Firebase's summarizeConnectBalance "negative" risk signal).
+ * non-refundable commission (and, until its release settles or when a printer
+ * job was accepted, the production withholding too), and a lost dispute
+ * leaves it owing the fee. That is the honest figure — the connected
+ * account's balance goes negative the same way (Firebase's
+ * summarizeConnectBalance "negative" risk signal).
  *
  * THE SELLER SEES ONE NUMBER (memory seller-sees-one-number, LAUNCH_TODO A13):
  * the fee is reported as one figure; its split into commission and withheld
@@ -99,6 +104,21 @@ export interface PayoutFacts {
   payout_state: string;
   refund_succeeded_minor: number;
   transfer_reversed_minor: number;
+  /**
+   * D36 (0028): the part of the fee returned to the shop. Always selected by
+   * PAYOUT_FACT_COLUMNS; optional only so fact literals written before 0028
+   * (and the SQL-parity matrix) read as 0.
+   */
+  withholding_released_minor?: number;
+}
+
+/**
+ * The platform's net deduction on an order — the ONE fee figure the seller
+ * sees (memory seller-sees-one-number): the application fee less whatever of
+ * it was returned (D36). Its split is never exposed.
+ */
+export function netFeeMinor(facts: Pick<PayoutFacts, "application_fee_minor" | "withholding_released_minor">): number {
+  return facts.application_fee_minor - (facts.withholding_released_minor ?? 0);
 }
 
 export interface Payout {
@@ -111,7 +131,7 @@ export function computePayoutAmount(facts: PayoutFacts): number {
   return (
     facts.charged_minor -
     facts.refund_succeeded_minor -
-    facts.application_fee_minor -
+    netFeeMinor(facts) -
     facts.transfer_reversed_minor +
     facts.dispute_retransferred_minor
   );
@@ -161,7 +181,7 @@ export function computePayout(
 }
 
 export const PAYOUT_FACT_COLUMNS = `o.charged_minor, o.refund_succeeded_minor,
-  o.application_fee_minor, o.transfer_reversed_minor,
+  o.application_fee_minor, o.withholding_released_minor, o.transfer_reversed_minor,
   o.dispute_retransferred_minor, o.dispute_status, o.dispute_recovery,
   o.paid_at, o.payout_state`;
 

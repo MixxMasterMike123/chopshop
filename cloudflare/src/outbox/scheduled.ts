@@ -22,6 +22,7 @@ interface CommerceCrons {
   replayDeferred?: CronStep;
   runReconciliation?: CronStep;
   runRetentionSweep?: CronStep;
+  runAlertDigest?: CronStep;
 }
 
 /**
@@ -99,7 +100,8 @@ export async function handleScheduled(
     failures.push("outbox_sweep");
   }
 
-  for (const name of ["runReconciliation", "runRetentionSweep"] as const) {
+  // The digest runs LAST so it sees the alerts this tick raised (D40).
+  for (const name of ["runReconciliation", "runRetentionSweep", "runAlertDigest"] as const) {
     const step = commerce?.[name];
     if (typeof step !== "function") {
       continue;

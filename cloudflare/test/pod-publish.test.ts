@@ -100,8 +100,9 @@ describe("the POD publish gate", () => {
   });
 
   it("PRISGOLV: refuses a price under the floor, accepts one exactly at it", async () => {
-    // front only: 60 + 40 + 40 = 140 kr ex → floor 196 kr.
-    await seedProduct(TENANT, { productId: "gate-floor", priceMinor: 19_500 });
+    // front only: 60 + 40 + 40 = 140 kr ex, + the printer's 49 kr parcel
+    // (D41: the floor is a one-item order's) = 189 kr ex → floor 263 kr.
+    await seedProduct(TENANT, { productId: "gate-floor", priceMinor: 26_200 });
     expect((await map("gate-floor", "art-front", ["front"])).status).toBe("ok");
     await expect(publishAdminProduct(env.DB, ADMIN, "gate-floor", Date.now())).resolves.toMatchObject({
       code: "price_below_floor",
@@ -110,7 +111,7 @@ describe("the POD publish gate", () => {
 
     // Not live: a PATCH is not gated (the next publish judges it in full)…
     await expect(
-      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_599 }, Date.now()),
+      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 26_299 }, Date.now()),
     ).resolves.toMatchObject({ status: "ok" });
     await expect(publishAdminProduct(env.DB, ADMIN, "gate-floor", Date.now())).resolves.toMatchObject({
       code: "price_below_floor",
@@ -118,32 +119,32 @@ describe("the POD publish gate", () => {
     });
     // …and the floor itself is a legal price.
     await expect(
-      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_600 }, Date.now()),
+      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 26_300 }, Date.now()),
     ).resolves.toMatchObject({ status: "ok" });
     await expect(publishAdminProduct(env.DB, ADMIN, "gate-floor", Date.now())).resolves.toMatchObject({
-      product: { isPod: true, priceMinor: 19_600, screeningStatus: "advisory" },
+      product: { isPod: true, priceMinor: 26_300, screeningStatus: "advisory" },
       status: "ok",
     });
 
     // Live: lowering it under the floor is refused (ProductForm's rule), with
     // the code and a sentence saying why; raising is always allowed.
     await expect(
-      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_599 }, Date.now()),
+      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 26_299 }, Date.now()),
     ).resolves.toEqual({
       code: "price_below_floor",
       message: "The price is below the break-even floor for this production cost.",
       status: "refused",
     });
     await expect(
-      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_700 }, Date.now()),
+      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 26_400 }, Date.now()),
     ).resolves.toMatchObject({ status: "ok" });
     await expect(
-      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 19_600 }, Date.now()),
+      updateAdminProduct(env.DB, ADMIN, "gate-floor", { priceMinor: 26_300 }, Date.now()),
     ).resolves.toMatchObject({ status: "ok" });
   });
 
   it("a mapping edit on a LIVE product may not push its floor over the price", async () => {
-    // gate-floor is live at 196 kr; a back print would make the floor 250 kr.
+    // gate-floor is live at 263 kr; a back print would make the floor 317 kr.
     await expect(map("gate-floor", "art-back", ["back"])).resolves.toEqual({
       code: "price_below_floor",
       status: "refused",
@@ -589,12 +590,18 @@ describe("the base price of a variant product is floor-checked whenever it is se
       status: "refused",
     });
 
-    // The floor itself is a legal base price…
-    expect((await updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 19_600 }, Date.now())).status).toBe("ok");
-    // …but at the floor the withholding (cost + the printer's parcel, × 1.25)
-    // can exceed a small basket's gross, which checkout refuses (A1) — the
-    // floor excludes the per-order parcel, as in Firebase. Priced above it:
-    expect((await updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 29_900 }, Date.now())).status).toBe("ok");
+    // Just under the floor (263 kr since D41) is still refused…
+    await expect(
+      updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 26_299 }, Date.now()),
+    ).resolves.toMatchObject({ status: "ok" });
+    await expect(publishAdminProduct(env.DB, ADMIN, "base-low", Date.now())).resolves.toMatchObject({
+      code: "price_below_floor",
+      status: "refused",
+    });
+    // …the floor itself is a legal base price, and since D41 (the floor counts
+    // the printer's per-order parcel) a one-item basket AT the floor clears its
+    // own withholding, so it checks out (it used to be refused by A1):
+    expect((await updateAdminProduct(env.DB, ADMIN, "base-low", { priceMinor: 26_300 }, Date.now())).status).toBe("ok");
     expect((await publishAdminProduct(env.DB, ADMIN, "base-low", Date.now())).status).toBe("ok");
     const base = await createCheckout(
       env.DB,
@@ -625,9 +632,9 @@ describe("large products are read completely, or refused — never truncated", (
       productId: "many",
       variants: Array.from({ length: VARIANTS }, (_, index) => ({
         // The LAST variant (by id — the order a paged read would drop) is
-        // priced between the front-only floor (196 kr) and the front+back
-        // floor (250 kr): only a complete read of its set refuses it.
-        priceMinor: index === VARIANTS - 1 ? 20_000 : 39_900,
+        // priced between the front-only floor (263 kr) and the front+back
+        // floor (317 kr, both D41): only a complete read of its set refuses it.
+        priceMinor: index === VARIANTS - 1 ? 29_000 : 39_900,
         sku: `MANY-${pad(index)}`,
         variantId: `many-v${pad(index)}`,
       })),
@@ -942,11 +949,11 @@ describe("the price floor holds while a mapping is suspended, and when a mapping
     await seedProduct(TENANT, {
       priceMinor: 39_900,
       productId: "fallback",
-      variants: [{ priceMinor: 20_000, sku: "FALLBACK-M", variantId: "fallback-m" }],
+      variants: [{ priceMinor: 29_000, sku: "FALLBACK-M", variantId: "fallback-m" }],
     });
-    // The variant's own set: front only on TEE_M (floor 196 kr ≤ its 200 kr).
+    // The variant's own set: front only on TEE_M (floor 263 kr ≤ its 290 kr).
     expect((await map("fallback", "art-front", ["front"], { sku: TEE_M, variantId: "fallback-m" })).status).toBe("ok");
-    // The product-level set: front+back on TEE_S (floor 250 kr).
+    // The product-level set: front+back on TEE_S (floor 317 kr).
     expect((await map("fallback", "art-front", ["front"])).status).toBe("ok");
     expect((await map("fallback", "art-back", ["back"])).status).toBe("ok");
     expect((await publishAdminProduct(env.DB, ADMIN, "fallback", Date.now())).status).toBe("ok");

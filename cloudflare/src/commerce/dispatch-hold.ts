@@ -1,3 +1,6 @@
+import type { EffectContext, OutboxRunOutcome } from "../outbox/outbox";
+import { fenceGuard } from "../outbox/outbox";
+
 /**
  * The dispatch HOLD: an order's print job may not go out while payment facts
  * about it are still unsettled here.
@@ -115,6 +118,73 @@ export function holdDispatchStatement(
          AND ${heldSql("outbox_events.aggregate_id")}`,
     )
     .bind(input.now, input.paymentIntentId);
+}
+
+/**
+ * PARKS a dispatch row the effect already CLAIMED when it finds the order held
+ * (Codex review of f5a93e7, P2).
+ *
+ * `holdDispatchStatement` only reaches rows that are not in flight, so a hold
+ * that lands after the claim is discovered by the effect's own
+ * `dispatchHeldForPayment` check. Treating that as an ordinary retry (the
+ * effect's retryLater) put the row back on a 1, 2, 4 … minute backoff, and
+ * every re-claim while the payment facts were still unsettled spent an
+ * attempt — ten of them and the job went `failed` for good, which
+ * releaseDispatchHolds cannot revive.
+ *
+ * Instead the claimed row goes back to exactly the HELD state the order batch
+ * and holdDispatchStatement produce: `pending`, claim released,
+ * `next_attempt_at` = DISPATCH_HOLD_UNTIL_MS. Nothing can claim it until
+ * releaseDispatchHolds un-parks it (its existing condition matches it), so no
+ * further attempt is spent however long the hold lasts; the attempt that
+ * discovered the hold is the only one (0021 makes `attempts` one-way). The
+ * order line goes back from a previous attempt's 'submitting' to 'pending',
+ * as retryLater does.
+ *
+ * Atomic with its own re-checks, under the claim's fence: the row must still
+ * be ours and `claimed` (never a `submitting` one — its call may be out), the
+ * order must STILL be held, and an attempt must remain (a row parked on its
+ * last attempt could never be claimed again). Otherwise null, and the caller
+ * falls back to its ordinary retry — a released hold then just retries soon,
+ * and an exhausted row fails with its alert.
+ */
+export async function parkForHold(
+  ctx: EffectContext,
+  line: { orderItemId: string; tenantId: string },
+): Promise<OutboxRunOutcome | null> {
+  const { claim, env } = ctx;
+  const now = ctx.clock();
+  const fence = fenceGuard(claim, now);
+  const parkable = {
+    binds: fence.binds,
+    sql: `${fence.sql} AND status = 'claimed' AND attempts < max_attempts
+          AND ${heldSql("outbox_events.aggregate_id")}`,
+  };
+
+  const results = await env.DB.batch([
+    // First, while the row is still claimed: the line.
+    env.DB.prepare(
+      `UPDATE order_items
+       SET dispatch_state = CASE WHEN dispatch_state = 'submitting' THEN 'pending'
+                                 ELSE dispatch_state END
+       WHERE order_item_id = ? AND tenant_id = ?
+         AND EXISTS (SELECT 1 FROM outbox_events WHERE ${parkable.sql})`,
+    ).bind(line.orderItemId, line.tenantId, ...parkable.binds),
+    env.DB.prepare(
+      `UPDATE outbox_events
+       SET status = 'pending',
+           next_attempt_at = ${DISPATCH_HOLD_UNTIL_MS},
+           last_error = 'payment_facts_pending',
+           claimed_by = NULL, claim_expires_at = NULL,
+           updated_at = MAX(updated_at, ?)
+       WHERE ${parkable.sql}
+       RETURNING outbox_id`,
+    ).bind(now, ...parkable.binds),
+  ]);
+
+  return (results[1]?.results.length ?? 0) === 1
+    ? { delayMs: DISPATCH_HOLD_UNTIL_MS - now, kind: "retry" }
+    : null;
 }
 
 /**

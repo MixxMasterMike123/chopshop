@@ -1,4 +1,5 @@
 import {
+  canonicalAlertDigestContent,
   canonicalOrderContent,
   hashEmailRecipient,
   type AuthEmailJob,
@@ -42,6 +43,8 @@ export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string
     // key is ABSENT for the auth kinds, so their canonical string — and every
     // fingerprint already in a ledger — is byte-identical to before.
     ...(job.kind === "order_confirmation" ? { order: canonicalOrderContent(job.order) } : {}),
+    // Likewise the platform alert digest's (D40); absent for every other kind.
+    ...(job.kind === "alert_digest" ? { digest: canonicalAlertDigestContent(job.digest) } : {}),
   });
   return bytesToHex(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)),

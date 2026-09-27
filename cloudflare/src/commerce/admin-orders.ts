@@ -1,6 +1,6 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import type { Payout, PayoutFacts } from "./payouts";
-import { computePayout, disputeBlocksRefund, PAYOUT_FACT_COLUMNS } from "./payouts";
+import { computePayout, disputeBlocksRefund, netFeeMinor, PAYOUT_FACT_COLUMNS } from "./payouts";
 import type { RefundState } from "./refunds";
 
 /**
@@ -10,7 +10,9 @@ import type { RefundState } from "./refunds";
  * ── THE SELLER SEES ONE NUMBER (HARD RULE, memory seller-sees-one-number) ────
  * The response is built field by field from named columns, never by spreading
  * a row. The platform's deduction is ONE figure, `feeMinor`
- * ("Avgift (plattform & produktion)", LAUNCH_TODO A1b). Its split — the
+ * ("Avgift (plattform & produktion)", LAUNCH_TODO A1b) — net of a released
+ * production withholding (D36), so payout = charged − refunded − fee holds for
+ * the numbers the seller sees. Its split — the
  * commission, the withheld production cost, the per-line production costs,
  * the snapshot, the printer, the connected account, the transfer reversals —
  * is never read into this projection, so no later field addition can leak it
@@ -126,7 +128,9 @@ export async function readAdminOrder(
               amountMinor: order.dispute_amount_minor,
               status: order.dispute_status,
             },
-      feeMinor: order.application_fee_minor,
+      // ONE figure: the platform's net deduction. A released production
+      // withholding (D36) lowers it; nothing ever names the split.
+      feeMinor: netFeeMinor(order),
       refundableMinor: disputeBlocksRefund(order.dispute_status)
         ? 0
         : Math.max(0, remaining),

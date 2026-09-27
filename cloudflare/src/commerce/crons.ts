@@ -16,9 +16,24 @@ import type {
 } from "./stripe-client";
 import {
   isStripeConfigured,
+  resolveStripeFeeRefundGateway,
   resolveStripeMoneyGateway,
   StripeGatewayError,
 } from "./stripe-client";
+import type { StripeFeeRefundGateway } from "./stripe-client";
+import type { WithholdingReleaseSummary } from "./withholding-release";
+import {
+  discoverWithholdingReleases,
+  emptyWithholdingReleaseSummary,
+  executeWithholdingReleases,
+} from "./withholding-release";
+
+/**
+ * D40 (CP2-D2): the 15-minute platform alert digest. Exported here with the
+ * other crons for `scheduled()` (the reviewer wires it AFTER reconciliation,
+ * so a tick's own alerts are in its digest); implemented in alert-digest.ts.
+ */
+export { runAlertDigest } from "./alert-digest";
 
 /**
  * The money crons (PLAN §2.2, §2.3). CP2-B owns the `scheduled()` export and
@@ -48,6 +63,11 @@ const DISPATCH_SETTLED = ["done", "superseded"] as const;
 
 function gatewayFor(env: Env): StripeMoneyGateway | null {
   return isStripeConfigured(env) ? resolveStripeMoneyGateway(env) : null;
+}
+
+/** D36's application-fee calls: their own seam (stripe-client.ts). */
+function feeGatewayFor(env: Env): StripeFeeRefundGateway | null {
+  return isStripeConfigured(env) ? resolveStripeFeeRefundGateway(env) : null;
 }
 
 function iso(now: number): string {
@@ -270,6 +290,8 @@ export interface ReconciliationSummary {
   };
   retention: { snapshotsWithoutTerminalIntent: number };
   stripe: "configured" | "unconfigured";
+  /** D36: production withholdings returned to shops (withholding-release.ts). */
+  withholding: WithholdingReleaseSummary;
 }
 
 export async function runReconciliation(
@@ -289,6 +311,7 @@ export async function runReconciliation(
     refunds: { errors: 0, incompleteListings: 0, released: 0, settled: 0, unsettled: 0 },
     retention: { snapshotsWithoutTerminalIntent: 0 },
     stripe: gateway === null ? "unconfigured" : "configured",
+    withholding: emptyWithholdingReleaseSummary(),
   };
   const alert = async (...args: Parameters<typeof raiseAlert>) => {
     if (await raiseAlert(...args)) {
@@ -317,6 +340,18 @@ export async function runReconciliation(
   // A full refund of an accepted job queued a printer cancellation: tell the
   // outbox consumer now rather than at its next sweep.
   await nudgeOutbox(env, await pendingPrinterCancellationIds(db, null));
+
+  // D36: production that can never happen returns its withholding to the
+  // shop. Discovery (D1 only) after the refunds above settled — it catches
+  // what no settlement batch reserved (the cancel route, an in-flight
+  // dispatch that honoured its cancellation later); then the Stripe calls.
+  summary.withholding.discovered = await discoverWithholdingReleases(db, now);
+  const feeGateway = feeGatewayFor(env);
+  if (feeGateway !== null) {
+    await executeWithholdingReleases(db, feeGateway, now, summary.withholding, (raised) =>
+      alert(db, raised, now),
+    );
+  }
 
   // Payout states after the money moves above, so they see the new facts.
   summary.payouts = await refreshPayoutStates(db, now);
@@ -450,7 +485,21 @@ async function detectWaitingDeferred(
  * Guarded on the event time read before the call, so an ordered event that
  * lands meanwhile is never overwritten. A failed retrieval raises an alert
  * (one while open) and is retried every run.
+ *
+ * THE WATERMARK IS SECOND-ALIGNED (Codex review of f5a93e7, P2). Events are
+ * ordered by `event.created × 1000` — whole seconds. Writing the resync's
+ * millisecond `now` made every later event created in that SAME second
+ * compare as older and be dropped as stale, with nothing left to repair it
+ * (a restriction at S+500 ms after a resync at S+100 ms was lost). The resync
+ * is therefore recorded "as of the start of its second": an event of that
+ * second is a TIE, which stripe-events.ts merges fail-closed and marks for
+ * another resync when it disagrees — never silently discarded.
  */
+/** `now` (ms) floored to its second: the resolution Stripe orders events in. */
+export function secondWatermark(now: number): number {
+  return Math.floor(now / 1_000) * 1_000;
+}
+
 async function resyncConnectAccounts(
   db: D1Database,
   gateway: StripeMoneyGateway,
@@ -502,7 +551,7 @@ async function resyncConnectAccounts(
         account.charges_enabled ? 1 : 0,
         account.payouts_enabled ? 1 : 0,
         account.details_submitted ? 1 : 0,
-        now,
+        secondWatermark(now),
         now,
         row.tenant_id,
         row.stripe_account_id,

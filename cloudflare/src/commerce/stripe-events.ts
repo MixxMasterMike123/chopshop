@@ -25,6 +25,7 @@ import {
 import type { RefundFact } from "./refunds";
 import { applyRefundFact, refundFactFrom } from "./refunds";
 import type { VerifiedStripeEvent } from "./stripe-client";
+import { handleApplicationFeeEvent } from "./withholding-release";
 
 /**
  * Every verified Stripe event other than `payment_intent.succeeded` (which is
@@ -61,6 +62,8 @@ import type { VerifiedStripeEvent } from "./stripe-client";
  *   account.updated                tenants.stripe_* capability flags, applied
  *                                  only from an event NEWER than the last one
  *                                  applied (Stripe does not deliver in order)
+ *   application_fee.refunded       D36: settles withholding releases (deduped
+ *   application_fee.refund.updated by fee refund id; withholding-release.ts)
  *   anything else                  recorded 'ignored', logged by type only
  *
  * ── EVENTS THAT ARRIVE BEFORE THEIR ORDER ────────────────────────────────────
@@ -104,6 +107,9 @@ export async function handleStripeEvent(
       return handleDisputeEvent(db, event, now);
     case "account.updated":
       return handleAccountUpdated(db, event, now);
+    case "application_fee.refunded":
+    case "application_fee.refund.updated":
+      return handleApplicationFeeEvent(db, event, now);
     default:
       // Acknowledged and recorded, never refused. The type is the only thing
       // logged: an event body carries buyer data.

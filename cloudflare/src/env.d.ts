@@ -83,6 +83,13 @@ interface Env {
   // Events verified by it are acted on only when they are `account.updated`.
   STRIPE_CONNECT_WEBHOOK_SECRET?: string;
 
+  // Optional plain var: the platform operator's address for the 15-minute
+  // alert digest (D40, runAlertDigest in src/commerce/crons.ts). Absent or
+  // not an email address ⇒ no digest is built (one log line per tick). The
+  // digest goes through EMAIL_QUEUE and Resend like every other mail, so it
+  // also needs RESEND_API_KEY + EMAIL_FROM to be delivered.
+  PLATFORM_ALERT_EMAIL?: string;
+
   // ── THE POD / RENDER-FARM CONFIGURATION ──────────────────────────────────
   // Six values, and the ENTIRE POD surface answers a fail-closed 404 until all
   // six exist (isPodConfigured in src/pod/render-farm-client.ts). Partial

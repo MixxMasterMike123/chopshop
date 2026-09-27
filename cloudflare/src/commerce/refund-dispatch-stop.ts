@@ -1,5 +1,6 @@
 import { RETURN_CASE_ORDER_STATUSES } from "../dispatch/cancellation";
 import { printerCancellationInsert } from "../dispatch/dispatch-effect";
+import { reserveReleaseStatement } from "./withholding-release";
 
 /**
  * "A full refund stops production" — decided INSIDE the settlement batch.
@@ -130,6 +131,12 @@ export function guardedDispatchCancellationStatements(
  * The statements a settlement batch carries: they act only if THIS batch moved
  * `operationId` into 'succeeded' (its transition id) and the order's money,
  * as updated earlier in the same batch, now covers the whole charge.
+ *
+ * LAST, the D36 reservation (CP2-D2, withholding-release.ts): if the order is
+ * now releasable — every dispatch row superseded before submission, which the
+ * statements above may just have made true — a `reserved` release of the
+ * production withholding is born in THIS batch. It is state-conditioned and
+ * idempotent (one per order), so it needs no transition guard of its own.
  */
 export function fullRefundStopStatements(
   db: D1Database,
@@ -141,21 +148,28 @@ export function fullRefundStopStatements(
     transitionId: string;
   },
 ): D1PreparedStatement[] {
-  return guardedDispatchCancellationStatements(
-    db,
-    { nowMs: input.nowMs, orderId: input.orderId, tenantId: input.tenantId },
-    {
-      binds: [input.operationId, input.transitionId, input.orderId, input.tenantId],
-      sql: `EXISTS (
-          SELECT 1 FROM refund_operations
-          WHERE id = ? AND transition_id = ? AND state = 'succeeded'
-        )
-        AND EXISTS (
-          SELECT 1 FROM orders
-          WHERE order_id = ? AND tenant_id = ?
-            AND charged_minor > 0
-            AND refund_succeeded_minor >= charged_minor
-        )`,
-    },
-  );
+  return [
+    ...guardedDispatchCancellationStatements(
+      db,
+      { nowMs: input.nowMs, orderId: input.orderId, tenantId: input.tenantId },
+      {
+        binds: [input.operationId, input.transitionId, input.orderId, input.tenantId],
+        sql: `EXISTS (
+            SELECT 1 FROM refund_operations
+            WHERE id = ? AND transition_id = ? AND state = 'succeeded'
+          )
+          AND EXISTS (
+            SELECT 1 FROM orders
+            WHERE order_id = ? AND tenant_id = ?
+              AND charged_minor > 0
+              AND refund_succeeded_minor >= charged_minor
+          )`,
+      },
+    ),
+    reserveReleaseStatement(db, {
+      nowMs: input.nowMs,
+      orderId: input.orderId,
+      tenantId: input.tenantId,
+    }),
+  ];
 }

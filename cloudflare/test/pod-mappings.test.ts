@@ -79,6 +79,8 @@ describe("quotePodCost + PRISGOLV + withholding (the ported formulas)", () => {
         quantity: 1,
         unitMinor: 14_000,
       },
+      // D41: the printer's per-order parcel travels with the quote (server-only).
+      parcelMinor: 4_900,
       productionCostMinor: 14_000,
     });
     // printProjection.ts §10 worked example: tee front+back = 60 + 40 + 40 + 40.
@@ -225,8 +227,9 @@ describe("POD mappings (create, list, delete, quote)", () => {
         status: "active",
         variantId: null,
       },
-      // 60 + 40 (front) + 20 (pocket) + 40 cut = 160 kr ex → floor 223 kr.
-      quote: { currency: "SEK", inkopMinor: 16_000, priceFloorMinor: 22_300 },
+      // 60 + 40 (front) + 20 (pocket) + 40 cut = 160 kr ex; the D41 floor adds
+      // the printer's 49 kr parcel (a one-item order): 209 kr ex → 290 kr.
+      quote: { currency: "SEK", inkopMinor: 16_000, priceFloorMinor: 29_000 },
       status: "ok",
     });
     const product = await env.DB.prepare("SELECT is_pod FROM products WHERE product_id = 'tee-a'").first();
@@ -244,7 +247,8 @@ describe("POD mappings (create, list, delete, quote)", () => {
     }, Date.now());
     expect(result).toMatchObject({ quote: { inkopMinor: 20_000 }, status: "ok" });
     await expect(quoteForProduct(env.DB, A, "tee-a", null)).resolves.toEqual({
-      quote: { currency: "SEK", inkopMinor: 20_000, priceFloorMinor: 27_800 },
+      // (200 + 49 parcel) kr ex → 344 kr (D41).
+      quote: { currency: "SEK", inkopMinor: 20_000, priceFloorMinor: 34_400 },
       status: "ok",
     });
   });
@@ -437,13 +441,14 @@ describe("the admin POD routes over HTTP (auth, shapes, denylist)", () => {
     });
     expect(created.status).toBe(201);
     const body = await created.json<{ inkopMinor: number; mapping: { mappingId: string }; priceFloorMinor: number }>();
-    expect(body).toMatchObject({ currency: "SEK", inkopMinor: 14_000, priceFloorMinor: 19_600 });
+    // (140 + 49 parcel) kr ex → 263 kr (D41).
+    expect(body).toMatchObject({ currency: "SEK", inkopMinor: 14_000, priceFloorMinor: 26_300 });
     expect(Object.keys(body).sort()).toEqual(["currency", "inkopMinor", "mapping", "priceFloorMinor"]);
     expectNoCostKeys(body);
 
     const quote = await request("/v1/admin/pod/quote?productId=tee-http", "GET");
     expect(quote.status).toBe(200);
-    await expect(quote.json()).resolves.toEqual({ currency: "SEK", inkopMinor: 14_000, priceFloorMinor: 19_600 });
+    await expect(quote.json()).resolves.toEqual({ currency: "SEK", inkopMinor: 14_000, priceFloorMinor: 26_300 });
 
     const listed = await request("/v1/admin/pod/mappings?productId=tee-http", "GET");
     const list = await listed.json();

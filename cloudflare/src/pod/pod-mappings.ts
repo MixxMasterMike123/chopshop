@@ -8,7 +8,7 @@ import {
   withScreeningRetry,
 } from "../catalog/screening";
 import type { PodQuote, TierFacts } from "./pod-quote";
-import { priceFloorMinor, quoteFromTier, quotePodCost } from "./pod-quote";
+import { podPriceFloorMinor, quoteFromTier, quotePodCost } from "./pod-quote";
 import type { PrintArea, PrintSlot, Printer, PrinterRow } from "./printers";
 import { loadUsablePrinter, PRINT_SLOTS, slotFrame, toPrinter } from "./printers";
 
@@ -548,7 +548,7 @@ export async function evaluatePodGate(
     if (quote.breakdown.currency !== product.currency) {
       return "currency_mismatch";
     }
-    const floor = priceFloorMinor(quote.productionCostMinor, product.vat_rate_bp);
+    const floor = podPriceFloorMinor(quote, product.vat_rate_bp);
     if (floor === null || unit.priceMinor < floor) {
       return "price_below_floor";
     }
@@ -565,7 +565,7 @@ async function sellerQuoteFor(
   if (quote === null) {
     return null;
   }
-  const floor = priceFloorMinor(quote.productionCostMinor, vatRateBp);
+  const floor = podPriceFloorMinor(quote, vatRateBp);
   return floor === null
     ? null
     : {

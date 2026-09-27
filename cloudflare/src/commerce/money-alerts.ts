@@ -22,7 +22,11 @@ export type MoneyAlertKind =
   | "payout_blocked_dispute"
   | "production_snapshot_invalid"
   | "refund_failed_after_success"
-  | "refund_unsettled_30m";
+  | "refund_unsettled_30m"
+  // D36 (CP2-D2): the application-fee refund of a production withholding.
+  | "withholding_release_failed"
+  | "withholding_release_unmatched"
+  | "withholding_release_unsettled_30m";
 
 export interface MoneyAlert {
   kind: MoneyAlertKind;
