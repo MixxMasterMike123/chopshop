@@ -22,6 +22,6 @@
   },
   "stripeAccountId": "acct_1Tp7gtKAaBMOW5AC",
   "stripeMode": "sandbox",
-  "stripeWebhookEndpointId": "we_1UK0jhKAaBMOW5ACAHh8BxB8",
+  "stripeWebhookEndpointId": "we_1UK66JKAaBMOW5ACuWMdx6K9",
   "dispatchTarget": "fake-printer"
 }
