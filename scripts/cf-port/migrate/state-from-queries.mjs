@@ -61,7 +61,10 @@ function readPinned(env) {
  * `users.json`.
  */
 const TARGET_QUERIES = [
-  { file: 'users', sql: `SELECT "id", "email" FROM "user";` },
+  {
+    file: 'users',
+    sql: `SELECT u."id" AS id, u."email" AS email, ia.account_type AS account_type, ia.status AS status FROM "user" AS u LEFT JOIN identity_access AS ia ON ia.user_id = u."id";`,
+  },
   { file: 'identity_counts', sql: `SELECT account_type, status, COUNT(*) AS n FROM identity_access GROUP BY account_type, status;` },
   { file: 'tenants', sql: `SELECT tenant_id FROM tenants;` },
   { file: 'hostnames', sql: `SELECT hostname FROM tenant_domains;` },
@@ -167,9 +170,12 @@ function activeCountsOf(rows) {
 function buildTargetState(fromDir) {
   const users = readQueryFile(fromDir, 'users');
   const emailToId = {};
+  const identities = {};
   for (const row of users) {
     if (typeof row.email === 'string' && typeof row.id === 'string') {
       emailToId[row.email] = row.id;
+      // null = the user has no identity row (the query is a LEFT JOIN).
+      identities[row.id] = typeof row.account_type === 'string' && typeof row.status === 'string' ? { accountType: row.account_type, status: row.status } : null;
     }
   }
   const activeCounts = activeCountsOf(readQueryFile(fromDir, 'identity_counts'));
@@ -192,7 +198,7 @@ function buildTargetState(fromDir) {
       };
     }
   }
-  return { hostnames, podProfiles, tenants: { ids }, users: { activeCounts, activePlatformAdminCount, emailToId } };
+  return { hostnames, podProfiles, tenants: { ids }, users: { activeCounts, activePlatformAdminCount, emailToId, identities } };
 }
 
 /**

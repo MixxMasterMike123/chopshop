@@ -150,16 +150,92 @@ test('transformUser: D59 adoption — an existing target email adopts the existi
     env: 'staging',
     nowMillis: Date.parse('2026-01-01T00:00:00.000Z'),
     scrubUnmapped: false,
-    targetState: { emails: new Map([['admin1-test@example.com', 'existing-id-123']]) },
+    targetState: { emails: new Map([['admin1-test@example.com', 'existing-id-123']]), identities: new Map([['existing-id-123', { accountType: 'platform_admin', status: 'active' }]]) },
     uid: 'admin1',
-    userDoc: { data: { active: true, email: 'admin1@example.com', platform: true, role: 'admin' } },
+    userDoc: { data: { active: true, email: 'admin1@example.com', isActive: true, platform: true, role: 'admin' } },
   });
   assert.equal(result.report.adopted, true);
   assert.equal(result.report.newUserId, 'existing-id-123');
   const tables = result.rows.map((r) => r.table);
-  assert.ok(!tables.includes('user'));
-  assert.ok(!tables.includes('account'));
-  assert.ok(tables.includes('identity_access')); // still writes identity/membership against the adopted id
+  assert.deepEqual(tables, ['legacy_id_map'], 'the adopted user keeps its own user, account and identity rows');
+});
+
+function adopt({ identities, userData = {}, authUser = {} }) {
+  return transformUser({
+    authUser: { disabled: false, email: 'admin1@example.com', emailVerified: true, ...authUser },
+    emailMap,
+    env: 'staging',
+    nowMillis: Date.parse('2026-01-01T00:00:00.000Z'),
+    scrubUnmapped: false,
+    targetState: { emails: new Map([['admin1-test@example.com', 'existing-id-123']]), ...(identities === undefined ? {} : { identities }) },
+    uid: 'admin1',
+    userDoc: { data: { active: true, email: 'admin1@example.com', isActive: true, platform: true, role: 'admin', ...userData } },
+  });
+}
+
+test('adoption is refused when the target identity is another account type or another status', () => {
+  for (const existing of [
+    { accountType: 'tenant_admin', status: 'active' },
+    { accountType: 'platform_admin', status: 'suspended' },
+    { accountType: 'print_operator', status: 'active' },
+  ]) {
+    const result = adopt({ identities: new Map([['existing-id-123', existing]]) });
+    assert.equal(result.carried, false, JSON.stringify(existing));
+    assert.deepEqual(result.rows, []);
+    assert.match(result.refusal, new RegExp(`exists in the target as ${existing.accountType}/${existing.status}, the import carries platform_admin/active`));
+    assert.ok(!result.refusal.includes('admin1'), 'the refusal names no user id and no address');
+    assert.ok(!hasActivePlatformAdminAfterImport([result], 0), 'a refused adoption is no platform admin');
+  }
+  // A suspended import onto an active target is refused as well.
+  const suspendedImport = adopt({ identities: new Map([['existing-id-123', { accountType: 'platform_admin', status: 'active' }]]), userData: { active: false } });
+  assert.match(suspendedImport.refusal, /the import carries platform_admin\/suspended/);
+});
+
+test('adoption is refused when the target state says nothing about the adopted user', () => {
+  for (const identities of [undefined, new Map(), new Map([['another-id', { accountType: 'platform_admin', status: 'active' }]])]) {
+    const result = adopt({ identities });
+    assert.equal(result.carried, false);
+    assert.match(result.refusal, /says nothing about that user's authorization/);
+  }
+});
+
+test('adoption of a user that has no identity row writes the import\'s identity', () => {
+  const result = adopt({ identities: new Map([['existing-id-123', null]]) });
+  assert.equal(result.carried, true);
+  assert.deepEqual(result.rows.map((r) => r.table), ['legacy_id_map', 'identity_access']);
+  assert.match(result.rows[1].statement, /'existing-id-123', 'platform_admin', 'active'/);
+});
+
+test('suspension fails closed: a flag that is missing, null or not a boolean suspends, and so does a missing Auth record', () => {
+  const base = { email: 'admin1@example.com', platform: true, role: 'admin' };
+  const cases = [
+    [{ ...base, active: true, isActive: true }, { disabled: false }, 'active'],
+    [{ ...base, isActive: true }, { disabled: false }, 'suspended'],
+    [{ ...base, active: true }, { disabled: false }, 'suspended'],
+    [{ ...base }, { disabled: false }, 'suspended'],
+    [{ ...base, active: null, isActive: true }, { disabled: false }, 'suspended'],
+    [{ ...base, active: 'true', isActive: true }, { disabled: false }, 'suspended'],
+    [{ ...base, active: 1, isActive: true }, { disabled: false }, 'suspended'],
+    [{ ...base, active: true, isActive: true }, { disabled: true }, 'suspended'],
+    [{ ...base, active: true, isActive: true }, {}, 'suspended'],
+    [{ ...base, active: true, isActive: true }, null, 'suspended'],
+  ];
+  for (const [data, auth, expected] of cases) {
+    const result = transformUser({
+      authUser: auth === null ? null : { email: 'admin1@example.com', emailVerified: true, ...auth },
+      emailMap,
+      env: 'staging',
+      nowMillis: Date.parse('2026-01-01T00:00:00.000Z'),
+      scrubUnmapped: false,
+      targetState: null,
+      uid: 'admin1',
+      userDoc: { data },
+    });
+    const label = `${JSON.stringify(data)} auth ${JSON.stringify(auth)}`;
+    assert.equal(result.carried, true, label);
+    assert.match(result.rows.find((r) => r.table === 'identity_access').statement, new RegExp(`'platform_admin', '${expected}'`), label);
+    assert.equal(hasActivePlatformAdminAfterImport([result], 0), expected === 'active', label);
+  }
 });
 
 test('hasActivePlatformAdminAfterImport: true when a carried user is an active platform admin', () => {

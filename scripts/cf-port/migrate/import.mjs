@@ -135,7 +135,12 @@ function parseTargetState(raw) {
   // Active identities per account type before the import (verify.mjs adds
   // what this plan carries to it). Absent in an older state file: unknown.
   const activeCounts = typeof raw.users?.activeCounts === 'object' && raw.users.activeCounts !== null ? raw.users.activeCounts : null;
-  return { activeCounts, activePlatformAdminCount, emails, hostnames, podProfileIds, tenantIds };
+  // user id -> { accountType, status }, or null for a user with no identity
+  // row. A user the file does not name is unknown, and an adoption of it is refused.
+  const identities = new Map(
+    Object.entries(raw.users?.identities ?? {}).map(([id, v]) => [id, v === null ? null : { accountType: v.accountType, status: v.status }]),
+  );
+  return { activeCounts, activePlatformAdminCount, emails, hostnames, identities, podProfileIds, tenantIds };
 }
 
 /**
@@ -299,6 +304,10 @@ function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emai
   for (const { authUser, uid, userDoc } of joined) {
     const result = transformUser({ authUser, emailMap, env, knownTenantIds, nowMillis, scrubUnmapped, targetState, uid, userDoc });
     userTransforms.push(result);
+    if (result.refusal) {
+      problems.push(`REFUSED: ${result.refusal}`);
+      continue;
+    }
     if (!result.carried) {
       notCarriedCount += 1;
       continue;
@@ -322,20 +331,40 @@ function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emai
   const legalAcceptanceDocs = readSubcollection(bundleDir, 'shops__legalAcceptances');
   const legalRows = [];
   const scanExemptLiterals = [];
+  // Evidence of a shop that this plan does not import and the target does not
+  // hold has no tenant to point at (both tables reference `tenants`): it
+  // stays in the bundle with its shop, counted here.
+  let legalOfUnknownShop = 0;
   for (const doc of legalAcceptanceDocs) {
+    if (!knownTenantIds.has(doc.path.split('/')[1])) {
+      legalOfUnknownShop += 1;
+      continue;
+    }
     const result = transformLegalAcceptance({ doc, emailMap, legacyIdMap, nowMillis, scrubUnmapped });
     for (const p of result.problems) problems.push(`legalAcceptances(${doc.path}): ${p}`);
     legalRows.push(...result.rows);
     scanExemptLiterals.push(...(result.scanExemptLiterals ?? []));
+  }
+  if (legalOfUnknownShop > 0) {
+    reportLines.push(`legal_acceptances: ${legalOfUnknownShop} acceptance(s) of a shop that is not imported — not carried, kept in the bundle with the shop`);
   }
   addSection('legal_acceptances', legalRows);
 
   // ── row 12: auditLogs → audit_events ──
   const auditLogDocs = readCollection(bundleDir, 'auditLogs');
   const auditRows = [];
+  let auditOfUnknownShop = 0;
   for (const doc of auditLogDocs) {
+    const shopId = typeof doc.data?.shopId === 'string' && doc.data.shopId.length > 0 ? doc.data.shopId : null;
+    if (shopId !== null && !knownTenantIds.has(shopId)) {
+      auditOfUnknownShop += 1;
+      continue;
+    }
     const { rows } = transformAuditLog({ doc, legacyIdMap, nowMillis });
     auditRows.push(...rows);
+  }
+  if (auditOfUnknownShop > 0) {
+    reportLines.push(`audit_events: ${auditOfUnknownShop} entr(y/ies) of a shop that is not imported — not carried, kept in the bundle with the shop`);
   }
   addSection('audit_events', auditRows);
 

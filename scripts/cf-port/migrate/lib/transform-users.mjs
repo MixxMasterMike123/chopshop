@@ -18,15 +18,25 @@
  * password column) — the migration-invite flow (CP3-B) is what lets a carried
  * user set one.
  *
- * Suspension: identity_access.status = 'suspended' when the source `active`
- * is not true, `isActive` is not true, or the Auth record is `disabled`.
+ * Suspension (manifest §a, FAIL CLOSED): identity_access.status = 'suspended'
+ * when `active !== true`, or `isActive !== true`, or the Auth record is
+ * disabled, or there is no Auth record at all. A flag that is missing, null
+ * or not a boolean suspends: an incomplete record never becomes an active
+ * administrator.
  *
  * D59 adoption: with `--target-state`, a mapped email that ALREADY exists as
  * a user in the target adopts that existing user's id instead of minting a
  * new one (the legacy_id_map row then points the legacy uid at the existing
- * user, and no `user`/`account` INSERT is emitted for that identity — only
- * identity_access/tenant_memberships, using OR IGNORE so a second import run
- * against the same already-populated target is harmless).
+ * user, and no `user`/`account` INSERT is emitted for that identity).
+ *
+ * An adoption is REFUSED unless the identity in the target is what the import
+ * would have written: the same account type and the same status. INSERT OR
+ * IGNORE keeps the target's row, so without this check an imported platform
+ * admin adopted onto a shop admin would stay a shop admin while the plan, the
+ * report and the last-admin rule all said platform admin. When the target
+ * user has an identity row, none is emitted; when it has none, the import's
+ * row is written. A target state that says nothing about the adopted user's
+ * authorization refuses too.
  */
 
 import { createHash } from 'node:crypto';
@@ -133,7 +143,28 @@ export function transformUser({ authUser, emailMap, env, knownTenantIds = null, 
   const createdAtMillisSource = parseSourceTimestampMillis(data.createdAt, null);
   const createdAtMillis = createdAtMillisSource ?? parseSourceTimestampMillis(authUser?.metadata?.creationTime, nowMillis);
 
-  const suspended = data.active === false || data.isActive === false || authUser?.disabled === true;
+  const suspended = data.active !== true || data.isActive !== true || authUser === null || authUser === undefined || authUser.disabled !== false;
+  const status = suspended ? 'suspended' : 'active';
+
+  // An adoption must leave the target as the import describes it.
+  let existingIdentity = null;
+  if (adopted !== null) {
+    const known = targetState?.identities instanceof Map ? targetState.identities.get(adopted) : undefined;
+    const where = `users/<uid ${uidFingerprint(uid)}>`;
+    if (known === undefined) {
+      return { carried: false, reason: 'adoption refused', refusal: `${where}: the address exists in the target, and the target state says nothing about that user's authorization (rebuild it with state-from-queries.mjs)`, rows: [], uid };
+    }
+    if (known !== null && (known.accountType !== classification.accountType || known.status !== status)) {
+      return {
+        carried: false,
+        reason: 'adoption refused',
+        refusal: `${where}: the address exists in the target as ${known.accountType}/${known.status}, the import carries ${classification.accountType}/${status}; the target's row would stay as it is`,
+        rows: [],
+        uid,
+      };
+    }
+    existingIdentity = known;
+  }
 
   const rows = [];
   const report = { accountType: classification.accountType, adopted: adopted !== null, emailAction: resolvedEmail.action, newUserId, suspended, uid };
@@ -203,17 +234,20 @@ export function transformUser({ authUser, emailMap, env, knownTenantIds = null, 
   }
 
   // identity_access — created_at/updated_at are INTEGER milliseconds (0002).
-  const identityColumns = ['user_id', 'account_type', 'status', 'created_at', 'updated_at'];
-  const identityRow = {
-    account_type: classification.accountType,
-    created_at: formatTime('identity_access', 'created_at', createdAtMillis),
-    status: suspended ? 'suspended' : 'active',
-    updated_at: formatTime('identity_access', 'updated_at', nowMillis),
-    user_id: newUserId,
-  };
-  rows.push(
-    carriedRow('identity_access', newUserId, insertStatement('identity_access', identityColumns, identityRow), rowContentHash('identity_access', identityColumns, identityRow)),
-  );
+  // Not written for an adopted user that has its row: the row is the target's.
+  if (existingIdentity === null) {
+    const identityColumns = ['user_id', 'account_type', 'status', 'created_at', 'updated_at'];
+    const identityRow = {
+      account_type: classification.accountType,
+      created_at: formatTime('identity_access', 'created_at', createdAtMillis),
+      status,
+      updated_at: formatTime('identity_access', 'updated_at', nowMillis),
+      user_id: newUserId,
+    };
+    rows.push(
+      carriedRow('identity_access', newUserId, insertStatement('identity_access', identityColumns, identityRow), rowContentHash('identity_access', identityColumns, identityRow)),
+    );
+  }
 
   // tenant_memberships (tenant_admin only) — created_at/updated_at are
   // INTEGER milliseconds (0002), same as identity_access.

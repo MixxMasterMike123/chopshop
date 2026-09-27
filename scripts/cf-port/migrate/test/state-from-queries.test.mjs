@@ -48,7 +48,10 @@ const TARGET_FILES = {
   ],
   pod_profiles: [{ accepted_formats_json: '[{"ext":"png"}]', label: 'Textil', max_file_mb: 50, min_dpi: 300, print_area_h_mm: 400, print_area_w_mm: 300, profile_id: 'apparel_dtg' }],
   tenants: [{ tenant_id: 'bench-cp1' }, { tenant_id: 'slice-20260927' }],
-  users: [{ email: 'Platform@Example.com', id: 'user_1' }],
+  users: [
+    { account_type: 'platform_admin', email: 'Platform@Example.com', id: 'user_1', status: 'active' },
+    { account_type: null, email: 'no-identity@example.com', id: 'user_2', status: null },
+  ],
 };
 
 const ACTUAL_FILES = {
@@ -98,7 +101,12 @@ test('buildTargetState: the shape import.mjs reads, active identities per accoun
       hostnames: ['slice.example.test'],
       podProfiles: { apparel_dtg: { accepted_formats_json: '[{"ext":"png"}]', label: 'Textil', max_file_mb: 50, min_dpi: 300, print_area_h_mm: 400, print_area_w_mm: 300 } },
       tenants: { ids: ['bench-cp1', 'slice-20260927'] },
-      users: { activeCounts: { platform_admin: 1, tenant_admin: 2 }, activePlatformAdminCount: 1, emailToId: { 'Platform@Example.com': 'user_1' } },
+      users: {
+        activeCounts: { platform_admin: 1, tenant_admin: 2 },
+        activePlatformAdminCount: 1,
+        emailToId: { 'Platform@Example.com': 'user_1', 'no-identity@example.com': 'user_2' },
+        identities: { user_1: { accountType: 'platform_admin', status: 'active' }, user_2: null },
+      },
     });
   } finally {
     rmDir(base);

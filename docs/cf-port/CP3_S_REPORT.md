@@ -340,3 +340,16 @@ It found three more defects, fixed in the commit after `416b3bb1`:
 
 Tests: 343.
 
+### 10.8 Codex on the script commits (2026-09-28)
+
+Codex reviewed everything since `f0db7a72` as one range. Its first run, on 2026-09-27, was cut off by its own usage limit and gave no finding. Four findings, all real, none seen by the 346 tests of that moment:
+
+| # | Finding | Fix |
+|---|---|---|
+| P1 | Suspension was `active === false`: a user whose flag was missing, null or not a boolean was imported ACTIVE. The manifest (§a) says `active !== true` or `isActive !== true` or Auth disabled. | Fail closed, and a user with no Auth record is suspended too. All six users of the real bundle hold both flags as `true`. |
+| P1 | An address that exists in the target adopted that user, and `INSERT OR IGNORE` kept the target's identity row: an imported platform admin adopted onto a shop admin stayed a shop admin, while the plan, the report and the last-admin rule said platform admin. | The target state holds each user's account type and status (the users query joins `identity_access`). An adoption is refused unless both are equal to what the import carries, and when the target state does not name the user. No identity row is written for a user that has one. |
+| P2 | A legal acceptance or an audit entry of a shop that is not imported pointed at a tenant that does not exist: the plan was accepted and the apply failed on the foreign key. | Such evidence is not carried, is counted in the report, and stays in the bundle with its shop. The real bundle holds none. |
+| P2 | A restore plan opens with a row in `import_runs`, and production accepts one completed run (0033): every restore after the import would be refused by its first statement. | `restore-archive.mjs` refuses `--env production` and says why. Restores into production need bookkeeping of their own, which comes with the first archived collection that is restored. |
+
+Tests: 352.
+

@@ -116,6 +116,20 @@ export function runRestore(args) {
 }
 
 function runRestoreUnsafe({ bundleDir, collection, connectMapPath = null, emailMapPath = null, env, idMapPath = null, now = null, scrubUnmapped = false }) {
+  if (env === 'production') {
+    // A restore plan opens with an import_runs row of its own, and 0033 allows
+    // production ONE completed run (`import_runs_insert_guard`): after the
+    // import, every restore would be refused by its first statement, and
+    // before it a restore would use up the one run. No plan that cannot be
+    // applied is written.
+    return {
+      ok: false,
+      problems: [
+        'REFUSED: a restore into production is not supported yet. A restore plan records a run in import_runs, and production accepts one completed run (0033): ' +
+          'restores need bookkeeping of their own, which the checkpoint that first restores an archived collection adds.',
+      ],
+    };
+  }
   const scrubProblem = scrubOptionsProblem(env, { emailMapGiven: emailMapPath !== null, scrubUnmapped });
   if (scrubProblem !== null) {
     return { ok: false, problems: [scrubProblem] };

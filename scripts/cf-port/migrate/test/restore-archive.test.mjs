@@ -40,7 +40,7 @@ test('runRestore: users collection produces a plan with a Better Auth user row',
 
 test('runRestore: printers collection produces a snapwear printer row', async () => {
   await withFixture(async (bundleDir) => {
-    const result = runRestore({ bundleDir, collection: 'printers', env: 'production', now: FIXED_NOW });
+    const result = runRestore({ bundleDir, collection: 'printers', env: 'staging', now: FIXED_NOW });
     assert.equal(result.ok, true, JSON.stringify(result.problems));
     assert.match(result.planText, /INSERT OR IGNORE INTO printers/);
     assert.match(result.planText, /'snapwear'/);
@@ -159,18 +159,17 @@ test('runRestore: an unmapped address is a refusal with a fingerprint, not a cra
   }
 });
 
-test('runRestore: production refuses the two scrub options and carries addresses as they are', async () => {
+test('runRestore: a restore into production is refused, for every collection, and no plan is written', async () => {
   const base = tmpDir();
   try {
     const bundleDir = path.join(base, 'bundle');
     await buildFixtureBundle(bundleDir);
-    const emailMapPath = path.join(base, 'e.json');
-    writeFileSync(emailMapPath, JSON.stringify(FIXED_EMAIL_MAP));
-    assert.match(runRestore({ bundleDir, collection: 'users', emailMapPath, env: 'production' }).problems[0], /--email-map is a staging option/);
-    assert.match(runRestore({ bundleDir, collection: 'users', env: 'production', scrubUnmapped: true }).problems[0], /--scrub-unmapped is a staging option/);
-    const plain = runRestore({ bundleDir, collection: 'users', env: 'production' });
-    assert.equal(plain.ok, true, JSON.stringify(plain.problems));
-    assert.ok(plain.planText.includes("'admin1@example.com'"));
+    for (const collection of SUPPORTED_COLLECTIONS) {
+      const result = runRestore({ bundleDir, collection, env: 'production' });
+      assert.equal(result.ok, false, collection);
+      assert.match(result.problems[0], /a restore into production is not supported yet/);
+      assert.equal(result.planText, undefined);
+    }
   } finally {
     rmDir(base);
   }

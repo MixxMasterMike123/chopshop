@@ -263,7 +263,7 @@ test('runImport: with --target-state, an existing user email is ADOPTED (D59) ra
   await withFixture(async (bundleDir, base) => {
     const emailMapPath = writeEmailMap(base);
     const targetStatePath = path.join(base, 'target-state.json');
-    writeFileSync(targetStatePath, JSON.stringify({ users: { activePlatformAdminCount: 1, emailToId: { 'admin1-test@example.com': 'existing_user_id_123' } } }));
+    writeFileSync(targetStatePath, JSON.stringify({ users: { activePlatformAdminCount: 1, emailToId: { 'admin1-test@example.com': 'existing_user_id_123' }, identities: { existing_user_id_123: { accountType: 'platform_admin', status: 'active' } } } }));
     const result = runImport({ bundleDir, emailMapPath, env: 'staging', now: FIXED_NOW, targetStatePath });
     assert.equal(result.ok, true, JSON.stringify(result.problems));
     // No fresh `user` INSERT for the adopted identity...
@@ -573,5 +573,57 @@ test('D75: --commission-default-for accepts the platform default for the named s
       assert.ok(unknown.problems.some((p) => p.includes('--commission-default-for no-such-shop: no such shop')));
     },
     { schemaPatch: (schema) => { schema.shops['test-shop-a'].data.payments.commissionBps = 5000; } },
+  );
+});
+
+// ── Codex review of the script commits (2026-09-28) ─────────────────────────
+
+test('an adoption onto an identity of another kind refuses the plan; the refusal names no address and no user id', async () => {
+  await withFixture(async (bundleDir, base) => {
+    const targetStatePath = path.join(base, 'target-state.json');
+    writeFileSync(
+      targetStatePath,
+      JSON.stringify({ users: { emailToId: { 'admin1-test@example.com': 'existing_user_id_123' }, identities: { existing_user_id_123: { accountType: 'tenant_admin', status: 'active' } } } }),
+    );
+    const result = runImport({ bundleDir, emailMapPath: writeEmailMap(base), env: 'staging', targetStatePath });
+    assert.equal(result.ok, false);
+    const refusal = result.problems.find((p) => p.includes('exists in the target as tenant_admin/active'));
+    assert.ok(refusal, JSON.stringify(result.problems));
+    assert.ok(!/@example\.com|admin1|existing_user_id_123/.test(result.problems.join('\n')));
+  });
+});
+
+test('evidence of a shop that is not imported is not carried, is counted, and the plan applies', async () => {
+  await withFixture(
+    async (bundleDir, base) => {
+      const result = runImport({ bundleDir, emailMapPath: writeEmailMap(base), env: 'staging' });
+      assert.equal(result.ok, true, JSON.stringify(result.problems));
+      assert.ok(result.reportLines.some((l) => l.startsWith('legal_acceptances: 1 acceptance(s) of a shop that is not imported')));
+      assert.ok(result.reportLines.some((l) => l.startsWith('audit_events: 2 entr(y/ies) of a shop that is not imported')));
+      assert.ok(!result.planText.includes("'robowatz'"));
+      assert.ok(!result.planText.includes("'shop-never-exported'"));
+      // The evidence of the imported shop and the entry with no shop are carried.
+      assert.equal(result.planText.split('\n').filter((l) => l.startsWith('INSERT OR IGNORE INTO legal_acceptances')).length, 1);
+      assert.equal(result.planText.split('\n').filter((l) => l.startsWith('INSERT OR IGNORE INTO audit_events')).length, 2);
+
+      const { DatabaseSync } = await import('node:sqlite');
+      const { readdirSync, readFileSync } = await import('node:fs');
+      const db = new DatabaseSync(':memory:');
+      db.exec('PRAGMA foreign_keys = ON;');
+      const dir = path.join(REPO_ROOT, 'cloudflare', 'migrations');
+      for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) db.exec(readFileSync(path.join(dir, file), 'utf8'));
+      db.exec(result.planText);
+      assert.equal(db.prepare('SELECT status FROM import_runs').get().status, 'completed');
+    },
+    {
+      schemaPatch: (schema) => {
+        schema.shops.robowatz.subcollections = {
+          legalAcceptances: { accept9: { data: { ...schema.shops['test-shop-a'].subcollections.legalAcceptances.accept1.data, shopId: 'robowatz' } } },
+        };
+        schema.auditLogs.log2 = { data: { action: 'product.takedown', actorUid: 'admin1', createdAt: '2026-01-06T00:00:00.000Z', shopId: 'robowatz', targetId: 'prod-2' } };
+        schema.auditLogs.log3 = { data: { action: 'product.takedown', actorUid: 'admin1', createdAt: '2026-01-07T00:00:00.000Z', shopId: 'shop-never-exported', targetId: 'prod-3' } };
+        schema.auditLogs.log4 = { data: { action: 'platform.note', actorUid: 'admin1', createdAt: '2026-01-08T00:00:00.000Z' } };
+      },
+    },
   );
 });
