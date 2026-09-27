@@ -72,6 +72,8 @@ The real bundle now builds: 864 statements, 286 KB, longest statement 47.7 KB, i
 
 **Seen on real Stripe, not changed:** a new account that has not started its onboarding reads **`restricted`**, not `onboarding`, after the first refresh: Stripe sets a disabled reason on every new account, and `deriveConnectStatus` tests it before `details_submitted`. Firebase's `deriveStatus` does the same, so it is parity, but the seller's payments page (CP5) should not tell a new seller that the account is restricted. The accounts made before the routes (`acct_1UKHP7K39XhkqYJ0`) keep their `daily` schedule.
 
+**Groundwork for CP4 (no code, no go yet): `CP4_GAP_ANALYSIS.md`, D77–D82 on recommended defaults.** Three findings: an anonymous visitor gets a name and a price and nothing else (no branding, menu or image in any public response); public images can be neither uploaded nor served; the storefront finds its shop in the URL path and the Worker in the hostname. Eight builders proposed, public objects first. Of the 37 storefront files, 16 stay in the build. None of the six import rows moved into CP4 has met the real bundle.
+
 **Branding images (D76):** not copied in CP3. Public objects have no delivery in the Worker yet, so the copy moves to CP4 with the product images. The imported shops have no logo, hero or favicon on staging until then.
 
 **Order from here:** Codex on the script commits (`416b3bb1`, `7d59996b`, `779d3405`, and the proof script) → correct staging's `apparel_dtg` through the profiles route → target state by read-only queries → plan from the bundle with `--scrub-unmapped --target-state` → Mikael applies `plan.sql` → `verify.mjs` → CP3 closed.
