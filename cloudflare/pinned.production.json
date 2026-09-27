@@ -6,7 +6,10 @@
     "api": "https://chopshop-api.kent-ee2.workers.dev",
     "web": "https://chopshop-web.kent-ee2.workers.dev"
   },
-  "d1": { "name": "chopshop-prod", "id": "6216ebd9-760b-4506-8165-af4507d3f1fe" },
+  "d1": {
+    "name": "chopshop-prod",
+    "id": "6216ebd9-760b-4506-8165-af4507d3f1fe"
+  },
   "r2": {
     "public": "chopshop-prod-public",
     "private": "chopshop-prod-private",
@@ -20,5 +23,6 @@
   "stripeAccountId": null,
   "stripeMode": "live",
   "stripeWebhookEndpointId": null,
-  "dispatchTarget": "snapwear"
+  "dispatchTarget": "snapwear",
+  "stripeConnectWebhookEndpointId": null
 }

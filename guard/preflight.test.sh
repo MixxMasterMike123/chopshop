@@ -55,8 +55,8 @@ print(json.dumps({env: e}))' "$1" "$2" "${3:-}" "$REPO/cloudflare/pinned.$1.json
 }
 ENV_STAGING=$(env_section staging stg)
 ENV_PRODUCTION=$(env_section production prod)
-PIN_STG="p['d1']['id'] = 'd1-stg-uuid'; p['stripeWebhookEndpointId'] = 'we_stg'"
-PIN_PROD="p['d1']['id'] = 'd1-prod-uuid'; p['stripeAccountId'] = 'acct_PRODTEST'; p['stripeWebhookEndpointId'] = 'we_prod'"
+PIN_STG="p['d1']['id'] = 'd1-stg-uuid'; p['stripeWebhookEndpointId'] = 'we_stg'; p['stripeConnectWebhookEndpointId'] = 'we_stgc'"
+PIN_PROD="p['d1']['id'] = 'd1-prod-uuid'; p['stripeAccountId'] = 'acct_PRODTEST'; p['stripeWebhookEndpointId'] = 'we_prod'; p['stripeConnectWebhookEndpointId'] = 'we_prodc'"
 
 # Inherited credentials the preflight must ignore.
 export CLOUDFLARE_API_TOKEN=INHERITED-WRONG-TOKEN CLOUDFLARE_API_KEY=inherited-global-key \
@@ -119,7 +119,8 @@ case $url in
   https://api.stripe.com/v1/account)
     printf '{"id": "%s", "object": "account"}' "$FAKE_STRIPE_ACCOUNT" >"$out"; printf 200 ;;
   https://api.stripe.com/v1/webhook_endpoints/*)
-    if [ "${url##*/}" = "${FAKE_STRIPE_WEBHOOK:-}" ]; then
+    case " ${FAKE_STRIPE_WEBHOOK:-} " in *" ${url##*/} "*) hit=1 ;; *) hit=0 ;; esac
+    if [ "$hit" = 1 ]; then
       printf '{"id": "%s", "object": "webhook_endpoint", "status": "enabled", "url": "https://api.example.test/stripe"}' "${url##*/}" >"$out"; printf 200
     else
       printf '{"error": {"type": "invalid_request_error", "code": "resource_missing"}}' >"$out"; printf 404
@@ -229,11 +230,11 @@ new_tree; run qa --bootstrap -- whoami
 expect_refused "unknown environment → refused" "unknown environment 'qa'"
 
 # --- pinned resources ---------------------------------------------------------------------
-new_tree; pin "$T" staging "p['d1']['id'] = None; p['stripeWebhookEndpointId'] = None"; run staging -- deploy
-expect_refused "null pinned id without --bootstrap → refused" "still has null (not yet created) values: d1.id, stripeWebhookEndpointId"
+new_tree; pin "$T" staging "p['d1']['id'] = None; p['stripeWebhookEndpointId'] = None; p['stripeConnectWebhookEndpointId'] = None"; run staging -- deploy
+expect_refused "null pinned id without --bootstrap → refused" "still has null (not yet created) values: d1.id, stripeWebhookEndpointId, stripeConnectWebhookEndpointId"
 
 new_tree; pin "$T" production "p['d1']['id'] = None"; run production -- deploy
-expect_refused "production with null ids without --bootstrap → refused" "d1.id, stripeAccountId, stripeWebhookEndpointId"
+expect_refused "production with null ids without --bootstrap → refused" "d1.id, stripeAccountId, stripeWebhookEndpointId, stripeConnectWebhookEndpointId"
 
 new_tree; pin "$T" production "p['dispatchTarget'] = 'fake-printer'"; run production --bootstrap -- whoami
 expect_refused "production dispatchTarget != snapwear → refused (even under --bootstrap)" "only 'snapwear' may be deployed to production"
@@ -411,44 +412,48 @@ new_tree; run staging --bootstrap -- d1 list
 expect_exec "correct account + --bootstrap → execs wrangler with the file's token and pinned account" \
   "FAKE-WRANGLER EXEC: --env staging d1 list | account=$GOOD token=ok cwd=cloudflare"
 
-new_tree; pin "$T" staging "p['stripeWebhookEndpointId'] = None"; stripe_file "$T" staging "$SKEY_TEST"; FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG run staging --bootstrap -- whoami
+new_tree; pin "$T" staging "p['stripeWebhookEndpointId'] = None; p['stripeConnectWebhookEndpointId'] = None"; stripe_file "$T" staging "$SKEY_TEST"; FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG run staging --bootstrap -- whoami
 expect_exec "matching Stripe sandbox account → execs (webhook not yet pinned, bootstrap)" "FAKE-WRANGLER EXEC: --env staging whoami | account=$GOOD token=ok"
 
 new_tree; pin "$T" staging "$PIN_STG"; write_jsonc "$T" "$GOOD" "$ENV_STAGING"; stripe_file "$T" staging "$SKEY_TEST"
-FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK=we_stg run staging -- deploy
+FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK="we_stg we_stgc" run staging -- deploy
 expect_exec "staging fully pinned, bindings + Stripe + webhook match, no --bootstrap → execs" \
   "FAKE-WRANGLER EXEC: --env staging deploy | account=$GOOD token=ok"
 
 new_tree; pin "$T" staging "$PIN_STG"; write_jsonc "$T" "$GOOD" "$ENV_STAGING"; stripe_file "$T" staging "$RKEY_TEST"
-FAKE_STRIPE_KEY=$RKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK=we_stg run staging -- deploy
+FAKE_STRIPE_KEY=$RKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK="we_stg we_stgc" run staging -- deploy
 expect_exec "restricted rk_test_ key accepted for sandbox" "FAKE-WRANGLER EXEC: --env staging deploy | account=$GOOD token=ok"
 
 new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$ENV_PRODUCTION"; stripe_file "$T" production "$SKEY_LIVE"
 launch_todo_all_done "$T"
-FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK=we_prod run production -- deploy
+FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK="we_prod we_prodc" run production -- deploy
 expect_exec "production fully pinned, launch gate done (A8/A12/B11 open), live Stripe → execs" \
   "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok"
 
 new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$(env_section production prod "del e['name']")"
 stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"
-FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK=we_prod run production -- deploy
+FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK="we_prod we_prodc" run production -- deploy
 expect_refused "env.production without a name → wrangler's effective '<top>-production' → refused" "env.production.name is 'chopshop-api-production' (wrangler's effective name: top-level name + '-production'), pinned workerName is 'chopshop-api'"
 
 # --- the repo's REAL wrangler.jsonc agrees with the repo's real pinned files ----------------
 # Only the Stripe ids that do not exist yet are filled in; every Cloudflare id, name, origin
 # and jurisdiction is the committed one, so drift between the two files fails here.
-new_tree; cp "$REPO/cloudflare/wrangler.jsonc" "$T/cloudflare/"; pin "$T" staging "p['stripeWebhookEndpointId'] = 'we_stg'"
+new_tree; cp "$REPO/cloudflare/wrangler.jsonc" "$T/cloudflare/"; pin "$T" staging "p['stripeWebhookEndpointId'] = 'we_stg'; p['stripeConnectWebhookEndpointId'] = 'we_stgc'"
 stripe_file "$T" staging "$SKEY_TEST"
-FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK=we_stg run staging -- deploy
+FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK="we_stg we_stgc" run staging -- deploy
 expect_exec "repo wrangler.jsonc passes every staging check against repo pinned.staging.json" \
   "FAKE-WRANGLER EXEC: --env staging deploy | account=$GOOD token=ok"
 
 new_tree; cp "$REPO/cloudflare/wrangler.jsonc" "$T/cloudflare/"
-pin "$T" production "p['stripeAccountId'] = 'acct_PRODTEST'; p['stripeWebhookEndpointId'] = 'we_prod'"
+pin "$T" production "p['stripeAccountId'] = 'acct_PRODTEST'; p['stripeWebhookEndpointId'] = 'we_prod'; p['stripeConnectWebhookEndpointId'] = 'we_prodc'"
 stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"
-FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK=we_prod run production -- deploy
+FAKE_STRIPE_KEY=$SKEY_LIVE FAKE_STRIPE_ACCOUNT=acct_PRODTEST FAKE_STRIPE_WEBHOOK="we_prod we_prodc" run production -- deploy
 expect_exec "repo wrangler.jsonc passes every production check against repo pinned.production.json" \
   "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok"
+
+new_tree; pin "$T" staging "$PIN_STG"; write_jsonc "$T" "$GOOD" "$ENV_STAGING"; stripe_file "$T" staging "$SKEY_TEST"
+FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=$STRIPE_STG FAKE_STRIPE_WEBHOOK="we_stg" run staging -- deploy
+expect_refused "pinned CONNECT webhook endpoint missing on the Stripe account → refused" "stripeWebhookEndpointId we_stgc does not exist"
 
 # --- secrets never surface ----------------------------------------------------------------
 RC=0 OUT=$ALL_OUT

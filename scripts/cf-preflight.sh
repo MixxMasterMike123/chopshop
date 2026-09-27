@@ -9,7 +9,8 @@
 #   1. credentials file ($CHOPSHOP_CF_ENV_FILE, default ~/.config/chopshop/cloudflare.env) is
 #      mode 600 and defines CF_ACCOUNT_ID + CLOUDFLARE_API_TOKEN; CF_ACCOUNT_ID == pinned id;
 #   2. cloudflare/pinned.<env>.json has the full shape, stripeMode is sandbox (staging) or
-#      live (production), production's dispatchTarget is "snapwear", and origins.api /
+#      live (production), production's dispatchTarget is "snapwear", the two Stripe webhook
+#      endpoint ids (platform + connect) are we_ ids or null, and origins.api /
 #      origins.web are bare https:// origins (no path, query or fragment);
 #   3. `wrangler whoami --json`, run with THAT token, sees exactly one account, and its id ==
 #      CF_ACCOUNT_ID == pinned cloudflareAccountId;
@@ -173,9 +174,13 @@ SHAPE = {
     "d1": {"name": str, "id": str},
     "r2": {"public": str, "private": str, "production": str},
     "queues": {"outbox": str, "email": str, "renderJobs": str},
-    "stripeAccountId": str, "stripeMode": str, "stripeWebhookEndpointId": str, "dispatchTarget": str,
+    "stripeAccountId": str, "stripeMode": str, "stripeWebhookEndpointId": str,
+    # The CONNECT endpoint (connect=true): Stripe delivers connected-account events (account.updated)
+    # only on an endpoint created with connect=true, and platform events (payments, refunds,
+    # disputes) only on one created without it — two endpoints, two signing secrets.
+    "stripeConnectWebhookEndpointId": str, "dispatchTarget": str,
 }
-NULLABLE = {"d1.id", "stripeAccountId", "stripeWebhookEndpointId"}  # null = not created yet
+NULLABLE = {"d1.id", "stripeAccountId", "stripeWebhookEndpointId", "stripeConnectWebhookEndpointId"}  # null = not created yet
 # A bare https origin exactly as a browser serialises it: lowercase host, optional port, and
 # nothing after it — no path (not even "/"), query, fragment or userinfo. Reset/verification
 # links are built from these (PLAN §2.1), so anything looser is a link-injection surface.
@@ -205,7 +210,7 @@ def cmd_pinned(path, env, bootstrap):
     walk(p, SHAPE, "", nulls, path)
     if not re.fullmatch(r"[0-9a-f]{32}", p["cloudflareAccountId"]):
         refuse(f"{path}: cloudflareAccountId is not a 32-hex account id")
-    for key, pat in (("stripeAccountId", r"acct_[A-Za-z0-9]+"), ("stripeWebhookEndpointId", r"we_[A-Za-z0-9]+")):
+    for key, pat in (("stripeAccountId", r"acct_[A-Za-z0-9]+"), ("stripeWebhookEndpointId", r"we_[A-Za-z0-9]+"), ("stripeConnectWebhookEndpointId", r"we_[A-Za-z0-9]+")):
         if p[key] is not None and not re.fullmatch(pat, p[key]):
             refuse(f"{path}: {key} {p[key]!r} is not a Stripe {pat.split('_')[0]}_ id")
     for key in ("api", "web"):
@@ -219,7 +224,7 @@ def cmd_pinned(path, env, bootstrap):
     if nulls and bootstrap != "1":
         refuse(f"{path} still has null (not yet created) values: {', '.join(nulls)} - create them under --bootstrap, pin the ids, then deploy")
     print("|".join([p["cloudflareAccountId"], p["stripeAccountId"] or "", p["stripeMode"],
-                    p["stripeWebhookEndpointId"] or "", ", ".join(nulls)]))
+                    p["stripeWebhookEndpointId"] or "", p["stripeConnectWebhookEndpointId"] or "", ", ".join(nulls)]))
 
 def cmd_whoami(path, file_id, pinned_id):
     w = load_json(path, "wrangler whoami --json output")
@@ -392,7 +397,7 @@ TOKEN=$(env_value "$ENV_FILE" CLOUDFLARE_API_TOKEN)
 
 # --- 2. pinned identity -------------------------------------------------------------------
 out=$(python3 -c "$PY" pinned "$PINNED" "$ENV_NAME" "$BOOTSTRAP") || refuse "${out:-python3 helper failed on $PINNED}"
-IFS='|' read -r PINNED_ID STRIPE_ACCT STRIPE_MODE WEBHOOK_ID NULLS <<<"$out"
+IFS='|' read -r PINNED_ID STRIPE_ACCT STRIPE_MODE WEBHOOK_ID CONNECT_WEBHOOK_ID NULLS <<<"$out"
 [ "$FILE_ACCOUNT_ID" = "$PINNED_ID" ] ||
   refuse "CF_ACCOUNT_ID $FILE_ACCOUNT_ID in $ENV_FILE != pinned cloudflareAccountId $PINNED_ID"
 
@@ -443,6 +448,12 @@ if [ -f "$STRIPE_FILE" ]; then
       refuse "Stripe GET /v1/webhook_endpoints failed: $(tail -n 1 "$TMP/stripe.err")"
     out=$(python3 -c "$PY" webhook "$TMP/webhook.json" "$code" "$WEBHOOK_ID" "$STRIPE_FILE") || refuse "${out:-python3 helper failed on the webhook response}"
     note "pinned Stripe webhook endpoint $WEBHOOK_ID exists: $out"
+  fi
+  if [ -n "$CONNECT_WEBHOOK_ID" ]; then
+    code=$(stripe_get "/v1/webhook_endpoints/$CONNECT_WEBHOOK_ID" "$TMP/webhook.json") ||
+      refuse "Stripe GET /v1/webhook_endpoints failed: $(tail -n 1 "$TMP/stripe.err")"
+    out=$(python3 -c "$PY" webhook "$TMP/webhook.json" "$code" "$CONNECT_WEBHOOK_ID" "$STRIPE_FILE") || refuse "${out:-python3 helper failed on the webhook response}"
+    note "pinned Stripe CONNECT webhook endpoint $CONNECT_WEBHOOK_ID exists: $out"
   fi
   unset SKEY
 elif [ "$BOOTSTRAP" = 0 ]; then
