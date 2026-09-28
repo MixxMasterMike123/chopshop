@@ -2,6 +2,16 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
+## CP4 — Catalogue + storefront (GO 2026-09-28, not started)
+
+**Mikael: "CP4 go"**, with D77 and D81 confirmed. D83 is open (he asked what it means; the default, mappings made again by hand, stands). D78, D79, D80, D82, D84 on their defaults.
+
+**Start from `CP4_GAP_ANALYSIS.md`.** Eight builders; **P (public objects) first**, or its interface fixed first, since products, collections, branding and the storage copy all stand on it. Next migration 0039. Worker code by the Opus builder when its spend limit allows, otherwise Sonnet; scripts by Sonnet; Fable reviews every diff; Codex before every deploy.
+
+**Asked for during the session of 2026-09-27/28 and recorded as decisions, to be designed into CP4 and not bolted on:** a shop's own website reads its collections (D87, ninetone's artist pages); permanent forwarding of old addresses per shop (D88); finished pages for search engines (D88); a shop on its own domain (D89, D90, a PLUS feature). Not decided: the commission of the free plan (D91), the platform's domain and name.
+
+**Blocked on people, not on code:** a technical base domain (custom domains, mail, the admin address); Resend on Kent's account (Mikael, 2026-09-28); Kent's colours per garment and the garment of each of the 6 POD products.
+
 ## CP3 — Platform minimal + data import to staging (GO 2026-09-27 13:10, ✅ CLOSED 2026-09-28 02:10)
 
 **✅ CP3 CLOSED.** Both exit criteria of PLAN §10 are met on staging:
