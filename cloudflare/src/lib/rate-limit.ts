@@ -149,3 +149,47 @@ export async function enforceRateLimit(
 
   return { allowed: false, retryAfterSeconds };
 }
+
+// ── a visitor as a limiter's key (CP4-G, CP4-B) ─────────────────────────────
+
+const IPV6_GROUP = /^[0-9a-f]{1,4}$/;
+const IPV4_MAPPED = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/;
+
+/**
+ * The limiter's key for a visitor address: an IPv4 address (or the shared
+ * "unknown") as it is, an IPv4-mapped IPv6 address as its IPv4 address, and
+ * any other IPv6 address as its /64 prefix in canonical form
+ * (`2001:db8:0:1::/64`), so every spelling and every address of one network
+ * counts once. Anything that does not parse as IPv6 is keyed as it is.
+ */
+export function visitorRateKey(ip: string): string {
+  const address = ip.trim().toLowerCase();
+  if (!address.includes(":")) {
+    return address;
+  }
+  const mapped = IPV4_MAPPED.exec(address)?.[1];
+  if (mapped !== undefined) {
+    return mapped;
+  }
+  const halves = address.split("::");
+  if (halves.length > 2) {
+    return address;
+  }
+  // An embedded IPv4 tail (…:1.2.3.4) is the last 32 bits: two groups.
+  const groupsOf = (part: string): string[] =>
+    part === ""
+      ? []
+      : part.split(":").flatMap((group) => (group.includes(".") ? ["0", "0"] : [group]));
+  const head = groupsOf(halves[0] ?? "");
+  const tail = halves.length === 2 ? groupsOf(halves[1] ?? "") : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) {
+    return address;
+  }
+  const groups = [...head, ...Array.from({ length: missing }, () => "0"), ...tail];
+  const prefix = groups.slice(0, 4);
+  if (prefix.length !== 4 || !prefix.every((group) => IPV6_GROUP.test(group))) {
+    return address;
+  }
+  return `${prefix.map((group) => Number.parseInt(group, 16).toString(16)).join(":")}::/64`;
+}

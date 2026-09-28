@@ -32,9 +32,9 @@ import {
   WITHDRAWAL_IP_LIMIT,
   WITHDRAWAL_IP_SCOPE,
   WITHDRAWAL_IP_WINDOW_MS,
-  withdrawalRateKey,
 } from "../src/routes/storefront-withdrawals";
 import { quietEnv, recordingQueue } from "./dispatch-fixtures";
+import { visitorRateKey } from "../src/lib/rate-limit";
 
 /**
  * CP4-G — the withdrawal function (DAL 2 kap. 10 a §; D96; migration 0044):
@@ -687,18 +687,18 @@ describe("the rate limits", () => {
   });
 
   it("keys a visitor address canonically: IPv4 as it is, IPv4-mapped as IPv4, IPv6 by its /64", () => {
-    expect(withdrawalRateKey("203.0.113.9")).toBe("203.0.113.9");
-    expect(withdrawalRateKey("unknown")).toBe("unknown");
-    expect(withdrawalRateKey("::ffff:203.0.113.9")).toBe("203.0.113.9");
-    expect(withdrawalRateKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
-    expect(withdrawalRateKey("2001:0DB8:0000:0000:abcd:ef01:2345:6789")).toBe("2001:db8:0:0::/64");
-    expect(withdrawalRateKey("2001:db8:0:0:1::")).toBe("2001:db8:0:0::/64");
-    expect(withdrawalRateKey("2001:db8:1:2:3:4:1.2.3.4")).toBe("2001:db8:1:2::/64");
-    expect(withdrawalRateKey("::1")).toBe("0:0:0:0::/64");
+    expect(visitorRateKey("203.0.113.9")).toBe("203.0.113.9");
+    expect(visitorRateKey("unknown")).toBe("unknown");
+    expect(visitorRateKey("::ffff:203.0.113.9")).toBe("203.0.113.9");
+    expect(visitorRateKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(visitorRateKey("2001:0DB8:0000:0000:abcd:ef01:2345:6789")).toBe("2001:db8:0:0::/64");
+    expect(visitorRateKey("2001:db8:0:0:1::")).toBe("2001:db8:0:0::/64");
+    expect(visitorRateKey("2001:db8:1:2:3:4:1.2.3.4")).toBe("2001:db8:1:2::/64");
+    expect(visitorRateKey("::1")).toBe("0:0:0:0::/64");
     // Not IPv6: keyed as it is (a strict bucket of its own).
-    expect(withdrawalRateKey("1:2:3")).toBe("1:2:3");
-    expect(withdrawalRateKey("1::2::3")).toBe("1::2::3");
-    expect(withdrawalRateKey("zz:1:2:3:4:5:6:7")).toBe("zz:1:2:3:4:5:6:7");
+    expect(visitorRateKey("1:2:3")).toBe("1:2:3");
+    expect(visitorRateKey("1::2::3")).toBe("1::2::3");
+    expect(visitorRateKey("zz:1:2:3:4:5:6:7")).toBe("zz:1:2:3:4:5:6:7");
   });
 
   it("keeps NO limit per order number: a flood of wrong guesses from many addresses never keeps the buyer out", async () => {

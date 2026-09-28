@@ -323,6 +323,20 @@ import {
 } from "./routes/admin-products";
 // CP4-IMPORTS-A — end
 // CP4-IMPORTS-B — begin
+import {
+  ADMIN_COLLECTION_PRODUCTS_ROUTE,
+  ADMIN_COLLECTION_ROUTE,
+  ADMIN_COLLECTIONS_PATH,
+  handleAdminCollectionProductsRoute,
+  handleAdminCollectionRoute,
+  handleAdminCollectionsRoute,
+} from "./routes/admin-collections";
+import {
+  handlePublicCollectionRoute,
+  handlePublicCollectionsRoute,
+  PUBLIC_COLLECTION_ROUTE,
+  PUBLIC_COLLECTIONS_PATH,
+} from "./routes/public-collections";
 // CP4-IMPORTS-B — end
 // CP4-IMPORTS-C — begin
 import {
@@ -2180,6 +2194,31 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   );
   // CP4-ROUTES-A — end
   // CP4-ROUTES-B (collections: admin, public list and detail) — begin
+  // Exact paths, each claiming only its own methods; no earlier route owns
+  // any of them. The id and ref segments are read from the RAW pathname and
+  // decoded once by the handlers. The two public reads also claim OPTIONS:
+  // their CORS preflight (D87) is answered by the handler before anything
+  // touches the database.
+  app.all(
+    ADMIN_COLLECTIONS_PATH,
+    onMethods(["GET", "POST"], (c) => handleAdminCollectionsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_COLLECTION_ROUTE,
+    onMethods(["GET", "PATCH", "DELETE"], (c) => handleAdminCollectionRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_COLLECTION_PRODUCTS_ROUTE,
+    onMethods(["PUT"], (c) => handleAdminCollectionProductsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PUBLIC_COLLECTIONS_PATH,
+    onMethods(["GET", "OPTIONS"], storefront((c) => handlePublicCollectionsRoute(c.env, c.req.raw))),
+  );
+  app.all(
+    PUBLIC_COLLECTION_ROUTE,
+    onMethods(["GET", "OPTIONS"], storefront((c) => handlePublicCollectionRoute(c.env, c.req.raw))),
+  );
   // CP4-ROUTES-B — end
   // CP4-ROUTES-C (pages: admin, public page, public legal page) — begin
   // Exact paths, each claiming only its own methods; no earlier route owns

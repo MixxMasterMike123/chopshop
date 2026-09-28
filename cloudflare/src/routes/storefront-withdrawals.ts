@@ -5,7 +5,7 @@ import {
 } from "../commerce/withdrawals";
 import { readJsonBodyWithin } from "../legal/legal-pages";
 import { jsonResponse } from "../lib/http";
-import { clientIp, enforceRateLimit } from "../lib/rate-limit";
+import { clientIp, enforceRateLimit, visitorRateKey } from "../lib/rate-limit";
 import {
   invalidRequestResponse,
   rateLimitedResponse,
@@ -69,48 +69,6 @@ export const WITHDRAWAL_IP_WINDOW_MS = 10 * 60 * 1_000;
 /** The body is three short strings; anything larger is not a withdrawal. */
 export const WITHDRAWAL_BODY_MAX_BYTES = 4_096;
 
-const IPV6_GROUP = /^[0-9a-f]{1,4}$/;
-const IPV4_MAPPED = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/;
-
-/**
- * The limiter's key for a visitor address: an IPv4 address (or the shared
- * "unknown") as it is, an IPv4-mapped IPv6 address as its IPv4 address, and
- * any other IPv6 address as its /64 prefix in canonical form
- * (`2001:db8:0:1::/64`), so every spelling and every address of one network
- * counts once. Anything that does not parse as IPv6 is keyed as it is.
- */
-export function withdrawalRateKey(ip: string): string {
-  const address = ip.trim().toLowerCase();
-  if (!address.includes(":")) {
-    return address;
-  }
-  const mapped = IPV4_MAPPED.exec(address)?.[1];
-  if (mapped !== undefined) {
-    return mapped;
-  }
-  const halves = address.split("::");
-  if (halves.length > 2) {
-    return address;
-  }
-  // An embedded IPv4 tail (…:1.2.3.4) is the last 32 bits: two groups.
-  const groupsOf = (part: string): string[] =>
-    part === ""
-      ? []
-      : part.split(":").flatMap((group) => (group.includes(".") ? ["0", "0"] : [group]));
-  const head = groupsOf(halves[0] ?? "");
-  const tail = halves.length === 2 ? groupsOf(halves[1] ?? "") : [];
-  const missing = 8 - head.length - tail.length;
-  if (halves.length === 2 ? missing < 1 : missing !== 0) {
-    return address;
-  }
-  const groups = [...head, ...Array.from({ length: missing }, () => "0"), ...tail];
-  const prefix = groups.slice(0, 4);
-  if (prefix.length !== 4 || !prefix.every((group) => IPV6_GROUP.test(group))) {
-    return address;
-  }
-  return `${prefix.map((group) => Number.parseInt(group, 16).toString(16)).join(":")}::/64`;
-}
-
 function requestHostname(request: Request): string | null {
   const url = new URL(request.url);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
@@ -160,7 +118,7 @@ export async function handleStorefrontWithdrawalRoute(
 
   const now = options.now ?? Date.now();
   const byVisitor = await enforceRateLimit(env.DB, {
-    key: withdrawalRateKey(clientIp(request)),
+    key: visitorRateKey(clientIp(request)),
     limit: WITHDRAWAL_IP_LIMIT,
     now,
     scope: WITHDRAWAL_IP_SCOPE,
