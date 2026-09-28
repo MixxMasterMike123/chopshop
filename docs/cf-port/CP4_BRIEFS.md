@@ -483,6 +483,42 @@ The real gate is on staging, after the import and the deploy: every page re-shot
 
 ---
 
+## R. The recipient of an order (D98)
+
+Written 2026-09-28 after the review of the page swap. One builder, Worker and client together. Mikael's go: 2026-09-28.
+
+**Goal.** An order says who gets it and where: the seller can deliver it, the printer can ship it, the buyer sees it on the confirmation. Today the checkout takes the e-mail address, the delivery method and the country, and no table holds a name or an address.
+
+### Owns
+
+`$CF/migrations/0045_order_recipients.sql`; a new module `$CF/src/commerce/recipient.ts` (the shape, the validation, the reads and the statements); its tests `$CF/test/recipient.test.ts`; the lines it needs in `src/commerce/checkout.ts`, in the order creation, in the three order reads (the buyer's with the receipt token, the seller's, the platform's) and in the printer job; `REQUIRED_MIGRATION` → `0045_order_recipients.sql` (`app.ts`, `test/health.test.ts`, `test/public-catalog.test.ts`); `test/slice-harness.ts` (a default recipient, so every older test still buys). On the client: `src/storefront/adapters/checkout.js`, `src/storefront/adapters/order.js` and their tests, the props `StripePaymentForm.jsx` hands to `buildCheckoutRequest`, `src/storefront/dev/money-api.mjs` and `money-fixtures.json`. Its report: `docs/cf-port/CP4_R_REPORT.md`.
+
+### The rules
+
+1. **Two tables of their own, not columns:** `checkout_recipients` (one row per checkout) and `order_recipients` (one row per order), each with `tenant_id` and the triggers every table of a shop has (the tenant is immutable and is the parent's). The reason is D68: the order is permanent evidence and cannot change; the recipient is personal data and must be removable one day without touching the order. **A row is never updated** (a trigger refuses every UPDATE). A DELETE is allowed by the schema and by no route of this step.
+2. **The request:** `POST /v1/checkout` takes `recipient`. For `deliveryMethod: "shipping"`: `{ name, addressLine1, addressLine2?, postalCode, city, country, phone? }`, and `country` must equal `shippingCountry`. For `"pickup"`: `{ name, phone?, pickupLocationId, pickupDate? }`; the place must be one of the shop's own pickup places as the store identity holds them, and the date one of that place's dates when the place offers dates. Read `src/pages/shop/Checkout.jsx` for which fields the form requires today, and require the same. **A checkout without a valid recipient is refused: 400 `invalid_request`**, one answer for every fault of the body, as the route answers today.
+3. **Validation:** every text trimmed; no control character (C0, DEL, C1), no line break; lengths: name 1–100, address lines 1–100, postal code 1–16, city 1–100, phone 0–30 (digits, space, `+`, `-`, `(`, `)` only), country two upper-case letters. Unknown keys of `recipient` are refused. The texts are stored as given and are TEXT wherever they are shown: nothing here is HTML.
+4. **Frozen with the checkout:** the recipient is part of what the idempotency key stands for. The same key with another recipient is the 409 the route answers for any other change.
+5. **Copied to the order** in the same batch that creates the order (the payment provider's confirmation), from the checkout's row. An order whose checkout has no recipient row (every order made before 0045) is created and read as before, with `recipient: null`.
+6. **The reads:** the buyer's order (receipt token), the seller's order and the platform's order answer `recipient`. For a pickup the place's name and address are answered as they were WHEN THE CHECKOUT WAS MADE (copied into the row), not as the shop's settings say today.
+7. **The printer's job** of a shipped order carries the recipient. Read how the job is built and what the fake printer takes (`CP1_C_REPORT.md` says the wire shape of the address is provisional): put it where the dispatch builds its body, behind one function, and say in the report what is still to be agreed with the printer.
+8. **Nothing of a recipient is logged**, put into an audit event, an alert or an outbox payload. Ids only.
+9. **Not in this step, say so in the report:** the address in the order confirmation mail; the route that removes a recipient (D68); validation of a postal code against its country.
+
+### The client
+
+`buildCheckoutRequest` sends `recipient` from what the form already collects (`shippingInfo`, `deliveryInfo`, `customerInfo` reach `StripePaymentForm` today). `toPageOrder` gives the confirmation page the name, the address and the pickup place in the shape the page already reads (read `OrderConfirmation.jsx`; the markup is not touched). The dev API answers the new shape.
+
+### Must be proven by tests
+
+Every refusal of rule 2 and 3, one test each; the 409 of rule 4; the copy of rule 5 under the real order creation, and an order without a recipient row; each of the three reads; a read of another shop's order shows nothing; the UPDATE trigger; the job's body; no recipient text in any log line, audit row, alert or outbox row of a purchase (search them for the test's own values).
+
+### The gate
+
+`cd cloudflare && npx tsc --noEmit && npx tsc --noEmit -p web && npx vitest run` (before this step: 89 files, 3838 tests; read the SUMMARY line, "Test Files N failed" must be absent); `node --test src/api/*.test.mjs src/storefront/adapters/*.test.mjs src/storefront/dev/*.test.mjs` (112); `node cloudflare/web/check-storefront-build.mjs`; `npx vite build`; `node guard/guards.test.mjs`.
+
+---
+
 ## S. Scripts
 
 Written in full when 0040–0042 are reviewed. Fixed now:
