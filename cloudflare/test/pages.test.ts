@@ -654,6 +654,7 @@ describe("what a write must carry", () => {
     ["a date without milliseconds", { ...draft("datum-ms"), publishedAt: "2026-09-28T00:00:00Z" }],
     ["an impossible date", { ...draft("datum-fel"), publishedAt: "2026-02-30T00:00:00.000Z" }],
     ["a blank author", { ...draft("forfattare"), author: " " }],
+    ["a content of white space only", { ...draft("tomt-innehall"), content: { "sv-SE": " \n\t " } }],
     ["an author with a control character", { ...draft("forfattare-2"), author: "a\u0007b" }],
     ["an object id with a slash", { ...draft("bild"), imageObjectId: "a/b" }],
     ["a summary with a lone surrogate", { ...draft("sammanfattning"), summary: { "sv-SE": "\ud800" } }],
@@ -778,6 +779,12 @@ describe("what a write must carry", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("creating, reading, editing and deleting a page", () => {
+  it("stores the author trimmed, so every reader prints the same name", async () => {
+    const created = await createPage(shopA, { ...draft("forfattare-trimmad"), author: "  Kim  " });
+    expect(created.author).toBe("Kim");
+    expect(await pageRow(created.pageId)).toMatchObject({ author: "Kim" });
+  });
+
   it("creates a draft with every field, audited in the same batch, and reads it back", async () => {
     const image = await objectRow(shopA);
     const created = await createPage(shopA, {

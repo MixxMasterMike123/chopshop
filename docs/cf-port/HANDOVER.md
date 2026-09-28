@@ -47,7 +47,9 @@ Each fix has its test. Codex re-reviews the fix commit and B before the deploy.
 
 **B collections (0041): reviewed by Fable, committed `14274ea3`. `/ready` requires `0044_withdrawals.sql` (`219f4301`).** Whole suite at `14274ea3`: **88 files, 3810 tests passed, none skipped.**
 
-**Running since 06:45 (they die with the window):** K, the consolidation (D's reads move to the functions of A, B and C; one address rule; one public gate; the older product routes go); F1 and F2, the page swap (brief in `CP4_BRIEFS.md` §F).
+**K, the consolidation: reviewed by Fable, committed `6ecd315e`.** One address rule (`src/storefront/addresses.ts`), one public gate of a shop (`public-shop.ts`), the product page of the answer for search engines reads through A's public read, the older product routes and the four deprecated reads are gone. K stopped where a merge would have changed an answer and proved each difference; the four differences and what becomes of each are in `CP4_K_REPORT.md`, "Review round 1". Whole suite after K: **89 files, 3836 tests passed, 0 failed, 0 skipped.** Two of the four differences are closed already (a page's content of white space only is refused; the author is stored trimmed).
+
+**Running (they die with the window):** F1 and F2, the page swap (brief in `CP4_BRIEFS.md` §F), since 06:45; W, the deploy path of the second Worker in the preflight and the deploy script, since 06:55. Their files are in the tree, uncommitted: `src/**`, `vite.storefront.config.js`, `scripts/cf-*.sh`, `guard/**`, the pinned files, the two `wrangler.jsonc`.
 
 **What the review changed, beyond wiring:**
 

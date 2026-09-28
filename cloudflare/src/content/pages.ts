@@ -238,7 +238,9 @@ function parseContent(value: unknown): FieldResult<LanguageMap> {
   }
   const map: LanguageMap = {};
   for (const [language, html] of entries) {
-    if (typeof html !== "string") {
+    // A content of white space only is no content: the page would answer an
+    // empty text where the answer for search engines falls back.
+    if (typeof html !== "string" || html.trim().length === 0) {
       return { status: "invalid" };
     }
     const verdict = checkHtml(html);
@@ -267,12 +269,13 @@ function parseAuthor(value: unknown): FieldResult<string | null> {
   if (value === null) {
     return { status: "ok", value: null };
   }
+  // Stored trimmed: every reader prints the same name.
   return typeof value === "string" &&
     value.trim().length > 0 &&
     value.length <= AUTHOR_MAX_LENGTH &&
     !LINE_CONTROL.test(value) &&
     !LONE_SURROGATE.test(value)
-    ? { status: "ok", value }
+    ? { status: "ok", value: value.trim() }
     : { status: "invalid" };
 }
 
