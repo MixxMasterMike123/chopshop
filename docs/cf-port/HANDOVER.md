@@ -4,7 +4,45 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP4 — Catalogue + storefront (GO 2026-09-28, started 2026-09-28)
 
-### ✅ 2026-09-28 17:00 — CP4's code is complete and reviewed; the staging deploy waits for the migrations — START HERE
+### 🚀 2026-09-28 18:30 — CP4 is DEPLOYED to staging and proven with a purchase; the design gate waits for the catalogue import — START HERE
+
+| What | Result |
+|---|---|
+| Migrations 0039–0045 on staging | applied by Claude on Mikael's "continue", first try, no retry. Bookmark BEFORE: `000000c8-00000000-000050f4-ff3f82a57679ac2a4b4994afa43b9516` |
+| `scripts/cf-deploy.sh staging` at `895c24d9` (attested) | API version `f0122e26-b06c-48c0-8469-73f83721455d`; **web Worker, its first deploy:** `b40b300d-59e8-4d63-8853-1a61dc9fb27c`, `https://chopshop-web-stg.kent-ee2.workers.dev` |
+| `/ready` | `0045_order_recipients.sql`, ok |
+| A verified hostname per imported shop | `<shop>.stg-shop.invalid` for `melodie-mc`, `gif-sundsvall`, `ninetone`, `sillmans`, through `POST /v1/platform/tenants/:id/domains` (201, verified) |
+| The shops through the web Worker | `melodie-mc` 200; the other three 404, as designed (unpublished in the source; the preview D57 is not built); `slice-20260927` 200 |
+| **A purchase with a recipient (D98)** | order `0c378fdd-dcd3-4386-8f5a-30d621d04a43` (`20260928-SXG3KMDG`), a parcel, 42 800 öre, PI `pi_3UKgu3KAaBMOW5AC1JtnAO0i`. The order's recipient row holds the name, the two address lines, the postal code, the city, the country and the telephone; **the fake printer's job carries `shipping_address`** with the same values |
+| Reconciliation | **BALANCED, 3 orders, Δ 0 öre**, 0 alerts, no dispatch row unknown or failed |
+
+`seed-staging-slice.mjs --purchase` now buys a parcel with an invented recipient (the checkout requires one). Run it with `--tenant slice-20260927`.
+
+**The first look at the pages rendered (the twelve baseline pages at 375, 768, 1440, shot with the baseline's own tool against staging):** layout, type, colours and spacing are the baseline's. No console error and no failed request but the expected 404s of what staging does not hold. The differences, each with its cause:
+
+| Difference | Cause |
+|---|---|
+| Every page is 28 px shorter | the footer's "Mitt konto" row is gone (D81) |
+| The home page has no review tile | reviews are not ported (D81); the payment tile beside it is wider |
+| The logo reads "My Shop", the hero has no image | the branding images are not imported (D76, scripts S) |
+| No products, no categories in the navigation, the category page shows its address as its heading | the catalogue is not imported (scripts S) |
+| The three legal pages and the platform's terms: "Sidan kunde inte hittas" | DATA on staging: `melodie-mc` has adopted no legal page, and the platform terms version `2026-09-07` has no archived text. The slice shop, which adopted one, answers it |
+| The titles of the cart and the product page read "… \| My Shop" | the same in the baseline |
+
+**The design gate cannot be passed before the catalogue, the images and the legal texts are on staging.** That is the import scripts (S) and two data steps. It is the next dependency of everything visible.
+
+**FOR THE CUTOVER, found here:** on the source a shop's legal pages were generated from templates and were always there. On Cloudflare a legal page exists only once the seller has ADOPTED it, and the checkout is closed until then. Every imported shop therefore starts with no legal pages and a closed checkout until its owner adopts them in the admin (CP5). Kent must do this for melodie-mc before it sells.
+
+**Next, in this order (each builder needs Mikael's go: the budget):**
+
+1. S, the import scripts: catalogue, collections, pages, images through the Worker's object routes, branding. Sonnet. Then the import on staging and the design gate.
+2. The platform terms' archived text on staging, and the legal pages of melodie-mc adopted (acting as its admin), so those four pages can be shot.
+3. D's second pass (the preview of an unpublished shop, D57), so the three unpublished shops can be shot without publishing them.
+4. CP5, the admin.
+
+**Not done:** no purchase was made by hand through the PAGES (the card form in a browser); the purchase above went through the same routes by script. The receipt poll's fix is still not reproduced in a browser.
+
+### (history) 2026-09-28 17:00 — CP4's code is complete and reviewed
 
 **Tree clean, pushed. Everything below this entry is history.**
 

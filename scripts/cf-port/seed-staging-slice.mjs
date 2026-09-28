@@ -937,10 +937,21 @@ async function purchase(productId, account) {
       json: {
         // The buyer ticked the purchase terms (required); marketing stays unticked.
         consent: { terms: true },
-        deliveryMethod: "pickup",
+        // A parcel, so the printer's job carries an address (D98). Invented data.
+        deliveryMethod: "shipping",
         email: `slice-buyer+${Date.now()}@example.com`,
         idempotencyKey: `slice-${randomUUID()}`,
         items: [{ productId, quantity: 1 }],
+        recipient: {
+          addressLine1: "Provgatan 1",
+          addressLine2: "lgh 1001",
+          city: "Provstad",
+          country: "SE",
+          name: "Prov Provsson",
+          phone: "+46 70 000 00 00",
+          postalCode: "852 30",
+        },
+        shippingCountry: "SE",
       },
     }),
     [201],
