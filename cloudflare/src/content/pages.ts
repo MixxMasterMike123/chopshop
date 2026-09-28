@@ -2,6 +2,7 @@ import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
 import type { PublicImage } from "../storage/public-objects";
 import { getReferencablePublicImage, resolvePublicImages } from "../storage/public-objects";
+import { publicShopStatement, type PublicShopRow } from "../storefront/public-shop";
 import type { HtmlRefusal } from "./html-refusal";
 import { checkHtml } from "./html-refusal";
 
@@ -124,6 +125,12 @@ function mapJson(map: LanguageMap): string {
   return JSON.stringify(sorted);
 }
 
+/**
+ * `/<slug>` for a slug of PAGE_SLUG_PATTERN, which needs no encoding. Not the
+ * address grammar's `pagePath` (src/storefront/addresses.ts), which encodes
+ * the segment: the two agree on every slug the pages table admits and differ
+ * on other text (test/addresses.test.ts), so they are kept apart.
+ */
 export function pagePath(slug: string): string {
   return `/${slug}`;
 }
@@ -946,27 +953,6 @@ export interface PublicPageDetail extends PublicPageSummary {
   updatedAt: string;
 }
 
-interface PublicTenantRow {
-  catalog_version: number;
-  default_locale: string;
-}
-
-/**
- * The shop, only while it is active AND published: the one gate of every
- * public read of a page (and of a legal page), with the version the ETag is
- * made from.
- */
-export function publicTenantStatement(db: D1Database, tenantId: string): D1PreparedStatement {
-  return db
-    .prepare(
-      `SELECT catalog_version, default_locale
-       FROM tenants
-       WHERE tenant_id = ? AND status = 'active' AND published = 1
-       LIMIT 1`,
-    )
-    .bind(tenantId);
-}
-
 type PublicRow = Pick<
   PageRow,
   "author" | "image_object_id" | "kind" | "published_at" | "slug" | "summary_json" | "title_json"
@@ -1006,8 +992,8 @@ export async function readPublicPage(
   if (!PAGE_SLUG_PATTERN.test(slug)) {
     return null;
   }
-  const [tenantResult, pageResult] = await db.batch<PublicTenantRow | PageRow>([
-    publicTenantStatement(db, tenantId),
+  const [tenantResult, pageResult] = await db.batch<PublicShopRow | PageRow>([
+    publicShopStatement(db, tenantId),
     db
       .prepare(
         `SELECT ${PAGE_COLUMNS}
@@ -1017,7 +1003,7 @@ export async function readPublicPage(
       )
       .bind(tenantId, slug),
   ]);
-  const tenant = tenantResult?.results[0] as PublicTenantRow | undefined;
+  const tenant = tenantResult?.results[0] as PublicShopRow | undefined;
   const row = pageResult?.results[0] as PageRow | undefined;
   if (tenant === undefined || row === undefined) {
     return null;
@@ -1063,8 +1049,8 @@ export async function listPublicPages(
     where.push("(published_at, page_id) < (?, ?)");
     binds.push(query.cursor.at, query.cursor.pageId);
   }
-  const [tenantResult, pagesResult] = await db.batch<PublicTenantRow | (PublicRow & { page_id: string })>([
-    publicTenantStatement(db, tenantId),
+  const [tenantResult, pagesResult] = await db.batch<PublicShopRow | (PublicRow & { page_id: string })>([
+    publicShopStatement(db, tenantId),
     db
       .prepare(
         `SELECT page_id, slug, kind, title_json, summary_json, author, image_object_id, published_at
@@ -1075,7 +1061,7 @@ export async function listPublicPages(
       )
       .bind(...binds, query.limit + 1),
   ]);
-  const tenant = tenantResult?.results[0] as PublicTenantRow | undefined;
+  const tenant = tenantResult?.results[0] as PublicShopRow | undefined;
   if (tenant === undefined) {
     return null;
   }

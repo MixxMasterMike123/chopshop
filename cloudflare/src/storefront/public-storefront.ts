@@ -26,47 +26,12 @@ import {
   resolveMenu,
   storedMenu,
 } from "./identity-projection";
+import { publicShopStatement, type PublicShopRow } from "./public-shop";
 
 export interface PublicStorefront {
   currency: string;
   locale: string;
   name: string;
-}
-
-interface StorefrontRow {
-  default_currency: string;
-  default_locale: string;
-  shop_name: string | null;
-}
-
-/**
- * The shop's name, language and currency. Kept for its importer in app.ts; the
- * public route answers the full response below.
- */
-export async function getPublicStorefront(
-  db: D1Database,
-  tenant: TenantContext,
-): Promise<PublicStorefront | null> {
-  const row = await db
-    .prepare(
-      `SELECT shop_name, default_locale, default_currency
-       FROM tenants
-       WHERE tenant_id = ?
-         AND status = 'active'
-       LIMIT 1`,
-    )
-    .bind(tenant.tenantId)
-    .first<StorefrontRow>();
-
-  if (row === null || row.shop_name === null || row.shop_name.trim() === "") {
-    return null;
-  }
-
-  return {
-    currency: row.default_currency,
-    locale: row.default_locale,
-    name: row.shop_name,
-  };
 }
 
 // ── the storefront response (CP4-D) ─────────────────────────────────────────
@@ -96,31 +61,12 @@ export interface PublicStorefrontResponse extends PublicStorefront {
   theme: PublicTheme;
 }
 
-interface ShopRow extends StorefrontRow {
-  catalog_version: number;
-  support_email: string | null;
-}
-
 /**
- * Only an ACTIVE and PUBLISHED shop has a public storefront (D57: an
- * unpublished shop is not shown; its preview is D's second pass).
+ * The same rule as the response's: a public shop (public-shop.ts: active and
+ * published) with a name.
  */
-function shopStatement(db: D1Database, tenantId: string): D1PreparedStatement {
-  return db
-    .prepare(
-      `SELECT shop_name, default_locale, default_currency, support_email, catalog_version
-       FROM tenants
-       WHERE tenant_id = ?
-         AND status = 'active'
-         AND published = 1
-       LIMIT 1`,
-    )
-    .bind(tenantId);
-}
-
-/** The same rule as the response's: an active, published shop with a name. */
 export async function isPublicShop(db: D1Database, tenantId: string): Promise<boolean> {
-  const row = await shopStatement(db, tenantId).first<ShopRow>();
+  const row = await publicShopStatement(db, tenantId).first<PublicShopRow>();
   return row !== null && row.shop_name !== null && row.shop_name.trim() !== "";
 }
 
@@ -168,9 +114,9 @@ export async function getPublicStorefrontVersioned(
   tenant: TenantContext,
 ): Promise<{ catalogVersion: number; value: PublicStorefrontResponse } | null> {
   const [shopResult, settingsResult, featuresResult] = await db.batch<
-    ShopRow | { store_identity_json: string } | { enabled: number; feature_key: string }
+    PublicShopRow | { store_identity_json: string } | { enabled: number; feature_key: string }
   >([
-    shopStatement(db, tenant.tenantId),
+    publicShopStatement(db, tenant.tenantId),
     db
       .prepare("SELECT store_identity_json FROM tenant_settings WHERE tenant_id = ? LIMIT 1")
       .bind(tenant.tenantId),
@@ -184,7 +130,7 @@ export async function getPublicStorefrontVersioned(
       .bind(tenant.tenantId),
   ]);
 
-  const shop = (shopResult?.results[0] as ShopRow | undefined) ?? null;
+  const shop = (shopResult?.results[0] as PublicShopRow | undefined) ?? null;
   if (shop === null || shop.shop_name === null || shop.shop_name.trim() === "") {
     return null;
   }

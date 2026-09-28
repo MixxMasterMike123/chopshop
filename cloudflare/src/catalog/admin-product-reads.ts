@@ -24,7 +24,7 @@ export interface AdminProduct {
   allowPickup: boolean;
   allowShipping: boolean;
   brand: string | null;
-  /** As the seller typed it; its address form is derived (categoryKey). */
+  /** As the seller typed it; its address form is derived (slugify, storefront/addresses.ts). */
   category: string | null;
   compareAtPriceMinor: number | null;
   currency: string;

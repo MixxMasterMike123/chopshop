@@ -1,17 +1,14 @@
-import {
-  getPublicProductVersioned,
-  listPublicProductsVersioned,
-} from "../catalog/public-catalog";
 import { notFoundResponse } from "../lib/responses";
 import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 import { getPublicStorefrontVersioned } from "./public-storefront";
 
 /**
- * The public read routes WITH catalog_version caching (PLAN §2.4):
+ * The storefront response WITH catalog_version caching (PLAN §2.4), and the
+ * one ETag answer every public read of CP4 uses (`versionedJsonResponse`):
  *
  *   GET /v1/storefront          → { storefront }   (CP4-D: the full response)
- *   GET /v1/products            → { products }
- *   GET /v1/products/:productId → { product }
+ *
+ * The product reads are src/routes/public-products.ts (CP4-A).
  *
  * Every 200 carries `ETag: "<catalog_version>"` and `Cache-Control: no-cache`
  * (store, but revalidate every time — `no-store`, which jsonResponse sets, would
@@ -23,8 +20,7 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
  * proof of an unchanged body — including eligibility: a takedown bumps it, and
  * the next request for the product answers 404, not 304.
  *
- * 404s carry no ETag and are never cacheable. The response bodies are
- * byte-identical to the unversioned routes'.
+ * 404s carry no ETag and are never cacheable.
  */
 
 function etagFor(catalogVersion: number): string {
@@ -80,37 +76,5 @@ export async function handlePublicStorefrontRequest(
     ? notFoundResponse("Storefront not found")
     : versionedJsonResponse(request, storefront.catalogVersion, {
         storefront: storefront.value,
-      });
-}
-
-export async function handlePublicProductsRequest(
-  env: Env,
-  request: Request,
-): Promise<Response> {
-  const tenant = await resolveRequestTenant(env.DB, request);
-  const products =
-    tenant === null ? null : await listPublicProductsVersioned(env.DB, tenant);
-  return products === null
-    ? notFoundResponse("Products not found")
-    : versionedJsonResponse(request, products.catalogVersion, {
-        products: products.value,
-      });
-}
-
-export async function handlePublicProductRequest(
-  env: Env,
-  request: Request,
-  productId: string | null,
-): Promise<Response> {
-  if (productId === null || productId.length === 0) {
-    return notFoundResponse("Product not found");
-  }
-  const tenant = await resolveRequestTenant(env.DB, request);
-  const product =
-    tenant === null ? null : await getPublicProductVersioned(env.DB, tenant, productId);
-  return product === null || product.value === null
-    ? notFoundResponse("Product not found")
-    : versionedJsonResponse(request, product.catalogVersion, {
-        product: product.value,
       });
 }

@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { PlatformPrincipal } from "../src/auth/live-authorization";
 import { publishAdminProduct, updateAdminProduct } from "../src/catalog/admin-catalog";
-import { getPublicProduct } from "../src/catalog/public-catalog";
+import { getPublicProductByRef } from "../src/catalog/public-catalog";
 import {
   addScreeningTerm,
   decideByPlatform,
@@ -117,7 +117,7 @@ function context(tenantId: string): TenantContext {
 }
 
 async function isPublic(tenantId: string, productId: string): Promise<boolean> {
-  return (await getPublicProduct(env.DB, context(tenantId), productId)) !== null;
+  return (await getPublicProductByRef(env, env.DB, context(tenantId), productId)) !== null;
 }
 
 /** The storefront's own answer, over HTTP (the next request after a change). */

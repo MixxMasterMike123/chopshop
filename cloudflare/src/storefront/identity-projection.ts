@@ -18,7 +18,7 @@ import {
   pagePath,
   productPath,
   tagPath,
-} from "./redirects";
+} from "./addresses";
 
 /**
  * CP4-D — what of a shop's store identity (`tenant_settings.store_identity_json`)

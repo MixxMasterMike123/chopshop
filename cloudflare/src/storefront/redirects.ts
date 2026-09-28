@@ -1,5 +1,6 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
+import { encodePathSegment } from "./addresses";
 
 /**
  * CP4-D — a shop's permanent forwards (D88, migrations/0043 `redirects`).
@@ -85,73 +86,14 @@ export function normalizeStorefrontPath(raw: string): string | null {
 }
 
 /**
- * One segment of a path, percent-encoded for an address: encodeURIComponent
- * plus `!'()*` (the web Worker and the client use the same rule). The result
- * holds only `A-Z a-z 0-9 - . _ ~ %`.
+ * A normal-form path written as an address path: each segment encoded by the
+ * segment rule of the address grammar (addresses.ts).
  */
-export function encodePathSegment(segment: string): string {
-  return encodeURIComponent(segment).replace(
-    /[!'()*]/g,
-    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-}
-
-/** A normal-form path written as an address path: each segment encoded. */
 export function encodeStorefrontPath(normal: string): string {
   if (normal === "/") {
     return "/";
   }
   return `/${normal.slice(1).split("/").map(encodePathSegment).join("/")}`;
-}
-
-// ── the address grammar (CP4_BRIEFS.md "The address grammar") ───────────────
-//
-// Every address the API returns in a body is a path RELATIVE TO THE SHOP'S
-// ROOT, encoded segment by segment; the web Worker and the client put the root
-// in front. The API never builds an absolute storefront address.
-
-export const HOME_PATH = "/";
-export const ALL_PRODUCTS_PATH = "/produkter";
-
-/**
- * src/utils/productUrls.js `slugify`, verbatim: the storefront's category and
- * tag addresses are made with it today, and the pages find the category or
- * tag again by slugifying the real names and comparing.
- */
-export function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/[åä]/g, "a")
-    .replace(/ö/g, "o")
-    .replace(/&/g, "-and-")
-    .replace(/[^\w-]+/g, "")
-    .replace(/--+/g, "-");
-}
-
-export function productPath(handle: string): string {
-  return `/product/${encodePathSegment(handle)}`;
-}
-
-export function collectionPath(handle: string): string {
-  return `/samling/${encodePathSegment(handle)}`;
-}
-
-/** null when the name slugifies to nothing (no address can name it). */
-export function categoryPath(category: string): string | null {
-  const slug = slugify(category);
-  return slug.length === 0 ? null : `/kategori/${encodePathSegment(slug)}`;
-}
-
-export function tagPath(tag: string): string | null {
-  const slug = slugify(tag);
-  return slug.length === 0 ? null : `/tagg/${encodePathSegment(slug)}`;
-}
-
-/** A content page or post: `<root>/<slug>`. */
-export function pagePath(slug: string): string {
-  return `/${encodePathSegment(slug)}`;
 }
 
 /**

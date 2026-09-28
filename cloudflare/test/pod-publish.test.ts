@@ -6,7 +6,7 @@ import {
   unpublishAdminProduct,
   updateAdminProduct,
 } from "../src/catalog/admin-catalog";
-import { getPublicProduct } from "../src/catalog/public-catalog";
+import { getPublicProductByRef } from "../src/catalog/public-catalog";
 import { decideByPlatform } from "../src/catalog/screening";
 import { createCheckout } from "../src/commerce/checkout";
 import type { CreateCheckoutInput } from "../src/commerce/checkout";
@@ -19,10 +19,10 @@ import {
 } from "../src/pod/pod-mappings";
 import { replacePrinters } from "../src/pod/printers";
 import {
-  handlePublicProductRequest,
-  handlePublicProductsRequest,
-  handlePublicStorefrontRequest,
-} from "../src/storefront/public-routes";
+  handlePublicProductListRoute,
+  handlePublicProductRefRoute,
+} from "../src/routes/public-products";
+import { handlePublicStorefrontRequest } from "../src/storefront/public-routes";
 import type { TenantContext } from "../src/tenancy/resolve-tenant";
 import {
   adminOf,
@@ -174,7 +174,7 @@ describe("public eligibility, POD fields, previews and catalog_version", () => {
   });
 
   it("the product detail carries print areas and preview paths — never a printer, SKU or cost", async () => {
-    const detail = await getPublicProduct(env.DB, TENANT_CONTEXT, "pdp-tee");
+    const detail = await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "pdp-tee");
     expect(detail?.pod).toEqual({
       previewUrls: [
         "/v1/storefront/pod-previews/pdp-tee/art-front",
@@ -214,23 +214,22 @@ describe("public eligibility, POD fields, previews and catalog_version", () => {
 
   it("answers ETag: \"<catalog_version>\" and a bodiless 304 while nothing changed", async () => {
     const version = await catalogVersion(TENANT);
-    const first = await handlePublicProductRequest(env, new Request(`${ORIGIN}/v1/products/pdp-tee`), "pdp-tee");
+    const first = await handlePublicProductRefRoute(env, new Request(`${ORIGIN}/v1/products/pdp-tee`));
     expect(first.status).toBe(200);
     expect(first.headers.get("etag")).toBe(`"${version}"`);
     expect(first.headers.get("cache-control")).toBe("no-cache");
     const body = await first.json();
     expectNoCostKeys(body);
 
-    const again = await handlePublicProductRequest(
+    const again = await handlePublicProductRefRoute(
       env,
       new Request(`${ORIGIN}/v1/products/pdp-tee`, { headers: { "if-none-match": `"${version}"` } }),
-      "pdp-tee",
     );
     expect(again.status).toBe(304);
     expect(await again.text()).toBe("");
 
     for (const response of [
-      await handlePublicProductsRequest(env, new Request(`${ORIGIN}/v1/products`)),
+      await handlePublicProductListRoute(env, new Request(`${ORIGIN}/v1/products`)),
       await handlePublicStorefrontRequest(env, new Request(`${ORIGIN}/v1/storefront`)),
     ]) {
       expect(response.status).toBe(200);
@@ -245,10 +244,9 @@ describe("public eligibility, POD fields, previews and catalog_version", () => {
     await decideByPlatform(env.DB, PLATFORM, "pdp-tee", "blocked", Date.now());
     expect(await catalogVersion(TENANT)).toBeGreaterThan(version);
 
-    const conditional = await handlePublicProductRequest(
+    const conditional = await handlePublicProductRefRoute(
       env,
       new Request(`${ORIGIN}/v1/products/pdp-tee`, { headers: { "if-none-match": cached } }),
-      "pdp-tee",
     );
     expect(conditional.status).toBe(404);
     expect((await exports.default.fetch(`${ORIGIN}/v1/products/pdp-tee`)).status).toBe(404);
@@ -278,15 +276,15 @@ describe("public eligibility, POD fields, previews and catalog_version", () => {
     await bumps("shop go-live gate", () =>
       env.DB.prepare("UPDATE tenants SET published = 0 WHERE tenant_id = ?").bind(TENANT).run(),
     );
-    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "pdp-tee")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "pdp-tee")).toBeNull();
     await env.DB.prepare("UPDATE tenants SET published = 1 WHERE tenant_id = ?").bind(TENANT).run();
     await bumps("printer deactivated", () =>
       replacePrinters(env.DB, PLATFORM, [testPrinter({ status: "inactive" })], Date.now()),
     );
     // A POD product with no ACTIVE printer behind its mapping is not public.
-    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "pdp-tee")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "pdp-tee")).toBeNull();
     await bumps("printer reactivated", () => replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now()));
-    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "pdp-tee")).not.toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "pdp-tee")).not.toBeNull();
   });
 });
 
@@ -443,7 +441,7 @@ describe("checkout freezes the production snapshot", () => {
     expect((await map("snap-late", "art-front", ["front"])).status).toBe("ok");
     expect((await publishAdminProduct(env.DB, ADMIN, "snap-late", Date.now())).status).toBe("ok");
     // The buyer sees it (the "cart" moment)…
-    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "snap-late")).not.toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "snap-late")).not.toBeNull();
 
     // …the mapping is deactivated before they check out.
     const [mapping] = await listMappings(env.DB, ADMIN, "snap-late");
@@ -481,7 +479,7 @@ describe("checkout freezes the production snapshot", () => {
     await expect(
       createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "snap-tee", quantity: 1 }]), Date.now()),
     ).resolves.toEqual({ status: "invalid_items" });
-    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "snap-tee")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "snap-tee")).toBeNull();
     await expect(publishAdminProduct(env.DB, ADMIN, "snap-tee", Date.now())).resolves.toMatchObject({
       code: "pod_mapping_suspended",
       status: "refused",
@@ -490,9 +488,9 @@ describe("checkout freezes the production snapshot", () => {
     // Restoring the frame does not silently resurrect the mapping: the seller
     // re-posts it (which re-validates), and the product is whole again.
     await replacePrinters(env.DB, PLATFORM, [testPrinter()], Date.now());
-    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "snap-tee")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "snap-tee")).toBeNull();
     expect((await map("snap-tee", "art-back", ["back"])).status).toBe("ok");
-    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "snap-tee")).not.toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "snap-tee")).not.toBeNull();
 
   });
 
@@ -923,7 +921,7 @@ describe("the price floor holds while a mapping is suspended, and when a mapping
       code: "price_below_floor",
       status: "refused",
     });
-    expect(await getPublicProduct(env.DB, TENANT_CONTEXT, "fb")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "fb")).toBeNull();
     await expect(
       createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "fb", quantity: 10 }]), Date.now(), {
         dispatchTarget: "fake-printer",

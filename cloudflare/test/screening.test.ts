@@ -6,7 +6,7 @@ import {
   unpublishAdminProduct,
   updateAdminProduct,
 } from "../src/catalog/admin-catalog";
-import { getPublicProduct, listPublicProducts } from "../src/catalog/public-catalog";
+import { getPublicProductByRef, listPublicProductPage } from "../src/catalog/public-catalog";
 import type { BlocklistEntry, ScreeningState, StoredScreening } from "../src/catalog/screening-core";
 import {
   decideScreening,
@@ -267,7 +267,7 @@ async function screeningRow(productId: string) {
 }
 
 async function publicIds(): Promise<string[]> {
-  return (await listPublicProducts(env.DB, tenantContext)).map((p) => p.productId);
+  return (await listPublicProductPage(env, env.DB, tenantContext, {})).products.map((p) => p.productId);
 }
 
 describe("D8 on the live publish path", () => {
@@ -295,7 +295,7 @@ describe("D8 on the live publish path", () => {
       });
     }
     expect(await publicIds()).toEqual([]);
-    expect(await getPublicProduct(env.DB, tenantContext, "d8-first")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, tenantContext, "d8-first")).toBeNull();
   });
 
   it("publishing a third before any approval is STILL pending (dummies do not clear D8)", async () => {
@@ -362,7 +362,7 @@ describe("D8 on the live publish path", () => {
   it("a platform takedown blocks, stamps takedown_at, refuses re-publish and deletion", async () => {
     const taken = await decideByPlatform(env.DB, PLATFORM, "d8-first", "blocked", Date.now());
     expect(taken).toMatchObject({ reason: "takedown", status: "blocked", takenDown: true });
-    expect(await getPublicProduct(env.DB, tenantContext, "d8-first")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, tenantContext, "d8-first")).toBeNull();
     expect(await publishAdminProduct(env.DB, admin, "d8-first", Date.now())).toMatchObject({
       code: "taken_down",
       status: "refused",
@@ -471,7 +471,7 @@ describe("the screening fence (a platform decision racing a seller mutation)", (
       reason: "hard_block",
       status: "blocked",
     });
-    expect(await getPublicProduct(env.DB, raceContext, "race-edit")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, raceContext, "race-edit")).toBeNull();
     // The approval landed; the edit committed exactly once (the aborted
     // attempt left nothing behind).
     expect(await auditCount("race-edit", "screening.approve")).toBe(1);
@@ -493,7 +493,7 @@ describe("the screening fence (a platform decision racing a seller mutation)", (
     expect(await productName("race-persist")).toBe("Calm tee");
     expect(await auditCount("race-persist", "product.update")).toBe(0);
     expect((await screeningRow("race-persist"))?.status).toBe("approved");
-    expect((await getPublicProduct(env.DB, raceContext, "race-persist"))?.name).toBe("Calm tee");
+    expect((await getPublicProductByRef(env, env.DB, raceContext, "race-persist"))?.name).toBe("Calm tee");
   });
 
   it("a mapping created on a live product racing an approval is re-screened with its artwork's name", async () => {
@@ -513,7 +513,7 @@ describe("the screening fence (a platform decision racing a seller mutation)", (
     }, Date.now());
     expect(created.status).toBe("ok");
     expect((await screeningRow("race-map"))?.status).toBe("blocked");
-    expect(await getPublicProduct(env.DB, raceContext, "race-map")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, raceContext, "race-map")).toBeNull();
   });
 
   it("a mapping committed between a FIRST publish's reads and its batch: the publish is re-run and screens the new artwork", async () => {
@@ -536,7 +536,7 @@ describe("the screening fence (a platform decision racing a seller mutation)", (
     // products.updated_at fence is what caught it.
     expect(published).toMatchObject({ product: { screeningStatus: "blocked" }, status: "ok" });
     expect((await screeningRow("race-first"))?.hits_json).toBe('["nike"]');
-    expect(await getPublicProduct(env.DB, raceContext, "race-first")).toBeNull();
+    expect(await getPublicProductByRef(env, env.DB, raceContext, "race-first")).toBeNull();
   });
 
   it("a mapping change that keeps racing answers conflict and writes nothing", async () => {

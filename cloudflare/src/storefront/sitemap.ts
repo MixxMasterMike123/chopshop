@@ -2,6 +2,7 @@ import {
   ELIGIBLE_PRODUCTS_FROM,
   PUBLIC_ELIGIBILITY_PREDICATE,
 } from "../catalog/eligibility";
+import { PUBLIC_LEGAL_PAGES } from "../routes/public-legal";
 import type { TenantContext } from "../tenancy/resolve-tenant";
 import {
   ALL_PRODUCTS_PATH,
@@ -11,8 +12,8 @@ import {
   pagePath,
   productPath,
   tagPath,
-} from "./redirects";
-import { LEGAL_PAGES, legalPageTexts } from "./seo";
+} from "./addresses";
+import { legalPageTexts } from "./seo";
 
 /**
  * CP4-D — `GET /v1/sitemap?cursor=&limit=` → `{ entries: [{ path,
@@ -226,7 +227,7 @@ async function sectionRows(
 
     case "legal": {
       const legal = await legalPageTexts(db, tenantId, now);
-      return LEGAL_PAGES.filter((page) => page.path > after)
+      return PUBLIC_LEGAL_PAGES.filter((page) => page.path > after)
         .filter((page) =>
           page.key === "plattformsvillkor" ? legal.platformTermsAt !== null : legal.texts.has(page.key),
         )

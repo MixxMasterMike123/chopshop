@@ -2,27 +2,27 @@ import {
   ELIGIBLE_PRODUCTS_FROM,
   PUBLIC_ELIGIBILITY_PREDICATE,
 } from "../catalog/eligibility";
-import { getPublicProduct } from "../catalog/public-catalog";
+import { getPublicProductByRef } from "../catalog/public-catalog";
 import { isPlainObject } from "../platform/tenant-config";
+import { PUBLIC_LEGAL_PAGES, type PublicLegalKey } from "../routes/public-legal";
 import type { PublicImage } from "../storage/public-objects";
 import { resolvePublicImages } from "../storage/public-objects";
 import type { TenantContext } from "../tenancy/resolve-tenant";
 import {
-  getPublicStorefrontVersioned,
-  type PublicStorefrontResponse,
-} from "./public-storefront";
-import {
   ALL_PRODUCTS_PATH,
   categoryPath,
   collectionPath,
-  findRedirect,
   HOME_PATH,
-  normalizeStorefrontPath,
   pagePath,
   productPath,
   slugify,
   tagPath,
-} from "./redirects";
+} from "./addresses";
+import {
+  getPublicStorefrontVersioned,
+  type PublicStorefrontResponse,
+} from "./public-storefront";
+import { findRedirect, normalizeStorefrontPath } from "./redirects";
 
 /**
  * CP4-D — the head and the readable body of a storefront page, for search
@@ -325,16 +325,9 @@ function relative(path: string): { "@relative": string } {
 }
 
 // ── the address grammar, read back ──────────────────────────────────────────
-
-/** The shop's legal pages, at today's addresses (src/config/legalTemplates.js). */
-export const LEGAL_PAGES = [
-  { key: "kopvillkor", label: "Köpvillkor", path: "/legal/kopvillkor" },
-  { key: "angerratt", label: "Ångerrätt & returer", path: "/legal/angerratt-och-returer" },
-  { key: "integritetspolicy", label: "Integritetspolicy", path: "/legal/integritetspolicy" },
-  { key: "plattformsvillkor", label: "Plattformsvillkor", path: "/legal/plattformsvillkor" },
-] as const;
-
-export type LegalPageKey = (typeof LEGAL_PAGES)[number]["key"];
+//
+// The shop's legal pages, their addresses and titles are C's
+// PUBLIC_LEGAL_PAGES (src/routes/public-legal.ts), the one list of them.
 
 /** First segments that are pages of the application, never a content page. */
 const APPLICATION_SEGMENTS = new Set([
@@ -347,7 +340,7 @@ export type StorefrontRoute =
   | { kind: "category"; slug: string }
   | { kind: "collection"; handle: string }
   | { kind: "home" }
-  | { kind: "legal"; key: LegalPageKey }
+  | { kind: "legal"; key: PublicLegalKey }
   | { kind: "page"; slug: string }
   | { kind: "product"; handle: string }
   | { kind: "tag"; slug: string };
@@ -360,7 +353,7 @@ export function parseStorefrontRoute(normal: string): StorefrontRoute | null {
   if (normal === ALL_PRODUCTS_PATH) {
     return { kind: "all_products" };
   }
-  const legal = LEGAL_PAGES.find((page) => page.path === normal);
+  const legal = PUBLIC_LEGAL_PAGES.find((page) => page.path === normal);
   if (legal !== undefined) {
     return { key: legal.key, kind: "legal" };
   }
@@ -391,12 +384,13 @@ export function parseStorefrontRoute(normal: string): StorefrontRoute | null {
 
 // ── reads of other builders' tables ─────────────────────────────────────────
 //
-// Each names only columns CP4_BRIEFS.md fixes (A: products.handle, .category,
-// .sort_order, product_images, product_tags; B: collections,
+// A product page reads through A's getPublicProductByRef. The reads below
+// are still D's own: each names only columns CP4_BRIEFS.md fixes (A:
+// products.handle, .category, .sort_order, product_tags; B: collections,
 // collection_products; C: pages) and goes through ELIGIBLE_PRODUCTS_FROM +
-// PUBLIC_ELIGIBILITY_PREDICATE wherever a product is shown. Each is to be
-// replaced by that builder's exported function once it is in the tree
-// (Reviewer wiring, docs/cf-port/CP4_D_REPORT.md).
+// PUBLIC_ELIGIBILITY_PREDICATE wherever a product is shown. Moving them to
+// the functions of A, B and C would change what they answer (the order of a
+// list, a blank text, the platform terms): docs/cf-port/CP4_K_REPORT.md.
 
 const PRODUCT_ORDER =
   "product.sort_order IS NULL, product.sort_order, publication.public_name, product.product_id";
@@ -554,71 +548,6 @@ export async function publicTagNames(
   return rows.results.map((row) => row.value);
 }
 
-interface ProductRef {
-  category: string | null;
-  handle: string;
-  productId: string;
-}
-
-async function findPublicProductByHandle(
-  db: D1Database,
-  tenantId: string,
-  handle: string,
-): Promise<ProductRef | null> {
-  const row = await db
-    .prepare(
-      `SELECT product.product_id AS product_id, product.handle AS handle,
-              product.category AS category
-       ${ELIGIBLE_PRODUCTS_FROM}
-       WHERE publication.tenant_id = ? AND product.tenant_id = ?
-         AND product.handle = ?
-         AND ${PUBLIC_ELIGIBILITY_PREDICATE}
-       LIMIT 1`,
-    )
-    .bind(tenantId, tenantId, handle)
-    .first<{ category: string | null; handle: string; product_id: string }>();
-  return row === null
-    ? null
-    : { category: row.category, handle: row.handle, productId: row.product_id };
-}
-
-const PRODUCT_IMAGES_READ = 30;
-
-/**
- * The product's main image: the first of its ONE ordered list whose object is
- * still a public image (D93: a removed object is skipped, the next one leads).
- */
-async function mainProductImage(
-  env: Env,
-  db: D1Database,
-  tenantId: string,
-  productId: string,
-): Promise<(PublicImage & { alt: string | null }) | null> {
-  const rows = await db
-    .prepare(
-      `SELECT object_id, alt FROM product_images
-       WHERE tenant_id = ? AND product_id = ?
-       ORDER BY position, object_id
-       LIMIT ${PRODUCT_IMAGES_READ}`,
-    )
-    .bind(tenantId, productId)
-    .all<{ alt: string | null; object_id: string }>();
-  const images = await resolvePublicImages(
-    env,
-    db,
-    tenantId,
-    rows.results.map((row) => row.object_id),
-    ["product_media"],
-  );
-  for (const row of rows.results) {
-    const image = images.get(row.object_id);
-    if (image !== undefined) {
-      return { ...image, alt: typeof row.alt === "string" ? row.alt : null };
-    }
-  }
-  return null;
-}
-
 interface CollectionRow {
   collection_id: string;
   description: string | null;
@@ -683,7 +612,7 @@ export async function legalPageTexts(
   db: D1Database,
   tenantId: string,
   now: number,
-): Promise<{ acceptedAt: string | null; platformTermsAt: string | null; texts: Map<LegalPageKey, string> }> {
+): Promise<{ acceptedAt: string | null; platformTermsAt: string | null; texts: Map<PublicLegalKey, string> }> {
   const [adoption, terms] = await db.batch<
     { accepted_at: string; texts_json: string } | { published_at: string }
   >([
@@ -704,7 +633,7 @@ export async function legalPageTexts(
       )
       .bind(new Date(now).toISOString()),
   ]);
-  const texts = new Map<LegalPageKey, string>();
+  const texts = new Map<PublicLegalKey, string>();
   const adopted = adoption?.results[0] as { accepted_at: string; texts_json: string } | undefined;
   if (adopted !== undefined) {
     let parsed: unknown = null;
@@ -714,7 +643,7 @@ export async function legalPageTexts(
       parsed = null;
     }
     if (isPlainObject(parsed)) {
-      for (const page of LEGAL_PAGES) {
+      for (const page of PUBLIC_LEGAL_PAGES) {
         const text = parsed[page.key];
         if (page.key !== "plattformsvillkor" && typeof text === "string" && text.trim().length > 0) {
           texts.set(page.key, text);
@@ -857,23 +786,24 @@ async function productPage(
   shop: Shop,
   handle: string,
 ): Promise<SeoPage | null> {
-  const ref = await findPublicProductByHandle(db, tenant.tenantId, handle);
-  if (ref === null) {
-    return null;
-  }
-  const product = await getPublicProduct(db, tenant, ref.productId);
+  // THE public product as the storefront's own read finds and shapes it
+  // (public-catalog.ts): by id, handle or the source system's sku rule, its
+  // main image by the group rule, its canonical path by its handle.
+  const product = await getPublicProductByRef(env, db, tenant, handle);
   if (product === null) {
     return null;
   }
-  const image = await mainProductImage(env, db, tenant.tenantId, ref.productId);
-  const path = productPath(ref.handle);
-  const prices = product.variants.map((variant) => variant.priceMinor);
-  const lowest = prices.length === 0 ? product.priceMinor : Math.min(...prices);
-  const highest = prices.length === 0 ? product.priceMinor : Math.max(...prices);
-  const from = lowest !== highest;
+  const image = product.image;
+  const path = product.path;
+  // The card's price (getCardPrice): the cheapest active variant priced above
+  // zero, else the product's price. The highest by the same rule.
+  const lowest = product.lowestPriceMinor;
+  const from = product.isFromPrice;
+  const priced = product.variants.map((variant) => variant.priceMinor).filter((price) => price > 0);
+  const highest = priced.length === 0 ? lowest : Math.max(...priced);
   const locale = shop.storefront.locale;
   const description = truncateDescription(product.description ?? `${product.name} – ${shop.name}`);
-  const category = ref.category;
+  const category = product.category;
   const categoryLink = category === null ? null : categoryPath(category);
 
   const body = new BodyHtml(BODY_HTML_MAX);
@@ -914,7 +844,9 @@ async function productPage(
             availability: offerAvailability,
             highPrice: schemaPrice(highest),
             lowPrice: schemaPrice(lowest),
-            offerCount: product.variants.length,
+            // The offers that were priced: the same variants the two prices
+            // were taken from.
+            offerCount: priced.length,
             priceCurrency: product.currency,
             url: relative(path),
           }
@@ -1063,10 +995,10 @@ async function legalPage(
   db: D1Database,
   tenantId: string,
   shop: Shop,
-  key: LegalPageKey,
+  key: PublicLegalKey,
   now: number,
 ): Promise<SeoPage | null> {
-  const page = LEGAL_PAGES.find((entry) => entry.key === key);
+  const page = PUBLIC_LEGAL_PAGES.find((entry) => entry.key === key);
   if (page === undefined) {
     return null;
   }
@@ -1075,10 +1007,10 @@ async function legalPage(
   if (key === "plattformsvillkor" ? legal.platformTermsAt === null : text === null) {
     return null;
   }
-  const description = truncateDescription(`${page.label} – ${shop.name}.`);
+  const description = truncateDescription(`${page.title} – ${shop.name}.`);
   const body = new BodyHtml(BODY_HTML_MAX);
   body.add("<article>");
-  body.add(`<h1>${escapeHtml(page.label)}</h1>`);
+  body.add(`<h1>${escapeHtml(page.title)}</h1>`);
   if (text !== null) {
     body.paragraphs(htmlToText(text, BODY_TEXT_MAX));
   }
@@ -1091,12 +1023,12 @@ async function legalPage(
     jsonLd: {
       "@context": "https://schema.org",
       "@type": "WebPage",
-      name: page.label,
+      name: page.title,
       url: relative(page.path),
       ...(description === null ? {} : { description }),
     },
     robots: null,
-    title: withShop(page.label, shop),
+    title: withShop(page.title, shop),
   };
 }
 

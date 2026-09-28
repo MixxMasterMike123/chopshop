@@ -328,6 +328,63 @@ describe("pages", () => {
     expect(page.bodyHtml).toContain(`alt="Mugg"`);
   });
 
+  it("a product's price is the storefront card's: a variant priced 0 is never its lowest price", async () => {
+    // CP4-K: the product page reads A's detail, so its lowest price is A's
+    // lowestPriceMinor/isFromPrice and the highest follows the same rule.
+    // D's own read answered lowPrice "0.00" for the first two and price
+    // "0.00" for the third.
+    const priced = await seedShop("seo-price");
+    const variants = (sku: string, prices: readonly number[]) =>
+      prices.map((priceMinor, index) => ({ label: `V${index}`, priceMinor, sku: `${sku}-${index}` }));
+    await seedProduct(priced.tenantId, {
+      handle: "tre",
+      name: "Tre",
+      priceMinor: 9_900,
+      sku: "SEO-PRICE-3",
+      variants: variants("SEO-PRICE-3", [0, 12_900, 15_900]),
+    });
+    await seedProduct(priced.tenantId, {
+      handle: "en",
+      name: "En",
+      priceMinor: 9_900,
+      sku: "SEO-PRICE-1",
+      variants: variants("SEO-PRICE-1", [0, 11_900]),
+    });
+    await seedProduct(priced.tenantId, {
+      handle: "noll",
+      name: "Noll",
+      priceMinor: 9_900,
+      sku: "SEO-PRICE-0",
+      variants: variants("SEO-PRICE-0", [0]),
+    });
+
+    const three = await seoPage("/product/tre", priced);
+    expect(three.jsonLd.offers).toMatchObject({
+      "@type": "AggregateOffer",
+      highPrice: "159.00",
+      lowPrice: "129.00",
+      // The variant priced 0 is no offer: the count is of what was priced.
+      offerCount: 2,
+    });
+    expect(three.bodyHtml).toMatch(/<p>Från 129,00\skr<\/p>/);
+    const one = await seoPage("/product/en", priced);
+    expect(one.jsonLd.offers).toMatchObject({ "@type": "Offer", price: "119.00" });
+    expect(one.bodyHtml).toMatch(/<p>119,00\skr<\/p>/);
+    const none = await seoPage("/product/noll", priced);
+    expect(none.jsonLd.offers).toMatchObject({ "@type": "Offer", price: "99.00" });
+
+    // The card the storefront paints from says the same.
+    for (const [handle, lowest, from] of [
+      ["tre", 12_900, true],
+      ["en", 11_900, false],
+      ["noll", 9_900, false],
+    ] as const) {
+      const response = await exports.default.fetch(`${priced.origin}/v1/products/${handle}`);
+      const { product } = await response.json<{ product: { isFromPrice: boolean; lowestPriceMinor: number } }>();
+      expect(product, handle).toMatchObject({ isFromPrice: from, lowestPriceMinor: lowest });
+    }
+  });
+
   it("a category: every name of its address, public products only, in the shop's order", async () => {
     const page = await seoPage("/kategori/rokt-and-gott");
     expect(page.title).toBe(`Rökt & Gott | Kläder & "Co"`);

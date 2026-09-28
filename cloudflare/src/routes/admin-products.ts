@@ -1,10 +1,12 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { authorizeTenantAdminRequest } from "../auth/request-authorization";
 import type { AdminRefusalCode } from "../catalog/admin-catalog";
-import { parseProductOrderInput, setProductOrder } from "../catalog/admin-catalog";
-import type { DisplayCursor } from "../catalog/admin-product-reads";
 import {
-  decodeDisplayCursor,
+  parseProductOrderInput,
+  setProductOrder,
+  TENANT_REFUSAL_CODES,
+} from "../catalog/admin-catalog";
+import {
   getAdminProductDetail,
   listAdminProducts,
   parseAdminProductListQuery,
@@ -19,27 +21,18 @@ import {
   parseUpdateVariantInput,
   updateProductVariant,
 } from "../catalog/product-variants";
-import type { PublicProductFilter } from "../catalog/public-catalog";
-import {
-  getPublicProductByRefVersioned,
-  listPublicProductPageVersioned,
-  PUBLIC_PRODUCT_LIMIT,
-} from "../catalog/public-catalog";
 import { jsonResponse } from "../lib/http";
 import {
   decodeSegment,
   invalidRequestResponse,
-  notFoundResponse,
   readJsonBody,
   routeNotFoundResponse,
 } from "../lib/responses";
 import { isSameOriginRequest } from "../lib/same-origin";
-import { versionedJsonResponse } from "../storefront/public-routes";
-import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 /**
- * CP4-A — the product routes that are new in CP4, and the two public product
- * reads with their new shapes.
+ * CP4-A — the admin product routes that are new in CP4. The two public product
+ * reads are in src/routes/public-products.ts.
  *
  * ADMIN (the shop's own admin, or a platform user's acting-as grant — the
  * tenant is the session's `X-Shop-Id`, never a path or body value). The live
@@ -60,11 +53,6 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  * actions stay in src/app.ts's handleAdminProductRoute; every mount here
  * claims only its own methods, so theirs fall through to it.
  *
- * PUBLIC (tenant by hostname; ETag = catalog_version, 304 on If-None-Match):
- *
- *   GET /v1/products?tag&category&featured=1&cursor&limit   { products, nextCursor }
- *   GET /v1/products/:ref                                   { product }
- *
  * Path segments are read from the RAW pathname and decoded once (see
  * ACTING_AS_ROUTE); an id segment is 1–128 characters with no "/".
  */
@@ -75,29 +63,11 @@ export const ADMIN_PRODUCT_ROUTE = "/v1/admin/products/:productId";
 export const ADMIN_PRODUCT_VARIANTS_ROUTE = "/v1/admin/products/:productId/variants";
 export const ADMIN_PRODUCT_VARIANT_ROUTE = "/v1/admin/products/:productId/variants/:variantId";
 export const ADMIN_PRODUCT_IMAGES_ROUTE = "/v1/admin/products/:productId/images";
-export const PUBLIC_PRODUCTS_PATH = "/v1/products";
-export const PUBLIC_PRODUCT_ROUTE = "/v1/products/:ref";
 
 // "", "v1", "admin", "products", :productId, "variants" | "images", :variantId
 const PRODUCT_SEGMENT = 4;
 const VARIANT_SEGMENT = 6;
-// "", "v1", "products", :ref
-const REF_SEGMENT = 3;
 const ID_MAX_LENGTH = 128;
-/** A handle is at most 1200 characters (migrations/0040); a ref is an id or a handle. */
-const REF_MAX_LENGTH = 1_200;
-const TAG_KEY_MAX_LENGTH = 250;
-const CATEGORY_KEY_MAX_LENGTH = 500;
-
-/**
- * "The seller sees one number" covers codes too (src/app.ts
- * TENANT_REFUSAL_CODES, restated here for the variant refusals): the two POD
- * refusals that would say HOW the platform prices read as one neutral code.
- */
-const TENANT_REFUSAL_CODES: Readonly<Record<string, string>> = {
-  currency_mismatch: "pod_unavailable",
-  pod_unpriced: "pod_unavailable",
-};
 
 function segment(request: Request, index: number, maxLength: number): string | null {
   const raw = new URL(request.url).pathname.split("/")[index] ?? "";
@@ -284,73 +254,4 @@ export async function handleAdminProductImagesRoute(env: Env, request: Request):
   return imagesResponse(
     await replaceProductImages(env, env.DB, principal, productId, input, Date.now()),
   );
-}
-
-// ── public: the product list and one product ────────────────────────────────
-
-/** `GET /v1/products` query → a filter, or null (400). Unknown or repeated parameters are refused. */
-export function parsePublicProductListQuery(url: URL): PublicProductFilter | null {
-  const params = url.searchParams;
-  for (const key of params.keys()) {
-    if (
-      !["category", "cursor", "featured", "limit", "tag"].includes(key) ||
-      params.getAll(key).length > 1
-    ) {
-      return null;
-    }
-  }
-  const limitRaw = params.get("limit");
-  if (limitRaw !== null && !/^\d{1,3}$/.test(limitRaw)) {
-    return null;
-  }
-  const limit = limitRaw === null ? PUBLIC_PRODUCT_LIMIT : Number(limitRaw);
-  if (limit < 1 || limit > PUBLIC_PRODUCT_LIMIT) {
-    return null;
-  }
-  const cursorRaw = params.get("cursor");
-  const cursor: DisplayCursor | null = cursorRaw === null ? null : decodeDisplayCursor(cursorRaw);
-  if (cursorRaw !== null && cursor === null) {
-    return null;
-  }
-  const featured = params.get("featured");
-  if (featured !== null && featured !== "1") {
-    return null;
-  }
-  const tag = params.get("tag");
-  const category = params.get("category");
-  if (
-    (tag !== null && (tag.length === 0 || tag.length > TAG_KEY_MAX_LENGTH)) ||
-    (category !== null && (category.length === 0 || category.length > CATEGORY_KEY_MAX_LENGTH))
-  ) {
-    return null;
-  }
-  return { category, cursor, featured: featured === "1", limit, tag };
-}
-
-export async function handlePublicProductListRoute(env: Env, request: Request): Promise<Response> {
-  const tenant = await resolveRequestTenant(env.DB, request);
-  if (tenant === null) {
-    return notFoundResponse("Products not found");
-  }
-  const filter = parsePublicProductListQuery(new URL(request.url));
-  if (filter === null) {
-    return invalidRequestResponse();
-  }
-  const page = await listPublicProductPageVersioned(env, env.DB, tenant, filter);
-  return page === null
-    ? notFoundResponse("Products not found")
-    : versionedJsonResponse(request, page.catalogVersion, page.value);
-}
-
-export async function handlePublicProductRefRoute(env: Env, request: Request): Promise<Response> {
-  const ref = segment(request, REF_SEGMENT, REF_MAX_LENGTH);
-  if (ref === null) {
-    return notFoundResponse("Product not found");
-  }
-  const tenant = await resolveRequestTenant(env.DB, request);
-  const product =
-    tenant === null ? null : await getPublicProductByRefVersioned(env, env.DB, tenant, ref);
-  return product === null || product.value === null
-    ? notFoundResponse("Product not found")
-    : versionedJsonResponse(request, product.catalogVersion, { product: product.value });
 }

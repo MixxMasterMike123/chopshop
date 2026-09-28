@@ -7,6 +7,7 @@ import {
   parseCreateProductInput,
   parseUpdateProductInput,
   publishAdminProduct,
+  TENANT_REFUSAL_CODES,
   unpublishAdminProduct,
   updateAdminProduct,
 } from "./catalog/admin-catalog";
@@ -25,10 +26,6 @@ import {
   parseTenantIdPathSegment,
   setTenantStatus,
 } from "./platform/provision-tenants";
-import {
-  getPublicProduct,
-  listPublicProducts,
-} from "./catalog/public-catalog";
 import {
   createCheckout,
   parseCreateCheckoutInput,
@@ -104,12 +101,7 @@ import {
 } from "./auth/request-authorization";
 import { handleAuthRoute } from "./auth/auth-routes";
 import { dispatchTargetOf } from "./pod/printers";
-import { getPublicStorefront } from "./storefront/public-storefront";
-import {
-  handlePublicProductRequest,
-  handlePublicProductsRequest,
-  handlePublicStorefrontRequest,
-} from "./storefront/public-routes";
+import { handlePublicStorefrontRequest } from "./storefront/public-routes";
 import { isSameOriginRequest } from "./lib/same-origin";
 import { resolveRequestTenant } from "./tenancy/resolve-tenant";
 import { hasTenantHeader } from "./lib/tenant-headers";
@@ -316,11 +308,13 @@ import {
   handleAdminProductReadRoute,
   handleAdminProductVariantRoute,
   handleAdminProductVariantsRoute,
+} from "./routes/admin-products";
+import {
   handlePublicProductListRoute,
   handlePublicProductRefRoute,
   PUBLIC_PRODUCT_ROUTE,
   PUBLIC_PRODUCTS_PATH,
-} from "./routes/admin-products";
+} from "./routes/public-products";
 // CP4-IMPORTS-A — end
 // CP4-IMPORTS-B — begin
 import {
@@ -377,7 +371,6 @@ import {
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
 const STOREFRONT_PATH = "/v1/storefront";
-const PRODUCTS_PATH = "/v1/products";
 const PRODUCT_PATH_PREFIX = "/v1/products/";
 const CHECKOUT_PATH = "/v1/checkout";
 const CHECKOUT_PATH_PREFIX = "/v1/checkout/";
@@ -524,11 +517,6 @@ function platformConflictResponse(): Response {
   );
 }
 
-const TENANT_REFUSAL_CODES: Readonly<Record<string, string>> = {
-  currency_mismatch: "pod_unavailable",
-  pod_unpriced: "pod_unavailable",
-};
-
 function adminResultResponse(
   result: AdminCatalogResult,
   successStatus: number,
@@ -644,26 +632,6 @@ function platformTenantRouteFromPath(
   }
 
   return null;
-}
-
-function productIdFromPath(pathname: string): string | null {
-  if (!pathname.startsWith(PRODUCT_PATH_PREFIX)) {
-    return null;
-  }
-
-  const segment = pathname.slice(PRODUCT_PATH_PREFIX.length);
-  if (segment.length === 0 || segment.includes("/")) {
-    return null;
-  }
-
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(segment);
-  } catch {
-    return null;
-  }
-
-  return decoded.length > 0 && !decoded.includes("/") ? decoded : null;
 }
 
 async function readinessResponse(env: Env): Promise<Response> {
@@ -2158,8 +2126,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // PATCH on the product path still reach handleAdminProductRoute below, as do
   // …/publish and …/unpublish. The order path is registered before the
   // `:productId` pattern, so "order" is never read as a product id by a PUT.
-  // The two public reads precede the older product mounts, which answer only
-  // what these do not claim (the old handlers stay for the consolidation).
+  // The two public reads (src/routes/public-products.ts) are THE product
+  // reads; the prefix mount further down answers only what they do not claim.
   app.all(
     ADMIN_PRODUCT_LIST_PATH,
     onMethods(["GET"], (c) => handleAdminProductListRoute(c.env, c.req.raw)),
@@ -2290,20 +2258,13 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     getOnly(storefront((c) => handlePublicStorefrontRequest(c.env, c.req.raw))),
   );
 
-  app.all(
-    PRODUCTS_PATH,
-    getOnly(storefront((c) => handlePublicProductsRequest(c.env, c.req.raw))),
-  );
-
+  // GET /v1/products and GET /v1/products/:ref are CP4-ROUTES-A's. A GET
+  // under the prefix that is not ONE segment (`/v1/products/`,
+  // `/v1/products/a/b`, a trailing slash) keeps the answer the older product
+  // handler gave it; every other method falls through, as it did.
   app.all(
     `${PRODUCT_PATH_PREFIX}*`,
-    getOnly(storefront((c) =>
-      handlePublicProductRequest(
-        c.env,
-        c.req.raw,
-        productIdFromPath(new URL(c.req.url).pathname),
-      ),
-    )),
+    getOnly(storefront(() => notFoundResponse("Product not found"))),
   );
 
   // Exact match only: no prefix, no sub-paths, so a probe for

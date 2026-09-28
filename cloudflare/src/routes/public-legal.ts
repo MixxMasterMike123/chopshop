@@ -1,7 +1,7 @@
-import { publicTenantStatement } from "../content/pages";
 import { LEGAL_PAGE_KEYS } from "../legal/legal-pages";
 import { readTermsStatus, readTermsText } from "../legal/platform-terms";
 import { decodeSegment, notFoundResponse } from "../lib/responses";
+import { publicShopStatement } from "../storefront/public-shop";
 import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 /**
@@ -102,7 +102,7 @@ function snapshotPath(key: ShopLegalKey): string {
 const LATEST_ADOPTION_ORDER = "ORDER BY accepted_at DESC, acceptance_id DESC LIMIT 1";
 
 async function publicCatalogVersion(db: D1Database, tenantId: string): Promise<number | null> {
-  const row = await publicTenantStatement(db, tenantId).first<{ catalog_version: number }>();
+  const row = await publicShopStatement(db, tenantId).first<{ catalog_version: number }>();
   return row?.catalog_version ?? null;
 }
 
@@ -187,7 +187,7 @@ export async function readPublicShopLegalPage(
   const [tenantResult, adoptionResult] = await db.batch<
     { catalog_version: number } | { accepted_at: string; html: unknown; html_type: string | null }
   >([
-    publicTenantStatement(db, tenantId),
+    publicShopStatement(db, tenantId),
     db
       .prepare(
         `SELECT accepted_at, json_extract(texts_json, ?1) AS html, json_type(texts_json, ?1) AS html_type
@@ -232,7 +232,7 @@ export async function listPublicLegalPages(
         AND length(json_extract(texts_json, ?${index + 2})) > 0) AS has_${index}`,
   ).join(", ");
   const [tenantResult, adoptionResult] = await db.batch<{ catalog_version: number } | Record<string, number>>([
-    publicTenantStatement(db, tenantId),
+    publicShopStatement(db, tenantId),
     db
       .prepare(
         `SELECT ${columns}

@@ -1,11 +1,10 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
-import { publicTenantStatement } from "../content/pages";
 import type { PublicImage } from "../storage/public-objects";
 import { getReferencablePublicImage, resolvePublicImages } from "../storage/public-objects";
-import { collectionPath } from "../storefront/redirects";
+import { collectionPath, slugify } from "../storefront/addresses";
+import { publicShopStatement } from "../storefront/public-shop";
 import type { TenantContext } from "../tenancy/resolve-tenant";
-import { addressSlug, productTagKey } from "./admin-catalog";
 import type { DisplayCursor, DisplayOrderColumns } from "./admin-product-reads";
 import {
   decodeDisplayCursor,
@@ -34,15 +33,15 @@ import {
  * functions (src/catalog/public-catalog.ts): a manual collection's members by
  * `listPublicProductsByIds` (the order given, whatever THE predicate refuses
  * dropped), a smart one's by `listPublicProductPage` with the tag's ADDRESS
- * form (`productTagKey`, as product_tags.tag_key and the /tagg/<key> page
- * match it). This module writes no product query of its own: a draft, an
+ * form (`slugify`, as product_tags.tag_key and the /tagg/<key> page match
+ * it). This module writes no product query of its own: a draft, an
  * archived or taken-down product, or another shop's, cannot appear.
  *
  * A PUBLIC read answers only a PUBLISHED collection of an ACTIVE, PUBLISHED
- * shop (content/pages.ts publicTenantStatement, the one gate of the public
- * reads of CP4). `:ref` is a handle, an external_ref or an id, which share
- * one namespace per shop (0041's triggers and `refConflict` below), so a ref
- * names at most one collection.
+ * shop (storefront/public-shop.ts publicShopStatement, the one gate of the
+ * public reads of CP4). `:ref` is a handle, an external_ref or an id, which
+ * share one namespace per shop (0041's triggers and `refConflict` below), so
+ * a ref names at most one collection.
  */
 
 export const COLLECTION_TYPES = ["manual", "smart"] as const;
@@ -102,7 +101,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * A handle is exactly what the source's slugify leaves (AdminCollectionEdit
- * slugifies every keystroke of the field): a fixed point of `addressSlug`,
+ * slugifies every keystroke of the field): a fixed point of `slugify`,
  * i.e. lower-case ASCII letters, digits, `_` and `-`, never `--`, with at
  * least one letter or digit. The same rule as 0041's CHECK.
  */
@@ -110,7 +109,7 @@ export function isCollectionHandle(value: string): boolean {
   return (
     value.length >= 1 &&
     value.length <= COLLECTION_HANDLE_MAX_LENGTH &&
-    addressSlug(value) === value &&
+    slugify(value) === value &&
     /[a-z0-9]/.test(value)
   );
 }
@@ -196,7 +195,7 @@ function parseRuleTag(value: unknown): FieldResult<string | null> {
     return { ok: true, value: null };
   }
   const text = parseText(value, COLLECTION_RULE_TAG_MAX_LENGTH, false);
-  return text === null || text === "" || productTagKey(text) === "" ? refused : { ok: true, value: text };
+  return text === null || text === "" || slugify(text) === "" ? refused : { ok: true, value: text };
 }
 
 function parseImageObjectId(value: unknown): FieldResult<string | null> {
@@ -742,7 +741,7 @@ export async function createCollection(
   if (input.title === undefined) {
     return { status: "invalid" };
   }
-  const handle = input.handle ?? addressSlug(input.title);
+  const handle = input.handle ?? slugify(input.title);
   const rule = resolveRule(input, null);
   if (!isCollectionHandle(handle) || rule === null) {
     return { status: "invalid" };
@@ -1095,7 +1094,7 @@ export async function listPublicCollections(
   query: CollectionListQuery,
 ): Promise<VersionedValue<PublicCollectionPage> | null> {
   const [tenantResult, listResult] = await db.batch<{ catalog_version: number } | CollectionRow>([
-    publicTenantStatement(db, tenantId),
+    publicShopStatement(db, tenantId),
     listStatement(db, tenantId, query, { publishedOnly: true, withCount: false }),
   ]);
   const tenant = tenantResult?.results[0] as { catalog_version: number } | undefined;
@@ -1240,7 +1239,7 @@ export async function readPublicCollection(
     return { status: "not_found" };
   }
   const [tenantResult, collectionResult] = await db.batch<{ catalog_version: number } | CollectionRow>([
-    publicTenantStatement(db, tenant.tenantId),
+    publicShopStatement(db, tenant.tenantId),
     publicCollectionByRefStatement(db, tenant.tenantId, ref),
   ]);
   const shop = tenantResult?.results[0] as { catalog_version: number } | undefined;
@@ -1266,7 +1265,7 @@ export async function readPublicCollection(
     if (query.cursor !== null && query.cursor.kind !== "display") {
       return { status: "invalid_cursor" };
     }
-    const tag = row.rule_tag === null ? "" : productTagKey(row.rule_tag);
+    const tag = row.rule_tag === null ? "" : slugify(row.rule_tag);
     products =
       tag === ""
         ? { nextCursor: null, products: [] }

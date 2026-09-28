@@ -6,114 +6,37 @@ import {
   deletePendingOrMutableObject,
   reservePendingObject,
 } from "../src/storage/object-store";
-import { slugify } from "../src/storefront/redirects";
+import { slugify } from "../src/storefront/addresses";
 import type { TenantContext } from "../src/tenancy/resolve-tenant";
 
 /**
  * CP4-D test fixtures. Not a test file.
  *
- * D reads tables of builders A (products.handle/.category/.sort_order/
- * .featured, product_images, product_tags), B (collections,
- * collection_products) and C (pages) whose migrations are written in the same
- * tree at the same time. `ensureStorefrontTables` creates what is missing with
- * the columns CP4_BRIEFS.md fixes, ONLY IF NOT EXISTS, so these suites run
- * with or without the other builders' migrations. The seeders write the
- * columns the brief fixes, plus — only when the table already has them — the
- * extra NOT NULL columns a builder's own migration added (A: `category_key`,
- * `tag_key`, the tag `position`), filled the way that builder's rule fills them.
+ * D's suites read the tables of builders A (0040: products.handle/.category/
+ * .category_key/.sort_order/.featured, product_images, product_tags), B (0041:
+ * collections, collection_products) and C (0042: pages). The seeders write
+ * those tables straight into D1, as the importer does, filling A's keys the
+ * way A's rule fills them (the slug of the text).
  */
 
 export const NOW = 1_790_000_000_000;
 export const NOW_ISO = new Date(NOW).toISOString();
 export const PUBLIC_BASE = "https://public-objects.test.invalid";
 
-async function columnsOf(table: string): Promise<Set<string>> {
-  const rows = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
-  return new Set(rows.results.map((row) => row.name));
-}
+const STOREFRONT_TABLES = ["product_images", "product_tags", "collections", "collection_products", "pages"] as const;
 
+/**
+ * The suites stand on the migrated tables of A, B and C. This only checks
+ * that they are there, so a run against a database without them fails here,
+ * naming the table, rather than inside a seeder.
+ */
 export async function ensureStorefrontTables(): Promise<void> {
-  const productColumns = await columnsOf("products");
-  const missing = (
-    [
-      ["handle", "TEXT"],
-      ["featured", "INTEGER NOT NULL DEFAULT 0"],
-      ["sort_order", "INTEGER"],
-      ["category", "TEXT"],
-    ] as const
-  ).filter(([name]) => !productColumns.has(name));
-  for (const [name, type] of missing) {
-    await env.DB.prepare(`ALTER TABLE products ADD COLUMN ${name} ${type}`).run();
+  for (const table of STOREFRONT_TABLES) {
+    const columns = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+    if (columns.results.length === 0) {
+      throw new Error(`the storefront fixtures need the migrated table ${table}`);
+    }
   }
-
-  await env.DB.batch([
-    env.DB.prepare(
-      `CREATE TABLE IF NOT EXISTS product_images (
-         tenant_id TEXT NOT NULL,
-         product_id TEXT NOT NULL,
-         variant_id TEXT,
-         object_id TEXT NOT NULL,
-         position INTEGER NOT NULL,
-         alt TEXT,
-         created_at TEXT NOT NULL
-       )`,
-    ),
-    env.DB.prepare(
-      `CREATE TABLE IF NOT EXISTS product_tags (
-         tenant_id TEXT NOT NULL,
-         product_id TEXT NOT NULL,
-         tag TEXT NOT NULL
-       )`,
-    ),
-    env.DB.prepare(
-      `CREATE TABLE IF NOT EXISTS collections (
-         collection_id TEXT PRIMARY KEY NOT NULL,
-         tenant_id TEXT NOT NULL,
-         handle TEXT NOT NULL,
-         external_ref TEXT,
-         title TEXT NOT NULL,
-         description TEXT,
-         image_object_id TEXT,
-         type TEXT NOT NULL,
-         rule_tag TEXT,
-         published INTEGER NOT NULL DEFAULT 0,
-         featured INTEGER NOT NULL DEFAULT 0,
-         sort_order INTEGER,
-         created_at TEXT NOT NULL,
-         updated_at TEXT NOT NULL,
-         UNIQUE (tenant_id, handle)
-       )`,
-    ),
-    env.DB.prepare(
-      `CREATE TABLE IF NOT EXISTS collection_products (
-         tenant_id TEXT NOT NULL,
-         collection_id TEXT NOT NULL,
-         product_id TEXT NOT NULL,
-         position INTEGER NOT NULL,
-         PRIMARY KEY (collection_id, product_id)
-       )`,
-    ),
-    env.DB.prepare(
-      `CREATE TABLE IF NOT EXISTS pages (
-         page_id TEXT PRIMARY KEY NOT NULL,
-         tenant_id TEXT NOT NULL,
-         slug TEXT NOT NULL,
-         kind TEXT NOT NULL,
-         status TEXT NOT NULL,
-         title_json TEXT NOT NULL,
-         content_json TEXT NOT NULL,
-         summary_json TEXT,
-         meta_title_json TEXT,
-         meta_description_json TEXT,
-         author TEXT,
-         image_object_id TEXT,
-         published_at TEXT,
-         created_at TEXT NOT NULL,
-         updated_at TEXT NOT NULL,
-         UNIQUE (tenant_id, slug)
-       )`,
-    ),
-  ]);
 }
 
 // ── shops ───────────────────────────────────────────────────────────────────
@@ -282,18 +205,16 @@ let productCounter = 0;
 export async function seedProduct(tenantId: string, seed: ProductSeed): Promise<string> {
   productCounter += 1;
   const productId = `prod-${tenantId}-${productCounter}`;
-  const productColumns = await columnsOf("products");
   const category = seed.category ?? null;
-  const withKey = productColumns.has("category_key");
   const price = seed.priceMinor ?? 19_900;
 
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(
       `INSERT INTO products (
          product_id, tenant_id, status, sku, name, description, b2c_price_minor,
-         currency, is_pod, created_at, updated_at, handle, category, sort_order
-         ${withKey ? ", category_key" : ""}
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'SEK', 0, ?, ?, ?, ?, ?${withKey ? ", ?" : ""})`,
+         currency, is_pod, created_at, updated_at, handle, category, sort_order,
+         category_key
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'SEK', 0, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       productId,
       tenantId,
@@ -307,7 +228,7 @@ export async function seedProduct(tenantId: string, seed: ProductSeed): Promise<
       seed.handle ?? seed.sku,
       category,
       seed.sortOrder ?? null,
-      ...(withKey ? [category === null ? null : slugify(category)] : []),
+      category === null ? null : slugify(category),
     ),
     env.DB.prepare(
       `INSERT INTO product_publications (
@@ -347,21 +268,12 @@ export async function seedProduct(tenantId: string, seed: ProductSeed): Promise<
   await env.DB.batch(statements);
 
   if (seed.tags !== undefined && seed.tags.length > 0) {
-    const tagColumns = await columnsOf("product_tags");
-    const keyed = tagColumns.has("tag_key");
-    const positioned = tagColumns.has("position");
     await env.DB.batch(
       seed.tags.map((tag, index) =>
         env.DB.prepare(
-          `INSERT INTO product_tags (tenant_id, product_id, tag${keyed ? ", tag_key" : ""}${positioned ? ", position" : ""})
-           VALUES (?, ?, ?${keyed ? ", ?" : ""}${positioned ? ", ?" : ""})`,
-        ).bind(
-          tenantId,
-          productId,
-          tag,
-          ...(keyed ? [slugify(tag)] : []),
-          ...(positioned ? [index] : []),
-        ),
+          `INSERT INTO product_tags (tenant_id, product_id, tag, tag_key, position)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).bind(tenantId, productId, tag, slugify(tag), index),
       ),
     );
   }

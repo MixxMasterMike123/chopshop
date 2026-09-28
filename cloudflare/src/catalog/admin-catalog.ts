@@ -25,6 +25,7 @@ import {
   withScreeningRetry,
 } from "./screening";
 import { checkHtml } from "../content/html-refusal";
+import { slugify } from "../storefront/addresses";
 
 // The admin product and its status moved to the read layer with CP4-A (the
 // module every product write and screening read from); re-exported here so
@@ -64,6 +65,19 @@ export type AdminCatalogResult =
 export function refused(code: AdminRefusalCode): { code: AdminRefusalCode; message: string; status: "refused" } {
   return { code, message: podRefusalMessage(code), status: "refused" };
 }
+
+/**
+ * The code a refusal carries to the shop's admin. "The seller sees one
+ * number" covers codes too: the two POD refusals that would say HOW the
+ * platform prices (no price row for the SKU, the printer priced in another
+ * currency) read as one neutral code. The gate keeps the precise codes; the
+ * message is already neutral (podRefusalMessage). Every admin route that
+ * answers a refusal maps its code through this table.
+ */
+export const TENANT_REFUSAL_CODES: Readonly<Record<string, string>> = {
+  currency_mismatch: "pod_unavailable",
+  pod_unpriced: "pod_unavailable",
+};
 
 /**
  * CP4-A: the fields a storefront page shows beyond name, description, price
@@ -180,26 +194,13 @@ const DEFAULT_ALLOW_SHIPPING = true;
 const DEFAULT_ALLOW_PICKUP = false;
 
 // ── the address rules (the source system's, shared with the importer) ──────
-
-/**
- * The source system's `slugify` (src/utils/productUrls.js), byte for byte:
- * lowercase, trim, whitespace → "-", å/ä → a, ö → o, & → "-and-", every
- * other character outside [A-Za-z0-9_-] dropped, runs of "-" collapsed. It
- * builds every storefront address that carries a name: a product's handle, a
- * category's `/kategori/<key>`, a tag's `/tagg/<key>`. The importer applies
- * the same function (the pinned vectors are in test/admin-products.test.ts).
- */
-export function addressSlug(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/[åä]/g, "a")
-    .replace(/ö/g, "o")
-    .replace(/&/g, "-and-")
-    .replace(/[^\w-]+/g, "")
-    .replace(/--+/g, "-");
-}
+//
+// The slug rule and the product's path are THE address grammar's
+// (src/storefront/addresses.ts). A category's and a tag's key — 0040
+// `products.category_key`, `product_tags.tag_key` — are the slug of the text;
+// "" = the text has no address (refused). `addressSlug` and `productPath` stay
+// importable from here under their CP4-A names.
+export { productPath, slugify as addressSlug } from "../storefront/addresses";
 
 /**
  * A product's handle: the last segment of its storefront address today,
@@ -209,30 +210,7 @@ export function addressSlug(value: string): string {
  * it, and the source address of such a product never resolved either.
  */
 export function productHandle(name: string, size: string | null, sku: string): string {
-  return `${addressSlug(`${name} ${size ?? ""}`)}_${sku.replace(/\//g, "-")}`;
-}
-
-/** A category's or a tag's address form; "" = the text has no address (refused). */
-export function categoryKey(category: string): string {
-  return addressSlug(category);
-}
-
-export function productTagKey(tag: string): string {
-  return addressSlug(tag);
-}
-
-/**
- * The storefront path of a product, relative to the shop's root (the address
- * grammar of CP4_BRIEFS.md): the handle as ONE percent-encoded segment,
- * `encodeURIComponent` plus `!'()*`, the segment rule of
- * src/storefront/redirects.ts, so every surface writes a handle one way.
- */
-export function productPath(handle: string): string {
-  const segment = encodeURIComponent(handle).replace(
-    /[!'()*]/g,
-    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  return `/product/${segment}`;
+  return `${slugify(`${name} ${size ?? ""}`)}_${sku.replace(/\//g, "-")}`;
 }
 
 function isValidHandle(handle: string): boolean {
@@ -393,7 +371,7 @@ function parseLaunchDate(value: unknown): string | null | undefined {
 /** A category with an address; "" or a text whose address is empty is refused. */
 function parseCategory(value: unknown): string | null | undefined {
   const category = parseOptionalText(value, CATEGORY_MAX_LENGTH);
-  if (typeof category === "string" && categoryKey(category) === "") {
+  if (typeof category === "string" && slugify(category) === "") {
     return undefined;
   }
   return category;
@@ -415,7 +393,7 @@ function parseTags(value: unknown): string[] | undefined {
     if (typeof tag !== "string") {
       return undefined;
     }
-    const key = productTagKey(tag);
+    const key = slugify(tag);
     if (key === "" || keys.has(key)) {
       return undefined;
     }
@@ -689,7 +667,7 @@ function tagInsertStatements(
         `INSERT INTO product_tags (tenant_id, product_id, tag_key, tag, position)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .bind(tenantId, productId, productTagKey(tag), tag, position),
+      .bind(tenantId, productId, slugify(tag), tag, position),
   );
 }
 
@@ -806,7 +784,7 @@ export async function createAdminProduct(
           product.sortOrder,
           product.compareAtPriceMinor,
           product.category,
-          product.category === null ? null : categoryKey(product.category),
+          product.category === null ? null : slugify(product.category),
           product.moreInfo,
           product.sizeGuide,
           product.size,
@@ -1005,7 +983,7 @@ async function updateAdminProductOnce(
         next.sortOrder,
         next.compareAtPriceMinor,
         next.category,
-        next.category === null ? null : categoryKey(next.category),
+        next.category === null ? null : slugify(next.category),
         next.moreInfo,
         next.sizeGuide,
         next.size,

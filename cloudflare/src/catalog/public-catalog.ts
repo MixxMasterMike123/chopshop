@@ -1,7 +1,7 @@
 import type { TenantContext } from "../tenancy/resolve-tenant";
 import type { PublicPodFields } from "../pod/pod-mappings";
 import { publicPodFields } from "../pod/pod-mappings";
-import { productPath } from "./admin-catalog";
+import { productPath } from "../storefront/addresses";
 import type {
   DisplayCursor,
   DisplayOrderColumns,
@@ -109,13 +109,13 @@ export interface PublicProductDetail extends PublicProductSummary {
 
 /** GET /v1/products: every filter is optional; they combine with AND. */
 export interface PublicProductFilter {
-  /** A category's address form (categoryKey), as in /kategori/<key>. */
+  /** A category's address form (slugify, storefront/addresses.ts), as in /kategori/<key>. */
   category?: string | null;
   cursor?: DisplayCursor | null;
   featured?: boolean;
   /** 1–100 (default 100). */
   limit?: number;
-  /** A tag's address form (productTagKey), as in /tagg/<key>. */
+  /** A tag's address form (slugify, storefront/addresses.ts), as in /tagg/<key>. */
   tag?: string | null;
 }
 
@@ -245,8 +245,6 @@ function listStatement(
     .bind(...binds, pageLimit(filter) + 1);
 }
 
-type DetailMatch = { id: string } | { ref: string };
-
 /**
  * The source system's product page found its product by the sku after the
  * LAST "_" of the address (productUrls.js getSkuFromSlug), so an address
@@ -261,18 +259,9 @@ function skuFromRef(ref: string): string | null {
 function detailStatement(
   db: D1Database,
   tenant: TenantContext,
-  match: DetailMatch,
+  ref: string,
 ): D1PreparedStatement {
-  if ("id" in match) {
-    return db
-      .prepare(
-        `${PUBLIC_PRODUCT_COLUMNS}
-           AND publication.product_id = ?
-         LIMIT 1`,
-      )
-      .bind(tenant.tenantId, tenant.tenantId, match.id);
-  }
-  const sku = skuFromRef(match.ref);
+  const sku = skuFromRef(ref);
   // The id first, then the handle, then the source system's sku rule; each
   // is unique in the shop, so the order only decides between two products
   // when one's handle is another's id (never in practice), and decides it
@@ -292,16 +281,7 @@ function detailStatement(
        END
        LIMIT 1`,
     )
-    .bind(
-      tenant.tenantId,
-      tenant.tenantId,
-      match.ref,
-      match.ref,
-      sku,
-      sku,
-      match.ref,
-      match.ref,
-    );
+    .bind(tenant.tenantId, tenant.tenantId, ref, ref, sku, sku, ref, ref);
 }
 
 /** What the rows of a set of products carry besides the predicate's row. */
@@ -312,7 +292,7 @@ interface ProductParts {
 }
 
 async function loadParts(
-  env: Env | null,
+  env: Env,
   db: D1Database,
   tenantId: string,
   productIds: readonly string[],
@@ -438,7 +418,7 @@ async function stillPublic(
 }
 
 async function toSummaries(
-  env: Env | null,
+  env: Env,
   db: D1Database,
   tenant: TenantContext,
   rows: readonly ProductRow[],
@@ -450,7 +430,7 @@ async function toSummaries(
 }
 
 async function toDetail(
-  env: Env | null,
+  env: Env,
   db: D1Database,
   tenant: TenantContext,
   row: ProductRow,
@@ -512,18 +492,6 @@ function toPage(
   };
 }
 
-async function listPage(
-  env: Env | null,
-  db: D1Database,
-  tenant: TenantContext,
-  filter: PublicProductFilter,
-): Promise<PublicProductPage> {
-  const limit = pageLimit(filter);
-  const result = await listStatement(db, tenant, filter).all<ProductRow>();
-  const page = result.results.slice(0, limit);
-  return toPage(result.results, limit, await toSummaries(env, db, tenant, page));
-}
-
 // ── the functions B and D call ──────────────────────────────────────────────
 
 /**
@@ -533,13 +501,16 @@ async function listPage(
  * nothing repeats and nothing is skipped. Throws RangeError on a limit
  * outside 1–100 (a caller's bug; the route validates first).
  */
-export function listPublicProductPage(
+export async function listPublicProductPage(
   env: Env,
   db: D1Database,
   tenant: TenantContext,
   filter: PublicProductFilter,
 ): Promise<PublicProductPage> {
-  return listPage(env, db, tenant, filter);
+  const limit = pageLimit(filter);
+  const result = await listStatement(db, tenant, filter).all<ProductRow>();
+  const page = result.results.slice(0, limit);
+  return toPage(result.results, limit, await toSummaries(env, db, tenant, page));
 }
 
 /**
@@ -594,7 +565,7 @@ export async function getPublicProductByRef(
   if (ref.length === 0) {
     return null;
   }
-  const row = await detailStatement(db, tenant, { ref }).first<ProductRow>();
+  const row = await detailStatement(db, tenant, ref).first<ProductRow>();
   return row === null ? null : toDetail(env, db, tenant, row);
 }
 
@@ -651,7 +622,7 @@ export async function getPublicProductByRefVersioned(
 ): Promise<Versioned<PublicProductDetail | null> | null> {
   const [version, detail] = await db.batch<{ catalog_version: number } | ProductRow>([
     catalogVersionStatement(db, tenant.tenantId),
-    detailStatement(db, tenant, { ref }),
+    detailStatement(db, tenant, ref),
   ]);
   const catalogVersion = versionOf(version);
   if (catalogVersion === undefined) {
@@ -661,75 +632,6 @@ export async function getPublicProductByRefVersioned(
   return {
     catalogVersion,
     value: row === null ? null : await toDetail(env, db, tenant, row),
-  };
-}
-
-// ── the pre-CP4 signatures ──────────────────────────────────────────────────
-//
-// Kept with their exact signatures for their callers outside this builder's
-// files: src/storefront/public-routes.ts (the GET mounts that the CP4-A
-// mounts now precede), src/storefront/seo.ts, and the CP2/CP3 suites. They
-// run the SAME queries as the functions above, with no `env`, so their shapes
-// carry no image (`image: null`, `images: []`); the reviewer's consolidation
-// moves their callers to the functions above and removes them.
-
-/** @deprecated Use listPublicProductPage (images, filters, cursor). The first page, no images. */
-export async function listPublicProducts(
-  db: D1Database,
-  tenant: TenantContext,
-): Promise<PublicProductSummary[]> {
-  return (await listPage(null, db, tenant, {})).products;
-}
-
-/** @deprecated Use getPublicProductByRef. By product id only, no images. */
-export async function getPublicProduct(
-  db: D1Database,
-  tenant: TenantContext,
-  productId: string,
-): Promise<PublicProductDetail | null> {
-  if (productId.length === 0) {
-    return null;
-  }
-
-  const row = await detailStatement(db, tenant, { id: productId }).first<ProductRow>();
-  return row === null ? null : toDetail(null, db, tenant, row);
-}
-
-/** @deprecated Use listPublicProductPageVersioned. The first page, no images. */
-export async function listPublicProductsVersioned(
-  db: D1Database,
-  tenant: TenantContext,
-): Promise<Versioned<PublicProductSummary[]> | null> {
-  const [version, list] = await db.batch<{ catalog_version: number } | ProductRow>([
-    catalogVersionStatement(db, tenant.tenantId),
-    listStatement(db, tenant, {}),
-  ]);
-  const catalogVersion = versionOf(version);
-  if (catalogVersion === undefined) {
-    return null;
-  }
-  const rows = ((list?.results ?? []) as ProductRow[]).slice(0, PUBLIC_PRODUCT_LIMIT);
-  return { catalogVersion, value: await toSummaries(null, db, tenant, rows) };
-}
-
-/** @deprecated Use getPublicProductByRefVersioned. By product id only, no images. */
-export async function getPublicProductVersioned(
-  db: D1Database,
-  tenant: TenantContext,
-  productId: string,
-): Promise<Versioned<PublicProductDetail | null> | null> {
-  const [version, detail] = await db.batch<{ catalog_version: number } | ProductRow>([
-    catalogVersionStatement(db, tenant.tenantId),
-    detailStatement(db, tenant, { id: productId }),
-  ]);
-  const catalogVersion = versionOf(version);
-  if (catalogVersion === undefined) {
-    return null;
-  }
-  const row = (detail?.results[0] as ProductRow | undefined) ?? null;
-  return {
-    catalogVersion,
-    value: row === null ? null : await toDetail(null, db, tenant, row),
   };
 }
 
