@@ -8,7 +8,24 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 **Found while writing P's brief:** the managed address of staging's public bucket is switched off (D95, Mikael switches it on); 444 of the 495 product images carry no file ending, so the type is read from the file itself (D92); 3 branding images are SVG (D92).
 
-**Builders:** P (public objects) and E (client and web Worker) launched 2026-09-28 ~04:25. A, C and D wait for the review of P's interface, B for A's public product functions, F for A–E, S lands last.
+**Builders, state 2026-09-28 05:30:**
+
+| Builder | State | Commit |
+|---|---|---|
+| P public objects | built, reviewed by Fable line by line, committed | `25db76e0` (migration 0039) |
+| E client and web Worker | built, reviewed by Fable line by line, committed | `9a11f1a9` |
+| A products (0040), C pages and legal (0042), D storefront response, first pass (0043) | launched 05:05, running | — |
+| G withdrawal function (0044, D96) | launched 05:25, running | — |
+| B collections (0041) | waits for A's public product functions | — |
+| D second pass (preview, D57), F page swap, S scripts | wait | — |
+
+Gate at `25db76e0` with E's files in the tree: `tsc` clean, **75 files, 2971 tests**. Codex has reviewed nothing of CP4 yet: it reviews before the deploy, the whole range from `a9991384`.
+
+**Found by E, and a gap of the port (D96):** the API has no route for a buyer's withdrawal. It is a legal duty in force; builder G builds it in CP4 and the storefront does not go live without it.
+
+**Carried forward from P:** response headers (`nosniff`, a Content-Security-Policy) on public objects come with the domain of our own at CP7; the sweep that removes files a failed delete left behind (PLAN §2.5) is not built; the three SVG branding files have not met the SVG check yet (S rehearses them).
+
+**Commits of A, C, D and G leave their route mounts in `app.ts` to ONE consolidation commit**, as in CP3: the four builders write their blocks of that file in the same tree at the same time. The consolidation also sets `REQUIRED_MIGRATION` to the highest of 0039–0044.
 
 **For the storefront proof on staging:** the four imported shops hold the importer's placeholder hostname (`<shop>.import.invalid`) in status `pending`, by design, and no route turns a pending hostname into a verified one. The tenant resolver reads verified hostnames only. Each shop therefore gets a second, verified storefront hostname through `POST /v1/platform/tenants/:id/domains` (which creates it verified) before its pages are shot; three of the four are also unpublished and are published through the platform route for the shots, or seen through the preview (D57).
 
