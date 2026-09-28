@@ -303,13 +303,62 @@ import {
 // Builder P (public objects) has no block: it extends the object handlers the
 // admin objects route already calls.
 // CP4-IMPORTS-A — begin
+import {
+  ADMIN_PRODUCT_IMAGES_ROUTE,
+  ADMIN_PRODUCT_LIST_PATH,
+  ADMIN_PRODUCT_ORDER_PATH,
+  ADMIN_PRODUCT_ROUTE,
+  ADMIN_PRODUCT_VARIANT_ROUTE,
+  ADMIN_PRODUCT_VARIANTS_ROUTE,
+  handleAdminProductImagesRoute,
+  handleAdminProductListRoute,
+  handleAdminProductOrderRoute,
+  handleAdminProductReadRoute,
+  handleAdminProductVariantRoute,
+  handleAdminProductVariantsRoute,
+  handlePublicProductListRoute,
+  handlePublicProductRefRoute,
+  PUBLIC_PRODUCT_ROUTE,
+  PUBLIC_PRODUCTS_PATH,
+} from "./routes/admin-products";
 // CP4-IMPORTS-A — end
 // CP4-IMPORTS-B — begin
 // CP4-IMPORTS-B — end
 // CP4-IMPORTS-C — begin
+import {
+  ADMIN_PAGE_ROUTE,
+  ADMIN_PAGES_PATH,
+  handleAdminPageRoute,
+  handleAdminPagesRoute,
+} from "./routes/admin-pages";
+import {
+  handlePublicPageRoute,
+  handlePublicPagesRoute,
+  PUBLIC_PAGE_ROUTE,
+  PUBLIC_PAGES_PATH,
+} from "./routes/public-pages";
+import {
+  handlePublicLegalPageRoute,
+  handlePublicLegalPagesRoute,
+  PUBLIC_LEGAL_PATH,
+  PUBLIC_LEGAL_ROUTE,
+} from "./routes/public-legal";
 // CP4-IMPORTS-C — end
 // CP4-IMPORTS-D — begin
+import { ADMIN_REDIRECTS_PATH, handleAdminRedirectsRoute } from "./routes/admin-redirects";
+import {
+  handlePublicSeoRequest,
+  handlePublicSitemapRequest,
+  SEO_PATH,
+  SITEMAP_PATH,
+} from "./routes/public-seo";
 // CP4-IMPORTS-D — end
+// CP4-IMPORTS-G — begin
+import {
+  handleStorefrontWithdrawalRoute,
+  STOREFRONT_WITHDRAWALS_PATH,
+} from "./routes/storefront-withdrawals";
+// CP4-IMPORTS-G — end
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -2091,13 +2140,108 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // RAW pathname and are decoded once by the handler (see ACTING_AS_ROUTE).
   // The reviewer consolidates after merge. ─────────────────────────────────
   // CP4-ROUTES-A (products: admin list and read, variants, images) — begin
+  // Exact paths, each claiming only its own methods: POST on the list path and
+  // PATCH on the product path still reach handleAdminProductRoute below, as do
+  // …/publish and …/unpublish. The order path is registered before the
+  // `:productId` pattern, so "order" is never read as a product id by a PUT.
+  // The two public reads precede the older product mounts, which answer only
+  // what these do not claim (the old handlers stay for the consolidation).
+  app.all(
+    ADMIN_PRODUCT_LIST_PATH,
+    onMethods(["GET"], (c) => handleAdminProductListRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_PRODUCT_ORDER_PATH,
+    onMethods(["PUT"], (c) => handleAdminProductOrderRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_PRODUCT_ROUTE,
+    onMethods(["GET"], (c) => handleAdminProductReadRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_PRODUCT_VARIANTS_ROUTE,
+    onMethods(["POST"], (c) => handleAdminProductVariantsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_PRODUCT_VARIANT_ROUTE,
+    onMethods(["PATCH", "DELETE"], (c) => handleAdminProductVariantRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_PRODUCT_IMAGES_ROUTE,
+    onMethods(["PUT"], (c) => handleAdminProductImagesRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PUBLIC_PRODUCTS_PATH,
+    onMethods(["GET"], storefront((c) => handlePublicProductListRoute(c.env, c.req.raw))),
+  );
+  app.all(
+    PUBLIC_PRODUCT_ROUTE,
+    onMethods(["GET"], storefront((c) => handlePublicProductRefRoute(c.env, c.req.raw))),
+  );
   // CP4-ROUTES-A — end
   // CP4-ROUTES-B (collections: admin, public list and detail) — begin
   // CP4-ROUTES-B — end
   // CP4-ROUTES-C (pages: admin, public page, public legal page) — begin
+  // Exact paths, each claiming only its own methods; no earlier route owns
+  // any of them. The id, slug and key segments are taken from the RAW
+  // pathname and decoded once by the handlers (see ACTING_AS_ROUTE).
+  const contentSegment = (c: Context<AppEnv>, index: number): string =>
+    new URL(c.req.url).pathname.split("/")[index] ?? "";
+  app.all(
+    ADMIN_PAGES_PATH,
+    onMethods(["GET", "POST"], (c) => handleAdminPagesRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_PAGE_ROUTE,
+    onMethods(["GET", "PATCH", "DELETE"], (c) =>
+      handleAdminPageRoute(c.env, c.req.raw, contentSegment(c, 4)),
+    ),
+  );
+  app.all(
+    PUBLIC_PAGES_PATH,
+    onMethods(["GET"], storefront((c) => handlePublicPagesRoute(c.env, c.req.raw))),
+  );
+  app.all(
+    PUBLIC_PAGE_ROUTE,
+    onMethods(["GET"], storefront((c) =>
+      handlePublicPageRoute(c.env, c.req.raw, contentSegment(c, 3)),
+    )),
+  );
+  app.all(
+    PUBLIC_LEGAL_PATH,
+    onMethods(["GET"], storefront((c) => handlePublicLegalPagesRoute(c.env, c.req.raw))),
+  );
+  app.all(
+    PUBLIC_LEGAL_ROUTE,
+    onMethods(["GET"], storefront((c) =>
+      handlePublicLegalPageRoute(c.env, c.req.raw, contentSegment(c, 3)),
+    )),
+  );
   // CP4-ROUTES-C — end
   // CP4-ROUTES-D (sitemap, robots, product feed, preview, forwarding) — begin
+  // The two reads of the web Worker (D88): exact paths, GET only, public.
+  app.all(
+    SEO_PATH,
+    onMethods(["GET"], storefront((c) => handlePublicSeoRequest(c.env, c.req.raw))),
+  );
+  app.all(
+    SITEMAP_PATH,
+    onMethods(["GET"], storefront((c) => handlePublicSitemapRequest(c.env, c.req.raw))),
+  );
+  // The shop's forwards: its admin (acting-as admitted); the handler answers
+  // the opaque 404 to anyone else and to a cross-origin state change.
+  app.all(
+    ADMIN_REDIRECTS_PATH,
+    onMethods(["GET", "PUT", "DELETE"], (c) => handleAdminRedirectsRoute(c.env, c.req.raw)),
+  );
   // CP4-ROUTES-D — end
+  // CP4-ROUTES-G (the withdrawal function) — begin
+  // A storefront route: tenant by hostname, the same public-entrypoint rule.
+  app.all(
+    STOREFRONT_WITHDRAWALS_PATH,
+    onMethods(["POST"], storefront((c) => handleStorefrontWithdrawalRoute(c.env, c.req.raw))),
+  );
+  // CP4-ROUTES-G — end
 
   // Public reads answer through the ETag/304 handlers (src/storefront/public-routes.ts):
   // bodies are byte-identical to the plain handlers, plus `ETag: "<catalog_version>"` and

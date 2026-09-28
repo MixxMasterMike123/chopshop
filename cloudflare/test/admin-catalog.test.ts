@@ -318,17 +318,33 @@ describe("tenant-admin catalogue lifecycle", () => {
       // collected order, so pickup must be opted into rather than out of.
       allowPickup: false,
       allowShipping: true,
+      // CP4-A: the storefront fields, all unset on a product that names none;
+      // the handle is derived from the name, the size and the sku.
+      brand: null,
+      category: null,
+      compareAtPriceMinor: null,
       currency: "SEK",
       description: "Soft cotton",
+      eanCode: null,
+      featured: false,
+      handle: "lifecycle-tee_SKU-LIFECYCLE",
+      isPersonalized: false,
       // Not POD until a mapping exists; not screened until first published.
       isPod: false,
+      launchDate: null,
+      moreInfo: null,
       name: "Lifecycle Tee",
       priceMinor: 19_900,
       productId: expect.any(String),
       screeningStatus: null,
       shippingRates: null,
+      size: null,
+      sizeGuide: null,
       sku: "SKU-LIFECYCLE",
+      sortOrder: null,
       status: "draft",
+      stock: null,
+      tags: [],
       weightGrams: 0,
     });
 
@@ -680,9 +696,11 @@ describe("tenant-admin catalogue authorization", () => {
     await expect(countProducts(TENANT_A)).resolves.toBe(before);
   });
 
+  // CP4-A changed this case: GET is now the admin list (test/admin-products.test.ts),
+  // so the "other method" is DELETE, which nothing on the collection path serves.
   it("does not expose the collection through another method", async () => {
     const response = await exports.default.fetch(
-      adminRequest(`${HOST_A}/v1/admin/products`, "GET", {
+      adminRequest(`${HOST_A}/v1/admin/products`, "DELETE", {
         cookie: adminA.cookie,
       }),
     );
@@ -1175,7 +1193,11 @@ describe("tenant-admin delivery and shipping fields", () => {
     expect(event?.metadata_json).not.toContain("777");
   });
 
-  it("keeps the delivery fields out of the public projection", async () => {
+  // CP4-A changed this case: the two delivery FLAGS are public now — the
+  // product page says "Endast hemleverans" from them and the cart restricts
+  // the delivery method with them (CartContext.jsx cartAllowsHome/Pickup).
+  // The carton weight and the carriage table stay out, as 0009 decided.
+  it("keeps the carriage inputs out of the public projection; the delivery flags are public", async () => {
     const created = await createWith({
       allowPickup: true,
       shippingRates: { sweden: { cost: 2_500 } },
@@ -1200,14 +1222,14 @@ describe("tenant-admin delivery and shipping fields", () => {
     const detail = await exports.default.fetch(
       `${HOST_A}/v1/products/${product.productId}`,
     );
-    const serialized = JSON.stringify(await detail.json());
+    const body = await detail.json<{ product: Record<string, unknown> }>();
+    const serialized = JSON.stringify(body);
 
     expect(detail.status).toBe(200);
+    expect(body.product).toMatchObject({ allowPickup: true, allowShipping: true });
     for (const leaked of [
       "weightGrams",
       "weight_grams",
-      "allowPickup",
-      "allowShipping",
       "shippingRates",
       "shipping_json",
       "450",

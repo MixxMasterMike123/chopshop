@@ -50,20 +50,55 @@ const stripHtml = (value: unknown): string =>
     .replace(/&[a-z0-9#]+;/gi, " ");
 
 /**
+ * Every text of one product a visitor reads (CP4-A). `name` and `description`
+ * are always there; the rest are optional so that a caller which knows only
+ * those two (the CP2/CP3 paths) still type-checks and screens what it always
+ * screened. src/catalog/admin-product-reads.ts `loadProductScreeningInput`
+ * reads the whole set from D1.
+ */
+export interface ProductScreeningInput {
+  brand?: string | null;
+  category?: string | null;
+  description: string | null;
+  /** The alt text of every image row of the product. */
+  imageAlts?: readonly string[];
+  /** "Mer information": HTML, screened with its markup stripped. */
+  moreInfo?: string | null;
+  name: string;
+  size?: string | null;
+  sizeGuide?: string | null;
+  tags?: readonly string[];
+  /** The label, group and size of every ACTIVE variant. */
+  variantTexts?: readonly string[];
+}
+
+/**
  * The screened texts of one product. Firebase read name, description, the two
- * `descriptions.b2c*` fields, tags and the artwork file names/labels; a CF
- * product has name + description (no b2c descriptions, no tags yet) and a CF
+ * `descriptions.b2c*` fields, tags and the artwork file names/labels. A CF
  * artwork has no label, so the artwork contribution is the original's file name
- * (the last segment of its stored object key).
+ * (the last segment of its stored object key). CP4-A adds every further text a
+ * visitor reads: the further description (`b2cMoreInfo`), the size guide, the
+ * category, the tags, the brand, the product's size, the label, group and size
+ * of each active variant, and the image alt texts. They come AFTER the texts of
+ * before, so the stored haystack of a product that has none of them is
+ * byte-identical to what CP3 stored.
  */
 export const productScreeningTexts = (
-  product: { description: string | null; name: string },
+  product: ProductScreeningInput,
   artworkFileNames: readonly string[] = [],
 ): string[] =>
   [
     product.name,
     stripHtml(product.description ?? ""),
     ...artworkFileNames,
+    stripHtml(product.moreInfo ?? ""),
+    product.sizeGuide ?? "",
+    product.category ?? "",
+    ...(product.tags ?? []),
+    product.brand ?? "",
+    product.size ?? "",
+    ...(product.variantTexts ?? []),
+    ...(product.imageAlts ?? []),
   ].filter((s) => typeof s === "string" && s.trim() !== "");
 
 /**

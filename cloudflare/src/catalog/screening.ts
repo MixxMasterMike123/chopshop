@@ -3,8 +3,10 @@ import {
   ELIGIBLE_PRODUCTS_FROM,
   PUBLIC_ELIGIBILITY_PREDICATE,
 } from "./eligibility";
+import { loadProductScreeningInput } from "./admin-product-reads";
 import type {
   BlocklistEntry,
+  ProductScreeningInput,
   ScreeningStatus,
   StoredScreening,
 } from "./screening-core";
@@ -333,8 +335,11 @@ export interface ScreeningStatementsInput {
   /** Read at the START of the mutation, before any content it screens. */
   guard: ScreeningGuard;
   now: number;
-  /** Post-mutation screened text (default: the stored product row). */
-  texts?: { description: string | null; name: string };
+  /**
+   * Post-mutation screened text: EVERY text of the product a visitor reads
+   * (default: what D1 holds, read by loadProductScreeningInput).
+   */
+  texts?: ProductScreeningInput;
 }
 
 export interface ScreeningStatements {
@@ -362,12 +367,9 @@ export async function screeningStatementsFor(
 
   let texts = input.texts;
   if (texts === undefined) {
-    const product = await db
-      .prepare(
-        "SELECT name, description FROM products WHERE tenant_id = ? AND product_id = ? LIMIT 1",
-      )
-      .bind(tenantId, productId)
-      .first<{ description: string | null; name: string }>();
+    // CP4-A: the whole set (tags, category, variant texts, image alts, …),
+    // so the sweep and a mapping change screen what a publish screens.
+    const product = await loadProductScreeningInput(db, tenantId, productId);
     if (product === null) {
       return {
         statements: [screeningFenceStatement(db, input.guard, input.now)],

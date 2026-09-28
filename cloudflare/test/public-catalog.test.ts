@@ -180,15 +180,30 @@ describe("GET /v1/products", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    // CP4-A changed this case: the summary gained the storefront fields and the
+    // list its cursor. The fixture names no handle, so the sku is its handle
+    // (the 0040 backfill); its one active variant (13 900) is the card price.
     expect(body).toEqual({
+      nextCursor: null,
       products: [
         {
+          category: null,
+          compareAtPriceMinor: null,
           currency: "SEK",
           description: null,
+          featured: false,
+          handle: "SKU-A-LIVE",
+          image: null,
+          isFromPrice: false,
+          lowestPriceMinor: 13_900,
           name: "Alpha Tee",
+          path: "/product/SKU-A-LIVE",
           priceMinor: 12_900,
           productId: "product-a-live",
           sku: "SKU-A-LIVE",
+          sortOrder: null,
+          swatches: [{ image: null, label: "Medium" }],
+          tags: [],
         },
       ],
     });
@@ -235,20 +250,49 @@ describe("GET /v1/products/{productId}", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    // CP4-A changed this case: the detail gained the storefront fields, the
+    // image list and the rail fields of each variant.
     expect(body).toEqual({
       product: {
+        allowPickup: false,
+        allowShipping: true,
+        brand: null,
+        category: null,
+        compareAtPriceMinor: null,
         currency: "SEK",
         description: null,
+        eanCode: null,
+        featured: false,
+        handle: "SKU-A-LIVE",
+        image: null,
+        images: [],
+        isFromPrice: false,
+        isPersonalized: false,
+        launchDate: null,
+        lowestPriceMinor: 13_900,
+        moreInfo: null,
         name: "Alpha Tee",
+        path: "/product/SKU-A-LIVE",
         // Not a POD product: no print areas, no previews.
         pod: null,
         priceMinor: 12_900,
         productId: "product-a-live",
+        size: null,
+        sizeGuide: null,
         sku: "SKU-A-LIVE",
+        sortOrder: null,
+        stock: null,
+        swatches: [{ image: null, label: "Medium" }],
+        tags: [],
         variants: [
           {
+            group: null,
+            image: null,
+            images: [],
             label: "Medium",
+            position: 0,
             priceMinor: 13_900,
+            size: null,
             sku: "SKU-A-LIVE-M",
             variantId: "variant-a-m",
           },
