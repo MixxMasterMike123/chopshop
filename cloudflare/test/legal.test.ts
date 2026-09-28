@@ -10,7 +10,7 @@ import {
   withdrawalDisclosureSha256,
 } from "../src/legal/consent";
 import { hasAcceptedCurrentTerms } from "../src/legal/platform-terms";
-import { CURRENT_TERMS_VERSION, legalReadinessStatements } from "./legal-fixtures";
+import { BUYER_RECIPIENT_PICKUP, CURRENT_TERMS_VERSION, legalReadinessStatements } from "./legal-fixtures";
 import {
   ADMIN,
   acceptPlatformTerms,
@@ -114,6 +114,7 @@ function checkoutBody(items: Array<{ productId: string; quantity: number }>, con
     email: `${unique("buyer")}@buyers.legal.test`,
     idempotencyKey: unique("idem-legal"),
     items,
+    recipient: BUYER_RECIPIENT_PICKUP,
   };
 }
 
@@ -440,6 +441,7 @@ describe("buyer: consent at checkout", () => {
       email: "x@buyers.legal.test",
       idempotencyKey: "idem-legal-replay-1",
       items: [{ productId: mug, quantity: 1 }],
+      recipient: BUYER_RECIPIENT_PICKUP,
     });
     await expectJson(replay, 201, "first");
     const flipped = await postCheckout(shop, {
@@ -448,6 +450,7 @@ describe("buyer: consent at checkout", () => {
       email: "x@buyers.legal.test",
       idempotencyKey: "idem-legal-replay-1",
       items: [{ productId: mug, quantity: 1 }],
+      recipient: BUYER_RECIPIENT_PICKUP,
     });
     expect(flipped.status, "marketing flipped under the same key").toBe(409);
 

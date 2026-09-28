@@ -14,8 +14,9 @@ export function newIdempotencyKey() {
  * quantity 1–999). `deliveryMethod`: 'shipping' | 'pickup'; `shippingCountry`
  * (ISO alpha-2) only for 'shipping'. `consent`: `{ terms: true, marketing?,
  * withdrawalWaiver?, disclosureVersion? }` (disclosureVersion only with a
- * ticked waiver). No discount code is sent: discount codes are not ported
- * (D81).
+ * ticked waiver). `recipient` (D98): who gets the order and where, as
+ * storefront/adapters/checkout.js toApiRecipient builds it. No discount code
+ * is sent: discount codes are not ported (D81).
  *
  * Resolves `{ checkout, replayed }`: the priced checkout (`checkoutId`,
  * `items`, `subtotalMinor`, `shippingMinor`, `vatMinor`, `vatRateBp`,
@@ -27,7 +28,7 @@ export function newIdempotencyKey() {
  * `unprocessable` (a line cannot be bought), 429 `rate_limited`.
  */
 export async function createCheckout(
-  { items, email, deliveryMethod, shippingCountry, consent, idempotencyKey },
+  { items, email, deliveryMethod, shippingCountry, consent, idempotencyKey, recipient },
   { signal } = {},
 ) {
   const body = {
@@ -40,6 +41,9 @@ export async function createCheckout(
     ),
   };
   if (deliveryMethod === 'shipping') body.shippingCountry = shippingCountry;
+  // D98: who gets the order and where (storefront/adapters/checkout.js
+  // toApiRecipient). The server refuses a checkout without one.
+  if (recipient !== undefined) body.recipient = recipient;
 
   const { status, data } = await request('/v1/checkout', { method: 'POST', body, signal });
   return { checkout: data.checkout, replayed: status === 200 };

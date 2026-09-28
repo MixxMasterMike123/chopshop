@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { acceptTermsStatement, BUYER_CONSENT } from "./legal-fixtures";
+import { acceptTermsStatement, BUYER_CONSENT, withBuyerRecipient } from "./legal-fixtures";
 
 import {
   MAX_DISCOUNT_PERCENT_BP,
@@ -179,13 +179,15 @@ async function post(
         "cf-connecting-ip": nextIp(),
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        consent: BUYER_CONSENT,
-        deliveryMethod: "pickup",
-        email: nextEmail(),
-        idempotencyKey: nextKey(),
-        ...body,
-      }),
+      body: JSON.stringify(
+        withBuyerRecipient({
+          consent: BUYER_CONSENT,
+          deliveryMethod: "pickup",
+          email: nextEmail(),
+          idempotencyKey: nextKey(),
+          ...body,
+        }),
+      ),
     }),
   );
 }
@@ -753,14 +755,16 @@ describe("discount replay fingerprint", () => {
           "cf-connecting-ip": nextIp(),
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          consent: BUYER_CONSENT,
-          deliveryMethod: "pickup",
-          discountCode,
-          email,
-          idempotencyKey,
-          items: [{ productId: "dc-a-one", quantity: 2 }],
-        }),
+        body: JSON.stringify(
+          withBuyerRecipient({
+            consent: BUYER_CONSENT,
+            deliveryMethod: "pickup",
+            discountCode,
+            email,
+            idempotencyKey,
+            items: [{ productId: "dc-a-one", quantity: 2 }],
+          }),
+        ),
       }),
     );
   }

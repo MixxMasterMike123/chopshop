@@ -25,6 +25,8 @@
  * most one hour), and never beside the hash that authorizes it.
  */
 
+import { readOrderRecipient, type RecipientView } from "./recipient";
+
 export const RECEIPT_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 export const RECEIPT_HANDOFF_TTL_MS = 60 * 60 * 1_000;
 
@@ -194,6 +196,12 @@ export interface BuyerOrder {
   items: BuyerOrderItem[];
   orderId: string;
   orderNumber: string;
+  /**
+   * D98: who gets the order and where (src/commerce/recipient.ts
+   * RecipientView) — the buyer's own words, shown back to the holder of the
+   * receipt token. null for an order made before 0045.
+   */
+  recipient: RecipientView | null;
   status: string;
   totals: {
     discountMinor: number;
@@ -306,6 +314,7 @@ export async function readBuyerOrder(
     })),
     orderId: order.order_id,
     orderNumber: order.order_number,
+    recipient: await readOrderRecipient(db, tenantId, order.order_id),
     status: order.status,
     totals: {
       discountMinor: order.discount_minor,

@@ -7,7 +7,7 @@ import {
   shippingMinor as shippingMinorFor,
   vatMinor,
 } from "../src/commerce/shipping";
-import { acceptTermsStatement, BUYER_CONSENT } from "./legal-fixtures";
+import { acceptTermsStatement, BUYER_CONSENT, buyerRecipientFor } from "./legal-fixtures";
 
 const NOW = 1_787_200_000_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -179,8 +179,10 @@ function checkoutRequest(
 }
 
 /**
- * Posts a body EXACTLY as given — with ONE exception: a body that does not
- * mention `consent` at all gets the buyer's terms acceptance (CP2-E), because
+ * Posts a body EXACTLY as given — with TWO exceptions: a body that does not
+ * mention `consent` at all gets the buyer's terms acceptance (CP2-E), and one
+ * that does not mention `recipient` the recipient its delivery needs (D98),
+ * because
  * every suite but the consent suite is about something else. A test that means
  * "no consent" says so with `consent: undefined` (dropped by JSON). Parser
  * tests use this so an assertion about a missing or malformed field is about
@@ -195,7 +197,22 @@ async function postRaw(
     body !== null && typeof body === "object" && !Array.isArray(body) && !("consent" in body)
       ? { consent: BUYER_CONSENT, ...(body as Record<string, unknown>) }
       : body;
-  return exports.default.fetch(checkoutRequest(hostname, withConsent, headers));
+  // D98: likewise the recipient its delivery needs, unless the test names one
+  // (`recipient: undefined` = none).
+  const filled =
+    withConsent !== null &&
+    typeof withConsent === "object" &&
+    !Array.isArray(withConsent) &&
+    !("recipient" in withConsent)
+      ? {
+          ...(withConsent as Record<string, unknown>),
+          recipient: buyerRecipientFor(
+            (withConsent as Record<string, unknown>).deliveryMethod,
+            (withConsent as Record<string, unknown>).shippingCountry,
+          ),
+        }
+      : withConsent;
+  return exports.default.fetch(checkoutRequest(hostname, filled, headers));
 }
 
 /**

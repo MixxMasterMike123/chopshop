@@ -20,6 +20,7 @@ import {
   recordOnly,
 } from "./payment-events";
 import { mintReceiptCapability } from "./receipts";
+import { copyRecipientToOrderStatement } from "./recipient";
 import {
   handleStripeEvent,
   replayDeferredPaymentEvents,
@@ -626,6 +627,13 @@ export async function handleStripeWebhookEvent(
         ),
     );
   }
+
+  // The recipient (D98, 0045), copied from the checkout's frozen row in this
+  // same batch. A checkout without one (made before 0045) copies nothing and
+  // the order is created as before.
+  statements.push(
+    copyRecipientToOrderStatement(db, checkout.tenant_id, checkout.checkout_id, orderId, now),
+  );
 
   // The birth transition. from_status is NULL: the order came from nothing.
   statements.push(

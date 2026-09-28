@@ -36,6 +36,7 @@ import {
   readBuyerOrder,
   refundCall,
   seedPrintShop,
+  SLICE_RECIPIENT,
   SliceWorld,
   storefrontCall,
   succeedPayment,
@@ -211,6 +212,7 @@ describe("CP2 vertical slice", () => {
           email: "early@buyers.slice.test",
           idempotencyKey: "idem-slice-gated",
           items: [{ productId, quantity: 1 }],
+          recipient: SLICE_RECIPIENT,
         },
         origin: null,
       });
@@ -450,12 +452,15 @@ describe("CP2 vertical slice", () => {
         "items",
         "orderId",
         "orderNumber",
+        "recipient",
         "status",
         "totals",
         "withdrawal",
       ]);
       expect(buyer.order).toMatchObject({
         delivery: { country: null, method: "pickup" },
+        // D98: the harness's default recipient, collected at the shop's place.
+        recipient: { deliveryMethod: "pickup", name: SLICE_RECIPIENT.name, pickupLocationId: SLICE_RECIPIENT.pickupLocationId },
         email: "k***@buyers.slice.test",
         items: [{ lineTotalMinor: PRICE_MINOR, name: "Slice-tröja", quantity: 1, unitPriceMinor: PRICE_MINOR }],
         status: "paid",

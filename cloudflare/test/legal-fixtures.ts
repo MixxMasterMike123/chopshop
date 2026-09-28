@@ -19,6 +19,53 @@ export const CURRENT_TERMS_VERSION = "2026-09-07";
 /** The minimum a checkout body must carry: the buyer accepted the terms. */
 export const BUYER_CONSENT = { terms: true } as const;
 
+// ── D98: the recipient every checkout body carries ─────────────────────────
+
+/**
+ * The pickup place every fixture shop offers (invented): the fixture trigger
+ * below writes it into the shop's store identity, and the slice harness sets
+ * it through PUT /v1/admin/settings.
+ */
+export const FIXTURE_PICKUP_LOCATION = {
+  address: "Testgatan 1, 123 45 Teststad",
+  dates: [] as string[],
+  id: "fixture-pickup",
+  name: "Testbutikens utlämning",
+} as const;
+
+/** A collected order's recipient at the fixture place (invented). */
+export const BUYER_RECIPIENT_PICKUP = {
+  name: "Testa Köpare",
+  pickupLocationId: FIXTURE_PICKUP_LOCATION.id,
+} as const;
+
+/** A shipped order's recipient in `country` (invented; must equal shippingCountry). */
+export function buyerRecipientShipping(country = "SE") {
+  return {
+    addressLine1: "Provvägen 2",
+    city: "Teststad",
+    country,
+    name: "Testa Köpare",
+    postalCode: "123 45",
+  };
+}
+
+/** `body` with the recipient its delivery needs, unless it names one. */
+export function withBuyerRecipient<T extends Record<string, unknown>>(body: T): T & { recipient: unknown } {
+  return "recipient" in body
+    ? (body as T & { recipient: unknown })
+    : { ...body, recipient: buyerRecipientFor(body.deliveryMethod, body.shippingCountry) };
+}
+
+/** The recipient a checkout body with this delivery (and country) needs. */
+export function buyerRecipientFor(deliveryMethod: unknown, shippingCountry: unknown): Record<string, unknown> {
+  return deliveryMethod === "pickup"
+    ? { ...BUYER_RECIPIENT_PICKUP }
+    : buyerRecipientShipping(
+        typeof shippingCountry === "string" ? shippingCountry.toUpperCase() : "SE",
+      );
+}
+
 /**
  * One acceptance row for `tenantId`, as the accept route would write it — and,
  * through the fixture trigger below, the shop's legal readiness too.
@@ -108,14 +155,19 @@ export const LEGAL_TEXTS_SHA256 = "fa412aae365174b550bf7530c9625f7797cb2e9ff8bdc
 /** The return address a legally ready fixture shop gets (invented). */
 export const FIXTURE_RETURN_ADDRESS = "Testgatan 1, 123 45 Teststad";
 
-/** A tenant_settings row answering the two settings conditions (address + VAT). */
+/**
+ * A tenant_settings row answering the two settings conditions (address + VAT),
+ * with the fixture pickup place (D98) in its store identity.
+ */
 export function readySettingsStatement(db: D1Database, tenantId: string): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO tenant_settings (tenant_id, return_address, vat_registered, updated_at, updated_by)
-       VALUES (?, ?, 1, '2026-09-07T00:00:00.000Z', 'seed-admin')`,
+      `INSERT INTO tenant_settings (
+         tenant_id, return_address, vat_registered, updated_at, updated_by, store_identity_json
+       )
+       VALUES (?, ?, 1, '2026-09-07T00:00:00.000Z', 'seed-admin', ?)`,
     )
-    .bind(tenantId, FIXTURE_RETURN_ADDRESS);
+    .bind(tenantId, FIXTURE_RETURN_ADDRESS, JSON.stringify({ pickupLocations: [FIXTURE_PICKUP_LOCATION] }));
 }
 
 /** A Worker legal-pages acceptance by `userId` (a real user), as the route writes it. */
@@ -157,8 +209,11 @@ beforeAll(async () => {
        INSERT OR IGNORE INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt")
        VALUES ('seed-seller-' || NEW.tenant_id, 'Test Seller',
                'seed-seller+' || NEW.tenant_id || '@example.com', 1, NEW.accepted_at, NEW.accepted_at);
-       INSERT OR IGNORE INTO tenant_settings (tenant_id, return_address, vat_registered, updated_at, updated_by)
-       VALUES (NEW.tenant_id, ${sqlText(FIXTURE_RETURN_ADDRESS)}, 1, NEW.accepted_at, 'seed-admin');
+       INSERT OR IGNORE INTO tenant_settings (
+         tenant_id, return_address, vat_registered, updated_at, updated_by, store_identity_json
+       )
+       VALUES (NEW.tenant_id, ${sqlText(FIXTURE_RETURN_ADDRESS)}, 1, NEW.accepted_at, 'seed-admin',
+               ${sqlText(JSON.stringify({ pickupLocations: [FIXTURE_PICKUP_LOCATION] }))});
        INSERT OR IGNORE INTO legal_acceptances (
          acceptance_id, tenant_id, type, user_id, email, accepted_at, template_version,
          is_pod, is_custom, texts_json, texts_sha256, source

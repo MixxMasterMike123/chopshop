@@ -1,7 +1,8 @@
 import { handleFakePrinterRoute } from "../routes/fake-printer";
 import { FAKE_PRINTER_JOBS_PATH, isFakePrinterEnabled } from "./fake-printer";
 import type { PrintLocation, SnapwearJobBody } from "./snapwear-wire";
-import { SNAPWEAR_DUPLICATE_JOB_MESSAGE } from "./snapwear-wire";
+import { SNAPWEAR_DUPLICATE_JOB_MESSAGE, snapwearShippingAddress } from "./snapwear-wire";
+import type { ShipTo } from "../commerce/recipient";
 
 /**
  * The printer seam the CP2 dispatch consumer will call (PLAN §2.3).
@@ -32,6 +33,11 @@ export interface PrinterJob {
   /** Stable: printerJobId(orderId, lineNo). The printer's dedupe key. */
   jobId: string;
   mockupUrls: string[];
+  /**
+   * Where the parcel goes (D98): the recipient of a SHIPPED order; null or
+   * absent for a collected order and for an order made before 0045.
+   */
+  shipTo?: ShipTo | null;
 }
 
 export type PrinterSubmitResult =
@@ -45,13 +51,17 @@ export interface PrinterClient {
 }
 
 export function toSnapwearJobBody(job: PrinterJob): SnapwearJobBody {
-  return {
+  const body: SnapwearJobBody = {
     artworks: job.artworks.map((artwork) => ({ url: artwork.url })),
     items: job.items.map((item) => ({ quantity: item.quantity, sku: item.sku })),
     job_id: job.jobId,
     layouts: job.artworks.map((artwork) => ({ location: artwork.location })),
     mockups: job.mockupUrls.map((url) => ({ url })),
   };
+  if (job.shipTo !== undefined && job.shipTo !== null) {
+    body.shipping_address = snapwearShippingAddress(job.shipTo);
+  }
+  return body;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

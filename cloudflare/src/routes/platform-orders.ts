@@ -8,6 +8,7 @@ import {
   parseResolveAlertInput,
   resolveAlert,
 } from "../commerce/money-alerts";
+import { readOrderRecipients, type RecipientView } from "../commerce/recipient";
 import { jsonResponse } from "../lib/http";
 import {
   decodeSegment,
@@ -33,7 +34,9 @@ import { isSameOriginRequest } from "../lib/same-origin";
  * PLATFORM-ONLY, so the order view carries what no seller or buyer surface
  * may: the Stripe ids, the gross application fee and its withholding split,
  * the production cost and the printer. Still no card data (none is stored)
- * and no buyer email (reconciliation does not need personal data).
+ * and no buyer email. It does carry the order's `recipient` (D98, brief R):
+ * the platform places the printer's job and answers for its delivery, so its
+ * operator must be able to see where an order goes.
  */
 
 export const PLATFORM_ORDERS_PATH = "/v1/platform/orders";
@@ -129,6 +132,8 @@ export interface PlatformOrderView {
   paymentIntentId: string;
   payout: Payout;
   production: { printer: string | null; productionCostMinor: number | null; withholdMinor: number | null } | null;
+  /** src/commerce/recipient.ts RecipientView; null for an order made before 0045. */
+  recipient: RecipientView | null;
   status: string;
   stripeChargeId: string | null;
   stripeTransferId: string | null;
@@ -238,6 +243,12 @@ async function listPlatformOrders(
     }
   }
 
+  const recipients = await readOrderRecipients(
+    db,
+    query.tenantId,
+    page.map((row) => row.order_id),
+  );
+
   const last = page.at(-1);
   return {
     nextCursor:
@@ -280,6 +291,7 @@ async function listPlatformOrders(
               withholdMinor: row.production_withhold_minor,
             }
           : null,
+      recipient: recipients.get(row.order_id) ?? null,
       status: row.status,
       stripeChargeId: row.stripe_charge_id,
       stripeTransferId: row.stripe_transfer_id,

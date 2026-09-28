@@ -11,6 +11,7 @@ import {
 import {
   bareTenantStatement,
   BUYER_CONSENT,
+  BUYER_RECIPIENT_PICKUP,
   CURRENT_TERMS_VERSION,
   DAY,
   FOURTEEN_DAYS,
@@ -156,6 +157,7 @@ function checkoutBody(productId: string) {
     email: `${unique("buyer")}@example.com`,
     idempotencyKey: unique("idem-grace"),
     items: [{ productId, quantity: 1 }],
+    recipient: BUYER_RECIPIENT_PICKUP,
   };
 }
 

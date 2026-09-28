@@ -17,10 +17,13 @@
  * PROVISIONAL, and to be replaced when A6's API documentation lands: the
  * `items[]` wrapper, the pairing of `artworks[i]` with `layouts[i]`, the exact
  * text of the duplicate-400 body (C5), and the success body (C6 — the fake
- * answers `201 { id, status: "accepted" }`). Shipping address fields are not
- * modelled at all: orders carry no address yet, and the fake stores unknown
- * top-level fields untouched, so CP2 can add them without changing the fake.
+ * answers `201 { id, status: "accepted" }`), and the shipping address
+ * (`shipping_address`, below: D98 gave orders a recipient; SnapWear's field
+ * names are not known). The fake stores unknown top-level fields untouched, so
+ * the address reaches it without changing the fake.
  */
+
+import type { ShipTo } from "../commerce/recipient";
 
 export type PrintLocation = "back" | "front";
 
@@ -30,6 +33,38 @@ export interface SnapwearJobBody {
   job_id: string;
   layouts: Array<{ location: PrintLocation }>;
   mockups: Array<{ url: string }>;
+  /** A shipped order only; absent for a collected one (see below). */
+  shipping_address?: SnapwearShippingAddress;
+}
+
+/**
+ * PROVISIONAL (to be agreed with SnapWear, brief R / CP4_R_REPORT.md): where
+ * the printer sends the parcel. The names, whether the name is split into
+ * first and last, whether the telephone and the buyer's e-mail address are
+ * required (the DPA names both for the carrier), and the address of a
+ * COLLECTED order's parcel are all open. The only place the wire shape is
+ * built: change it here.
+ */
+export interface SnapwearShippingAddress {
+  address1: string;
+  address2: string | null;
+  city: string;
+  country_code: string;
+  name: string;
+  phone: string | null;
+  zip: string;
+}
+
+export function snapwearShippingAddress(shipTo: ShipTo): SnapwearShippingAddress {
+  return {
+    address1: shipTo.addressLine1,
+    address2: shipTo.addressLine2,
+    city: shipTo.city,
+    country_code: shipTo.country,
+    name: shipTo.name,
+    phone: shipTo.phone,
+    zip: shipTo.postalCode,
+  };
 }
 
 export const SNAPWEAR_VALIDATION_FAILED_MESSAGE = "Validation Failed";

@@ -14,6 +14,7 @@ import {
   type Quote,
   renderReadyArtwork,
   seedPrintShop,
+  SLICE_RECIPIENT,
   SliceWorld,
   storefrontCall,
   succeedPayment,
@@ -151,6 +152,7 @@ function checkoutOf(tenant: Tenant, productId: string, variantId: string): Promi
       email: `${unique("buyer")}@buyers.cp4a.test`,
       idempotencyKey: unique("idem-cp4a"),
       items: [{ productId, quantity: 2, variantId }],
+      recipient: SLICE_RECIPIENT,
     },
     origin: null,
   });

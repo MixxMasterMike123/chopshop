@@ -3,7 +3,10 @@
 //
 //   buildCheckoutRequest  what the page sends to POST /v1/checkout: products,
 //                         variants and quantities, the buyer's e-mail address,
-//                         the delivery, the consents. NEVER a price.
+//                         the delivery, the recipient, the consents. NEVER a
+//                         price.
+//   toApiRecipient        who gets the order and where (D98), from what the
+//                         form collects.
 //   toCheckoutTotals      the server's priced checkout as the figures the page
 //                         prints (kronor, as the page's price components take
 //                         them). No checkout yet → no figure at all.
@@ -19,12 +22,49 @@ export function toApiDeliveryMethod(method) {
   return method === 'pickup' ? 'pickup' : 'shipping';
 }
 
+function text(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * `recipient` of POST /v1/checkout (cloudflare/src/commerce/recipient.ts
+ * parseRecipient) from what the checkout form collects:
+ *   `shippingInfo`  { firstName, lastName, address, apartment, postalCode,
+ *                   city, phone? } — the name is first + last name
+ *   `pickupLocationId`, `pickupDate`  the chosen pickup occasion
+ * A parcel sends { name, addressLine1, addressLine2?, postalCode, city,
+ * country, phone? }, `country` the request's shipping country; a pickup
+ * { name, phone?, pickupLocationId, pickupDate? }. Texts are trimmed; an empty
+ * optional field is left out. What the server refuses (an empty name, an
+ * unknown place) is the server's to refuse: nothing is invented here.
+ */
+export function toApiRecipient({ deliveryMethod, shippingCountry, shippingInfo, pickupLocationId, pickupDate }) {
+  const info = shippingInfo && typeof shippingInfo === 'object' ? shippingInfo : {};
+  const recipient = { name: [text(info.firstName), text(info.lastName)].filter(Boolean).join(' ') };
+  const phone = text(info.phone);
+  if (phone) recipient.phone = phone;
+
+  if (toApiDeliveryMethod(deliveryMethod) === 'pickup') {
+    recipient.pickupLocationId = String(pickupLocationId ?? '');
+    if (text(pickupDate)) recipient.pickupDate = text(pickupDate);
+    return recipient;
+  }
+
+  recipient.addressLine1 = text(info.address);
+  if (text(info.apartment)) recipient.addressLine2 = text(info.apartment);
+  recipient.postalCode = text(info.postalCode);
+  recipient.city = text(info.city);
+  recipient.country = String(shippingCountry || '').toUpperCase();
+  return recipient;
+}
+
 /**
  * The body of POST /v1/checkout (without the idempotency key, which the
  * caller keeps per request).
  *
  * `items`: the cart's lines as the cart provider gives them
- * (`[{ productId, quantity, variantId? }]`). `withdrawal`: the page's gate,
+ * (`[{ productId, quantity, variantId? }]`). `shippingInfo`,
+ * `pickupLocationId`, `pickupDate`: the recipient (toApiRecipient). `withdrawal`: the page's gate,
  * `{ required, accepted, noticeVersion }`. The waiver and the version of the
  * text the buyer was shown are sent only when the gate was required AND
  * ticked; the server decides which lines are personalised and refuses a basket
@@ -36,7 +76,17 @@ export function toApiDeliveryMethod(method) {
  * sent on the payment step, where that sentence is on the screen, and a
  * checkout becomes an order only when the buyer pays.
  */
-export function buildCheckoutRequest({ items, email, deliveryMethod, shippingCountry, marketing, withdrawal }) {
+export function buildCheckoutRequest({
+  items,
+  email,
+  deliveryMethod,
+  shippingCountry,
+  shippingInfo,
+  pickupLocationId,
+  pickupDate,
+  marketing,
+  withdrawal,
+}) {
   const method = toApiDeliveryMethod(deliveryMethod);
   const consent = { terms: true, marketing: marketing === true };
   if (withdrawal?.required === true && withdrawal?.accepted === true) {
@@ -55,6 +105,7 @@ export function buildCheckoutRequest({ items, email, deliveryMethod, shippingCou
   if (method === 'shipping') {
     request.shippingCountry = String(shippingCountry || '').toUpperCase();
   }
+  request.recipient = toApiRecipient({ deliveryMethod: method, shippingCountry, shippingInfo, pickupLocationId, pickupDate });
   return request;
 }
 

@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/auth/create-auth";
-import { acceptTermsStatement, BUYER_CONSENT } from "./legal-fixtures";
+import { acceptTermsStatement, BUYER_CONSENT, buyerRecipientShipping } from "./legal-fixtures";
 
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
 const HOST_A = "https://admin-a.adminshop.test";
@@ -1296,6 +1296,7 @@ describe("tenant-admin delivery and shipping fields", () => {
           email: "admin-configured@example.test",
           idempotencyKey: "admin-configured-rate",
           items: [{ productId: product.productId, quantity: 1 }],
+          recipient: buyerRecipientShipping("SE"),
           shippingCountry: "SE",
         }),
         headers: {

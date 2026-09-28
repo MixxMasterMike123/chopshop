@@ -396,7 +396,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0044_withdrawals.sql";
+const REQUIRED_MIGRATION = "0045_order_recipients.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -1123,6 +1123,12 @@ async function handleCheckoutRoute(
 
   if (result.status === "invalid_items") {
     return unprocessableResponse();
+  }
+
+  // D98: a pickup place that is not one of the shop's own, or a date that is
+  // not one of its dates, is a fault of the body like any other: 400.
+  if (result.status === "invalid_recipient") {
+    return invalidRequestResponse();
   }
 
   // CP2-E: the legal gate answers exactly as an unknown shop does, and a basket

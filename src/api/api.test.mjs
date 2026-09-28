@@ -178,6 +178,20 @@ describe('checkout', () => {
     });
   });
 
+  it('sends the recipient as given (D98)', async () => {
+    stubFetch(() => answer(201, { checkout: { checkoutId: 'c2', totalMinor: 19900 } }));
+    const recipient = { name: 'Testa Köpare', pickupLocationId: 'plats-1', pickupDate: '2026-10-01' };
+    await createCheckout({
+      consent: { terms: true },
+      deliveryMethod: 'pickup',
+      email: 'a@b.test',
+      idempotencyKey: 'key-12345679',
+      items: [{ productId: 'p1', quantity: 1 }],
+      recipient,
+    });
+    assert.deepEqual(JSON.parse(calls[0].init.body).recipient, recipient);
+  });
+
   it('asks for the payment with no body', async () => {
     stubFetch(() => answer(201, { payment: { clientSecret: 'cs', paymentIntentId: 'pi' } }));
     const payment = await createPayment('c 1');

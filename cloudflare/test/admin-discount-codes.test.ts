@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/auth/create-auth";
-import { acceptTermsStatement, BUYER_CONSENT } from "./legal-fixtures";
+import { acceptTermsStatement, BUYER_CONSENT, BUYER_RECIPIENT_PICKUP } from "./legal-fixtures";
 
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
 const HOST_A = "https://admin-a.dcadmin.test";
@@ -839,6 +839,7 @@ describe("admin-created codes price a real checkout", () => {
           email: "e2e-buyer@example.test",
           idempotencyKey: "dcadmin-e2e-key",
           items: [{ productId: "dcadmin-product", quantity: 1 }],
+          recipient: BUYER_RECIPIENT_PICKUP,
         }),
       }),
     );

@@ -9,7 +9,13 @@ import {
   isLegallyReady,
   LEGAL_TEXTS_MAX_BYTES,
 } from "../src/legal/legal-pages";
-import { BUYER_CONSENT, LEGAL_TEXTS, LEGAL_TEXTS_CANONICAL, LEGAL_TEXTS_SHA256 } from "./legal-fixtures";
+import {
+  BUYER_CONSENT,
+  BUYER_RECIPIENT_PICKUP,
+  LEGAL_TEXTS,
+  LEGAL_TEXTS_CANONICAL,
+  LEGAL_TEXTS_SHA256,
+} from "./legal-fixtures";
 import {
   ADMIN,
   adminCall,
@@ -18,6 +24,7 @@ import {
   call,
   createPlainProduct,
   createTenant,
+  SLICE_PICKUP_LOCATION,
   expectJson,
   platformCall,
   publishProduct,
@@ -463,6 +470,7 @@ describe("the legal readiness gate at checkout (return address, VAT answer, page
       email: `${unique("buyer")}@example.com`,
       idempotencyKey: unique("idem-ready"),
       items: [{ productId: mug, quantity: 1 }],
+      recipient: BUYER_RECIPIENT_PICKUP,
     };
   }
 
@@ -511,7 +519,12 @@ describe("the legal readiness gate at checkout (return address, VAT answer, page
     expect(await checkoutStatus()).toBe(404);
 
     // PUT /v1/admin/settings (CP3-A): the return address and the VAT answer.
-    await putSettings({ returnAddress: "Testgatan 1\n123 45 Teststad", vatRegistered: false });
+    // (With the pickup place the checkout's recipient names, D98.)
+    await putSettings({
+      returnAddress: "Testgatan 1\n123 45 Teststad",
+      storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION] },
+      vatRegistered: false,
+    });
     expect(await readiness()).toEqual({ legalPagesAccepted: false, ready: false, returnAddress: true, vatAnswered: true });
     // The pages alone missing: still closed.
     expect(await checkoutStatus()).toBe(404);

@@ -72,7 +72,7 @@ describe('toPageOrder', () => {
     assert.deepEqual(page.shippingInfo, {});
   });
 
-  it('carries nothing the buyer schema does not hold (no name, address, image, label, marketing)', () => {
+  it('without a recipient, carries nothing the buyer schema does not hold (no name, address, image, label, marketing)', () => {
     const page = toPageOrder(BUYER_ORDER);
     assert.equal(page.customerInfo.firstName, undefined);
     assert.equal(page.customerInfo.marketingOptIn, undefined);
@@ -81,6 +81,75 @@ describe('toPageOrder', () => {
     assert.equal(page.items[0].image, undefined);
     assert.equal(page.items[0].label, undefined);
     assert.equal(page.affiliateCode, undefined);
+  });
+
+  // D98: the recipient (cloudflare/src/commerce/recipient.ts RecipientView).
+  const NONE = {
+    addressLine1: null,
+    addressLine2: null,
+    city: null,
+    country: null,
+    phone: null,
+    pickupDate: null,
+    pickupLocationAddress: null,
+    pickupLocationId: null,
+    pickupLocationName: null,
+    postalCode: null,
+  };
+
+  it("a shipped order's recipient: the name and the address where the page prints them", () => {
+    const page = toPageOrder({
+      ...BUYER_ORDER,
+      recipient: {
+        ...NONE,
+        addressLine1: 'Provvägen 2',
+        addressLine2: 'Lgh 3',
+        city: 'Teststad',
+        country: 'SE',
+        deliveryMethod: 'shipping',
+        name: 'Testa Köpare',
+        postalCode: '123 45',
+      },
+    });
+    assert.deepEqual(page.shippingInfo, {
+      firstName: 'Testa Köpare',
+      lastName: '',
+      address: 'Provvägen 2',
+      apartment: 'Lgh 3',
+      postalCode: '123 45',
+      city: 'Teststad',
+      country: 'SE',
+    });
+    assert.equal(page.pickupLocation, undefined);
+    assert.deepEqual(page.customerInfo, { email: 'k***@example.test' });
+  });
+
+  it("a collected order's recipient: the name, and the place as it was at checkout, with the date", () => {
+    const page = toPageOrder({
+      ...BUYER_ORDER,
+      delivery: { country: null, method: 'pickup' },
+      recipient: {
+        ...NONE,
+        deliveryMethod: 'pickup',
+        name: 'Testa Köpare',
+        pickupDate: '2026-10-01',
+        pickupLocationAddress: 'Hämtvägen 3, 111 22 Hämtby',
+        pickupLocationId: 'plats-1',
+        pickupLocationName: 'Lördagsutlämningen',
+      },
+    });
+    assert.equal(page.deliveryMethod, 'pickup');
+    assert.deepEqual(page.shippingInfo, { firstName: 'Testa Köpare', lastName: '' });
+    assert.deepEqual(page.pickupLocation, {
+      id: 'plats-1',
+      name: 'Lördagsutlämningen',
+      address: 'Hämtvägen 3, 111 22 Hämtby',
+      date: '2026-10-01',
+    });
+  });
+
+  it('an order made before the recipient existed (recipient null) is shown as before', () => {
+    assert.deepEqual(toPageOrder({ ...BUYER_ORDER, recipient: null }), toPageOrder(BUYER_ORDER));
   });
 
   it('is null for no order, and a time it cannot read is no time', () => {

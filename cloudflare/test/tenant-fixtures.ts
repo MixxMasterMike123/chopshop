@@ -8,6 +8,7 @@ import {
   createTenant,
   expectJson,
   PLATFORM,
+  SLICE_PICKUP_LOCATION,
   SliceWorld,
   type Tenant,
 } from "./slice-harness";
@@ -186,7 +187,12 @@ export async function makeLegallyReady(world: SliceWorld, tenant: Tenant): Promi
   await expectJson(
     await call(world, "PUT", "https://admin.slice.test/v1/admin/settings", {
       ...admin,
-      body: { returnAddress: "Returgatan 1, 123 45 Teststad", vatRegistered: true },
+      body: {
+        returnAddress: "Returgatan 1, 123 45 Teststad",
+        // D98: the pickup place the slice harness's default recipient names.
+        storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION] },
+        vatRegistered: true,
+      },
     }),
     200,
     `settings for ${tenant.tenantId}`,

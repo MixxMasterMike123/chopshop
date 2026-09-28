@@ -26,6 +26,7 @@ import {
   resolvePrinterClient,
 } from "./printer-client";
 import { dispatchHeldForPayment, parkForHold } from "../commerce/dispatch-hold";
+import { readDispatchShipTo } from "../commerce/recipient";
 import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-wire";
 
 /**
@@ -509,6 +510,10 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
       : retryLater(ctx, storage.error, lineRef);
   }
 
+  // D98: a shipped order's job carries where the parcel goes, read from the
+  // order's frozen recipient (never from the checkout or the shop's settings).
+  const shipTo = await readDispatchShipTo(env.DB, tenantId, payload.orderId);
+
   let job: PrinterJob;
   try {
     const presigner = resolveR2Presigner(env);
@@ -522,6 +527,7 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
       items: [{ quantity: built.value.quantity, sku: built.value.sku }],
       jobId: payload.jobId,
       mockupUrls: [],
+      shipTo,
     };
   } catch {
     return retryLater(ctx, "presign_failed", lineRef);

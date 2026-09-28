@@ -5,14 +5,35 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { buildCheckoutRequest, checkoutRefusal, minorToKronor, toApiDeliveryMethod, toCheckoutTotals } from './checkout.js';
+import {
+  buildCheckoutRequest,
+  checkoutRefusal,
+  minorToKronor,
+  toApiDeliveryMethod,
+  toApiRecipient,
+  toCheckoutTotals,
+} from './checkout.js';
 import { ApiError } from '../../api/client.js';
 import { createCheckout, createPayment } from '../../api/checkout.js';
 
 // The keys the API's parser admits (cloudflare/src/commerce/checkout.ts
-// CHECKOUT_KEYS and ITEM_KEYS, cloudflare/src/legal/consent.ts CONSENT_KEYS).
+// CHECKOUT_KEYS and ITEM_KEYS, cloudflare/src/legal/consent.ts CONSENT_KEYS,
+// cloudflare/src/commerce/recipient.ts SHIPPING_KEYS and PICKUP_KEYS).
 // Any other key is a 400 there; a price key would be one.
-const CHECKOUT_KEYS = ['consent', 'deliveryMethod', 'discountCode', 'email', 'idempotencyKey', 'items', 'shippingCountry'];
+const CHECKOUT_KEYS = ['consent', 'deliveryMethod', 'discountCode', 'email', 'idempotencyKey', 'items', 'recipient', 'shippingCountry'];
+const SHIPPING_RECIPIENT_KEYS = ['addressLine1', 'addressLine2', 'city', 'country', 'name', 'phone', 'postalCode'];
+const PICKUP_RECIPIENT_KEYS = ['name', 'phone', 'pickupDate', 'pickupLocationId'];
+
+// What Checkout.jsx hands StripePaymentForm as `shippingInfo` (invented).
+const SHIPPING_INFO = {
+  country: 'SE',
+  firstName: ' Testa ',
+  lastName: 'Köpare',
+  address: ' Provvägen 2 ',
+  apartment: '',
+  city: 'Teststad',
+  postalCode: '123 45',
+};
 const ITEM_KEYS = ['productId', 'quantity', 'variantId'];
 const CONSENT_KEYS = ['disclosureVersion', 'marketing', 'terms', 'withdrawalWaiver'];
 
@@ -47,6 +68,7 @@ describe('buildCheckoutRequest', () => {
       email: '  kund@example.test ',
       deliveryMethod: 'home',
       shippingCountry: 'se',
+      shippingInfo: SHIPPING_INFO,
       marketing: false,
       withdrawal: { required: false, accepted: null, noticeVersion: 'v1-2026-06' },
     });
@@ -58,8 +80,16 @@ describe('buildCheckoutRequest', () => {
         { productId: 'prod-a', quantity: 2, variantId: 'var-a-m' },
         { productId: 'prod-b', quantity: 1 },
       ],
+      recipient: {
+        addressLine1: 'Provvägen 2',
+        city: 'Teststad',
+        country: 'SE',
+        name: 'Testa Köpare',
+        postalCode: '123 45',
+      },
       shippingCountry: 'SE',
     });
+    for (const key of Object.keys(request.recipient)) assert.ok(SHIPPING_RECIPIENT_KEYS.includes(key), key);
     for (const key of Object.keys(request)) assert.ok(CHECKOUT_KEYS.includes(key), key);
     for (const item of request.items) for (const key of Object.keys(item)) assert.ok(ITEM_KEYS.includes(key), key);
     for (const key of Object.keys(request.consent)) assert.ok(CONSENT_KEYS.includes(key), key);
@@ -122,8 +152,10 @@ describe('buildCheckoutRequest', () => {
         email: 'kund@example.test',
         deliveryMethod: 'home',
         shippingCountry: 'SE',
+        shippingInfo: SHIPPING_INFO,
         withdrawal: { required: true, accepted: true, noticeVersion: 'v1-2026-06' },
       });
+      assert.equal(request.recipient.name, 'Testa Köpare');
       const { checkout, replayed } = await createCheckout({ ...request, idempotencyKey: 'key-0001' });
       assert.equal(sent.url, '/_api/testbutik/v1/checkout');
       assert.deepEqual(sent.body, { ...request, idempotencyKey: 'key-0001' });
@@ -133,6 +165,57 @@ describe('buildCheckoutRequest', () => {
       globalThis.fetch = realFetch;
       delete globalThis.location;
     }
+  });
+});
+
+describe('toApiRecipient (D98)', () => {
+  it('a parcel: the name is first + last name, the texts trimmed, an empty second line left out, the country the shipping country', () => {
+    assert.deepEqual(
+      toApiRecipient({ deliveryMethod: 'home', shippingCountry: 'no', shippingInfo: { ...SHIPPING_INFO, apartment: ' Lgh 3 ', phone: ' 070-1 ' } }),
+      {
+        addressLine1: 'Provvägen 2',
+        addressLine2: 'Lgh 3',
+        city: 'Teststad',
+        country: 'NO',
+        name: 'Testa Köpare',
+        phone: '070-1',
+        postalCode: '123 45',
+      },
+    );
+  });
+
+  it('a pickup: the name and the chosen occasion, never an address', () => {
+    const withDate = toApiRecipient({
+      deliveryMethod: 'pickup',
+      shippingCountry: 'SE',
+      shippingInfo: { ...SHIPPING_INFO, address: '', city: '', postalCode: '' },
+      pickupLocationId: 'plats-1',
+      pickupDate: '2026-10-01',
+    });
+    assert.deepEqual(withDate, { name: 'Testa Köpare', pickupDate: '2026-10-01', pickupLocationId: 'plats-1' });
+    for (const key of Object.keys(withDate)) assert.ok(PICKUP_RECIPIENT_KEYS.includes(key), key);
+
+    assert.deepEqual(
+      toApiRecipient({ deliveryMethod: 'pickup', shippingInfo: SHIPPING_INFO, pickupLocationId: 'plats-2', pickupDate: '' }),
+      { name: 'Testa Köpare', pickupLocationId: 'plats-2' },
+    );
+  });
+
+  it('a pickup request carries it beside no country', () => {
+    const request = buildCheckoutRequest({
+      items: LINES,
+      email: 'kund@example.test',
+      deliveryMethod: 'pickup',
+      shippingCountry: 'SE',
+      shippingInfo: SHIPPING_INFO,
+      pickupLocationId: 'plats-1',
+    });
+    assert.equal('shippingCountry' in request, false);
+    assert.deepEqual(request.recipient, { name: 'Testa Köpare', pickupLocationId: 'plats-1' });
+  });
+
+  it('invents nothing: a form without a name sends an empty one, for the server to refuse', () => {
+    assert.equal(toApiRecipient({ deliveryMethod: 'pickup', pickupLocationId: 'p' }).name, '');
   });
 });
 

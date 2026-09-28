@@ -18,6 +18,7 @@ import {
 } from "../lib/responses";
 import { isSameOriginRequest } from "../lib/same-origin";
 import { readAdminOrderWithdrawal } from "../commerce/withdrawals";
+import { readOrderRecipient } from "../commerce/recipient";
 
 /**
  * The tenant-admin money surface (CP2-A):
@@ -75,6 +76,9 @@ export async function handleAdminOrderRoute(
     order: {
       ...order,
       consent: consent?.consent ?? null,
+      // D98: who gets the order and where, so the shop can deliver it
+      // (src/commerce/recipient.ts RecipientView); null before 0045.
+      recipient: await readOrderRecipient(env.DB, principal.tenantId, orderId),
       withdrawal: { waived: consent?.isPersonalized ?? false },
       // CP4-G: the buyer's withdrawal on record for this order, with the
       // server's time of receipt; null when there is none.

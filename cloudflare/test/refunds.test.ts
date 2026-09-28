@@ -782,6 +782,8 @@ describe("GET /v1/admin/orders/:orderId", () => {
       order: {
         // CP2-E: the buyer's consent facts (none on a seeded checkout).
         consent: null,
+        // D98: no recipient on a seeded checkout (as before 0045).
+        recipient: null,
         currency: "SEK",
         money: {
           chargedMinor: 20_000,

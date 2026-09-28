@@ -36,6 +36,20 @@
         ],
         "orderId": "8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d",
         "orderNumber": "20260928-K7M3Q9TX",
+        "recipient": {
+          "addressLine1": "Provvägen 2",
+          "addressLine2": null,
+          "city": "Teststad",
+          "country": "SE",
+          "deliveryMethod": "shipping",
+          "name": "Testa Köpare",
+          "phone": null,
+          "pickupDate": null,
+          "pickupLocationAddress": null,
+          "pickupLocationId": null,
+          "pickupLocationName": null,
+          "postalCode": "123 45"
+        },
         "status": "paid",
         "totals": { "discountMinor": 0, "shippingMinor": 5800, "subtotalMinor": 84700, "totalMinor": 90500, "vatMinor": 18100 },
         "withdrawal": { "waived": false }

@@ -10,6 +10,7 @@ import { getPublicProductByRef } from "../src/catalog/public-catalog";
 import { decideByPlatform } from "../src/catalog/screening";
 import { createCheckout } from "../src/commerce/checkout";
 import type { CreateCheckoutInput } from "../src/commerce/checkout";
+import { buyerRecipientShipping } from "./legal-fixtures";
 import {
   createMapping,
   deleteMapping,
@@ -456,6 +457,7 @@ describe("checkout freezes the production snapshot", () => {
           email: "late@podtest.test",
           idempotencyKey: `idem-late-${crypto.randomUUID()}`,
           items: [{ productId: "snap-late", quantity: 1 }],
+          recipient: buyerRecipientShipping("SE"),
           shippingCountry: "SE",
         }),
         headers: { "content-type": "application/json" },
@@ -508,6 +510,7 @@ describe("checkout freezes the production snapshot", () => {
           email: "http@podtest.test",
           idempotencyKey: `idem-http-${crypto.randomUUID()}`,
           items: [{ productId: "snap-http", quantity: 1 }],
+          recipient: buyerRecipientShipping("SE"),
           shippingCountry: "SE",
         }),
         headers: { "content-type": "application/json" },

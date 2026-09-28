@@ -284,13 +284,17 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, withdrawa
   const idempotencyKeys = useRef(new Map());
 
   // What the server prices (POST /v1/checkout): products, variants and
-  // quantities, the buyer's e-mail address, the delivery and the
-  // consents. Never a price, a total, a carriage or a VAT figure.
+  // quantities, the buyer's e-mail address, the delivery, the recipient
+  // (name, address or pickup occasion) and the consents. Never a price, a
+  // total, a carriage or a VAT figure.
   const checkoutRequest = buildCheckoutRequest({
     items: checkoutItems(),
     email: customerInfo?.email,
     deliveryMethod: deliveryInfo?.method,
     shippingCountry: shippingInfo?.country,
+    shippingInfo,
+    pickupLocationId: deliveryInfo?.pickupLocation?.id,
+    pickupDate: deliveryInfo?.pickupDate,
     marketing: customerInfo?.marketing,
     withdrawal: withdrawalGate,
   });

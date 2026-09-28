@@ -418,10 +418,13 @@ describe("reading an order with the receipt token", () => {
       "items",
       "orderId",
       "orderNumber",
+      "recipient",
       "status",
       "totals",
       "withdrawal",
     ]);
+    // D98: a checkout seeded without a recipient row (as before 0045) has none.
+    expect(body.order.recipient).toBeNull();
     expect(body.order).toMatchObject({
       currency: "SEK",
       delivery: { country: "SE", method: "shipping" },

@@ -5,7 +5,9 @@
 // routes/storefront-reports.ts). Rows of dev-api.mjs's ROUTES.
 //
 // INVENTED DATA ONLY (money-fixtures.json): no product, name or address of a
-// real shop, nothing of the earlier brand. The payment's client secret is an
+// real shop or a real person, nothing of the earlier brand. The buyer's order
+// carries the recipient (D98, commerce/recipient.ts RecipientView) in the
+// API's shape. The payment's client secret is an
 // invented string: nothing here calls the payment provider.
 //
 // The dev server does not hand a handler the request's body or headers, so

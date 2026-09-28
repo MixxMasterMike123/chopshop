@@ -369,6 +369,21 @@ export async function createTenant(world: SliceWorld, spec: TenantSpec): Promise
 }
 
 export const SLICE_RETURN_ADDRESS = "Testgatan 1, 123 45 Teststad";
+
+/**
+ * D98: the pickup place every slice shop offers (invented), set with the
+ * store settings in makeLegallyReady, and the recipient openCheckout sends by
+ * default — a collected order at that place.
+ */
+export const SLICE_PICKUP_LOCATION = {
+  address: "Testgatan 1, 123 45 Teststad",
+  dates: [] as string[],
+  // The same id as legal-fixtures.ts FIXTURE_PICKUP_LOCATION, so a shop made
+  // ready either way takes the same default recipient.
+  id: "fixture-pickup",
+  name: "Slice-butikens utlämning",
+};
+export const SLICE_RECIPIENT = { name: "Slice Köpare", pickupLocationId: SLICE_PICKUP_LOCATION.id };
 export const SLICE_LEGAL_TEMPLATE_VERSION = "2026-09-07";
 
 /**
@@ -381,6 +396,7 @@ export async function makeLegallyReady(world: SliceWorld, tenant: Tenant): Promi
   await expectJson(
     await adminCall(world, tenant, "PUT", "/v1/admin/settings", {
       returnAddress: SLICE_RETURN_ADDRESS,
+      storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION] },
       vatRegistered: true,
     }),
     200,
@@ -717,7 +733,7 @@ export async function openCheckout(
   world: SliceWorld,
   tenant: Tenant,
   items: Array<{ productId: string; quantity: number }>,
-  options: { consent?: BuyerConsent; email?: string } = {},
+  options: { consent?: BuyerConsent; email?: string; recipient?: Record<string, unknown> } = {},
 ): Promise<CheckoutView> {
   const body = await expectJson<{ checkout: CheckoutView }>(
     await storefrontCall(world, tenant, "POST", "/v1/checkout", {
@@ -727,6 +743,7 @@ export async function openCheckout(
         email: options.email ?? `${unique("buyer")}@buyers.slice.test`,
         idempotencyKey: unique("idem-slice"),
         items,
+        recipient: options.recipient ?? SLICE_RECIPIENT,
       },
       origin: null,
     }),

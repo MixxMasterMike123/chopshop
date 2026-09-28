@@ -16,6 +16,14 @@ import {
   PUBLIC_ELIGIBILITY_PREDICATE,
 } from "../catalog/eligibility";
 import { resolveProductionLines } from "../pod/pod-mappings";
+import type { FrozenRecipient, RecipientInput } from "./recipient";
+import {
+  checkoutRecipientStatement,
+  parseRecipient,
+  readCheckoutRecipient,
+  resolveRecipient,
+  sameRecipient,
+} from "./recipient";
 import { withholdMinorFor } from "../pod/pod-quote";
 import type { ResolvedDiscount } from "./discount-codes";
 import {
@@ -60,6 +68,13 @@ export interface CreateCheckoutInput {
   email: string;
   idempotencyKey: string;
   items: CheckoutItemInput[];
+  /**
+   * Who gets the order and where (src/commerce/recipient.ts, D98). The HTTP
+   * parser always sets it and a body without a valid one is a 400; it is
+   * optional here only for engine-level callers, which then freeze no
+   * recipient (as every checkout made before 0045 has none).
+   */
+  recipient?: RecipientInput;
   shippingCountry: string | null;
 }
 
@@ -124,6 +139,11 @@ export interface Checkout {
 export type CreateCheckoutResult =
   | { checkout: Checkout; replayed: boolean; status: "ok" }
   | { status: "conflict" | "invalid_items" }
+  /**
+   * The recipient's pickup place is not one of the shop's own, or its date is
+   * not one of that place's dates: a fault of the body (400 invalid_request).
+   */
+  | { status: "invalid_recipient" }
   /** The shop may not sell: its admin has not accepted the current platform terms. */
   | { status: "not_found" }
   /** The basket needs a consent the request did not give (400 with the code). */
@@ -201,6 +221,7 @@ const CHECKOUT_KEYS = [
   "email",
   "idempotencyKey",
   "items",
+  "recipient",
   "shippingCountry",
 ] as const;
 const ITEM_KEYS = ["productId", "quantity", "variantId"] as const;
@@ -403,6 +424,14 @@ export function parseCreateCheckoutInput(
     items.push(item);
   }
 
+  // Required (D98): a checkout that does not say who gets the order and where
+  // is not a checkout. The shape is decided here; the pickup place against
+  // the shop's own places in createCheckout.
+  const recipient = parseRecipient(body.recipient, deliveryMethod, shippingCountry);
+  if (recipient === null) {
+    return null;
+  }
+
   return {
     consent,
     deliveryMethod,
@@ -410,6 +439,7 @@ export function parseCreateCheckoutInput(
     email,
     idempotencyKey,
     items,
+    recipient,
     shippingCountry,
   };
 }
@@ -785,6 +815,8 @@ function toCheckout(
 function matchesExisting(
   existing: CheckoutRow,
   existingLines: CheckoutItemRow[],
+  existingRecipient: Awaited<ReturnType<typeof readCheckoutRecipient>>,
+  recipient: FrozenRecipient | null,
   email: string,
   currency: string,
   lines: CheckoutLine[],
@@ -800,6 +832,9 @@ function matchesExisting(
   },
 ): boolean {
   if (
+    // The recipient is part of what the key stands for (D98): the same key
+    // with another name, address or pickup place is another request.
+    !sameRecipient(existingRecipient, recipient) ||
     existing.customer_email !== email ||
     existing.currency !== currency ||
     // The FRESHLY RESOLVED discount, both its amount and what authorized it.
@@ -867,7 +902,11 @@ async function loadExisting(
   db: D1Database,
   tenant: TenantContext,
   idempotencyKeyHash: string,
-): Promise<{ lines: CheckoutItemRow[]; row: CheckoutRow } | null> {
+): Promise<{
+  lines: CheckoutItemRow[];
+  recipient: Awaited<ReturnType<typeof readCheckoutRecipient>>;
+  row: CheckoutRow;
+} | null> {
   const row = await db
     .prepare(
       `SELECT
@@ -900,7 +939,11 @@ async function loadExisting(
     .bind(tenant.tenantId, row.checkout_id)
     .all<CheckoutItemRow>();
 
-  return { lines: items.results, row };
+  return {
+    lines: items.results,
+    recipient: await readCheckoutRecipient(db, tenant.tenantId, row.checkout_id),
+    row,
+  };
 }
 
 function storedLine(row: CheckoutItemRow): CheckoutLine {
@@ -1065,6 +1108,17 @@ export async function createCheckout(
     return { status: "not_found" };
   }
 
+  // The recipient's pickup place must be one of the shop's own (D98). Before
+  // any line is resolved: a fault of the body is answered as one (400) before
+  // the basket is judged.
+  let recipient: FrozenRecipient | null = null;
+  if (input.recipient !== undefined) {
+    recipient = await resolveRecipient(db, tenant.tenantId, input.recipient);
+    if (recipient === null) {
+      return { status: "invalid_recipient" };
+    }
+  }
+
   const lines = await resolveLines(db, tenant, input.items);
   if (lines === null) {
     return { status: "invalid_items" };
@@ -1215,6 +1269,14 @@ export async function createCheckout(
     );
   }
 
+  // The recipient, frozen with the checkout it belongs to (0045). Nothing of
+  // it goes into the audit row below.
+  if (recipient !== null) {
+    statements.push(
+      checkoutRecipientStatement(db, tenant.tenantId, checkoutId, recipient, now),
+    );
+  }
+
   statements.push(
     db
       .prepare(
@@ -1249,6 +1311,8 @@ export async function createCheckout(
       !matchesExisting(
         existing.row,
         existing.lines,
+        existing.recipient,
+        recipient,
         input.email,
         currency,
         lines,
