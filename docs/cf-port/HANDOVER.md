@@ -22,9 +22,11 @@ The report of all three is `CP4_F_REPORT.md`: what changes for a visitor, the fi
 
 **Codex** was started at 14:52 on `14274ea3` (B), `6ecd315e` (K), `3022da12`, `eedfa614` (W), `f26d616e` (F), one after the other, medium effort; logs in the session's scratchpad as `codex-cp4-<sha>.log` (they die with the session: re-run `codex review -c model_reasoning_effort="medium" --commit <sha>`). **No finding has been read yet; no commit is attested.**
 
+**Update 15:40.** Codex read the five commits: K and `3022da12` clean; seven comments on B, W and F, six real, fixed in `7cef3821`; its one comment on that fix is fixed in `474b7466` (the table is in `CP4_F_REPORT.md`). **`474b7466` itself has not been read by Codex, and nothing is attested.** **Mikael gave the go for D98 (15:30):** the brief is §R of `CP4_BRIEFS.md` (`4c1db34e`); **builder R (Opus) was launched at 15:40 and runs in the background; it dies with the window.** Its files will be in the tree, uncommitted: `cloudflare/migrations/0045_order_recipients.sql`, `cloudflare/src/commerce/recipient.ts`, `cloudflare/test/recipient.test.ts`, lines in the checkout, the order creation, the three order reads and the printer job, `test/slice-harness.ts`, the two storefront adapters, `StripePaymentForm.jsx`, the dev money API, and `CP4_R_REPORT.md`. If the window died: `git status`, read the report if present, run the gate, finish it from the tree (do not relaunch from zero). The migrations for staging are then **0039–0045**.
+
 **Next, in this order:**
 
-1. Read Codex's findings, fix, re-review the fix commit, attest HEAD.
+1. Review builder R line by line, commit, Codex on it and on `474b7466`, fix, attest HEAD.
 2. D95 is still open: Mikael's command was refused because the pinned value is null. It runs under `--bootstrap`: `scripts/cf-preflight.sh staging --bootstrap -- r2 bucket dev-url enable chopshop-stg-public --jurisdiction eu`. The address it prints goes into `pinned.staging.json` → `r2.publicBaseUrl` and into `env.staging.vars.PUBLIC_OBJECT_BASE_URL` of both `wrangler.jsonc`, in one commit; the preflight refuses every deploy until the three are equal.
 3. Mikael creates `~/.config/chopshop/web.staging.env` (mode 600): `VITE_STRIPE_PUBLISHABLE_KEY=pk_test_…` of the staging sandbox, `VITE_PLATFORM_LEGAL_NAME`, `VITE_PLATFORM_ORG_NUMBER`.
 4. Migrations 0039–0044 on staging (Mikael), then `scripts/cf-deploy.sh staging`.
