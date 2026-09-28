@@ -376,7 +376,7 @@ describe("who may read and write", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-describe("nothing in tenant_settings reaches a public response", () => {
+describe("nothing private in tenant_settings reaches a public response", () => {
   it("the storefront, the product list and the product page carry none of it", async () => {
     const marker = "cp3a-private-7f3a";
     const productId = await createPlainProduct(world, shopC, { name: "Mössa", priceMinor: 19_900, sku: "AS-HAT" });
@@ -387,7 +387,15 @@ describe("nothing in tenant_settings reaches a public response", () => {
       await settingsCall(shopC, "PUT", {
         returnAddress: `Retur ${marker}`,
         sellerType: "individual",
-        storeIdentity: { heroHeadline: `Hero ${marker}`, pickupLocations: [{ address: marker, id: "p" }] },
+        // CP4-D: the storefront shows the identity through an allowlist, key
+        // by key. These keys are not on it, and a key nobody has named yet is
+        // never public.
+        storeIdentity: {
+          contactEmail: `${marker}@example.com`,
+          legal: { noWithdrawalNotice: `Notice ${marker}` },
+          notificationEmail: `notify-${marker}@example.com`,
+          somethingAddedLater: { nested: marker },
+        },
         vatNumber: `SE${marker}`,
         vatRegistered: true,
       }),
@@ -400,8 +408,49 @@ describe("nothing in tenant_settings reaches a public response", () => {
       const text = await response.text();
       expect(response.status, `${path}: ${text.slice(0, 200)}`).toBe(200);
       expect(text, path).not.toContain(marker);
-      expect(text, path).not.toMatch(/storeIdentity|returnAddress|vatRegistered|sellerType/);
+      expect(text, path).not.toMatch(/storeIdentity|returnAddress|vatRegistered|vatNumber|sellerType/);
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("the images the identity names (CP4-D)", () => {
+  it("refuses an identity that names an image this shop cannot use, and writes nothing", async () => {
+    const before = await expectJson<{ settings: { storeIdentity: unknown } }>(
+      await settingsCall(shopC, "GET"),
+      200,
+      "before",
+    );
+    const refused = await settingsCall(shopC, "PUT", {
+      storeIdentity: {
+        gallery: [{ imageObjectId: "no-such-object", label: "Tile" }],
+        logoObjectId: "11111111-1111-4111-8111-111111111111",
+      },
+    });
+    expect(await expectJson(refused, 400, "unreferencable")).toEqual({
+      error: {
+        code: "unreferencable_images",
+        keys: ["logoObjectId", "gallery[0].imageObjectId"],
+        message: "The store identity names an image this shop cannot use",
+      },
+    });
+    const after = await expectJson<{ settings: { storeIdentity: unknown } }>(
+      await settingsCall(shopC, "GET"),
+      200,
+      "after",
+    );
+    expect(after.settings.storeIdentity).toEqual(before.settings.storeIdentity);
+  });
+
+  it("refuses an address of the source system's storage anywhere in the identity", async () => {
+    const refused = await settingsCall(shopC, "PUT", {
+      storeIdentity: {
+        gallery: [{ imageUrl: "https://firebasestorage.googleapis.com/v0/b/x/o/y.png", label: "Tile" }],
+      },
+    });
+    expect(await expectJson(refused, 400, "storage address")).toMatchObject({
+      error: { code: "refused_store_identity_keys", keys: ["gallery[0].imageUrl"] },
+    });
   });
 });
 

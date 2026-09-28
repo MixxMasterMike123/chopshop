@@ -3,6 +3,7 @@ import type {
   TenantAdminPrincipal,
 } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
+import { resolvePublicImages } from "../storage/public-objects";
 
 /**
  * CP3-A — a shop's configuration (migrations/0032_tenant_config.sql):
@@ -485,6 +486,163 @@ export function sanitizeStoreIdentity(
   );
 }
 
+// ── the branding images of the store identity (CP4-D) ───────────────────────
+//
+// The identity names its images by OBJECT ID, never by address (D92, D95): an
+// address is made at read time from the object's row, so moving the public
+// bucket behind a domain of our own changes one value and no stored identity.
+//
+//   logoObjectId, heroObjectId, faviconObjectId, emailLogoObjectId
+//   gallery[].imageObjectId
+//
+// Each must be an active public object of kind `shop_branding` of the SAME
+// shop when it is written (`unreferencableStoreIdentityImages`); a later
+// removal (D93) leaves the id in place and the public response shows no image.
+
+/** The four top-level keys that name a branding image. */
+export const STORE_IDENTITY_IMAGE_KEYS = [
+  "emailLogoObjectId",
+  "faviconObjectId",
+  "heroObjectId",
+  "logoObjectId",
+] as const;
+
+export type StoreIdentityImageKey = (typeof STORE_IDENTITY_IMAGE_KEYS)[number];
+
+/** The key of a gallery entry that names its image. */
+export const GALLERY_IMAGE_KEY = "imageObjectId";
+
+/** What `crypto.randomUUID()` object ids (and any imported id) look like. */
+const OBJECT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Hosts of the source system's file storage (the importer's list, manifest
+ * §b, plus the bucket domains). An address on one of them points at storage
+ * that is being retired and must never be written into an identity again.
+ */
+const SOURCE_STORAGE_MARKERS = [
+  "firebasestorage.googleapis.com",
+  "storage.googleapis.com",
+  "firebasestorage.app",
+  ".appspot.com",
+  "gs://",
+] as const;
+
+export function isSourceStorageAddress(value: string): boolean {
+  const lowered = value.toLowerCase();
+  return SOURCE_STORAGE_MARKERS.some((marker) => lowered.includes(marker));
+}
+
+/** Every path of the identity (any depth) whose string names source storage. */
+function sourceStoragePaths(value: unknown, path: string, found: string[]): void {
+  if (typeof value === "string") {
+    if (isSourceStorageAddress(value)) {
+      found.push(path);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => sourceStoragePaths(entry, `${path}[${index}]`, found));
+    return;
+  }
+  if (isPlainObject(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      sourceStoragePaths(child, path === "" ? key : `${path}.${key}`, found);
+    }
+  }
+}
+
+export interface StoreIdentityImageRef {
+  objectId: string;
+  /** `logoObjectId`, or `gallery[2].imageObjectId`. */
+  path: string;
+}
+
+/**
+ * The object ids an identity names as images, with where. A value that is not
+ * a well-formed id (or null, which clears) is not a reference: the parser
+ * refuses it on write, and the public projection shows no image for it.
+ */
+export function storeIdentityImageRefs(
+  identity: Record<string, unknown>,
+): StoreIdentityImageRef[] {
+  const refs: StoreIdentityImageRef[] = [];
+  for (const key of STORE_IDENTITY_IMAGE_KEYS) {
+    const value = identity[key];
+    if (typeof value === "string" && OBJECT_ID_PATTERN.test(value)) {
+      refs.push({ objectId: value, path: key });
+    }
+  }
+  const gallery = identity.gallery;
+  if (Array.isArray(gallery)) {
+    gallery.forEach((entry: unknown, index) => {
+      if (isPlainObject(entry)) {
+        const value = entry[GALLERY_IMAGE_KEY];
+        if (typeof value === "string" && OBJECT_ID_PATTERN.test(value)) {
+          refs.push({ objectId: value, path: `gallery[${index}].${GALLERY_IMAGE_KEY}` });
+        }
+      }
+    });
+  }
+  return refs;
+}
+
+/** true when every image key holds null or a well-formed object id. */
+function imageKeysWellFormed(identity: Record<string, unknown>): boolean {
+  const wellFormed = (value: unknown): boolean =>
+    value === null || (typeof value === "string" && OBJECT_ID_PATTERN.test(value));
+  for (const key of STORE_IDENTITY_IMAGE_KEYS) {
+    if (Object.hasOwn(identity, key) && !wellFormed(identity[key])) {
+      return false;
+    }
+  }
+  const gallery = identity.gallery;
+  if (Array.isArray(gallery)) {
+    for (const entry of gallery as unknown[]) {
+      if (
+        isPlainObject(entry) &&
+        Object.hasOwn(entry, GALLERY_IMAGE_KEY) &&
+        !wellFormed(entry[GALLERY_IMAGE_KEY])
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * For PUT /v1/admin/settings, after `parseStoreSettingsInput`: the paths of
+ * the identity's image references that this shop may NOT use — anything but
+ * an active public `shop_branding` object of this tenant, and every reference
+ * while the public object address is not configured
+ * (`getReferencablePublicImage`'s conditions, in one batched read). Empty =
+ * the write may proceed; otherwise the route answers 400 and writes nothing.
+ */
+export async function unreferencableStoreIdentityImages(
+  env: Env,
+  db: D1Database,
+  tenantId: string,
+  storeIdentityJson: string,
+): Promise<string[]> {
+  const parsed: unknown = JSON.parse(storeIdentityJson);
+  if (!isPlainObject(parsed)) {
+    return [];
+  }
+  const refs = storeIdentityImageRefs(parsed);
+  if (refs.length === 0) {
+    return [];
+  }
+  const images = await resolvePublicImages(
+    env,
+    db,
+    tenantId,
+    refs.map((ref) => ref.objectId),
+    ["shop_branding"],
+  );
+  return refs.filter((ref) => !images.has(ref.objectId)).map((ref) => ref.path);
+}
+
 /** A trimmed, bounded, control-character-free string; '' → null (cleared). */
 function parseOptionalText(
   value: unknown,
@@ -513,7 +671,12 @@ function parseOptionalText(
 
 /**
  * PUT /v1/admin/settings body: any non-empty subset of
- *   storeIdentity  object (REPLACES the stored object; see the report)
+ *   storeIdentity  object (REPLACES the stored object; see the report). Its
+ *                  image keys (STORE_IDENTITY_IMAGE_KEYS, gallery[].imageObjectId)
+ *                  hold an object id or null; a string naming the source
+ *                  system's storage anywhere in it is refused with its path.
+ *                  Whether the ids may be used is decided with the database,
+ *                  by `unreferencableStoreIdentityImages`.
  *   returnAddress  string | null ('' clears)
  *   vatRegistered  boolean | null (null = not answered)
  *   vatNumber      string | null ('' clears)
@@ -544,6 +707,16 @@ export function parseStoreSettingsInput(body: unknown): StoreSettingsParse {
     const json = JSON.stringify(identity);
     if (new TextEncoder().encode(json).byteLength > STORE_IDENTITY_MAX_BYTES) {
       return { status: "invalid" };
+    }
+    // CP4-D: an image is named by object id (null clears it) …
+    if (!imageKeysWellFormed(identity)) {
+      return { status: "invalid" };
+    }
+    // … and never by an address of the source system's storage, at any depth.
+    const storagePaths: string[] = [];
+    sourceStoragePaths(identity, "", storagePaths);
+    if (storagePaths.length > 0) {
+      return { keys: storagePaths, status: "refused" };
     }
     input.storeIdentityJson = json;
   }

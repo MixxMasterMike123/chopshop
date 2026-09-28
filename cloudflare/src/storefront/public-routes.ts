@@ -9,7 +9,7 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
 /**
  * The public read routes WITH catalog_version caching (PLAN §2.4):
  *
- *   GET /v1/storefront          → { storefront }
+ *   GET /v1/storefront          → { storefront }   (CP4-D: the full response)
  *   GET /v1/products            → { products }
  *   GET /v1/products/:productId → { product }
  *
@@ -63,13 +63,19 @@ export function versionedJsonResponse(
   });
 }
 
+/**
+ * `GET /v1/storefront` — the full public response (CP4-D, public-storefront.ts):
+ * `{ storefront: { name, locale, currency, identity, branding, menu, features,
+ * pickupLocations, templateId, theme, accent } }`. An unknown, suspended or
+ * unpublished shop is the 404 below.
+ */
 export async function handlePublicStorefrontRequest(
   env: Env,
   request: Request,
 ): Promise<Response> {
   const tenant = await resolveRequestTenant(env.DB, request);
   const storefront =
-    tenant === null ? null : await getPublicStorefrontVersioned(env.DB, tenant);
+    tenant === null ? null : await getPublicStorefrontVersioned(env, env.DB, tenant);
   return storefront === null
     ? notFoundResponse("Storefront not found")
     : versionedJsonResponse(request, storefront.catalogVersion, {

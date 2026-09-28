@@ -9,6 +9,7 @@ import { isSameOriginRequest } from "../lib/same-origin";
 import {
   parseStoreSettingsInput,
   readTenantSettings,
+  unreferencableStoreIdentityImages,
   writeTenantSettings,
 } from "../platform/tenant-config";
 
@@ -67,6 +68,29 @@ export async function handleAdminSettingsRoute(env: Env, request: Request): Prom
       },
       400,
     );
+  }
+
+  // CP4-D: an image the identity names is an active public branding image of
+  // THIS shop, or the write is refused whole.
+  if (parsed.input.storeIdentityJson !== undefined) {
+    const keys = await unreferencableStoreIdentityImages(
+      env,
+      env.DB,
+      principal.tenantId,
+      parsed.input.storeIdentityJson,
+    );
+    if (keys.length > 0) {
+      return jsonResponse(
+        {
+          error: {
+            code: "unreferencable_images",
+            keys,
+            message: "The store identity names an image this shop cannot use",
+          },
+        },
+        400,
+      );
+    }
   }
 
   return jsonResponse({

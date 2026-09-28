@@ -38,6 +38,14 @@ export function settingsFromStorefront(storefront) {
   if (branding.logo?.url) saved.logoUrl = branding.logo.url;
   if (branding.hero?.url) saved.heroImageUrl = branding.hero.url;
   if (branding.favicon?.url) saved.faviconUrl = branding.favicon.url;
+  // A gallery tile as the page reads it: the image's address, and the path of
+  // the product it links (relative to the shop's root; shopHref adds the root).
+  if (Array.isArray(saved.gallery)) {
+    saved.gallery = saved.gallery.map((tile) => ({
+      ...tile,
+      imageUrl: tile?.image?.url ?? null,
+    }));
+  }
   for (const key of ['menu', 'pickupLocations', 'templateId', 'theme', 'accent']) {
     if (storefront[key] !== undefined) saved[key] = storefront[key];
   }

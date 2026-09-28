@@ -35,8 +35,8 @@ PRAGMA foreign_keys = ON;
 -- is not carried; bounded like tenant_settings.updated_by.
 --
 -- Whatever a visitor can see bumps tenants.catalog_version by trigger (PLAN
--- §2.4, 0025): every write of `pages`, a new legal-pages adoption, and a
--- change of an object a page names as its image.
+-- §2.4, 0025): every write of `pages` and a new legal-pages adoption here; a
+-- change of an object a page names as its image through 0043.
 -- ============================================================================
 
 CREATE TABLE pages (
@@ -112,9 +112,6 @@ CREATE TABLE pages (
 CREATE INDEX pages_public_idx ON pages(tenant_id, status, published_at DESC, page_id DESC);
 -- The admin list, newest first, keyset on (created_at, page_id).
 CREATE INDEX pages_admin_idx ON pages(tenant_id, created_at DESC, page_id DESC);
--- "Does a page name this object as its image" (the bump trigger below).
-CREATE INDEX pages_image_idx ON pages(tenant_id, image_object_id)
-  WHERE image_object_id IS NOT NULL;
 
 CREATE TRIGGER pages_tenant_immutable
 BEFORE UPDATE OF tenant_id ON pages
@@ -279,15 +276,6 @@ BEGIN
   UPDATE tenants SET catalog_version = catalog_version + 1 WHERE tenant_id = NEW.tenant_id;
 END;
 
--- A page's image is resolved from its object at read time: a removal (D93),
--- an activation or any change of what the address or the size is made from
--- changes the page's public shape. Only objects a page names bump.
-CREATE TRIGGER catalog_version_page_image_update
-AFTER UPDATE OF status, bucket, kind, object_key, content_type, width_px, height_px ON stored_objects
-FOR EACH ROW
-WHEN EXISTS (
-  SELECT 1 FROM pages WHERE tenant_id = NEW.tenant_id AND image_object_id = NEW.object_id
-)
-BEGIN
-  UPDATE tenants SET catalog_version = catalog_version + 1 WHERE tenant_id = NEW.tenant_id;
-END;
+-- A change of an object a page names as its image (a removal, D93) bumps the
+-- version through 0043's triggers on public objects, which cover every public
+-- object of the shop.

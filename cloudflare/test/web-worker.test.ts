@@ -419,12 +419,14 @@ describe("a navigation", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  it("serves the application through the real API, which has no head route yet", async () => {
+  it("serves the application through the real API, with the head the API gives the page", async () => {
     const response = await handleRequest(navigation(`${WEB_ORIGIN}/${SHOP_A}/produkter`), webEnv(realApi));
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("<title>My Shop</title>");
+    expect(html).toContain("<title>Alla produkter | ");
+    expect(html).not.toContain("<title>My Shop</title>");
+    expect(html).toContain(`<link rel="canonical" href="${WEB_ORIGIN}/${SHOP_A}/produkter">`);
     expect(html).toContain(`<meta name="storefront-root" content="/${SHOP_A}">`);
   });
 

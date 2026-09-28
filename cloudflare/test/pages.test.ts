@@ -492,9 +492,7 @@ describe("the 0042 schema", () => {
     expect(await catalogVersion(shopA)).toBeGreaterThan(version);
   });
 
-  // 0042 bumps for an object a PAGE names; builders A (0040) and D (0043)
-  // add wider triggers on public objects, so an unrelated object may bump too.
-  it("bumps on a legal-pages adoption, and on a change of an object a page names", async () => {
+  it("bumps on a legal-pages adoption, and on the removal of an object a page names", async () => {
     let version = await catalogVersion(shopA);
     await expectJson(
       await adminAs(shopA, "POST", "/v1/admin/legal/accept-pages", {
@@ -509,18 +507,10 @@ describe("the 0042 schema", () => {
     expect(await catalogVersion(shopA)).toBeGreaterThan(version);
 
     const named = await objectRow(shopA);
-    const unnamed = await objectRow(shopA);
     await insertPage({ image_object_id: named, page_id: "schema-named", slug: "schema-named" });
 
-    // The type is part of the image's public shape, and no wider trigger
-    // watches it: 0042's alone decides here.
-    version = await catalogVersion(shopA);
-    const retype = "UPDATE stored_objects SET content_type = 'image/webp' WHERE object_id = ?";
-    await env.DB.prepare(retype).bind(unnamed).run();
-    expect(await catalogVersion(shopA)).toBe(version);
-    await env.DB.prepare(retype).bind(named).run();
-    expect(await catalogVersion(shopA)).toBe(version + 1);
-
+    // A removal of the image a page names (D93): 0043's trigger on public
+    // objects bumps for every public object of the shop.
     version = await catalogVersion(shopA);
     expect((await deletePendingOrMutableObject(env.DB, context(shopA), named, NOW)).status).toBe("ok");
     expect(await catalogVersion(shopA)).toBeGreaterThan(version);
