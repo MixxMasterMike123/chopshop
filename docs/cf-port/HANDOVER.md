@@ -41,6 +41,8 @@ Gate at `fd32bf8e`: `tsc` clean for both projects, **86 files, 3656 tests passed
 
 Each fix has its test. Codex re-reviews the fix commit and B before the deploy.
 
+**A fault of the fix commit, found by builder B and corrected in the commit after it:** the first cap of the variant triggers (100 active) was lower than what the publish gate prices completely (200), and `pod-publish.test.ts` failed in its fixtures. `661f6438` was committed with that suite failing; the reviewer read the run's last lines and missed the second failing file. The caps are now the gate's own (200 active, 400 in all; the largest product of the export holds 65 variants), a test keeps the two numbers equal, and the whole suite passes: **88 files, 3810 tests, none skipped.** The rule taken from it: the count of failed FILES is read from the run's summary line before a commit, not from the failures that happen to be printed last.
+
 **What the review changed, beyond wiring:**
 
 - **The adopted legal texts are checked like a page's HTML** (C's open question, and a hole: the text comes from the seller's browser and is shown to every visitor, and on the shared host every shop is served from one origin). The three templates were rendered as the storefront renders them and pass.

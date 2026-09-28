@@ -702,6 +702,9 @@ describe("large products are read completely, or refused — never truncated", (
   });
 
   it("more variants than one gate checks completely is refused, not half-checked", async () => {
+    // 0040 stops such a product at the write. The gate's own refusal stays for
+    // rows that are older than that cap: written here without it.
+    await env.DB.prepare("DROP TRIGGER IF EXISTS product_variants_limit_insert").run();
     await seedProduct(TENANT, {
       isPod: true,
       priceMinor: 39_900,
@@ -723,7 +726,9 @@ describe("large products are read completely, or refused — never truncated", (
 
 describe("pod_too_large on a live product is refused by every caller of the gate", () => {
   beforeAll(async () => {
-    // Live before it grew past MAX_GATE_VARIANTS (a fixture publication).
+    // Live before it grew past MAX_GATE_VARIANTS (a fixture publication), and
+    // older than 0040's cap, which would stop it at the write today.
+    await env.DB.prepare("DROP TRIGGER IF EXISTS product_variants_limit_insert").run();
     await seedProduct(TENANT, {
       isPod: true,
       priceMinor: 39_900,

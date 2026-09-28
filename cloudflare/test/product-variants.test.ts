@@ -24,6 +24,8 @@ import { createProductVariant, deleteProductVariant } from "../src/catalog/produ
 import { decideByPlatform } from "../src/catalog/screening";
 import { adminOf, PLATFORM } from "./pod-fixtures";
 import { auditRows, expectOpaque404, tenantRow } from "./tenant-fixtures";
+import { MAX_ACTIVE_VARIANTS } from "../src/catalog/admin-product-reads";
+import { MAX_GATE_VARIANTS } from "../src/pod/pod-mappings";
 
 /**
  * CP4-A — a product's variants: POST, PATCH, DELETE
@@ -253,10 +255,14 @@ describe("refusals", () => {
     await addVariant(shopB, theirs, { label: "S", priceMinor: 100, sku: "V-REF-S" });
   });
 
-  it("the 101st active variant is refused; an inactive one still fits", async () => {
+  it("the cap of active variants is the number the publish gate prices completely", () => {
+    expect(MAX_ACTIVE_VARIANTS).toBe(MAX_GATE_VARIANTS);
+  });
+
+  it("the 201st active variant is refused; an inactive one still fits", async () => {
     const full = await createProduct(shopA, { name: "Full", sku: "V-FULL" });
     await env.DB.batch(
-      Array.from({ length: 100 }, (_, index) =>
+      Array.from({ length: MAX_ACTIVE_VARIANTS }, (_, index) =>
         env.DB.prepare(
           `INSERT INTO product_variants (variant_id, tenant_id, product_id, sku, label, price_minor, active, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, 100, 1, ?, ?)`,

@@ -203,15 +203,17 @@ CREATE INDEX product_variants_product_position_idx
 -- The caps of a product's variants (src/catalog/admin-product-reads.ts
 -- MAX_PRODUCT_VARIANTS, MAX_ACTIVE_VARIANTS), enforced where two writers at
 -- once cannot both pass: the routes count first and answer `variant_limit`,
--- and these stop what slipped between the count and the write.
+-- and these stop what slipped between the count and the write. 200 active is
+-- what one publish gate prices completely (src/pod/pod-mappings.ts
+-- MAX_GATE_VARIANTS); the largest product of the export holds 65.
 CREATE TRIGGER product_variants_limit_insert
 BEFORE INSERT ON product_variants
 FOR EACH ROW
-WHEN (SELECT COUNT(*) FROM product_variants WHERE product_id = NEW.product_id) >= 200
+WHEN (SELECT COUNT(*) FROM product_variants WHERE product_id = NEW.product_id) >= 400
   OR (
     NEW.active = 1
     AND (SELECT COUNT(*) FROM product_variants
-         WHERE product_id = NEW.product_id AND active = 1) >= 100
+         WHERE product_id = NEW.product_id AND active = 1) >= 200
   )
 BEGIN
   SELECT RAISE(ABORT, 'variant limit reached');
@@ -222,7 +224,7 @@ BEFORE UPDATE OF active ON product_variants
 FOR EACH ROW
 WHEN OLD.active = 0 AND NEW.active = 1
   AND (SELECT COUNT(*) FROM product_variants
-       WHERE product_id = NEW.product_id AND active = 1) >= 100
+       WHERE product_id = NEW.product_id AND active = 1) >= 200
 BEGIN
   SELECT RAISE(ABORT, 'variant limit reached');
 END;

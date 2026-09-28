@@ -413,19 +413,19 @@ describe("catalogue database invariants", () => {
     ]);
   });
 
-  it("stops the 101st active variant and the 201st variant of a product, whoever writes it", async () => {
+  it("stops the 201st active variant and the 401st variant of a product, whoever writes it", async () => {
     await seedProduct({ productId: "product-many", published: false, sku: "MANY", status: "draft", tenantId: "tenant-cat-a" });
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 200; index += 1) {
       await seedVariant("tenant-cat-a", "product-many", `many-a-${index}`, `MANY-A-${index}`, `A ${index}`, true);
     }
     await expect(
-      seedVariant("tenant-cat-a", "product-many", "many-a-100", "MANY-A-100", "A 100", true),
+      seedVariant("tenant-cat-a", "product-many", "many-a-200", "MANY-A-200", "A 200", true),
     ).rejects.toThrow(/variant limit reached/);
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 200; index += 1) {
       await seedVariant("tenant-cat-a", "product-many", `many-i-${index}`, `MANY-I-${index}`, `I ${index}`, false);
     }
     await expect(
-      seedVariant("tenant-cat-a", "product-many", "many-i-100", "MANY-I-100", "I 100", false),
+      seedVariant("tenant-cat-a", "product-many", "many-i-200", "MANY-I-200", "I 200", false),
     ).rejects.toThrow(/variant limit reached/);
     await expect(
       env.DB.prepare("UPDATE product_variants SET active = 1 WHERE variant_id = 'many-i-0'").run(),

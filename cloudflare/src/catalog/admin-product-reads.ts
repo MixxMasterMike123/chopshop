@@ -100,9 +100,14 @@ export interface ProductRow {
 export const MAX_PRODUCT_IMAGES = 30;
 export const MAX_PRODUCT_TAGS = 20;
 /** Variants one product may hold in all (the admin route refuses more). */
-export const MAX_PRODUCT_VARIANTS = 200;
-/** Variants one product may have ACTIVE: every one of them is public. */
-export const MAX_ACTIVE_VARIANTS = 100;
+export const MAX_PRODUCT_VARIANTS = 400;
+/**
+ * Variants one product may have ACTIVE: every one of them is public. The
+ * number the publish gate prices completely (src/pod/pod-mappings.ts
+ * MAX_GATE_VARIANTS; a test keeps the two equal), so a product at the cap can
+ * always be priced and published.
+ */
+export const MAX_ACTIVE_VARIANTS = 200;
 /** D1 bound-parameter budget (PLAN §2.7): `IN (…)` lists are read 90 at a time. */
 export const ID_CHUNK = 90;
 
