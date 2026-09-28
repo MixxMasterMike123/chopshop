@@ -521,7 +521,65 @@ Every refusal of rule 2 and 3, one test each; the 409 of rule 4; the copy of rul
 
 ## S. Scripts
 
-Written in full when 0040–0042 are reviewed. Fixed now:
+Written in full on 2026-09-28 (Mikael's go: "import all content so we can properly review the shops"). Two builders side by side, disjoint files, joined by ONE file format (the copy manifest, below): **S1** the files and the staging data steps, **S2** the rows and the locale files. What was fixed earlier stands and follows after the two briefs.
+
+**Changed against the outline:** the artworks (row 43) are NOT imported in this step. They serve the print mappings, which are tied again in the admin later (D83), and no storefront page shows them. The importer prints them as deferred, with the count.
+
+### Rules of S beyond §0
+
+- A builder runs NOTHING against the network: no request to the source's storage, to staging or to the payment provider. Tools are proven with fakes (a fake source, a fake API) under `node --test`. The REVIEWER runs them against staging.
+- Every tool refuses production unless the brief says otherwise, refuses an output directory inside the repository (`lib/outside-repo.mjs`), and prints counts, ids and reasons only: never a name, an address, a text of a row, a token or a cookie.
+- The source system's storage addresses carry the earlier brand's project name. No tracked file may hold one: a tool learns them from the bundle at run time, tests use invented hosts, and a report writes "the source's storage".
+- Bundle: `~/chopshop-export/export-2026-09-27T15-02-15.414Z` (outside the repository, personal data inside: never copied into the repository, never quoted in a report). A builder MAY read it to rehearse (counts and shapes only).
+- Existing code is reused, not copied: `scripts/cf-port/migrate/lib/*` (bundle reader, ids, sql, plan checks, scrub, timestamps, scan of source addresses), the sign-in and acting-as flow of `scripts/cf-port/seed-staging-slice.mjs`, and the Worker's own pure rules imported from `cloudflare/src` where a rule must be the same on both sides (`image-sniff.ts`, `checkHtml`, `productHandle`, `addressSlug`, the slug rule of collections).
+- Gate: `node --test "scripts/cf-port/migrate/test/*.test.mjs"` (353 before this step; read the summary), `node guard/guards.test.mjs`, and for S2 also the storefront's gate (`node --test src/api/*.test.mjs src/storefront/adapters/*.test.mjs src/storefront/dev/*.test.mjs`, `node cloudflare/web/check-storefront-build.mjs`, `npx vite build`).
+
+### The copy manifest (the one format S1 writes and S2 reads)
+
+`<out>/copy-manifest.json`, outside the repository:
+
+```
+{ "schemaVersion": 1, "env": "staging", "apiOrigin": "…", "bundleManifestSha256": "…", "createdAt": "…",
+  "entries": [ { "shopId": "…",            // the source's shop id = the tenant id
+                 "sourceKey": "…",         // sha256 (hex) of the source address exactly as the bundle holds it
+                 "use": "product_image" | "collection_cover" | "branding" | "page_image",
+                 "status": "copied" | "refused" | "missing" | "failed",
+                 "objectId": "…" | null,   // set when copied
+                 "sha256": "…" | null, "sizeBytes": 0, "contentType": "…" | null,
+                 "reason": "…" | null } ] } // the Worker's error.reason, or http_<status>, or timeout
+```
+
+One entry per (shopId, sourceKey): one file, one object, many rows. The manifest never holds a source address, only its hash; S2 hashes the address a row holds and looks it up. `lib/copy-manifest.mjs` (read, write, look up, validate) is **S1's file**; S2 imports it and does not edit it. S1 writes it FIRST, before anything else, so S2 can build against it.
+
+### S1 — the files, and the data steps of staging
+
+**Owns:** `scripts/cf-port/migrate/storage-copy.mjs`, `lib/copy-manifest.mjs`, `lib/copy-sources.mjs` (which addresses of the bundle name a file, per shop and use), `lib/api-session.mjs` (platform sign-in, acting-as, one request helper with 429 and Retry-After), `scripts/cf-port/staging-legal.mjs`, their tests under `scripts/cf-port/migrate/test/`, and `docs/cf-port/CP4_S1_REPORT.md`.
+
+1. **`storage-copy.mjs --env staging --bundle <dir> --out <dir outside the repo> [--shop <id>] [--limit <n>] [--dry-run]`.** Collects every file a row that S2 imports names: the product images (`b2cImageUrl`, `b2cImageGallery[]`, `imageUrl`, the variants' images), the collections' covers, the branding images of the store identity (logo, hero, favicon, e-mail logo, gallery tiles), images inside a page's HTML. For each distinct (shop, address): fetch the file from the source (read-only, a size cap as the Worker's: 15 MB, SVG 512 KB), sniff its type with the Worker's own `image-sniff.ts`, then **reserve and upload through the Worker's object routes under a session acting for that shop** (`POST /v1/platform/tenants/:tenantId/acting-as`, then `/v1/admin/objects`: read `cloudflare/src/storage/public-objects.ts`, `app.ts` `handleAdminObjectRoute` and `CP4_P_REPORT.md` for the exact flow and kinds). The Worker proves the type and writes the row and the audit line; the tool holds no second copy of the admission rules.
+2. **Resumable and idempotent:** the manifest is written after every file (atomically: write beside, rename). A second run skips every entry that is `copied` and tries the others again. The same file is never uploaded twice for one shop.
+3. **A refusal is a result, not a failure:** `refused` with the Worker's `error.reason`, `missing` for a source that answers 404, `failed` for anything else after three tries. The run ends with counts per shop, use and status, and exits 0 when nothing is `failed`.
+4. **`--dry-run`** makes no request at all and prints the counts of what it would copy (the rehearsal on the real bundle).
+5. **`staging-legal.mjs --env staging` (refuses production):** (a) archives the text of the platform's current terms version where it has none, through the platform's route (read `CP3_E_REPORT.md` and `cloudflare/src/routes/legal-platform.ts`; the text in the format the storefront renders: `src/storefront/adapters/legal.js` `toPagePlatformTerms`, the source's templates in `src/config/platformTerms*`); (b) for each imported shop, acting as the shop: sets what the legal readiness needs where it is missing and adopts the three legal pages, rendered from the source's templates (`src/config/legalTemplates*`, `src/utils/legalPageRenderer.js`) with the shop's own imported data, through `accept-pages` (read `cloudflare/src/routes/legal-admin.ts`). **It is a staging step for the design review and says so in every audit row it causes; at the cutover the seller adopts the pages himself.** A text the Worker's HTML check refuses is reported and not adopted.
+6. **`--publish-for-review` of `staging-legal.mjs`:** publishes the shops that are unpublished in the source, through the platform's route, and writes which ones into `<out>/published-for-review.json`; `--unpublish-after-review` reads that file and hides exactly those again.
+
+### S2 — the rows, and the locale files
+
+**Owns:** `scripts/cf-port/migrate/import-catalogue.mjs`, `scripts/cf-port/migrate/verify-catalogue.mjs`, `lib/transform-products.mjs`, `lib/transform-collections.mjs`, `lib/transform-pages.mjs`, `lib/transform-branding.mjs`, `scripts/cf-port/build-locales.mjs`, `src/locales/*.json` (generated), their tests, and `docs/cf-port/CP4_S2_REPORT.md`. It may ADD a query to `state-from-queries.mjs`; it edits nothing else of CP3's importer.
+
+1. **`import-catalogue.mjs --env staging --bundle <dir> --copy-manifest <file> --target-state <file> --out <dir outside the repo>`** writes `plan.sql`, `plan.json` (with `expected`, as CP3's) and `apply.md`, under every check CP3's plan passes (`lib/plan-checks.mjs`: allowed verbs, one line per statement, 100 000 bytes per statement, no source address, deterministic from the bundle and the options). The CP3 import is APPLIED on staging: this plan is additive, finds its shops through what CP3 wrote (`legacy_id_map`, `import_runs`), records its own run, and refuses a target that already holds its rows.
+2. **Products:** the field table of `CP4_A_REPORT.md` and its "For S" note are the rule (handle = `productHandle(name(sv-SE), size, sku)`, `category = category || group`, `b2cPrice ?? basePrice` in öre, active and b2c → `active` and published, the variants expanded from `variantGroups[]` and the embedded variants, tags with their keys). Read the schema itself (0040) and every trigger on it; the caps are the database's (200 active variants, 400 in all).
+3. **Images:** a row names an OBJECT ID, and only one the copy manifest holds as `copied` for that shop. An image that is `refused`, `missing` or `failed` is left out, the row is imported without it, and the report counts it by shop and status. The first image of a product stays the first (`b2cImageUrl`, then the gallery in its order).
+4. **The 6 POD products of melodie-mc** are imported as POD products without a mapping (D83); `verify` counts them as the expected difference of the public projection (205 in the source, 199 on Cloudflare).
+5. **Screening:** a product is imported in the state the Worker gives a NEW product, never as approved by the importer. `apply.md` names the route that screens them afterwards (`POST /v1/platform/screening-terms/rescreen`, until nothing is pending).
+6. **Collections (19):** `CP4_B_REPORT.md` "For S": the handle a fixed point of the slug rule, manual members by the imported product ids in their order, smart collections by their tag, the cover by object id.
+7. **Pages (2):** `CP4_C_REPORT.md` "For S": title and content per language, the HTML through `checkHtml` (a page it refuses is not imported, reported by reason), an image of the source's storage inside the HTML replaced by its copied object's public address (`r2.publicBaseUrl` of the pinned file + the object's key, as the Worker builds it) or removed and counted.
+8. **Branding and store identity:** `CP4_D_REPORT.md` item 10: `logoObjectId`, `heroObjectId`, `faviconObjectId`, `emailLogoObjectId`, `gallery[].imageObjectId`, written into the store identity CP3 imported (an UPDATE of that one JSON, by the rules of `sanitizeStoreIdentity`), and the menu when the source holds one.
+9. **What a visitor sees bumps `catalog_version`** (by the triggers, or by the plan where no trigger does).
+10. **`verify-catalogue.mjs`** compares the queried state with `plan.json` `expected`, check by check, as `verify.mjs` does: counts per shop and table, the public projection per shop, no product without its handle, no image row without its object, no object id that is not the shop's own.
+11. **`build-locales.mjs --bundle <dir>`** writes `src/locales/sv-SE.json`, `en-GB.json`, `en-US.json` from the export's translations, keys sorted, **scrubbed**: a text that holds the earlier brand's name or its resale feature is left out (the page then shows its built-in text) and counted. The storefront's build must stay free of those names (`node guard/guards.test.mjs` after `git add -N`).
+12. **The rehearsal, before the report:** the plan built from the REAL bundle with an invented manifest that marks every file as copied, executed on a local sqlite that holds every migration and CP3's plan (`~/chopshop-export/import-2026-09-28/plan/plan.sql`), then `verify-catalogue` against it. Counts and shapes in the report, nothing of a row's content.
+
+### What was fixed earlier
 
 - **Rows:** 51 products (variants, images, tags), 20 collections, 40 pages, 43 artwork, the branding images of row 56 (D76), 33 infringement reports (none today). **Row 44 is not imported (D83):** the importer prints it as deferred to the admin, with the count.
 - **The 6 POD products of melodie-mc are imported as POD products without a mapping.** The predicate keeps a POD product without an active mapping off the storefront, so they are not public on Cloudflare until they are tied again. `verify` counts them as an expected difference: the public projection is 205 in the source and 199 on Cloudflare. Importing them as plain products would sell a print that nobody prints.
