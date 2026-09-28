@@ -129,6 +129,286 @@ The columns and tables that hold an image on a product, a collection or the bran
 
 ---
 
-## A–F, S
+## Order of work
 
-Written after P's interface is reviewed, one section each, in this file.
+```
+P ──► A ──► B ──┐
+  ├─► C ────────┼──► F ──► S (lands last; starts when 0040–0042 are drafted)
+  └─► D ────────┤
+E (starts at once) ┘
+```
+
+A, C and D start when P's interface is reviewed. B starts when A's public product functions are in the tree. D's menu reads the tables of B and C, whose names and columns this file fixes, so D does not wait for them.
+
+## The address grammar (fixed here, used by D, E, F and S)
+
+The storefront keeps today's addresses. `<root>` is `/<shop>` on the shared host (D77) and empty on a shop's own domain.
+
+| Page | Address |
+|---|---|
+| Home | `<root>/` |
+| Product | `<root>/product/<handle>` |
+| All products | `<root>/produkter` |
+| Category | `<root>/kategori/<category>` |
+| Collection | `<root>/samling/<handle>` |
+| Tag | `<root>/tagg/<tag>` |
+| Cart, checkout | `<root>/cart`, `<root>/checkout` |
+| Order | `<root>/order-return`, `<root>/order-confirmation/<orderId>` |
+| Withdrawal | `<root>/angra` |
+| Infringement report | `<root>/rapportera-intrang` |
+| Content page, post, legal page | `<root>/<slug>` |
+
+The browser reaches the API under `<root-host>/_api/<shop>/v1/…` on the shared host and `/_api/v1/…` on a shop's own domain. Every address the API returns inside a body is a path **relative to the shop's root** (`/product/<handle>`); the web Worker and the client put the root in front. The API never builds an absolute storefront address: on the shared host it sees the shop's internal hostname, which no visitor can use.
+
+---
+
+## A. Products
+
+**Goal.** Everything the product pages show has a home in D1, an admin can read and write all of it, and the public shapes carry it, images included.
+
+**Decisions:** D82 (typed columns for what Cloudflare reads; the B2B fields are not carried), D83 (no mapping is imported; nothing in A depends on one), D92, D93.
+
+### Owns
+
+| File | |
+|---|---|
+| `$CF/migrations/0040_product_catalogue.sql` | new |
+| `$CF/src/catalog/admin-catalog.ts` | existing: the new fields of create and update |
+| `$CF/src/catalog/admin-product-reads.ts`, `product-variants.ts`, `product-images.ts` | new |
+| `$CF/src/catalog/public-catalog.ts` | existing: the public shapes, the order, the filters, the cursor |
+| `$CF/src/catalog/screening-core.ts` | existing: `productScreeningTexts` only |
+| `$CF/src/routes/admin-products.ts` | new: the handlers of the new routes |
+| `$CF/test/admin-products.test.ts`, `product-variants.test.ts`, `product-images.test.ts` | new |
+| `$CF/test/admin-catalog.test.ts`, `public-catalog.test.ts` | existing: additions; a changed case is named in the report |
+
+`handleAdminProductRoute` in `app.ts` keeps serving `POST /v1/admin/products`, `PATCH /v1/admin/products/:id`, `…/publish` and `…/unpublish` through `admin-catalog.ts`. New fields of create and update arrive through the parsers A owns, with no change of `app.ts`.
+
+### First: the field table
+
+Before the schema, A reads the pages that stay (`PublicStorefront`, `AllProductsPage`, `TagPage`, `CollectionPage`, `ProductCollectionPage`, `PublicProductPage`, `ShoppingCart`, `Checkout`, and what they import) and writes, in its report, one row per product field of manifest row 51: **who reads it → where it lives in D1 → in which public shape**. The rule: a field a staying page shows gets a typed home; a field no staying page reads is not carried, and is listed as such. Review counts and rating sums are not carried (D81).
+
+### Schema (0040), the fixed part
+
+- `products` gains `handle TEXT` (the last segment of the product's address today; A finds the rule the source uses, the importer fills it; `UNIQUE (tenant_id, handle)`; NOT NULL after a backfill from the sku for rows that exist), `featured INTEGER NOT NULL DEFAULT 0`, `sort_order INTEGER` (NULL = none), `compare_at_price_minor INTEGER`, `category TEXT`, and the text fields of the field table.
+- `product_variants` gains what the variant rail needs: the group a variant belongs to, its size, its position. **Money stays keyed on the variant's sku**: checkout resolves a line by it and must keep doing so unchanged.
+- `product_images (tenant_id, product_id, variant_id NULL, object_id, position, alt)`: ONE ordered list per product, the first is the main image; a variant's images are the rows that name it. `object_id` references `stored_objects`.
+- `product_tags (tenant_id, product_id, tag)`, tags lowercased and trimmed, index on `(tenant_id, tag)`.
+- Tenant-match triggers like those of 0005 on every new table; `catalog_version` bump triggers on insert, update and delete of every new table.
+
+### Routes
+
+| Route | |
+|---|---|
+| `GET /v1/admin/products` | list: `status?`, `q?` (name or sku prefix), `cursor?`, `limit?` 1–100; each row with its main image and its publication state |
+| `GET /v1/admin/products/:id` | one product with variants, images, tags |
+| `PUT /v1/admin/products/order` | `[{ productId, sortOrder }]`, at most 200, one batch |
+| `POST /v1/admin/products/:id/variants` · `PATCH`, `DELETE …/variants/:variantId` | a variant a paid order names is deactivated, never deleted |
+| `PUT /v1/admin/products/:id/images` | the whole ordered list `[{ objectId, alt, variantId? }]`, at most 30; every `objectId` through `getReferencablePublicImage(…, ["product_media"])` |
+
+Every write that changes a text a visitor reads goes through the screening fence exactly as `updateAdminProduct` does, and the new texts (tags, category, the further description, variant labels, image alt texts) join `productScreeningTexts`. A price edit of a variant of a live POD product passes the same PRISGOLV rule as a product's price.
+
+### Public shapes
+
+```ts
+interface PublicProductSummary {           // additive to today's
+  handle: string; path: string;            // "/product/<handle>"
+  image: PublicImage & { alt: string | null } | null;
+  lowestPriceMinor: number;                // over the active variants, else the price
+  compareAtPriceMinor: number | null;
+  featured: boolean; category: string | null; tags: string[];
+}
+interface PublicProductDetail extends PublicProductSummary {
+  images: (PublicImage & { alt: string | null; variantId: string | null })[];
+  variants: PublicProductVariant[];        // gains group, size, position, image
+}
+```
+
+- `GET /v1/products` gains `tag?`, `category?`, `featured?=1`, `cursor?`, `limit?` (1–100, default 100) and answers `nextCursor`. **One shop has 113 public products and today's list stops at 100 without saying so.** Order: `sort_order` ascending with NULL last, then name, then id (`src/utils/productSorting.js`).
+- `GET /v1/products/:ref` accepts the product's id or its handle.
+- Exported for B and D: `listPublicProductsByIds(env, db, tenant, productIds)` (keeps the order given, drops what the predicate refuses) and `listPublicProducts(env, db, tenant, filter)`. Every one of them through `ELIGIBLE_PRODUCTS_FROM` + `PUBLIC_ELIGIBILITY_PREDICATE`; the predicate itself is not changed.
+
+### Must be proven by tests
+
+Beyond rule 9: a draft's image, tag or variant never appears in a public shape; an image row whose object was removed (D93) is absent and the next one becomes the main image; tenant A cannot attach tenant B's object; the cursor walks 250 products without a gap or a repeat while one is unpublished in between; every write of the new tables changes the ETag; the checkout suite is untouched and green.
+
+---
+
+## B. Collections
+
+**Goal.** Manual and tag-driven collections, readable by the storefront and by a shop's own website (D87).
+
+### Owns
+
+`$CF/migrations/0041_collections.sql`, `$CF/src/catalog/collections.ts`, `$CF/src/routes/admin-collections.ts`, `$CF/src/routes/public-collections.ts`, `$CF/test/collections.test.ts`, `$CF/test/public-collections.test.ts`.
+
+### Schema (0041) — names fixed, D reads them
+
+`collections (collection_id, tenant_id, handle, external_ref NULL, title, description NULL, image_object_id NULL, type 'manual'|'smart', rule_tag NULL, published 0|1, featured 0|1, sort_order NULL, created_at, updated_at)` with `UNIQUE (tenant_id, handle)`, a unique index on `(tenant_id, external_ref)` where it is set, and `CHECK` that a smart collection has a tag and a manual one has none.
+`collection_products (tenant_id, collection_id, product_id, position)`, primary key `(collection_id, product_id)`.
+Tenant-match and bump triggers as in A.
+
+### Routes
+
+| Route | |
+|---|---|
+| `GET`, `POST /v1/admin/collections` · `GET`, `PATCH`, `DELETE /v1/admin/collections/:id` | the cover through `getReferencablePublicImage(…, ["product_media"])` |
+| `PUT /v1/admin/collections/:id/products` | the whole ordered list, at most 500; every product of the same tenant |
+| `GET /v1/collections` | published only: `{ collections: [{ handle, externalRef, title, description, image, path, featured }] }` |
+| `GET /v1/collections/:ref` | `ref` = handle, `external_ref` or id, tried in that order. `limit?` 1–100 (default 24), `cursor?`. `{ collection, products: PublicProductSummary[], nextCursor }` |
+
+A handle and an `external_ref` share one namespace per shop: a write is refused when its handle equals another collection's `external_ref` or the reverse, so `:ref` names one collection.
+
+**D87.** The two public routes answer a GET from any origin: `Access-Control-Allow-Origin: *`, no credentials, nothing but public fields, the ETag as every public read, and a rate limit per caller (`src/lib/rate-limit.ts`). What the shop's site needs per product is in A's summary: title, one image with alt, width and height, the lowest price, the path.
+
+A collection's products come from A's exported functions: by ids for a manual collection, by tag for a smart one. B writes no product query of its own.
+
+---
+
+## C. Pages and legal pages
+
+**Goal.** Content pages and posts with per-language text; the legal texts a shop adopted, shown to a visitor as they were adopted.
+
+**Decisions:** D79 (legal pages have a route of their own), D84 (per language), D88 (a post is a kind of page), D94 (no attachments).
+
+### Owns
+
+`$CF/migrations/0042_pages.sql`, `$CF/src/content/pages.ts`, `$CF/src/content/html-refusal.ts`, `$CF/src/routes/admin-pages.ts`, `$CF/src/routes/public-pages.ts`, `$CF/src/routes/public-legal.ts`, `$CF/test/pages.test.ts`, `$CF/test/public-pages.test.ts`, `$CF/test/public-legal.test.ts`. Read-only use of `src/legal/legal-pages.ts` and `src/legal/platform-terms.ts`; a function C needs there is asked for in the report.
+
+### Schema (0042) — names fixed, D reads them
+
+`pages (page_id, tenant_id, slug, kind 'page'|'post', status 'draft'|'published', title_json, content_json, summary_json NULL, meta_title_json NULL, meta_description_json NULL, author NULL, image_object_id NULL, published_at NULL, created_at, updated_at)`, `UNIQUE (tenant_id, slug)`. Each `*_json` is an object keyed by language tag (`sv-SE`), every value a string. `content_json` at most 262 144 bytes.
+
+A slug is refused when it equals a first segment the storefront owns (`product`, `produkter`, `kategori`, `samling`, `tagg`, `cart`, `checkout`, `order-return`, `order-confirmation`, `angra`, `rapportera-intrang`, `_api`, `assets`) or a legal page's key.
+
+### Content is HTML
+
+The storefront cleans page HTML when it renders it (DOMPurify in `DynamicPage.jsx`), and that stays. The server adds a **refusal at write**: content that holds a `script`, `iframe`, `object` or `embed` element, an attribute starting with `on`, or `javascript:` in an address is refused with 400, never repaired (`html-refusal.ts`, a refusing scan like P's SVG check). A Firebase Storage address in the content is refused too: an image of a page is a public object of kind `product_media`, named by its address from `resolvePublicImages`.
+
+### Routes
+
+| Route | |
+|---|---|
+| `GET`, `POST /v1/admin/pages` · `GET`, `PATCH`, `DELETE /v1/admin/pages/:id` | |
+| `GET /v1/pages?kind=post` | published posts, newest first: `{ pages: [{ slug, path, title, summary, author, publishedAt, image }] }`, `lang?`, `cursor?`, `limit?` |
+| `GET /v1/pages/:slug` | one published page or post, `lang?` (the shop's default language when absent or unknown) |
+| `GET /v1/legal` | which legal pages the shop has: `{ pages: [{ key, path, title }] }` |
+| `GET /v1/legal/:key` | the HTML of the latest adoption (`legal_acceptances.texts_json`), with its adoption date. No adoption → 404 |
+
+**The baseline holds four legal pages** (`legal-angerratt`, `legal-integritetspolicy`, `legal-kopvillkor`, `legal-plattformsvillkor`) and `LEGAL_PAGE_KEYS` holds three. The fourth is the platform's own terms: `GET /v1/legal/plattformsvillkor` answers the text of the current published version of the platform terms. C reads `DynamicPage.jsx` for what else that page shows (it renders a second platform text beside the terms) and reports what has a source in D1 and what has none.
+
+A page of an unpublished or suspended shop is a 404, as every public read of it is. Pages and posts are screened content only if the platform's screening reads them today: C checks the source system and reports; it does not add screening on its own.
+
+---
+
+## D. The storefront response, search engines, forwarding
+
+**Goal.** One public read gives the storefront everything it paints from. A search engine gets a finished page and an old address gets a permanent forward.
+
+**Decisions:** D77, D81 (a feature that is not ported reads as off), D87, D88, D57 (preview).
+
+### Owns
+
+`$CF/migrations/0043_storefront.sql`, `$CF/src/storefront/public-storefront.ts` (existing), `$CF/src/storefront/identity-projection.ts`, `$CF/src/storefront/seo.ts`, `$CF/src/storefront/redirects.ts`, `$CF/src/storefront/sitemap.ts`, `$CF/src/routes/public-seo.ts`, `$CF/src/routes/admin-redirects.ts`, `$CF/src/platform/tenant-config.ts` (existing: the branding image keys of the store identity only), and their tests (`test/public-storefront.test.ts` existing; `identity-projection`, `seo`, `redirects`, `sitemap` new).
+
+### The storefront response
+
+`GET /v1/storefront` keeps `name`, `locale`, `currency` and gains:
+
+- `identity`: **an allowlist, key by key**, of `store_identity_json`. D reads `src/config/store.js` and the staying pages, and lists in its report every key with who shows it. A key that is not on the list is never in the response. Never on the list, whatever a page reads today: the return address's owner fields beyond what the legal pages print, VAT number unless a staying page prints it, notification and contact addresses that no page prints, anything under `legal.acceptance`, anything of payments.
+- `branding`: `{ logo, hero, favicon, emailLogo }`, each a `PublicImage` or null. The store identity holds **object ids** under `logoObjectId`, `heroObjectId`, `faviconObjectId`, `emailLogoObjectId` and in `gallery[].imageObjectId`; `PUT /v1/admin/settings` accepts them through `getReferencablePublicImage(…, ["shop_branding"])` and keeps refusing every address of the source system's storage.
+- `menu`: the shop's menu with every target resolved: an entry whose page or collection does not exist or is not public is left out. Each entry carries its `path`.
+- `features`: every key of `FEATURE_KEYS` as a boolean: the stored or default value AND "ported". Ported today: `pod`. All others read `false` (D81). The list of ported keys is one constant, so porting a feature is one line.
+- `pickupLocations`, `templateId`, `theme`, `accent` as stored.
+
+0043 adds the `catalog_version` bump triggers on `tenant_settings` and `tenant_features`.
+
+### Search engines and forwarding (D88)
+
+`GET /v1/seo?path=<path relative to the shop's root>` answers ONE of:
+
+- `{ redirect: { to, status: 301 } }` when the shop has a forward for that path;
+- `{ page: { title, description, canonicalPath, image, robots, jsonLd, bodyHtml } }` for a home, product, collection, category, tag, page, post or legal page that is public. `jsonLd` holds relative paths under the key `@relative` wherever an address belongs, and the caller makes them absolute; `bodyHtml` is the text a search engine should read (a product's name, price and description; a post's article), built from public fields only and escaped by the server;
+- 404 for anything else. The web Worker then serves the application as it is.
+
+`redirects (tenant_id, from_path, to_path, created_at, created_by)`, primary key `(tenant_id, from_path)`. `from_path` is stored in ONE normal form (percent-decoded to UTF-8, NFC, no trailing slash, query dropped, lower-case kept as given) and the lookup normalises the same way: old addresses hold percent-encoded emoji. `to_path` is relative to the shop's root and must not itself be a `from_path` (no chain, no loop). Admin: `GET /v1/admin/redirects` (cursor), `PUT /v1/admin/redirects` (at most 500 per call, one batch), `DELETE`. The importer fills it; the admin page is CP5.
+
+`GET /v1/sitemap` answers `{ entries: [{ path, lastModified }] }` for everything public, at most 5 000 per answer with a cursor. The web Worker writes the XML and `robots.txt`.
+
+### The preview of an unpublished shop (D57) — D's second pass
+
+After the first pass is reviewed. A grant the server mints for the shop's own admin (`POST /v1/admin/preview`), bound to the tenant, 30 minutes, signed; the storefront sends it on its reads; a read with a valid grant uses the predicate WITHOUT its `tenant.published = 1` term and answers `Cache-Control: no-store` with no ETag and `robots: noindex`. **Checkout, payment and every write ignore the grant**: a preview never sells. The predicate of `eligibility.ts` is not edited; the preview's fragment is derived from it in one place, with a test that the two differ in exactly that term.
+
+---
+
+## E. The client and the web Worker
+
+**Goal.** The storefront runs from Cloudflare with no Firebase code in its bundle, and reaches the API through the web Worker.
+
+**Decisions:** D77, D81, D88, D16 (translations as a static file).
+
+### Owns
+
+| | |
+|---|---|
+| `$CF/web/**` | new: the web Worker (`wrangler.jsonc`, `src/index.ts`, tests, its own `package.json` only if the API's tooling cannot serve it) |
+| `src/api/**` | new: the client |
+| `src/storefront/**` | new: the storefront's own entry, router and providers |
+| `index.storefront.html`, `vite.storefront.config.js` | new |
+| `$CF/src/index.ts` | existing: the `Internal` class only |
+| `$CF/src/tenancy/shop-hostname.ts`, `$CF/test/shop-hostname.test.ts` | new |
+
+E does not edit a page (that is F), `src/App.jsx`, `vite.config.js` or `index.html`: the build that exists keeps working as it is for the admin and platform pages, which are swapped in CP5.
+
+### The web Worker
+
+1. **Which shop.** A request whose host is the pinned web origin is on the shared host: the first path segment is the shop (`^[a-z0-9][a-z0-9-]{0,62}$`, and not one of the reserved first segments of `src/config/tenancy.js`). Any other host is a shop's own domain and carries no prefix.
+2. **`/_api/…`** is forwarded to the API's `Internal` entrypoint over the service binding, method, body and headers as they came, minus every `X-Tenant-*` header. On the shared host through `Internal.fetchForShop(shop, request)`: the API looks up that shop's verified storefront hostname (`shop-hostname.ts`: tenant active, domain `kind = 'storefront'` and `status = 'verified'`, the lowest hostname when several), rewrites the request's host to it and routes it as any other internal request. No hostname → the opaque 404. The API keeps ONE rule, the hostname, and the public entrypoint still takes no tenant from a browser. Only `/_api/<shop>/v1/…` paths that a storefront uses are forwarded: **nothing under `/v1/admin`, `/v1/platform`, `/v1/render`, `/v1/webhooks`, `/v1/staging` or `/api/auth` passes the web Worker.**
+3. **A navigation** (GET, `Accept` holds `text/html`, not an asset): one call to `GET /v1/seo?path=`. A redirect answer → `301` with `Location` = root + `to`. A page answer → the application's HTML with title, description, canonical, robots, Open Graph image, JSON-LD and `bodyHtml` (inside the root element) put in by `HTMLRewriter`. A 404 or a failure of that call → the application's HTML untouched: the shop must open when the API is slow or down. The call has a deadline of 1.5 s.
+4. **`<root>/sitemap.xml`** from `GET /v1/sitemap`, **`/robots.txt`** with the sitemap's address.
+5. **Assets** from the build, hashed files `immutable`, the HTML `no-cache`. Security headers as `firebase.json` sets them today, plus a Content-Security-Policy in report-only mode whose image source is the public object origin.
+6. The visitor's address (`CF-Connecting-IP`) is forwarded: the API's rate limits count by it.
+
+### The client (`src/api/`)
+
+One `request()` that knows the root, sends no credentials, reads the API's error shape into a typed error, and lets the browser revalidate by ETag. One module per surface: `storefront`, `products`, `collections`, `pages`, `legal`, `checkout`, `orders` (the receipt poll: every 2 s, at most 90 s, cancelled on unmount, an explicit timeout state — PLAN §2.9), `withdrawal`, `reports`. Shapes are the ones of A–D in this file; where a builder's report differs, the report wins and E says so.
+
+### The providers (`src/storefront/`)
+
+`StoreSettings` keeps painting from the static defaults and overrides when the response arrives: that is what makes the first paint equal to the baseline. `ShopFeatures` from the response's `features`. `Translation` from a static file per language (`src/locales/<lang>.json`; until S delivers it, the keys fall back to the text in the code, as they do today when a key is missing). `Cart` without the discount field while the feature reads off. No sign-in, no account: the storefront tree holds no auth provider.
+
+The router holds the staying addresses of the grammar above and nothing else; an address of a removed page (D81) shows the shop's not-found page.
+
+### Must be proven
+
+- `vite build --config vite.storefront.config.js` succeeds and **its output holds no Firebase code**: a test scans the built files.
+- Web Worker: the shop from the path; the reserved segments; an admin path through `/_api` is refused; tenant headers are dropped; a navigation gets the injected head; a slow or failing SEO call still serves the application; a redirect is a 301; the injected text is escaped (a product named `</title><script>` stays text).
+- `shop-hostname`: suspended tenant, pending domain, another kind of domain, an unknown shop and a malformed segment each answer nothing.
+
+### Other builders work in `$CF/src` at the same time
+
+E keeps `npx tsc --noEmit` green for its own files and runs its own suites. When the whole suite fails in a file E does not own, E reports it and does not repair it.
+
+---
+
+## F. The page swap
+
+Written in full when A–E are reviewed, because every line of it depends on their final shapes. Fixed now:
+
+- **The 16 files that stay** (`INVENTORY_CLIENT_DATA.md` §1.3), in this order: shell (`ShopGate`, `ShopNavigation`, `ShopFooter`) → catalogue (`PublicStorefront`, `AllProductsPage`, `TagPage`, `CollectionPage`, `ProductCollectionPage`, `PublicProductPage`) → content (`DynamicRouteHandler`, `DynamicPage`) → `InfringementReportPage` → money (`Checkout`, `OrderConfirmation`, `WithdrawalPage`, `OrderWithdrawal`). `ShoppingCart` and `OrderReturn` call no SDK themselves and stay as they are; they are shot and diffed with the rest.
+- **Only the data layer changes.** Markup, class names, tokens and copy stay byte for byte; a page's diff shows imports, hooks and field names, nothing else.
+- **The gate per page:** re-shoot at 375 / 768 / 1440 on staging and diff against `docs/cf-port/baseline/storefront` (`DESIGN_CONTRACT.md` §4). A difference is either fixed or written down with its cause and accepted by Mikael; the expected ones (no review stars, no account link, no discount field: D81) are listed before the first shot.
+- The reviewer looks at every page rendered, not only at its diff.
+
+---
+
+## S. Scripts
+
+Written in full when 0040–0042 are reviewed. Fixed now:
+
+- **Rows:** 51 products (variants, images, tags), 20 collections, 40 pages, 43 artwork, the branding images of row 56 (D76), 33 infringement reports (none today). **Row 44 is not imported (D83):** the importer prints it as deferred to the admin, with the count.
+- **The 6 POD products of melodie-mc are imported as POD products without a mapping.** The predicate keeps a POD product without an active mapping off the storefront, so they are not public on Cloudflare until they are tied again. `verify` counts them as an expected difference: the public projection is 205 in the source and 199 on Cloudflare. Importing them as plain products would sell a print that nobody prints.
+- **The copy of the files goes through the Worker's own object routes**, not around them: reserve, upload, under a session that acts for the shop. The Worker then proves every file's type (D92), writes the row and the audit line, and the importer holds no second copy of the admission rules. The copy writes a manifest (source address → object id, sha256, size, type); the plan names an object only when the manifest holds its verified entry (C6). A file the Worker refuses is reported by shop and by reason, and the row that named it is imported without that image.
+- 495 distinct product images, 12 covers, 17 branding images, 20 artworks. The 3 445 references collapse to the distinct files: one file, one object, many rows.
+- **Forwarding (D88):** for the four shops of the export the addresses do not change, so the importer writes no forward. The rule that builds a product's handle is A's, used by both.
+- **Translations (D16):** one static file per language from the export, scrubbed of the earlier brand's strings, under `src/locales/`.
+- Each transform is rehearsed on the real bundle before its builder is called done, as CP3's were: counts and shapes only, nothing printed from a row's content.
