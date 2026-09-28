@@ -729,6 +729,9 @@ expect_refused "web deploy with an inline source map comment → refused" "holds
 web_tree staging; printf 'body{}\n/*# sourceMappingURL=index.css.map */\n' >"$T/cloudflare/web/dist/assets/index-def456.css"; run_stg --web -- deploy
 expect_refused "web deploy with a CSS source map comment → refused" "holds a source map: assets/index-def456.css carries a sourceMappingURL comment"
 
+web_tree staging; printf 'body{color:red}/*# sourceMappingURL=data:application/json;base64,e30= */\n' >"$T/cloudflare/web/dist/assets/index-def456.css"; run_stg --web -- deploy
+expect_refused "web deploy with a source map comment behind code on its line → refused" "holds a source map: assets/index-def456.css carries a sourceMappingURL comment"
+
 web_tree staging; printf 'var s="//# sourceMappingURL=";\n' >>"$T/cloudflare/web/dist/assets/index-abc123.js"; run_stg --web -- deploy
 expect_exec_line "web deploy: the words inside code are not a source map comment → execs" "$WEB_EXEC_STG"
 

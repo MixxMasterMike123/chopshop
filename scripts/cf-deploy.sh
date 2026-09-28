@@ -200,6 +200,9 @@ build_storefront() ( # a subshell: the build sees the file's VITE_ values and no
     case $name in VITE_*) unset "$name" ;; esac
   done
   each_entry "$VALUES" export_entry
+  # A production build whatever the shell holds: with NODE_ENV=development Vite ships the
+  # development build of the libraries and the page's development-only notes.
+  export NODE_ENV=production
   exec node "$ROOT/cloudflare/web/check-storefront-build.mjs"
 )
 rc=0

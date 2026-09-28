@@ -54,3 +54,19 @@ Every change is a removal of a feature that is not ported. No markup, class name
 - No page was looked at rendered by the reviewer. F1 looked at its pages before it was stopped and left no record. The design gate on staging (every page at 375, 768 and 1440 against the baseline) is the proof, and it has not run.
 - `OrderReturn.jsx` is switched in unchanged; nobody has walked the return from a payment method's own page.
 - The guard's allowlist went from 313 to 298: 15 entries removed, none added.
+
+## Codex, 2026-09-28 14:51–14:59 (medium effort, one commit at a time)
+
+`6ecd315e` (K) and `3022da12`: **no finding.** Seven comments on the other three; six were real and are fixed in one commit, each with its test where a test can reach it.
+
+| Commit | Finding | What was done |
+|---|---|---|
+| B `14274ea3` | A change of a title only could remove the members another request had just given the collection (the row it read was older than that change) | Members are removed only by the change that writes the rule. **No test:** the state the test needs (members in a smart collection) is one the database refuses (0041) |
+| B `14274ea3` | A script of another origin could read the body and neither `ETag` nor `Retry-After` | `Access-Control-Expose-Headers: ETag, Retry-After` on every answer of the two routes |
+| W `eedfa614` | A shell that holds `NODE_ENV=development` built a development storefront (the libraries' development build, the payment form's development-only note) | The build runs with `NODE_ENV=production`; the deploy tests now run under `NODE_ENV=development` and read what the build saw |
+| W `eedfa614` | A source map comment behind code on its line passed the check | Found anywhere on a line, when an address follows the `=`; the bare words in a string of the code still pass. The real build passes the new check |
+| F `f26d616e` | A gallery tile whose product path holds no sku (`/product/mugg`) lost its link | The tile links the path the API gave it, under the shop's root |
+| F `f26d616e` | Featured collections behind the first hundred were not shown on the home page | `listCollections` follows the cursor to the end (at most 1 000) |
+| F `f26d616e` | **Not changed, by the brief.** In the OLDER build (`src/App.jsx`) the shop routes stand behind the swapped gate and wait for ever | The older build must build, and it does: the admin and platform pages live in it until CP5, and none of them stands behind the gate. Its storefront pages are all swapped and read an API that build does not have. This branch is never deployed to the older hosting |
+
+Gate after the fixes: Worker 89 files, 3838 tests, 0 failed; 112 tests under Node; preflight 183; deploy 48; both builds build; guard PASS.

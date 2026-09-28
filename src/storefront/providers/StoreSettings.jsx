@@ -18,6 +18,7 @@ import { resolveTheme, ensureTemplateFonts } from '../../config/nordTokens';
 import { getTemplate } from '../../config/templates';
 import { useStorefront } from './Storefront.jsx';
 import { skuOfProductPath } from '../adapters/products.js';
+import { shopHref } from '../../api/client.js';
 
 const StoreSettingsContext = createContext(STORE);
 
@@ -48,6 +49,9 @@ export function settingsFromStorefront(storefront) {
       ...tile,
       imageUrl: tile?.image?.url ?? null,
       linkSku: skuOfProductPath(tile?.path),
+      // The product's own path as the API answers it, under the shop's root: a
+      // handle without a sku behind a '_' has no `linkSku` and is linked by this.
+      linkTo: typeof tile?.path === 'string' ? shopHref(tile.path) : null,
     }));
   }
   for (const key of ['menu', 'pickupLocations', 'templateId', 'theme', 'accent']) {

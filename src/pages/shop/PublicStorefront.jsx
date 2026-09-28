@@ -519,7 +519,7 @@ const PublicStorefront = () => {
             src: g.imageUrl,
             label: g.label || '',
             // Optional SKU link; if absent the tile is non-navigating.
-            to: g.linkSku ? getProductUrl({ name: { 'sv-SE': g.label || '' }, sku: g.linkSku }) : null,
+            to: g.linkTo ? g.linkTo : g.linkSku ? getProductUrl({ name: { 'sv-SE': g.label || '' }, sku: g.linkSku }) : null,
           }));
 
           const Tile = ({ item, extraClass }) => {

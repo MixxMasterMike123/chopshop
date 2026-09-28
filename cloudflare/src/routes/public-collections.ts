@@ -83,6 +83,9 @@ const PREFLIGHT_MAX_AGE_SECONDS = 86_400;
 
 function withCors(response: Response): Response {
   response.headers.set("Access-Control-Allow-Origin", "*");
+  // Without this a script of another origin reads the body and neither header:
+  // no revalidation with If-None-Match, no waiting out a 429.
+  response.headers.set("Access-Control-Expose-Headers", "ETag, Retry-After");
   return response;
 }
 

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { listAllPages, listPages, MAX_PAGE_LIST_PAGES } from './pages.js';
-import { getWholeCollection, MAX_COLLECTION_PAGES } from './collections.js';
+import { getWholeCollection, listCollections, MAX_COLLECTION_PAGES } from './collections.js';
 
 const realFetch = globalThis.fetch;
 let calls;
@@ -83,5 +83,26 @@ describe('getWholeCollection', () => {
     stubFetch((url, n) => ({ body: { collection: { handle: 'x' }, products: [{ productId: `p${n}` }], nextCursor: `k${n}` } }));
     const whole = await getWholeCollection('x');
     assert.equal(whole.products.length, MAX_COLLECTION_PAGES);
+  });
+});
+
+describe('listCollections', () => {
+  it('follows the cursor to the end, 100 at a time: a collection behind the first hundred is there', async () => {
+    stubFetch((url, n) => ({
+      body: { collections: [{ handle: `c${n}`, featured: n === 3 }], nextCursor: n < 3 ? `k${n}` : null },
+    }));
+    const collections = await listCollections();
+    assert.deepEqual(collections.map((c) => c.handle), ['c1', 'c2', 'c3']);
+    assert.equal(collections[2].featured, true);
+    assert.deepEqual(calls, [
+      '/_api/provbutiken/v1/collections?limit=100',
+      '/_api/provbutiken/v1/collections?cursor=k1&limit=100',
+      '/_api/provbutiken/v1/collections?cursor=k2&limit=100',
+    ]);
+  });
+
+  it('stops after its maximum of pages', async () => {
+    stubFetch((url, n) => ({ body: { collections: [{ handle: `c${n}` }], nextCursor: `k${n}` } }));
+    assert.equal((await listCollections()).length, MAX_COLLECTION_PAGES);
   });
 });

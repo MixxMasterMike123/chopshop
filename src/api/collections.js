@@ -4,8 +4,17 @@ import { ApiError, request, segment, withQuery } from './client.js';
 
 /** Published collections: `[{ handle, externalRef, title, description, image, path, featured }]`. */
 export async function listCollections({ signal } = {}) {
-  const { data } = await request('/v1/collections', { signal });
-  return data?.collections ?? [];
+  // Every page of the list (100 each, at most MAX_COLLECTION_PAGES): a featured
+  // collection is not lost for standing behind the first hundred.
+  const collections = [];
+  let cursor;
+  for (let page = 0; page < MAX_COLLECTION_PAGES; page += 1) {
+    const { data } = await request(withQuery('/v1/collections', { cursor, limit: 100 }), { signal });
+    collections.push(...(data?.collections ?? []));
+    if (!data?.nextCursor) break;
+    cursor = data.nextCursor;
+  }
+  return collections;
 }
 
 /**
@@ -27,7 +36,7 @@ export async function getCollection(ref, { cursor, limit, signal } = {}) {
   }
 }
 
-/** The most pages `getWholeCollection` walks (100 products each). */
+/** The most pages `listCollections` and `getWholeCollection` walk (100 each). */
 export const MAX_COLLECTION_PAGES = 10;
 
 /**

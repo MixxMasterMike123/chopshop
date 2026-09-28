@@ -870,7 +870,9 @@ export async function updateCollection(
   if (imageChanges) {
     set("image_object_id", "imageObjectId", input.imageObjectId);
   }
-  if (input.type !== undefined || input.ruleTag !== undefined || rule.ruleTag !== current.rule_tag) {
+  const ruleWritten =
+    input.type !== undefined || input.ruleTag !== undefined || rule.ruleTag !== current.rule_tag;
+  if (ruleWritten) {
     set("type", "type", rule.type);
     set("rule_tag", "ruleTag", rule.ruleTag);
   }
@@ -885,7 +887,11 @@ export async function updateCollection(
   }
 
   const statements: D1PreparedStatement[] = [];
-  if (rule.type === "smart") {
+  // Members are removed only by the change that makes the collection smart. A
+  // change that writes no rule (a title) removes none: the row it read may be
+  // older than another writer's change to a manual collection with members,
+  // and a smart collection holds none to remove (0041).
+  if (ruleWritten && rule.type === "smart") {
     statements.push(
       db
         .prepare("DELETE FROM collection_products WHERE tenant_id = ? AND collection_id = ?")

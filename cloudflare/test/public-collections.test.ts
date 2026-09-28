@@ -616,6 +616,7 @@ describe("cross-origin reads (D87)", () => {
     ];
     for (const response of answers) {
       expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(response.headers.get("access-control-expose-headers")).toBe("ETag, Retry-After");
       expect(response.headers.get("access-control-allow-credentials")).toBeNull();
       expect(response.headers.get("vary")).toBeNull();
       await response.body?.cancel();

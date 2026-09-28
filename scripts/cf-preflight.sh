@@ -482,7 +482,9 @@ def cmd_dist(dist):
                 refuse(f"{dist} holds a source map: {rel} - the storefront ships none")
             if f.endswith((".js", ".mjs", ".css", ".html")):
                 with open(full, "rb") as fh:
-                    if re.search(rb"(?m)^[ \t]*(?://|/\*)[#@][ \t]*sourceMappingURL=", fh.read()):
+                    # Anywhere on a line (a comment may follow code), and with an address behind the
+                    # "=": the bare words inside a string of the code are no source map.
+                    if re.search(rb"(?://|/\*)[#@][ \t]*sourceMappingURL=[^\s\"'`$\\]", fh.read()):
                         refuse(f"{dist} holds a source map: {rel} carries a sourceMappingURL comment - the storefront ships none")
 
 def cmd_stripe(path, code, pinned_acct, key_file):

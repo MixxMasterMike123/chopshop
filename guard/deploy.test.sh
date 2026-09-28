@@ -66,6 +66,7 @@ for (const k of Object.keys(process.env).sort()) {
   if (k.startsWith('VITE_')) log(`build-env ${k}=${process.env[k]}`);
   if (k === 'CLOUDFLARE_API_TOKEN' || k === 'CLOUDFLARE_ACCOUNT_ID') log(`build-cf ${k}`);
   if (k === 'NOT_A_VITE_NAME') log(`build-other ${k}`);
+  if (k === 'NODE_ENV') log(`build-node-env ${process.env[k]}`);
 }
 if (process.env.FAKE_BUILD_FAIL) process.exit(3);
 mkdirSync(new URL('./dist/assets/', import.meta.url), { recursive: true });
@@ -116,7 +117,7 @@ run() { # run <cf-deploy args…> — in case $T; sets RC and OUT; $T/log holds 
   set +e
   (cd "$WORK" && HOME="$T/home" FAKE_LOG="$T/log" FAKE_FAIL_API="${FAKE_FAIL_API:-}" FAKE_FAIL_WEB="${FAKE_FAIL_WEB:-}" \
     FAKE_BUILD_FAIL="${FAKE_BUILD_FAIL:-}" FAKE_BUILD_DIRTY="${FAKE_BUILD_DIRTY:-}" \
-    bash "$T/repo/scripts/cf-deploy.sh" "$@") >"$OUT" 2>&1
+    NODE_ENV=development bash "$T/repo/scripts/cf-deploy.sh" "$@") >"$OUT" 2>&1
   RC=$?
   set -e
   cat "$OUT" "$T/log" >>"$ALL_OUT"
@@ -268,7 +269,7 @@ if grep -qx "build-env VITE_STRIPE_PUBLISHABLE_KEY=$PK_TEST" "$T/log" &&
   grep -qx 'build-env VITE_PLATFORM_LEGAL_NAME=Test Platform AB' "$T/log" &&
   grep -qx 'build-env VITE_PLATFORM_ORG_NUMBER=556000-0000' "$T/log" &&
   [ "$(grep -c '^build-env ' "$T/log")" = 3 ] && ! grep -q '^build-cf ' "$T/log" &&
-  ! grep -q '^build-other ' "$T/log"; then
+  ! grep -q '^build-other ' "$T/log" && grep -qx 'build-node-env production' "$T/log"; then
   ok "the build sees exactly the file's VITE_ values: not the shell's VITE_, not a non-VITE_ line, no Cloudflare variable"
 else bad "the build sees exactly the file's VITE_ values: not the shell's VITE_, not a non-VITE_ line, no Cloudflare variable"; fi
 
