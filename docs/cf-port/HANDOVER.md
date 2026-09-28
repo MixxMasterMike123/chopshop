@@ -43,6 +43,12 @@ Each fix has its test. Codex re-reviews the fix commit and B before the deploy.
 
 **A fault of the fix commit, found by builder B and corrected in the commit after it:** the first cap of the variant triggers (100 active) was lower than what the publish gate prices completely (200), and `pod-publish.test.ts` failed in its fixtures. `661f6438` was committed with that suite failing; the reviewer read the run's last lines and missed the second failing file. The caps are now the gate's own (200 active, 400 in all; the largest product of the export holds 65 variants), a test keeps the two numbers equal, and the whole suite passes: **88 files, 3810 tests, none skipped.** The rule taken from it: the count of failed FILES is read from the run's summary line before a commit, not from the failures that happen to be printed last.
 
+**Codex, second round (06:42):** the fix commit `661f6438` and the cap correction `2a3aabc2`: **no finding.** B's commit `14274ea3`: **NOT reviewed**, Codex's usage limit was reached (back at 11:08). Owed to Codex before any deploy: `14274ea3`, the consolidation (builder K), D's second pass, and the page swap (F1, F2). `codex review -c model_reasoning_effort="medium" --commit <sha>`.
+
+**B collections (0041): reviewed by Fable, committed `14274ea3`. `/ready` requires `0044_withdrawals.sql` (`219f4301`).** Whole suite at `14274ea3`: **88 files, 3810 tests passed, none skipped.**
+
+**Running since 06:45 (they die with the window):** K, the consolidation (D's reads move to the functions of A, B and C; one address rule; one public gate; the older product routes go); F1 and F2, the page swap (brief in `CP4_BRIEFS.md` §F).
+
 **What the review changed, beyond wiring:**
 
 - **The adopted legal texts are checked like a page's HTML** (C's open question, and a hole: the text comes from the seller's browser and is shown to every visitor, and on the shared host every shop is served from one origin). The three templates were rendered as the storefront renders them and pass.
