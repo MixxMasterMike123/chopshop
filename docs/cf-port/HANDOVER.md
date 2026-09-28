@@ -8,24 +8,36 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 **Found while writing P's brief:** the managed address of staging's public bucket is switched off (D95, Mikael switches it on); 444 of the 495 product images carry no file ending, so the type is read from the file itself (D92); 3 branding images are SVG (D92).
 
-**Builders, state 2026-09-28 05:30:**
+**Builders, state 2026-09-28 06:10:**
 
 | Builder | State | Commit |
 |---|---|---|
-| P public objects | built, reviewed by Fable line by line, committed | `25db76e0` (migration 0039) |
-| E client and web Worker | built, reviewed by Fable line by line, committed | `9a11f1a9` |
-| A products (0040), C pages and legal (0042), D storefront response, first pass (0043) | launched 05:05, running | — |
-| G withdrawal function (0044, D96) | launched 05:25, running | — |
-| B collections (0041) | waits for A's public product functions | — |
+| P public objects (0039) | reviewed by Fable line by line, committed | `25db76e0` |
+| E client and web Worker | reviewed, committed | `9a11f1a9` |
+| C pages and legal pages (0042) | reviewed, committed | `61dfe4ca` |
+| G withdrawal function (0044, D96) | reviewed, wired, committed | `5421fab1` |
+| D storefront response, first pass (0043) | reviewed, wired, committed | `e872853d` |
+| A products (0040) | reviewed, committed with the route mounts of A, C, D, G | `fd32bf8e` |
+| B collections (0041) | launched 06:02, running | — |
 | D second pass (preview, D57), F page swap, S scripts | wait | — |
 
-Gate at `25db76e0` with E's files in the tree: `tsc` clean, **75 files, 2971 tests**. Codex has reviewed nothing of CP4 yet: it reviews before the deploy, the whole range from `a9991384`.
+Gate at `fd32bf8e`: `tsc` clean for both projects, **86 files, 3656 tests passed**; the storefront build holds no Firebase code. **Codex started on the six commits at 06:10** (one after the other, medium effort; logs in the session's scratchpad as `codex-cp4-<sha>.log`, which dies with the session: re-run `codex review -c model_reasoning_effort="medium" --commit <sha>` if lost).
 
-**Found by E, and a gap of the port (D96):** the API has no route for a buyer's withdrawal. It is a legal duty in force; builder G builds it in CP4 and the storefront does not go live without it.
+**What the review changed, beyond wiring:**
+
+- **The adopted legal texts are checked like a page's HTML** (C's open question, and a hole: the text comes from the seller's browser and is shown to every visitor, and on the shared host every shop is served from one origin). The three templates were rendered as the storefront renders them and pass.
+- **A seller cannot write the personalised flag** (A had made it writable): it takes a buyer's right of withdrawal away, and D46 gives it to the studio's buyer flow.
+- **The further description of a product passes the HTML refusal** too.
+- **A screening without texts reads every text of the product**, so the sweep and a change of a print mapping screen what a publish screens.
+- **No cookie is forwarded from the web Worker to the API.**
+- **A refused upload says why**, for the admin and for the importer's report.
+- **One set of triggers on public objects** (0043's); C's and A's are removed.
+
+**Found by E, and a gap of the port (D96):** the API had no route for a buyer's withdrawal. Built as G. Four points of it are Mikael's to confirm (D97).
+
+**The consolidation that is left, after B:** D's reads move to the functions of A, B and C (D's own tests are the proof that nothing changed); the older public product mounts and the deprecated functions go; `REQUIRED_MIGRATION` becomes `0044_withdrawals.sql`; `PUBLIC_OBJECT_BASE_URL` in `wrangler.jsonc` and the pinned files with the preflight's check (after D95); the deploy path of the second Worker (`cloudflare/web`) in the preflight and the deploy script.
 
 **Carried forward from P:** response headers (`nosniff`, a Content-Security-Policy) on public objects come with the domain of our own at CP7; the sweep that removes files a failed delete left behind (PLAN §2.5) is not built; the three SVG branding files have not met the SVG check yet (S rehearses them).
-
-**Commits of A, C, D and G leave their route mounts in `app.ts` to ONE consolidation commit**, as in CP3: the four builders write their blocks of that file in the same tree at the same time. The consolidation also sets `REQUIRED_MIGRATION` to the highest of 0039–0044.
 
 **For the storefront proof on staging:** the four imported shops hold the importer's placeholder hostname (`<shop>.import.invalid`) in status `pending`, by design, and no route turns a pending hostname into a verified one. The tenant resolver reads verified hostnames only. Each shop therefore gets a second, verified storefront hostname through `POST /v1/platform/tenants/:id/domains` (which creates it verified) before its pages are shot; three of the four are also unpublished and are published through the platform route for the shots, or seen through the preview (D57).
 
