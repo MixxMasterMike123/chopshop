@@ -819,6 +819,8 @@ describe("GET /v1/admin/orders/:orderId", () => {
           vatMinor: 0,
         },
         withdrawal: { waived: false },
+        // CP4-G: no withdrawal is on record for this order.
+        withdrawalRequest: null,
       },
     });
   });

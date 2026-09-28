@@ -35,7 +35,13 @@
 export const CLAIM_TTL_MS = 5 * 60 * 1_000;
 
 /** The effect types a consumer here knows how to run. Others wait untouched. */
-export const OUTBOX_EFFECT_TYPES = ["dispatch", "email", "printer_cancellation"] as const;
+export const OUTBOX_EFFECT_TYPES = [
+  "dispatch",
+  "email",
+  "printer_cancellation",
+  // CP4-G: the receipt and the notice of a withdrawal (src/commerce/withdrawals.ts).
+  "withdrawal_email",
+] as const;
 export type OutboxEffectType = (typeof OUTBOX_EFFECT_TYPES)[number];
 
 export type OutboxStatus =

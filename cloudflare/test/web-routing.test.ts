@@ -98,6 +98,7 @@ describe("the API allowlist", () => {
     ["POST", "/v1/checkout/4f6e2a9c-1b3d-4e5f-8a7b-9c0d1e2f3a4b/receipt"],
     ["GET", "/v1/orders/4f6e2a9c-1b3d-4e5f-8a7b-9c0d1e2f3a4b"],
     ["POST", "/v1/reports"],
+    ["POST", "/v1/withdrawals"],
   ])("passes %s %s", (method, path) => {
     expect(isAllowedStorefrontApiRequest(method, path)).toBe(true);
   });
@@ -127,6 +128,8 @@ describe("the API allowlist", () => {
     ["GET", "/v1/checkout"],
     ["GET", "/v1/checkout/x/payment"],
     ["POST", "/v1/orders/x"],
+    ["GET", "/v1/withdrawals"],
+    ["POST", "/v1/withdrawals/x"],
     ["OPTIONS", "/v1/storefront"],
     // Spellings of an allowed path that are not that path.
     ["GET", "/v1/%70roducts"],

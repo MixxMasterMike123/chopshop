@@ -1,8 +1,19 @@
+import {
+  isWithdrawalEmailJob,
+  isWithdrawalEmailKind,
+  parseWithdrawalEmailJob,
+  renderWithdrawalEmail,
+  type WithdrawalEmailJob,
+} from "./withdrawal-email";
+
 export type AuthEmailKind =
   | "alert_digest"
   | "email_verification"
   | "order_confirmation"
-  | "password_reset";
+  | "password_reset"
+  // CP4-G: the two mails of the withdrawal function (./withdrawal-email.ts).
+  | "withdrawal_notice"
+  | "withdrawal_receipt";
 export type AuthEmailLocale = "en" | "sv";
 
 /** The two kinds that carry an action link (verify / reset). */
@@ -132,7 +143,11 @@ export interface AlertDigestEmailJob extends EmailJobBase {
   tenantId?: undefined;
 }
 
-export type AuthEmailJob = AuthActionEmailJob | AlertDigestEmailJob | OrderConfirmationEmailJob;
+export type AuthEmailJob =
+  | AuthActionEmailJob
+  | AlertDigestEmailJob
+  | OrderConfirmationEmailJob
+  | WithdrawalEmailJob;
 
 export interface AuthEmailMessage {
   html: string;
@@ -236,6 +251,10 @@ export function parseAuthEmailJob(
     throw new Error("Invalid auth email job");
   }
 
+  if (isWithdrawalEmailKind((value as { kind?: unknown }).kind)) {
+    return parseWithdrawalEmailJob(value);
+  }
+
   if ((value as { kind?: unknown }).kind === "order_confirmation") {
     return parseOrderConfirmationEmailJob(value);
   }
@@ -312,6 +331,10 @@ function escapeHtml(value: string): string {
 }
 
 export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
+  if (isWithdrawalEmailJob(job)) {
+    return renderWithdrawalEmail(job);
+  }
+
   if (job.kind === "order_confirmation") {
     return renderOrderConfirmationEmail(job);
   }

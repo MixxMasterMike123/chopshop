@@ -4,6 +4,7 @@ import {
   hashEmailRecipient,
   type AuthEmailJob,
 } from "./auth-email-job";
+import { fingerprintWithdrawalEmailJob, isWithdrawalEmailJob } from "./withdrawal-email";
 
 const LEASE_DURATION_MS = 60_000;
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -29,6 +30,11 @@ function bytesToHex(buffer: ArrayBuffer): string {
 }
 
 export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string> {
+  // The withdrawal mails fingerprint their own content (all of it is rendered).
+  if (isWithdrawalEmailJob(job)) {
+    return fingerprintWithdrawalEmailJob(job);
+  }
+
   const canonical = JSON.stringify({
     actionUrl: job.actionUrl,
     createdAt: job.createdAt,

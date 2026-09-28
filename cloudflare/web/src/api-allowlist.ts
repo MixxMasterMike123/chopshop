@@ -18,11 +18,11 @@
  * second fence.
  *
  * Sources of the rows: the routes that exist (src/app.ts: storefront,
- * products, pod previews, checkout, payment, receipt, orders, reports) and the
+ * products, pod previews, checkout, payment, receipt, orders, reports, the
+ * withdrawal function) and the
  * public routes of CP4 briefs A–C (collections, pages, legal). `GET /v1/seo`
  * and `GET /v1/sitemap` are NOT here: only this Worker calls them, never a
- * browser. The withdrawal intake is not here because the API has no such route
- * yet (see docs/cf-port/CP4_E_REPORT.md).
+ * browser.
  */
 
 const ID = ":id";
@@ -48,6 +48,7 @@ export const STOREFRONT_API_ROUTES: readonly ApiRoute[] = [
   { methods: ["POST"], segments: ["v1", "checkout", ID, "receipt"] },
   { methods: ["GET"], segments: ["v1", "orders", ID] },
   { methods: ["POST"], segments: ["v1", "reports"] },
+  { methods: ["POST"], segments: ["v1", "withdrawals"] },
 ];
 
 const RAW_ID_SEGMENT = /^(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+$/;

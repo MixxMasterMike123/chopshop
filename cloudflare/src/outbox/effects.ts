@@ -2,6 +2,7 @@ import {
   runDispatchEffect,
   runPrinterCancellationEffect,
 } from "../dispatch/dispatch-effect";
+import { runWithdrawalEmailEffect } from "../commerce/withdrawals";
 import { runEmailEffect } from "./email-effect";
 import {
   claimById,
@@ -24,6 +25,7 @@ const EFFECTS: Record<OutboxEffectType, (ctx: EffectContext) => Promise<OutboxRu
   dispatch: runDispatchEffect,
   email: runEmailEffect,
   printer_cancellation: runPrinterCancellationEffect,
+  withdrawal_email: runWithdrawalEmailEffect,
 };
 
 export function runClaimedOutboxRow(

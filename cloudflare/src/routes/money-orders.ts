@@ -17,6 +17,7 @@ import {
   routeNotFoundResponse,
 } from "../lib/responses";
 import { isSameOriginRequest } from "../lib/same-origin";
+import { readAdminOrderWithdrawal } from "../commerce/withdrawals";
 
 /**
  * The tenant-admin money surface (CP2-A):
@@ -75,6 +76,9 @@ export async function handleAdminOrderRoute(
       ...order,
       consent: consent?.consent ?? null,
       withdrawal: { waived: consent?.isPersonalized ?? false },
+      // CP4-G: the buyer's withdrawal on record for this order, with the
+      // server's time of receipt; null when there is none.
+      withdrawalRequest: await readAdminOrderWithdrawal(env.DB, principal.tenantId, orderId),
     },
   });
 }
