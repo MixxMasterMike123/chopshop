@@ -420,12 +420,66 @@ The web Worker's allowlist gains `POST /v1/withdrawals` and the client's `withdr
 
 ## F. The page swap
 
-Written in full when A–E are reviewed, because every line of it depends on their final shapes. Fixed now:
+Written in full on 2026-09-28, after A–E and G were reviewed. Two builders, side by side: **F1** the shell, the catalogue and the content pages; **F2** the money pages, the withdrawal and the report.
 
-- **The 16 files that stay** (`INVENTORY_CLIENT_DATA.md` §1.3), in this order: shell (`ShopGate`, `ShopNavigation`, `ShopFooter`) → catalogue (`PublicStorefront`, `AllProductsPage`, `TagPage`, `CollectionPage`, `ProductCollectionPage`, `PublicProductPage`) → content (`DynamicRouteHandler`, `DynamicPage`) → `InfringementReportPage` → money (`Checkout`, `OrderConfirmation`, `WithdrawalPage`, `OrderWithdrawal`). `ShoppingCart` and `OrderReturn` call no SDK themselves and stay as they are; they are shot and diffed with the rest.
-- **Only the data layer changes.** Markup, class names, tokens and copy stay byte for byte; a page's diff shows imports, hooks and field names, nothing else.
-- **The gate per page:** re-shoot at 375 / 768 / 1440 on staging and diff against `docs/cf-port/baseline/storefront` (`DESIGN_CONTRACT.md` §4). A difference is either fixed or written down with its cause and accepted by Mikael; the expected ones (no review stars, no account link, no discount field: D81) are listed before the first shot.
-- The reviewer looks at every page rendered, not only at its diff.
+**Goal.** Every page that stays reads from the API and looks as it looks today.
+
+### The rule that decides everything: only the data layer changes
+
+A page's markup, class names, tokens and copy stay byte for byte. A page's diff shows its imports and the functions that load its data, and nothing else. Where a page today reads a field the API names differently, the difference is bridged in ONE place, not in the markup.
+
+### How
+
+1. **The shapes are bridged by adapters** (`src/storefront/adapters/`): pure functions that turn an answer of the API into the object the page already reads (`toPageProduct`, `toPageCollection`, `toPagePage`, …): `priceMinor` → the price in kronor the page prints, `image.url` → `b2cImageUrl`, the variants → the rail the page renders. One adapter per shape, tested under Node beside the client's tests. A field the API does not carry (D81: review counts; D82: the B2B fields) is absent, and the markup that depends on it renders as it renders today for a product without it.
+2. **The providers are swapped by the build, not by the pages.** The pages and the components they share (`NordProductCard`, `SmartPrice`, `AddedToCartModal`, …) import `contexts/CartContext`, `TranslationContext`, `StoreSettingsContext`, `ShopContext`, `ShopFeaturesContext`. The storefront's build resolves those five to E's providers (`resolve.alias` in `vite.storefront.config.js`), which expose the same hooks with the same values. So a shared component is not touched, and the admin's build, which still reads the old contexts, keeps working. Where a provider of E lacks something a page reads, F adds it to the provider and says so.
+3. **A page is swapped in by its one line** of `src/storefront/pages.jsx`.
+4. **No Firebase code can be reached from the storefront's entry.** `node cloudflare/web/check-storefront-build.mjs` after every page. A module that a staying page imports and that pulls Firebase in (E's report lists them: `firebase/config`, `SimpleAuthContext`, `affiliateCalculations`, `translationDetection`, `fileUpload`, `productFeed`, `LandingPage` through `ShopGate`, `ProductReviews`) is replaced for the storefront's build by the same means as the providers, or the import leaves the page when what it served is a removed feature.
+5. **Addresses go through the root.** A link is built with the client's `shopHref` (E), so it is right on the shared host and on a shop's own domain. `src/utils/productUrls.js` builds `/<shop>/…` from `useShopId()` today: for the storefront's build its builders take the root from the same place as `shopHref`.
+6. **Lists are walked to their end.** The product list answers 100 a page; a page that shows every product follows `nextCursor` (the client has `listAllProducts`).
+
+### What changes for a visitor, listed BEFORE the first page is shot
+
+F writes this list into its report first, page by page, from reading the pages: what a removed feature (D81: review stars and the review block, the discount field, the account and sign-in links, the affiliate link) takes out of each page, and what the page shows in its place (nothing; the layout closes). Every other difference from the baseline is a fault.
+
+### F1 — the shell, the catalogue, the content
+
+Files, in this order: `ShopGate`, `ShopNavigation`, `ShopFooter` → `PublicStorefront`, `AllProductsPage`, `TagPage`, `CollectionPage`, `ProductCollectionPage`, `PublicProductPage` → `DynamicRouteHandler`, `DynamicPage`. F1 also owns `src/storefront/adapters/` for the catalogue, the alias list of the build, and the dev API below.
+
+- `ShopGate`: a shop that the storefront response does not answer (unknown, suspended, unpublished) shows what the gate shows today for a shop that is not available. The platform's landing page is not a page of the storefront (E, deviation 5).
+- The home: the featured collections are those of `GET /v1/collections` with `featured`; a card is shown when `GET /v1/collections/<handle>?limit=1` answers a product (the source's rule: a collection with nothing to buy is not shown).
+- The tag and category pages filter by KEY: `GET /v1/products?tag=<key>` and `?category=<key>`, the key being the address's own segment.
+- The product page: `GET /v1/products/<the address's segment>`; the API finds the product by its handle or by the sku behind the last `_`. The print previews of a POD product are read at the path the answer gives, through the client's `apiUrl`.
+- The content page and the post: `GET /v1/pages/<slug>`. **The legal pages: `GET /v1/legal/<the address's last segment>`.** Both are cleaned with DOMPurify when they are rendered, the legal page too (it is not cleaned today, because the page rendered it itself; now the text comes from the API). The platform's terms arrive as the archived text, in the format the source's templates have; the page renders it as it does today.
+
+### F2 — the money, the withdrawal, the report
+
+Files: `Checkout`, `OrderConfirmation`, `WithdrawalPage`, `OrderWithdrawal`, `InfringementReportPage`; `ShoppingCart` and `OrderReturn` when they read something that changed. F2 owns the adapters of these shapes.
+
+- **The server prices the order.** The checkout page sends products, variants and quantities (`createCheckout`), and SHOWS the numbers of the answer: subtotal, carriage, VAT, total. It computes none of them. The page never shows a total the server has not given.
+- **The cart before checkout** shows the sum of its lines from the public prices. The carriage: F2 reads what the cart shows today and reports; the rule is that the page shows no carriage figure the server would not charge. If today's estimate can differ from the server's, it goes, and the difference is on the list for Mikael.
+- **The legal gate of the client leaves the checkout** (`getLegalReadiness(loadShopConfig())` reads fields that are not public). The server is the gate: a shop that is not ready answers the checkout with its refusal, and the page shows what it shows today for a shop that cannot sell.
+- **The consents** of the checkout are sent as the API takes them (`consent: { terms, marketing?, withdrawalWaiver?, disclosureVersion? }`), and the two refusals `withdrawal_waiver_required` and `withdrawal_disclosure_outdated` are shown.
+- **The order confirmation** waits for the order with the receipt poll (`useReceiptPoll`: every 2 s, at most 90 s, an explicit state when the time is up) and reads the order with the receipt's token. The token lives in the tab's session storage and nowhere else.
+- **The withdrawal**: `submitWithdrawal({ orderNumber, name, contactEmail })`; the page shows the receipt of the answer (`acknowledgement`) and the answer for an order without the right (`eligible: false`, `reason`), and says so when the message was on record already (`alreadyReceived`). The logged-in path of the page is gone with the accounts.
+- **The infringement report**: the route of CP3 (`POST /v1/reports`), its fields as the API takes them.
+- Stripe: the payment form takes the client secret of `createPayment`. The publishable key is a value of the build.
+
+### The dev API (F1 builds it, F2 uses it)
+
+To look at a page before anything is deployed: a small middleware of the storefront's dev server (`src/storefront/dev/`) that answers the `/_api/<shop>/v1/…` routes from fixture files in the API's exact shapes. **Invented data only**: no product, name, text or image of a real shop, and nothing of the earlier brand (the guard scans every file). It is never part of the build: the build check fails when it is.
+
+With it F looks at every page it swaps, at 375, 768 and 1440 wide, beside the baseline image of that page (`docs/cf-port/baseline/storefront/`), and reports what it saw. The data differs from the baseline's, so this look finds faults of layout and of missing pieces, not of content.
+
+### The gate
+
+The real gate is on staging, after the import and the deploy: every page re-shot at 375 / 768 / 1440 and diffed against the baseline (`DESIGN_CONTRACT.md` §4), by the reviewer, who looks at every page rendered. A difference is fixed, or written down with its cause and accepted by Mikael.
+
+### Rules of F beyond §0
+
+- F edits files under `src/` only, and `vite.storefront.config.js`. Nothing under `cloudflare/`, nothing of the admin, platform or print pages, no shared component's markup.
+- A shared component that calls Firebase itself and that a staying page renders (`ShopNavigation` and `ShopFooter` are F1's; others as found) is swapped like a page: its data layer only.
+- `src/App.jsx`, `src/main.jsx`, `index.html` and `vite.config.js` are not touched: the older build must still build (`npx vite build` succeeds), since the admin and platform pages live in it until CP5.
+- Tests: the adapters and whatever logic F adds, under Node (`node --test`), beside `src/api/api.test.mjs`.
 
 ---
 
