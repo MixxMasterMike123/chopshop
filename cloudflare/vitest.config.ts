@@ -71,6 +71,9 @@ export default defineConfig({
             // the default-host fallback.
             R2_JURISDICTION: "eu",
             R2_PRIVATE_BUCKET_NAME: "meteorshop-test-private",
+            // CP4: the origin public objects are read from. .invalid is
+            // reserved, so an address built from it can never resolve.
+            PUBLIC_OBJECT_BASE_URL: "https://public-objects.test.invalid",
             R2_SECRET_ACCESS_KEY: "test-only-r2-secret-access-key-value",
             // ≥ 32 characters: since CP1-C this token also authenticates the
             // farm TO the worker on the /v1/render pull surface.

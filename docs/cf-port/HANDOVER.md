@@ -2,9 +2,13 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
-## CP4 — Catalogue + storefront (GO 2026-09-28, not started)
+## CP4 — Catalogue + storefront (GO 2026-09-28, started 2026-09-28)
 
-**Mikael: "CP4 go"**, with D77 and D81 confirmed. D83 is open (he asked what it means; the default, mappings made again by hand, stands). D78, D79, D80, D82, D84 on their defaults.
+**Started 2026-09-28 04:10.** Tree clean at `a9991384`, 353 script tests and 2416 Worker tests green before the first change. **D83 answered by Mikael: yes**, the old POD links are not imported and the 6 products are tied to their garment again in the admin later. Pre-step committed: `CP4-IMPORTS-A…D` and `CP4-ROUTES-A…D` anchors in `cloudflare/src/app.ts` (before every older route), the var `PUBLIC_OBJECT_BASE_URL` in the two type files and the test configuration, decisions D92–D95. The briefs are in `CP4_BRIEFS.md`, builder P first.
+
+**Found while writing P's brief:** the managed address of staging's public bucket is switched off (D95, Mikael switches it on); 444 of the 495 product images carry no file ending, so the type is read from the file itself (D92); 3 branding images are SVG (D92).
+
+**Mikael: "CP4 go"**, with D77 and D81 confirmed. D78, D79, D80, D82, D84 on their defaults.
 
 **Start from `CP4_GAP_ANALYSIS.md`.** Eight builders; **P (public objects) first**, or its interface fixed first, since products, collections, branding and the storage copy all stand on it. Next migration 0039. Worker code by the Opus builder when its spend limit allows, otherwise Sonnet; scripts by Sonnet; Fable reviews every diff; Codex before every deploy.
 

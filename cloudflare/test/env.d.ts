@@ -32,9 +32,13 @@ declare global {
       RENDER_CONTAINER:
         | DurableObjectNamespace<import("../src/render/render-container").RenderContainer>
         | undefined;
-      // Not bound in tests: nothing reads them yet.
+      // Not bound in tests: nothing reads it yet.
       PRODUCTION_BUCKET: R2Bucket | undefined;
-      PUBLIC_BUCKET: R2Bucket | undefined;
+      // Bound through wrangler.jsonc's staging section, like PRIVATE_BUCKET.
+      PUBLIC_BUCKET: R2Bucket;
+      // Test-only origin (.invalid never resolves); suites override it to
+      // prove the surface dark without it.
+      PUBLIC_OBJECT_BASE_URL: string;
       R2_ACCESS_KEY_ID: string;
       R2_ACCOUNT_ID: string;
       // The CP1 buckets are EU-jurisdiction; the suites presign against the

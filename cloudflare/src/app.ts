@@ -298,6 +298,17 @@ import {
   PLATFORM_CONNECT_ROUTE,
 } from "./routes/connect-platform";
 // CP3-IMPORTS-F — end
+// CP4 route handlers: each builder adds its imports ONLY inside its own block.
+// Builder P (public objects) has no block: it extends the object handlers the
+// admin objects route already calls.
+// CP4-IMPORTS-A — begin
+// CP4-IMPORTS-A — end
+// CP4-IMPORTS-B — begin
+// CP4-IMPORTS-B — end
+// CP4-IMPORTS-C — begin
+// CP4-IMPORTS-C — end
+// CP4-IMPORTS-D — begin
+// CP4-IMPORTS-D — end
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -2048,6 +2059,24 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     READINESS_PATH,
     getOnly((c) => readinessResponse(c.env)),
   );
+
+  // ── CP4 route mounts. They sit HERE, before every older route, because the
+  // older catalogue handlers answer a terminal 404 for what they do not own:
+  // the admin products mount takes every method, and the public product prefix
+  // takes every GET under `/v1/products/`. Each CP4 builder appends ONLY inside
+  // its own anchor block, registers EXACT paths (no prefix wildcard) and wraps
+  // every route in `onMethods([...])` so other methods fall through. A public
+  // route is wrapped in `storefront(...)` as well. Id segments come from the
+  // RAW pathname and are decoded once by the handler (see ACTING_AS_ROUTE).
+  // The reviewer consolidates after merge. ─────────────────────────────────
+  // CP4-ROUTES-A (products: admin list and read, variants, images) — begin
+  // CP4-ROUTES-A — end
+  // CP4-ROUTES-B (collections: admin, public list and detail) — begin
+  // CP4-ROUTES-B — end
+  // CP4-ROUTES-C (pages: admin, public page, public legal page) — begin
+  // CP4-ROUTES-C — end
+  // CP4-ROUTES-D (sitemap, robots, product feed, preview, forwarding) — begin
+  // CP4-ROUTES-D — end
 
   // Public reads answer through the ETag/304 handlers (src/storefront/public-routes.ts):
   // bodies are byte-identical to the plain handlers, plus `ETag: "<catalog_version>"` and

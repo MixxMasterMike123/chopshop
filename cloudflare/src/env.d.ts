@@ -40,9 +40,18 @@ interface Env {
   EMAIL_QUEUE: Queue | undefined;
   RENDER_JOBS_QUEUE: Queue | undefined;
 
-  // The three storage classes (PLAN §2.5). Only PRIVATE_BUCKET is read today.
+  // The three storage classes (PLAN §2.5).
   PUBLIC_BUCKET: R2Bucket | undefined;
   PRODUCTION_BUCKET: R2Bucket | undefined;
+
+  // Plain var: the origin the public bucket is read from (D78: the bucket's
+  // managed address on staging, a domain of our own at CP7), e.g.
+  // "https://pub-….r2.dev". A public object's address is this origin plus its
+  // key. Read only through src/storage/public-objects.ts, which accepts a bare
+  // https origin and nothing else. Absent or malformed ⇒ no public object has
+  // an address: uploads of public kinds are refused and every public shape
+  // carries no image.
+  PUBLIC_OBJECT_BASE_URL: string | undefined;
 
   // Deployed as a Worker secret; absent until the auth checkpoint provisions
   // it, so every reader must treat "not configured" as "no session possible".
