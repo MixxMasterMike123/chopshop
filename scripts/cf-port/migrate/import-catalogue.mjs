@@ -86,18 +86,24 @@ function die(message) {
 // ── the target state: read-only queries → one JSON file ──────────────────────
 
 /** Rows per shop of every table the plan writes into (before and after the apply). */
+// Two queries, five terms each: D1 refuses a compound SELECT of more ("too many
+// terms in compound SELECT"), which a local SQLite does not.
 export const COUNTS_SQL = [
   "SELECT 'products' AS t, tenant_id, COUNT(*) AS n FROM products GROUP BY tenant_id",
   "SELECT 'podProducts', tenant_id, COUNT(*) FROM products WHERE is_pod = 1 GROUP BY tenant_id",
   "SELECT 'variants', tenant_id, COUNT(*) FROM product_variants GROUP BY tenant_id",
   "SELECT 'tags', tenant_id, COUNT(*) FROM product_tags GROUP BY tenant_id",
   "SELECT 'images', tenant_id, COUNT(*) FROM product_images GROUP BY tenant_id",
-  "SELECT 'publications', tenant_id, COUNT(*) FROM product_publications WHERE published = 1 GROUP BY tenant_id",
+].join(' UNION ALL ') + ';';
+export const COUNTS_2_SQL = [
+  "SELECT 'publications' AS t, tenant_id, COUNT(*) AS n FROM product_publications WHERE published = 1 GROUP BY tenant_id",
   "SELECT 'screening', tenant_id, COUNT(*) FROM product_screening GROUP BY tenant_id",
   "SELECT 'collections', tenant_id, COUNT(*) FROM collections GROUP BY tenant_id",
   "SELECT 'collectionMembers', tenant_id, COUNT(*) FROM collection_products GROUP BY tenant_id",
   "SELECT 'pages', tenant_id, COUNT(*) FROM pages GROUP BY tenant_id",
 ].join(' UNION ALL ') + ';';
+/** The most terms of a compound SELECT that D1 takes. */
+export const D1_COMPOUND_TERMS = 5;
 
 /** The counts query's rows → { tenantId: { table: n } }. */
 export function countsOf(rows) {
@@ -114,6 +120,7 @@ export function countsOf(rows) {
 export function targetQueries(env) {
   return [
     { file: 'counts', sql: COUNTS_SQL },
+    { file: 'counts_2', sql: COUNTS_2_SQL },
     { file: 'import_runs', sql: 'SELECT run_id, env, bundle_sha, status FROM import_runs ORDER BY started_at, run_id;' },
     { file: 'tenants', sql: 'SELECT tenant_id, status, published, default_currency, catalog_version FROM tenants ORDER BY tenant_id;' },
     { file: 'tenant_settings', sql: 'SELECT tenant_id, store_identity_json, updated_at, updated_by FROM tenant_settings ORDER BY tenant_id;' },
@@ -171,7 +178,7 @@ export function buildTargetState(dir) {
   const need = (condition, file) => {
     if (!condition) throw new Error(`${file}.json holds a row of an unexpected shape`);
   };
-  const state = { collections: [], counts: countsOf(rows('counts')), importRuns: [], objects: {}, pages: [], products: [], settings: {}, tenants: {}, users: {}, variants: [] };
+  const state = { collections: [], counts: countsOf([...rows('counts'), ...rows('counts_2')]), importRuns: [], objects: {}, pages: [], products: [], settings: {}, tenants: {}, users: {}, variants: [] };
   for (const r of rows('import_runs')) {
     need(text(r.run_id) && text(r.env) && text(r.bundle_sha) && text(r.status), 'import_runs');
     state.importRuns.push({ bundleSha: r.bundle_sha, env: r.env, runId: r.run_id, status: r.status });

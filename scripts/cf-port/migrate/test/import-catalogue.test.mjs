@@ -440,3 +440,14 @@ test('verify: a missing expected block fails, and the shop gate is lifted only w
   assert.match(liftedShopGate(rules.ELIGIBLE_PRODUCTS_FROM), /\(SELECT tenant_id, 'active' AS status, 1 AS published FROM tenants\) AS tenant/);
   assert.throws(() => liftedShopGate('FROM products AS product'), /eligibility\.ts changed its FROM/);
 });
+
+// D1 refuses a compound SELECT of more than five terms; a local SQLite takes
+// five hundred, so no rehearsal finds it.
+test('no state query is a compound SELECT of more terms than D1 takes', async () => {
+  const { targetQueries: target, D1_COMPOUND_TERMS: most } = await import('../import-catalogue.mjs');
+  const { actualQueries: actual } = await import('../verify-catalogue.mjs');
+  for (const query of [...target('staging'), ...actual(rules)]) {
+    const terms = query.sql.split(/\bUNION(?:\s+ALL)?\b/).length;
+    assert.ok(terms <= most, `${query.file}: ${terms} terms`);
+  }
+});

@@ -47,7 +47,7 @@ import { writeFileSecure, ensureDir } from './lib/bundle-writer.mjs';
 import { isInsideRepo } from './lib/outside-repo.mjs';
 import { SOURCE_STORAGE_MARKERS } from './lib/copy-sources.mjs';
 import { loadWorkerRules } from './lib/worker-rules.mjs';
-import { COUNTS_SQL, countsOf, printQueryCommands, readResultFile, REPO_ROOT } from './import-catalogue.mjs';
+import { COUNTS_2_SQL, COUNTS_SQL, countsOf, printQueryCommands, readResultFile, REPO_ROOT } from './import-catalogue.mjs';
 
 const COUNTED = ['products', 'podProducts', 'variants', 'tags', 'images', 'publications', 'screening', 'collections', 'collectionMembers', 'pages'];
 const PLAN_KEY = { collectionMembers: 'collectionMembers', collections: 'collections', images: 'images', pages: 'pages', podProducts: 'podProducts', products: 'products', publications: 'publications', screening: 'screening', tags: 'tags', variants: 'variants' };
@@ -72,6 +72,7 @@ export function actualQueries(rules) {
     { file: 'import_runs', sql: "SELECT run_id, status FROM import_runs WHERE run_id LIKE 'catalogue%' ORDER BY run_id;" },
     { file: 'tenants', sql: 'SELECT tenant_id, status, published, catalog_version FROM tenants ORDER BY tenant_id;' },
     { file: 'counts', sql: COUNTS_SQL },
+    { file: 'counts_2', sql: COUNTS_2_SQL },
     { file: 'products', sql: 'SELECT tenant_id, product_id, handle FROM products ORDER BY tenant_id, product_id;' },
     { file: 'public_now', sql: publicSelect(rules.ELIGIBLE_PRODUCTS_FROM) },
     { file: 'public_if_live', sql: publicSelect(liftedShopGate(rules.ELIGIBLE_PRODUCTS_FROM)) },
@@ -109,7 +110,7 @@ export function buildActualState(dir) {
     }
     return out;
   };
-  const state = { badObjects: {}, brandingObjects: {}, counts: countsOf(rows('counts')), handles: {}, importRuns: {}, products: {}, publicIfLive: byTenant('public_if_live', 'product_id'), publicNow: byTenant('public_now', 'product_id'), screening: [], settings: {}, storageTexts: {}, tenants: {} };
+  const state = { badObjects: {}, brandingObjects: {}, counts: countsOf([...rows('counts'), ...rows('counts_2')]), handles: {}, importRuns: {}, products: {}, publicIfLive: byTenant('public_if_live', 'product_id'), publicNow: byTenant('public_now', 'product_id'), screening: [], settings: {}, storageTexts: {}, tenants: {} };
   for (const r of rows('import_runs')) {
     need(text(r.run_id) && text(r.status), 'import_runs');
     state.importRuns[r.run_id] = r.status;
