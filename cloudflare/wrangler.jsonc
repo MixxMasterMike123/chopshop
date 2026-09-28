@@ -80,6 +80,12 @@
         // Every bucket below is EU-jurisdiction: the S3 presign host must be the `.eu.` one
         // (src/pod/render-farm-client.ts). The preflight requires this to match the bindings.
         "R2_JURISDICTION": "eu",
+        // PUBLIC_OBJECT_BASE_URL goes here (D78): the origin public objects are read from, the
+        // public bucket's managed r2.dev address. NOT SET YET: that address is switched off, and
+        // D95 waits for Mikael to switch it on. The same bare https origin then goes here, into
+        // pinned.staging.json → r2.publicBaseUrl and into cloudflare/web/wrangler.jsonc
+        // env.staging.vars. The preflight requires the three to be equal, and refuses every
+        // deploy while the pinned value is null.
         // Printer dispatch target — must equal pinned.<env>.json → dispatchTarget (the preflight
         // checks it). "fake-printer" exists only in staging; production is always "snapwear".
         "DISPATCH_TARGET": "fake-printer",
@@ -153,6 +159,11 @@
         // Every bucket below is EU-jurisdiction: the S3 presign host must be the `.eu.` one
         // (src/pod/render-farm-client.ts). The preflight requires this to match the bindings.
         "R2_JURISDICTION": "eu",
+        // PUBLIC_OBJECT_BASE_URL goes here (D78): the origin public objects are read from. NOT
+        // SET YET: production's address comes with the real domain (CP7, D78; staging's waits
+        // for D95). It goes here, into pinned.production.json → r2.publicBaseUrl and into
+        // cloudflare/web/wrangler.jsonc env.production.vars together. The preflight requires the
+        // three to be equal, and refuses every deploy while the pinned value is null.
         // Printer dispatch target — must equal pinned.<env>.json → dispatchTarget (the preflight
         // checks it). "fake-printer" exists only in staging; production is always "snapwear".
         "DISPATCH_TARGET": "snapwear",

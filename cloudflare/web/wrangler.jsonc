@@ -8,8 +8,8 @@
   // Same shape as cloudflare/wrangler.jsonc, on purpose: NO bindings and NO vars at the top
   // level (wrangler env sections do not inherit them), and a top-level name that is no real
   // Worker's, so a bare `wrangler deploy` without --env deploys nothing that works. Every
-  // deploy names its environment. The deploy path (preflight + pinned checks) is reviewer
-  // wiring: see docs/cf-port/CP4_E_REPORT.md, "Reviewer wiring".
+  // deploy names its environment: scripts/cf-deploy.sh, through scripts/cf-preflight.sh
+  // <env> --web, which checks this file against cloudflare/pinned.<env>.json.
   "name": "chopshop-web-unbound",
   "account_id": "ee213082783ec86585150e876edb6107",
   "main": "src/index.ts",
@@ -43,8 +43,12 @@
       "vars": {
         // Must equal pinned.staging.json → origins.web (the shared host, D7/D77).
         "WEB_ORIGIN": "https://chopshop-web-stg.kent-ee2.workers.dev"
-        // PUBLIC_OBJECT_BASE_URL: the public bucket's address (D78, D95), set with the API's.
-        // Until then no image origin is allowed by the report-only policy and no Open Graph
+        // PUBLIC_OBJECT_BASE_URL goes here: the public bucket's address (D78). NOT SET YET: the
+        // staging bucket's managed r2.dev address is switched off, and D95 waits for Mikael to
+        // switch it on. The same bare https origin then goes here, into cloudflare/wrangler.jsonc
+        // env.staging.vars and into pinned.staging.json → r2.publicBaseUrl, set together: the
+        // preflight (--web) requires them equal and refuses every deploy while the pinned value is
+        // null. Without it no image origin is allowed by the report-only policy and no Open Graph
         // image is written.
       }
     },
@@ -66,6 +70,11 @@
         // Must equal pinned.production.json → origins.web. CP7 replaces it with the real
         // domain (D7), here and in the pinned file together.
         "WEB_ORIGIN": "https://chopshop-web.kent-ee2.workers.dev"
+        // PUBLIC_OBJECT_BASE_URL goes here: the public bucket's address (D78). NOT SET YET:
+        // production's comes with the real domain (CP7, D78; staging's waits for D95). It goes
+        // here, into cloudflare/wrangler.jsonc env.production.vars and into
+        // pinned.production.json → r2.publicBaseUrl together: the preflight (--web) requires
+        // them equal and refuses every deploy while the pinned value is null.
       }
     }
   }

@@ -2,6 +2,7 @@
   "cloudflareAccountId": "ee213082783ec86585150e876edb6107",
   "cloudflareAccountName": "Kent@meteorpr.se's Account",
   "workerName": "chopshop-api",
+  "webWorkerName": "chopshop-web",
   "origins": {
     "api": "https://chopshop-api.kent-ee2.workers.dev",
     "web": "https://chopshop-web.kent-ee2.workers.dev"
@@ -13,7 +14,8 @@
   "r2": {
     "public": "chopshop-prod-public",
     "private": "chopshop-prod-private",
-    "production": "chopshop-prod-production"
+    "production": "chopshop-prod-production",
+    "publicBaseUrl": null
   },
   "queues": {
     "outbox": "chopshop-prod-outbox",
