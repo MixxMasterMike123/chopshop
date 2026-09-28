@@ -4,7 +4,27 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP4 — Catalogue + storefront (GO 2026-09-28, started 2026-09-28)
 
-### 📦 2026-09-28 19:10 — the content of the four shops is IMPORTED on staging and verified; the locale files wait for Codex — START HERE
+### ⏸ PAUSED 2026-09-28 19:30 until the weekly reset (Saturday 2026-10-03, 17:00) — START HERE
+
+Mikael paused the work: 87 % of the week and 83 % of the week's Fable were used on a Monday. **Tree clean, HEAD pushed, no builder running, nothing half done.** Staging stays as it is: the four shops are imported and can be looked at, three of them published for the review.
+
+**Codex runs detached from the session:** `~/chopshop-export/codex-2026-09-28/run.sh` waits for the quota (19:51) and reviews `dacad8d7`, `91b58ced`, `d3c48d9f`, `287c76c7` at medium effort. Its logs are `~/chopshop-export/codex-2026-09-28/codex-<sha>.log`, and `done.txt` holds one line per finished review. If `done.txt` has fewer than four lines, or a log ends in "usage limit", run that commit again.
+
+**To resume, in this order:**
+
+1. `git status --short` (expect nothing), `git log --oneline -1` (expect the commit of this entry).
+2. Read Codex's four logs: the verdict is the text after the last line that reads `codex`. Fix what is real, one commit, Codex on the fix.
+3. The gate: `node --test "scripts/cf-port/migrate/test/*.test.mjs"` (430), `node --test src/api/*.test.mjs src/storefront/adapters/*.test.mjs src/storefront/dev/*.test.mjs` (120), `node cloudflare/web/check-storefront-build.mjs`, `npx vite build`, `node guard/guards.test.mjs`. The Worker's suite only if Worker code changed (90 files, 3893).
+4. Attest HEAD (`git notes --ref=reviews add -m "codex: PASS" -m "fable: PASS" HEAD`, `git push origin refs/notes/reviews`), then `scripts/cf-deploy.sh staging web`: it ships the locale files. No Worker code changed since `895c24d9`.
+5. Shoot the twelve pages again (`docs/cf-port/baseline/capture-storefront.sh <out> https://chopshop-web-stg.kent-ee2.workers.dev`) and compare; the texts of buttons and labels should then be the shop's own.
+6. Mikael reviews the four shops. After the review: `node scripts/cf-port/staging-legal.mjs --env staging --out ~/chopshop-export/legal-staging-2026-09-28 --unpublish-after-review`.
+7. Then, each with Mikael's go: the 6 POD products of melodie-mc for the review (a staging mapping, needs the artworks); D's second pass (the preview, D57); the sign-in of `lib/api-session.mjs` waits out a 429; CP5, the admin.
+
+**Mikael's open decisions** (none blocks step 1–6): D97 a–d; the veto on D92–D94; the seven points of `CP4_R_REPORT.md` "Review round 1"; the nine open questions of `CP4_S2_REPORT.md` §8 (the screening state of imported products, how the catalogue reaches PRODUCTION at the cutover, the 139 long variant skus, pickup on where the source says nothing); the infringement report that needs a product the page can find.
+
+**How far the port is (asked by Mikael, the reviewer's estimate, not a measurement): a little over half.** Done: CP0–CP3, and CP4 but for its design gate and the preview. Left: CP5 the admin (the largest part by files), the POD studio and the mapping page, mail (Resend), the domains, the production import and the cutover, DAC7.
+
+### 📦 2026-09-28 19:10 — the content of the four shops is IMPORTED on staging and verified; the locale files wait for Codex
 
 | Step | Result |
 |---|---|
