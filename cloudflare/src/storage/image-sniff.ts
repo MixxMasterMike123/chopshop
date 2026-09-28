@@ -1007,6 +1007,20 @@ function textRefusal(texts: readonly string[]): SvgRefusal | null {
   return null;
 }
 
+/**
+ * The text as a parser joins it: comments, CDATA markers and tags removed, so
+ * what stood on both sides of one stands together. Over-approximate on
+ * purpose (a `>` inside an attribute value ends the removal early): the result
+ * is only ever scanned for what refuses.
+ */
+function joinedText(text: string): string {
+  return text
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replaceAll("<![cdata[", "")
+    .replaceAll("]]>", "")
+    .replace(/<[^>]*>/g, "");
+}
+
 function roundedSide(value: number): number | null {
   const side = Math.round(value);
   return side >= 1 && side <= IMAGE_DIMENSION_MAX ? side : null;
@@ -1098,7 +1112,17 @@ export function checkSvg(bytes: Uint8Array): SvgCheckResult {
     return refuse(rootAttributes);
   }
 
-  const problem = textRefusal([text, resolvedText]);
+  // An XML parser joins the text on both sides of a comment, a CDATA marker
+  // or a child element into ONE text: `@im<![CDATA[port]]>` is `@import` to
+  // the style sheet. So the text-wide scans also read the text as joined,
+  // with every such construct taken out, raw and with its references resolved.
+  const joined = joinedText(text);
+  const problem = textRefusal([
+    text,
+    resolvedText,
+    joined,
+    asciiLowerCase(decodeReferences(joined) ?? joined),
+  ]);
   if (problem !== null) {
     return refuse(problem);
   }

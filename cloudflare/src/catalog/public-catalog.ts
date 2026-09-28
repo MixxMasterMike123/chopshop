@@ -396,14 +396,57 @@ function toSummary(row: ProductRow, parts: ProductParts): PublicProductSummary {
   };
 }
 
+/**
+ * The ids among `productIds` that THE predicate still admits, asked AFTER the
+ * tags, variants and images were read. Those reads run after the product row
+ * was selected, so an edit in between can put a text on the product that was
+ * never approved — and the same batch that writes it blocks the product. A
+ * product that is no longer admitted is left out of the answer, with whatever
+ * was read for it.
+ */
+async function stillPublic(
+  db: D1Database,
+  tenant: TenantContext,
+  productIds: readonly string[],
+): Promise<Set<string>> {
+  const admitted = new Set<string>();
+  const ids = [...new Set(productIds)];
+  if (ids.length === 0) {
+    return admitted;
+  }
+  const results = await db.batch<{ product_id: string }>(
+    chunks(ids).map((chunk) =>
+      db
+        .prepare(
+          `SELECT publication.product_id AS product_id
+           ${ELIGIBLE_PRODUCTS_FROM}
+           WHERE publication.tenant_id = ?
+             AND product.tenant_id = ?
+             AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+             AND publication.product_id IN (${placeholders(chunk.length)})
+           LIMIT ${chunk.length}`,
+        )
+        .bind(tenant.tenantId, tenant.tenantId, ...chunk),
+    ),
+  );
+  for (const result of results) {
+    for (const row of result.results) {
+      admitted.add(row.product_id);
+    }
+  }
+  return admitted;
+}
+
 async function toSummaries(
   env: Env | null,
   db: D1Database,
   tenant: TenantContext,
   rows: readonly ProductRow[],
 ): Promise<PublicProductSummary[]> {
-  const parts = await loadParts(env, db, tenant.tenantId, rows.map((row) => row.product_id));
-  return rows.map((row) => toSummary(row, parts));
+  const ids = rows.map((row) => row.product_id);
+  const parts = await loadParts(env, db, tenant.tenantId, ids);
+  const admitted = await stillPublic(db, tenant, ids);
+  return rows.filter((row) => admitted.has(row.product_id)).map((row) => toSummary(row, parts));
 }
 
 async function toDetail(
@@ -411,8 +454,13 @@ async function toDetail(
   db: D1Database,
   tenant: TenantContext,
   row: ProductRow,
-): Promise<PublicProductDetail> {
+): Promise<PublicProductDetail | null> {
   const parts = await loadParts(env, db, tenant.tenantId, [row.product_id]);
+  const pod = row.is_pod === 1 ? await publicPodFields(db, tenant.tenantId, row.product_id) : null;
+  // Asked last: see stillPublic.
+  if (!(await stillPublic(db, tenant, [row.product_id])).has(row.product_id)) {
+    return null;
+  }
   const visible = parts.images.get(row.product_id) ?? [];
   return {
     ...toSummary(row, parts),
@@ -424,7 +472,7 @@ async function toDetail(
     isPersonalized: row.is_personalized === 1,
     launchDate: row.launch_date,
     moreInfo: row.more_info,
-    pod: row.is_pod === 1 ? await publicPodFields(db, tenant.tenantId, row.product_id) : null,
+    pod,
     size: row.size,
     sizeGuide: row.size_guide,
     stock: row.stock,

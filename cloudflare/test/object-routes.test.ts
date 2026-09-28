@@ -1552,10 +1552,13 @@ describe("object removal takes the bytes out of the bucket the row names (D93)",
     await expect(decoy?.text()).resolves.toBe("public-decoy");
   });
 
-  it("tombstones a pending public object without touching either bucket", async () => {
+  it("removes the bytes of a public object whose row was still pending when it was read", async () => {
     const bytes = pngHeaded(5, 5);
     const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+    // What an upload leaves when it stores and activates between the
+    // removal's read of the row and its tombstone.
     await env.PUBLIC_BUCKET.put(reserved.objectKey, "stray");
+    await env.PRIVATE_BUCKET.put(reserved.objectKey, "decoy");
 
     const response = await exports.default.fetch(
       objectRequest(`${HOST_A}/v1/admin/objects/${reserved.objectId}`, "DELETE", { cookie: adminA.cookie }),
@@ -1563,9 +1566,11 @@ describe("object removal takes the bytes out of the bucket the row names (D93)",
 
     expect(response.status).toBe(204);
     expect((await dimensionRow(reserved.objectId))?.status).toBe("deleted");
-    // Same rule as the private leg: only an active row's bytes are removed.
-    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.not.toBeNull();
-    await env.PUBLIC_BUCKET.delete(reserved.objectKey);
+    // Bytes anyone can read never outlive their row, whatever the row said
+    // when the removal read it.
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    await expect(env.PRIVATE_BUCKET.head(reserved.objectKey)).resolves.not.toBeNull();
+    await env.PRIVATE_BUCKET.delete(reserved.objectKey);
   });
 });
 

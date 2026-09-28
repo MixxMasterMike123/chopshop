@@ -529,8 +529,11 @@ const SOURCE_STORAGE_MARKERS = [
 ] as const;
 
 export function isSourceStorageAddress(value: string): boolean {
-  const lowered = value.toLowerCase();
-  return SOURCE_STORAGE_MARKERS.some((marker) => lowered.includes(marker));
+  // As a URL parser reads a host: percent escapes of ASCII decoded, lower case.
+  const plain = value
+    .replace(/%([0-7][0-9a-f])/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .toLowerCase();
+  return SOURCE_STORAGE_MARKERS.some((marker) => plain.includes(marker));
 }
 
 /** Every path of the identity (any depth) whose string names source storage. */

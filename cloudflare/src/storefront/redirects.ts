@@ -277,8 +277,14 @@ export function decodeRedirectCursor(cursor: string): string | null {
     const binary = atob(cursor.replace(/-/g, "+").replace(/_/g, "/"));
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
     const fromPath = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    // A cursor is only ever a path this list answered; anything else is forged.
-    return normalizeStorefrontPath(fromPath) === fromPath ? fromPath : null;
+    // A cursor is a STORED path, already in the normal form: it is not
+    // normalised again (a stored `%`, `?` or `#` is a character of the path,
+    // not URL syntax). It only has to look like one.
+    return fromPath.startsWith("/") &&
+      fromPath.length <= STOREFRONT_PATH_MAX_LENGTH &&
+      !CONTROL_CHARACTER.test(fromPath)
+      ? fromPath
+      : null;
   } catch {
     return null;
   }

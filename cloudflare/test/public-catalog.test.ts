@@ -1,6 +1,8 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { getPublicProductByRef, listPublicProductPage } from "../src/catalog/public-catalog";
+
 const NOW = 1_787_100_000_000;
 
 interface SeedProductOptions {
@@ -349,7 +351,87 @@ describe("GET /v1/products/{productId}", () => {
   });
 });
 
+describe("a product that stops being public while its parts are read", () => {
+  it("is left out of the list and is no product to the read of one", async () => {
+    const tenantId = "tenant-catalog-race";
+    const productId = "product-race-1";
+    await seedTenant(tenantId, "race.catalog.test");
+    await seedProduct({ productId, published: true, sku: "RACE-1", status: "active", tenantId });
+    const tenant = { domainKind: "storefront", hostname: "race.catalog.test", tenantId };
+
+    // The product row is selected first; the tags, variants and images are
+    // read after it. An edit that lands in between writes a text and blocks
+    // the product in one batch: here, before the first of those later reads.
+    const racing = (): D1Database => {
+      let fired = false;
+      return new Proxy(env.DB, {
+        get(target, property) {
+          if (property === "batch") {
+            return async (statements: D1PreparedStatement[]) => {
+              if (!fired) {
+                fired = true;
+                await target.batch([
+                  target
+                    .prepare(
+                      "INSERT INTO product_tags (tenant_id, product_id, tag_key, tag, position) VALUES (?, ?, 'never-approved', 'Never approved', 0)",
+                    )
+                    .bind(tenantId, productId),
+                  target
+                    .prepare("UPDATE products SET takedown_at = '2027-01-01T00:00:00.000Z' WHERE product_id = ?")
+                    .bind(productId),
+                ]);
+              }
+              return target.batch(statements);
+            };
+          }
+          const value: unknown = Reflect.get(target, property);
+          return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+        },
+      });
+    };
+
+    const page = await listPublicProductPage(env, racing(), tenant, {});
+    expect(page.products.map((product) => product.productId)).not.toContain(productId);
+    expect(JSON.stringify(page)).not.toContain("Never approved");
+
+    await env.DB.prepare("UPDATE products SET takedown_at = NULL WHERE product_id = ?").bind(productId).run();
+    await env.DB.prepare("DELETE FROM product_tags WHERE product_id = ?").bind(productId).run();
+    expect(await getPublicProductByRef(env, racing(), tenant, productId)).toBeNull();
+  });
+});
+
 describe("catalogue database invariants", () => {
+  it("gives two products whose skus make one handle each a handle of its own", async () => {
+    await seedProduct({ productId: "product-h-slash", published: false, sku: "H/1", status: "draft", tenantId: "tenant-cat-a" });
+    await seedProduct({ productId: "product-h-dash", published: false, sku: "H-1", status: "draft", tenantId: "tenant-cat-a" });
+    const rows = await env.DB.prepare(
+      "SELECT product_id, handle FROM products WHERE product_id IN ('product-h-slash', 'product-h-dash') ORDER BY product_id",
+    ).all<{ handle: string; product_id: string }>();
+    expect(rows.results).toEqual([
+      { handle: "H-1-product-", product_id: "product-h-dash" },
+      { handle: "H-1", product_id: "product-h-slash" },
+    ]);
+  });
+
+  it("stops the 101st active variant and the 201st variant of a product, whoever writes it", async () => {
+    await seedProduct({ productId: "product-many", published: false, sku: "MANY", status: "draft", tenantId: "tenant-cat-a" });
+    for (let index = 0; index < 100; index += 1) {
+      await seedVariant("tenant-cat-a", "product-many", `many-a-${index}`, `MANY-A-${index}`, `A ${index}`, true);
+    }
+    await expect(
+      seedVariant("tenant-cat-a", "product-many", "many-a-100", "MANY-A-100", "A 100", true),
+    ).rejects.toThrow(/variant limit reached/);
+    for (let index = 0; index < 100; index += 1) {
+      await seedVariant("tenant-cat-a", "product-many", `many-i-${index}`, `MANY-I-${index}`, `I ${index}`, false);
+    }
+    await expect(
+      seedVariant("tenant-cat-a", "product-many", "many-i-100", "MANY-I-100", "I 100", false),
+    ).rejects.toThrow(/variant limit reached/);
+    await expect(
+      env.DB.prepare("UPDATE product_variants SET active = 1 WHERE variant_id = 'many-i-0'").run(),
+    ).rejects.toThrow(/variant limit reached/);
+  });
+
   it("rejects a variant whose tenant differs from its product", async () => {
     await expect(
       env.DB.prepare(

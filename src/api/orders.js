@@ -71,16 +71,30 @@ export async function pollReceipt(
   const deadline = now() + timeoutMs;
   for (;;) {
     let delay = intervalMs;
+    // A request that stalls must not outlive the deadline: it is aborted when
+    // the time is up, and the poll answers its timeout.
+    const remaining = deadline - now();
+    if (remaining <= 0) return { status: 'timeout' };
+    const timer = new AbortController();
+    const timeout = setTimeout(() => timer.abort(), remaining);
+    const onAbort = () => timer.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      const receipt = await claimReceipt(checkoutId, { signal });
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      const receipt = await claimReceipt(checkoutId, { signal: timer.signal });
       if (receipt?.status === 'ready' || receipt?.status === 'issued') return receipt;
     } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      if (timer.signal.aborted) return { status: 'timeout' };
       if (!(error instanceof ApiError)) throw error;
       if (error.code === 'rate_limited') {
         delay = Math.max(intervalMs, (error.retryAfterSeconds ?? 0) * 1_000);
       } else if (error.code !== 'network_error') {
         throw error;
       }
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
     }
     if (now() + delay > deadline) return { status: 'timeout' };
     await wait(delay, signal);

@@ -56,7 +56,20 @@ ALTER TABLE products ADD COLUMN handle TEXT CHECK (
   OR (length(handle) BETWEEN 1 AND 1200 AND instr(handle, '/') = 0)
 );
 
-UPDATE products SET handle = replace(sku, '/', '-') WHERE handle IS NULL;
+-- Two skus of one shop can give one handle (`A/B` and `A-B`): every row of
+-- such a group gets the start of its own id behind it, so the backfill can
+-- never stop the migration on the unique index below.
+UPDATE products
+SET handle = replace(sku, '/', '-') || CASE
+  WHEN EXISTS (
+    SELECT 1 FROM products AS other
+    WHERE other.tenant_id = products.tenant_id
+      AND other.product_id <> products.product_id
+      AND replace(other.sku, '/', '-') = replace(products.sku, '/', '-')
+  ) THEN '-' || substr(product_id, 1, 8)
+  ELSE ''
+END
+WHERE handle IS NULL;
 
 CREATE UNIQUE INDEX products_tenant_handle_idx ON products(tenant_id, handle);
 
@@ -68,7 +81,17 @@ AFTER INSERT ON products
 FOR EACH ROW
 WHEN NEW.handle IS NULL
 BEGIN
-  UPDATE products SET handle = replace(NEW.sku, '/', '-') WHERE product_id = NEW.product_id;
+  UPDATE products
+  SET handle = replace(NEW.sku, '/', '-') || CASE
+    WHEN EXISTS (
+      SELECT 1 FROM products AS other
+      WHERE other.tenant_id = NEW.tenant_id
+        AND other.product_id <> NEW.product_id
+        AND other.handle = replace(NEW.sku, '/', '-')
+    ) THEN '-' || substr(NEW.product_id, 1, 8)
+    ELSE ''
+  END
+  WHERE product_id = NEW.product_id;
 END;
 
 CREATE TRIGGER products_handle_not_null
@@ -176,6 +199,33 @@ ALTER TABLE product_variants ADD COLUMN position INTEGER NOT NULL DEFAULT 0
 
 CREATE INDEX product_variants_product_position_idx
   ON product_variants(product_id, position);
+
+-- The caps of a product's variants (src/catalog/admin-product-reads.ts
+-- MAX_PRODUCT_VARIANTS, MAX_ACTIVE_VARIANTS), enforced where two writers at
+-- once cannot both pass: the routes count first and answer `variant_limit`,
+-- and these stop what slipped between the count and the write.
+CREATE TRIGGER product_variants_limit_insert
+BEFORE INSERT ON product_variants
+FOR EACH ROW
+WHEN (SELECT COUNT(*) FROM product_variants WHERE product_id = NEW.product_id) >= 200
+  OR (
+    NEW.active = 1
+    AND (SELECT COUNT(*) FROM product_variants
+         WHERE product_id = NEW.product_id AND active = 1) >= 100
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'variant limit reached');
+END;
+
+CREATE TRIGGER product_variants_limit_activate
+BEFORE UPDATE OF active ON product_variants
+FOR EACH ROW
+WHEN OLD.active = 0 AND NEW.active = 1
+  AND (SELECT COUNT(*) FROM product_variants
+       WHERE product_id = NEW.product_id AND active = 1) >= 100
+BEGIN
+  SELECT RAISE(ABORT, 'variant limit reached');
+END;
 
 
 -- ----------------------------------------------------------------------------

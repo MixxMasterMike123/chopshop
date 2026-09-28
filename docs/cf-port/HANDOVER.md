@@ -23,6 +23,24 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 Gate at `fd32bf8e`: `tsc` clean for both projects, **86 files, 3656 tests passed**; the storefront build holds no Firebase code. **Codex started on the six commits at 06:10** (one after the other, medium effort; logs in the session's scratchpad as `codex-cp4-<sha>.log`, which dies with the session: re-run `codex review -c model_reasoning_effort="medium" --commit <sha>` if lost).
 
+**Codex on the six commits (06:07–06:19, medium effort): 17 comments.** Six are of the commit boundary and need nothing (a builder's commit holds no route mounts; the mounts came with A's commit; `collections` comes with B). **Eleven were real and are fixed in one commit:**
+
+| Commit | Finding | Fix |
+|---|---|---|
+| P | An SVG style sheet could spell `@import` or `url(` across a CDATA marker, a comment or a child element, which a parser joins into one text | The text-wide scans also read the text as joined |
+| P | A removal that read a pending row could leave the bytes of an upload that finished in between readable | A public object's bytes are removed whatever the row said when it was read |
+| E | A receipt request that stalls could outlive the 90 seconds | The request is aborted at the deadline and the poll answers its timeout |
+| E | A connection that fails while the body is read was not a network error | The body is read inside the same handler |
+| C | An address of the source system's storage with a percent-encoded letter of the host, or an upper-case letter brought in by a reference, passed | Read as a URL parser reads a host; the same in the store identity |
+| D | The cursor of the forwards list was normalised again, so a stored `%`, `?` or `#` broke its own next page | The cursor is taken as the stored path it is |
+| D | Categories and tags were found in a list cut at 500 | Found by their key, one indexed lookup |
+| A | The backfill of `handle` stopped the migration when two skus gave one handle (`A/B`, `A-B`) | Every row of such a group gets the start of its id behind the handle; the fill trigger likewise |
+| A | Two writers at once could pass the cap of a product's variants | Two triggers in 0040 stop it in the database; the routes answer `variant_limit` |
+| A | A product blocked while its tags, variants and images were read could show a text that was never approved | The predicate is asked again after those reads; a product it no longer admits is left out |
+| E | The legal pages' addresses | Fixed before Codex ran (`<root>/legal/:slug`) |
+
+Each fix has its test. Codex re-reviews the fix commit and B before the deploy.
+
 **What the review changed, beyond wiring:**
 
 - **The adopted legal texts are checked like a page's HTML** (C's open question, and a hole: the text comes from the seller's browser and is shown to every visitor, and on the shared host every shop is served from one origin). The three templates were rendered as the storefront renders them and pass.

@@ -608,3 +608,25 @@ describe("checkSvg — refused", () => {
     }
   });
 });
+
+describe("checkSvg reads the text as a parser joins it", () => {
+  const svg = (inner: string): Uint8Array =>
+    new TextEncoder().encode(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">${inner}</svg>`);
+
+  it.each([
+    ["an import split by a CDATA marker", '<style>@im<![CDATA[port]]> "https://example.com/a.css";</style>', "style_import"],
+    ["an import split by a comment", '<style>@im<!-- -->port "https://example.com/a.css";</style>', "style_import"],
+    ["an import split by a child element", '<style>@im<g/>port "https://example.com/a.css";</style>', "style_import"],
+    ["a url( split by a CDATA marker", "<style>a{fill:ur<![CDATA[l(]]>https://example.com/a.png)}</style>", "outside_reference"],
+    ["a url( split by a comment", "<style>a{fill:ur<!--x-->l(https://example.com/a.png)}</style>", "outside_reference"],
+    ["a script scheme split by a CDATA marker", "<style>a{x:java<![CDATA[script:]]>1}</style>", "javascript_url"],
+  ])("refuses %s", (_label, inner, reason) => {
+    expect(checkSvg(svg(inner))).toEqual({ ok: false, reason });
+  });
+
+  it("still admits a style sheet inside a CDATA section that fetches nothing", () => {
+    expect(checkSvg(svg("<style><![CDATA[ .a{fill:#123456} ]]></style><rect class=\"a\" width=\"1\" height=\"1\"/>"))).toMatchObject({
+      ok: true,
+    });
+  });
+});

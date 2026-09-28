@@ -143,15 +143,18 @@ export async function request(path, { method = 'GET', body, headers = {}, signal
   }
 
   const url = `${apiBase()}${path}`;
+  // The body is read inside the same handler: a connection that fails after
+  // the headers arrived is a network error like any other.
   let response;
+  let text;
   try {
     response = await fetch(url, init);
+    text = await response.text();
   } catch (error) {
-    if (error?.name === 'AbortError') throw error;
+    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') throw error;
     throw new ApiError({ status: 0, code: 'network_error', message: 'The shop could not be reached' });
   }
 
-  const text = await response.text();
   let data = null;
   let parsed = true;
   if (text) {

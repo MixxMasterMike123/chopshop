@@ -283,9 +283,14 @@ function decodeValue(raw: string): string | HtmlRefusal {
   }
 }
 
+// Read as a URL parser reads a host: every percent escape of an ASCII
+// character decoded (`google%61pis`), then lower case (a numeric reference
+// can bring an upper-case letter in after the text was lower-cased).
 function containsStorageAddress(text: string): boolean {
-  const dotted = text.replaceAll("%2e", ".");
-  return STORAGE_HOSTS.some((host) => dotted.includes(host));
+  const plain = text
+    .replace(/%([0-7][0-9a-f])/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .toLowerCase();
+  return STORAGE_HOSTS.some((host) => plain.includes(host));
 }
 
 // `javascript:` / `vbscript:` with every white space character removed (a URL

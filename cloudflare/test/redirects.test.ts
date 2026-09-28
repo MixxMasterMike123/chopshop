@@ -7,6 +7,8 @@ import {
   parseRedirectFromPath,
   parseRedirectToPath,
   REDIRECTS_PER_CALL_MAX,
+  decodeRedirectCursor,
+  encodeRedirectCursor,
 } from "../src/storefront/redirects";
 import { ADMIN, call, type CallOptions } from "./slice-harness";
 import {
@@ -469,5 +471,13 @@ describe("the 0043 schema — the last fence", () => {
     before = await version();
     await env.DB.prepare("DELETE FROM redirects WHERE tenant_id = ? AND from_path = '/bump-a'").bind(shopB.tenantId).run();
     expect(await version()).toBeGreaterThan(before);
+  });
+});
+
+describe("the list cursor is a stored path, not an address", () => {
+  it.each(["/sale%", "/what?", "/tag#one", "/a b/ü"])("round-trips %s", (stored) => {
+    // Each is a path in the normal form as it is stored: `/sale%25` is stored
+    // as `/sale%`, and the cursor of that row must be taken back as it is.
+    expect(decodeRedirectCursor(encodeRedirectCursor(stored))).toBe(stored);
   });
 });

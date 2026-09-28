@@ -292,14 +292,23 @@ async function fencedTail(
   return statements;
 }
 
+/** 0040's two triggers: a writer that passed the count beside another one. */
+function isVariantLimitFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("variant limit reached");
+}
+
 async function commit(
   db: D1Database,
   statements: D1PreparedStatement[],
-): Promise<"conflict" | null> {
+): Promise<"conflict" | "variant_limit" | null> {
   try {
     await db.batch(statements);
     return null;
   } catch (error) {
+    if (isVariantLimitFailure(error)) {
+      return "variant_limit";
+    }
     if (!isScreeningConflict(error) && isUniqueConstraintFailure(error)) {
       return "conflict";
     }
@@ -403,8 +412,9 @@ async function createProductVariantOnce(
     ...(await fencedTail(db, principal, guard, product, live, activeAfter, now)),
     auditStatement(db, principal, "product.variant_create", productId, now, { variantId }),
   ];
-  if ((await commit(db, statements)) === "conflict") {
-    return { code: "conflict", status: "conflict" };
+  const failed = await commit(db, statements);
+  if (failed !== null) {
+    return { code: failed, status: "conflict" };
   }
   return { status: "ok", variant: toAdminVariant(row) };
 }
@@ -498,8 +508,9 @@ async function updateProductVariantOnce(
       variantId,
     }),
   ];
-  if ((await commit(db, statements)) === "conflict") {
-    return { code: "conflict", status: "conflict" };
+  const failed = await commit(db, statements);
+  if (failed !== null) {
+    return { code: failed, status: "conflict" };
   }
   return { status: "ok", variant: toAdminVariant(next) };
 }
@@ -691,8 +702,9 @@ async function deleteProductVariantOnce(
         now,
       ),
   ];
-  if ((await commit(db, statements)) === "conflict") {
-    return { code: "conflict", status: "conflict" };
+  const failed = await commit(db, statements);
+  if (failed !== null) {
+    return { code: failed, status: "conflict" };
   }
 
   const after = await loadVariant(db, tenantId, productId, variantId);

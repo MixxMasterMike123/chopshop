@@ -210,6 +210,8 @@ const REFUSED: ReadonlyArray<readonly [string, string, HtmlRefusal]> = [
   ["a Firebase Storage image", '<img src="https://firebasestorage.googleapis.com/v0/b/x/o/y.png">', "storage_address"],
   ["a Cloud Storage link", '<a href="https://storage.googleapis.com/bucket/x">x</a>', "storage_address"],
   ["a percent-encoded dot", '<img src="https://firebasestorage%2Egoogleapis.com/x">', "storage_address"],
+  ["a percent-encoded letter of the host", '<img src="https://firebasestorage.google%61pis.com/x">', "storage_address"],
+  ["an upper-case letter brought in by a reference", '<img src="https://firebasestorage.&#71;oogleapis.com/x">', "storage_address"],
   ["a bucket host in text", "<p>Se https://project.appspot.com/x</p>", "storage_address"],
   ["a new-style bucket", '<img src="https://p.firebasestorage.app/x.png">', "storage_address"],
   ["upper-case", '<img src="HTTPS://FIREBASESTORAGE.GOOGLEAPIS.COM/x">', "storage_address"],

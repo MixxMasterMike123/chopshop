@@ -400,7 +400,6 @@ export function parseStorefrontRoute(normal: string): StorefrontRoute | null {
 
 const PRODUCT_ORDER =
   "product.sort_order IS NULL, product.sort_order, publication.public_name, product.product_id";
-const DISTINCT_LIMIT = 500;
 
 interface ProductLink {
   name: string;
@@ -437,41 +436,37 @@ function listAllProductLinks(db: D1Database, tenantId: string): Promise<ProductL
   );
 }
 
-// Names that share one address are one page (`/kategori/rokt` is "Rökt" and
-// "rokt"): the lists below take every name of the address. At most 90, the
-// IN chunk of PLAN §2.7; more names of one address than that do not occur.
+// A category or a tag is found by its KEY, its address form (0040
+// `products.category_key`, `product_tags.tag_key`, made by the same slugify):
+// one indexed lookup, whatever the number of categories and tags of the shop.
+// Names that share one key are one page (`/kategori/rokt` is "Rökt" and
+// "rokt"); the page is titled with the first of them.
 const NAMES_MAX = 90;
-
-function placeholders(count: number): string {
-  return Array.from({ length: count }, () => "?").join(", ");
-}
 
 function listCategoryProductLinks(
   db: D1Database,
   tenantId: string,
-  categories: readonly string[],
+  key: string,
 ): Promise<ProductLink[]> {
-  const names = categories.slice(0, NAMES_MAX);
   return productLinks(
     db
       .prepare(
         `${PRODUCT_LINK_COLUMNS}
          WHERE publication.tenant_id = ? AND product.tenant_id = ?
-           AND product.category IN (${placeholders(names.length)})
+           AND product.category_key = ?
            AND ${PUBLIC_ELIGIBILITY_PREDICATE}
          ORDER BY ${PRODUCT_ORDER}
          LIMIT ${LIST_MAX}`,
       )
-      .bind(tenantId, tenantId, ...names),
+      .bind(tenantId, tenantId, key),
   );
 }
 
 function listTagProductLinks(
   db: D1Database,
   tenantId: string,
-  tags: readonly string[],
+  key: string,
 ): Promise<ProductLink[]> {
-  const names = tags.slice(0, NAMES_MAX);
   return productLinks(
     db
       .prepare(
@@ -481,13 +476,13 @@ function listTagProductLinks(
              SELECT 1 FROM product_tags AS tagged
              WHERE tagged.tenant_id = product.tenant_id
                AND tagged.product_id = product.product_id
-               AND tagged.tag IN (${placeholders(names.length)})
+               AND tagged.tag_key = ?
            )
            AND ${PUBLIC_ELIGIBILITY_PREDICATE}
          ORDER BY ${PRODUCT_ORDER}
          LIMIT ${LIST_MAX}`,
       )
-      .bind(tenantId, tenantId, ...names),
+      .bind(tenantId, tenantId, key),
   );
 }
 
@@ -513,24 +508,34 @@ function listCollectionMemberLinks(
   );
 }
 
-/** The distinct categories (or tags) of the shop's PUBLIC products, bounded. */
-export async function publicCategories(db: D1Database, tenantId: string): Promise<string[]> {
+/** The names of the shop's PUBLIC products' categories that share `key`. */
+export async function publicCategoryNames(
+  db: D1Database,
+  tenantId: string,
+  key: string,
+): Promise<string[]> {
   const rows = await db
     .prepare(
       `SELECT DISTINCT product.category AS value
        ${ELIGIBLE_PRODUCTS_FROM}
        WHERE publication.tenant_id = ? AND product.tenant_id = ?
+         AND product.category_key = ?
          AND product.category IS NOT NULL
          AND ${PUBLIC_ELIGIBILITY_PREDICATE}
        ORDER BY value
-       LIMIT ${DISTINCT_LIMIT}`,
+       LIMIT ${NAMES_MAX}`,
     )
-    .bind(tenantId, tenantId)
+    .bind(tenantId, tenantId, key)
     .all<{ value: string }>();
   return rows.results.map((row) => row.value);
 }
 
-export async function publicTags(db: D1Database, tenantId: string): Promise<string[]> {
+/** The names of the shop's PUBLIC products' tags that share `key`. */
+export async function publicTagNames(
+  db: D1Database,
+  tenantId: string,
+  key: string,
+): Promise<string[]> {
   const rows = await db
     .prepare(
       `SELECT DISTINCT tagged.tag AS value
@@ -539,11 +544,12 @@ export async function publicTags(db: D1Database, tenantId: string): Promise<stri
          ON tagged.product_id = product.product_id
         AND tagged.tenant_id = product.tenant_id
        WHERE publication.tenant_id = ? AND product.tenant_id = ?
+         AND tagged.tag_key = ?
          AND ${PUBLIC_ELIGIBILITY_PREDICATE}
        ORDER BY value
-       LIMIT ${DISTINCT_LIMIT}`,
+       LIMIT ${NAMES_MAX}`,
     )
-    .bind(tenantId, tenantId)
+    .bind(tenantId, tenantId, key)
     .all<{ value: string }>();
   return rows.results.map((row) => row.value);
 }
@@ -949,8 +955,7 @@ async function collectionPage(
   if (collection.type === "smart") {
     // A tag rule matches the tag by its address form, as the tag page does.
     const key = collection.rule_tag === null ? "" : slugify(collection.rule_tag);
-    const tags = key === "" ? [] : (await publicTags(db, tenantId)).filter((tag) => slugify(tag) === key);
-    links = tags.length === 0 ? [] : await listTagProductLinks(db, tenantId, tags);
+    links = key === "" ? [] : await listTagProductLinks(db, tenantId, key);
   } else {
     links = await listCollectionMemberLinks(db, tenantId, collection.collection_id);
   }
@@ -1147,25 +1152,21 @@ export async function resolveSeoAnswer(
       page = await productPage(env, db, tenant, shop, route.handle);
       break;
     case "category": {
-      const names = (await publicCategories(db, tenantId)).filter(
-        (category) => slugify(category) === route.slug,
-      );
-      const [name] = names;
+      const [name] = await publicCategoryNames(db, tenantId, route.slug);
       const path = name === undefined ? null : categoryPath(name);
       page =
         name === undefined || path === null
           ? null
-          : listingPage(shop, name, path, await listCategoryProductLinks(db, tenantId, names), null, null);
+          : listingPage(shop, name, path, await listCategoryProductLinks(db, tenantId, route.slug), null, null);
       break;
     }
     case "tag": {
-      const names = (await publicTags(db, tenantId)).filter((tag) => slugify(tag) === route.slug);
-      const [name] = names;
+      const [name] = await publicTagNames(db, tenantId, route.slug);
       const path = name === undefined ? null : tagPath(name);
       page =
         name === undefined || path === null
           ? null
-          : listingPage(shop, name, path, await listTagProductLinks(db, tenantId, names), null, null);
+          : listingPage(shop, name, path, await listTagProductLinks(db, tenantId, route.slug), null, null);
       break;
     }
     case "collection":

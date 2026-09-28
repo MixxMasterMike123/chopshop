@@ -220,7 +220,8 @@ describe('the receipt poll', () => {
 
     assert.deepEqual(await pollReceipt('c1', c), { status: 'timeout' });
     assert.ok(c.now() <= 90_000, `stopped at ${c.now()} ms`);
-    assert.equal(calls.length, 46);
+    // At 0, 2, … 88 s; no request is started at the deadline itself.
+    assert.equal(calls.length, 45);
   });
 
   it('waits out a network error and a 429, and stops on a refusal', async () => {
@@ -237,6 +238,36 @@ describe('the receipt poll', () => {
     stubFetch(() => answer(404, { error: { code: 'not_found', message: 'Order not found' } }));
     await assert.rejects(pollReceipt('c1', clock()), { code: 'not_found', status: 404 });
     assert.equal(calls.length, 1);
+  });
+
+  it('answers its timeout when a request stalls past the deadline', async () => {
+    // A request that never answers until it is aborted.
+    stubFetch(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        }),
+    );
+    const started = Date.now();
+    assert.deepEqual(await pollReceipt('c1', { intervalMs: 5, timeoutMs: 40 }), { status: 'timeout' });
+    assert.ok(Date.now() - started < 1_000);
+    assert.equal(calls.length, 1);
+  });
+
+  it('waits out a connection that fails while the body is read', async () => {
+    stubFetch((_url, _init, n) => {
+      if (n === 1) {
+        const broken = new ReadableStream({
+          pull(controller) {
+            controller.error(new TypeError('connection lost'));
+          },
+        });
+        return new Response(broken, { status: 200 });
+      }
+      return answer(200, { receipt: { status: 'issued' } });
+    });
+    assert.deepEqual(await pollReceipt('c1', clock()), { status: 'issued' });
+    assert.equal(calls.length, 2);
   });
 
   it('stops when cancelled and makes no further request', async () => {

@@ -782,8 +782,13 @@ export async function deleteAdminObject(
       : { status: "not_found" };
   }
 
+  // The row read above may be older than the tombstone: an upload can store
+  // and activate a pending row in between. A public object's bytes are
+  // readable by anyone at their address, so they leave whatever the row said
+  // when it was read (deleting a key that holds nothing is a no-op). A private
+  // object's bytes are reachable only through its row, which is now deleted.
   const bucket = bucketBinding(env, existing.bucket);
-  if (bucket !== undefined && existing.status === "active") {
+  if (bucket !== undefined && (existing.bucket === "public" || existing.status === "active")) {
     await bucket.delete(existing.objectKey);
   }
 
