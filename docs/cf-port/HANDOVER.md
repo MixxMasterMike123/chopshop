@@ -4,7 +4,40 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP4 — Catalogue + storefront (GO 2026-09-28, started 2026-09-28)
 
-### 🚀 2026-09-28 18:30 — CP4 is DEPLOYED to staging and proven with a purchase; the design gate waits for the catalogue import — START HERE
+### 📦 2026-09-28 19:10 — the content of the four shops is IMPORTED on staging and verified; the locale files wait for Codex — START HERE
+
+| Step | Result |
+|---|---|
+| S1 (the file copy, `staging-legal.mjs`) | built by an Opus builder, reviewed, `91b58ced` |
+| S2 (the catalogue plan, its verification, the locale files) | built by an Opus builder, `d3c48d9f`; the reviewer read the money conversion and the run book and ran the gate; the transforms are proven by the rehearsal and the verification, not read line by line |
+| The file copy on staging | **503 of 524 copied, 21 missing, 0 refused, 0 failed**; 480 objects (23 files identical to another of the same shop), about 309 MB. The 21 missing are product images of sillmans that the source's storage no longer holds (404) |
+| A copied file read back from the public bucket | size and sha256 equal |
+| The catalogue plan | 4 838 statements, sha256 `3320092381940e9409610ad4ee2f8c1f66736cef7d8e7ba335a55c954447d7b8`; bookmark BEFORE `000000d1-00000000-000050f4-6f3d4429bded7b0803e09c41cc32d006`, AFTER `000000d2-0000019c-000050f4-ed57cc19fd94b2a5d1d7fd30b96b76d5`; applied first try |
+| Rows | 217 products, 971 variants, 26 tags, 684 images, 205 publications, 19 collections with 86 members, 1 page, 4 store identities |
+| The screening | 205 products re-screened in 9 calls, 0 pending |
+| The legal texts | the platform terms' text archived; the three legal pages adopted for all four shops by a review admin per shop (`staging-review+<shop>@example.com`); return address and VAT answer set to staging placeholders where the source had none (gif-sundsvall, melodie-mc) |
+| Published for the review | gif-sundsvall, ninetone, sillmans (`~/chopshop-export/legal-staging-2026-09-28/published-for-review.json`; `staging-legal.mjs --unpublish-after-review` hides exactly those again) |
+| **`verify-catalogue.mjs`** | **PASS, 41 checks.** Public products: gif-sundsvall 113, ninetone 58, sillmans 22, melodie-mc 6; 199 in all, the source's 205 less the 6 POD products |
+
+Everything is under `~/chopshop-export/` (`copy-staging-2026-09-28`, `catalogue-staging-2026-09-28`, `legal-staging-2026-09-28`), outside the repository.
+
+**Found by the first run against staging, fixed in `287c76c7`:** D1 refuses a compound SELECT of more than five terms; a local SQLite does not, so no rehearsal finds it. A test now holds every state query to five.
+
+**Found, not fixed:** `staging-legal.mjs` reports a failed sign-in when the sign-in's rate limit answers; the third and fourth shop failed in one run and passed when run one by one with a pause. The sign-in of `lib/api-session.mjs` should wait out a 429 as its request helper does.
+
+**The second rendered look (the twelve baseline pages of melodie-mc, three widths):** every page shows the baseline's heading, no console error, no failed request. The logo, the hero, the products, the categories, the legal pages and the platform's terms are there. What differs:
+
+| Difference | Cause |
+|---|---|
+| Every page 28 px shorter; no account icon in the navigation; no review tile | D81, as before |
+| "Lägg i shoppingbagen" for "Lägg i kundvagnen", "Storlek" for "Välj..", "Art.nr" for "Stil" | the page shows its built-in texts; the shop's own are in `src/locales/*.json`, **committed and NOT deployed** |
+| The home and the product list of melodie-mc are shorter | 6 of its 12 products are POD products without a mapping (D83) and stay hidden |
+
+**Codex hit its usage limit at 19:05 (back 19:51).** Not read by Codex: `dacad8d7` (the purchase script), `91b58ced` (S1), `d3c48d9f` (S2, holds the locale files that are SHIPPED), `287c76c7`. **Nothing after `895c24d9` is attested, and the web Worker is not deployed again until it is.** No Worker code changed since `895c24d9`: the next deploy is `scripts/cf-deploy.sh staging web`.
+
+**Next:** Codex on the four commits → fix → attest HEAD → `scripts/cf-deploy.sh staging web` → shoot again → Mikael reviews the shops. Open for Mikael: the 6 POD products of melodie-mc are half its shop and cannot be reviewed until they are tied to a garment (a staging-only mapping is possible, it needs the artworks, which this step did not import).
+
+### (history) 2026-09-28 18:30 — CP4 is DEPLOYED to staging and proven with a purchase
 
 | What | Result |
 |---|---|
