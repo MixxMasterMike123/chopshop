@@ -1,7 +1,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 
 import { createApp } from "./app";
+import { routeNotFoundResponse } from "./lib/responses";
 import { stripTenantHeaders } from "./lib/tenant-headers";
+import {
+  requestOnHostname,
+  shopStorefrontHostname,
+} from "./tenancy/shop-hostname";
 import { handleScheduled } from "./outbox/scheduled";
 import { handleQueueBatch } from "./queues";
 
@@ -91,5 +96,27 @@ export class Internal extends WorkerEntrypoint<Env> {
     return Promise.resolve(
       internalApp.fetch(stripTenantHeaders(request), this.env, this.ctx),
     );
+  }
+
+  /**
+   * D77 — a storefront request on the SHARED host, where the shop is the first
+   * path segment (`/<shop>/cart`) rather than the hostname. `chopshop-web`
+   * validates the segment, strips it and the `/_api` prefix, and calls this with
+   * the API path (`/v1/…`). The shop's verified storefront hostname is looked up
+   * (src/tenancy/shop-hostname.ts), the request is moved onto it, and it is
+   * routed exactly as `fetch` routes any internal request: tenant headers
+   * stripped, tenant resolved from the hostname by the one rule.
+   *
+   * No hostname (malformed segment, unknown shop, tenant not active, no
+   * verified storefront domain) → the opaque 404, before anything is routed.
+   */
+  async fetchForShop(shop: string, request: Request): Promise<Response> {
+    const hostname = await shopStorefrontHostname(this.env.DB, shop);
+    const moved = hostname === null ? null : requestOnHostname(request, hostname);
+    if (moved === null) {
+      return routeNotFoundResponse();
+    }
+
+    return this.fetch(moved);
   }
 }

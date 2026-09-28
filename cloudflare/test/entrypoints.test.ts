@@ -214,6 +214,81 @@ describe("internal entrypoint", () => {
   });
 });
 
+/**
+ * CP4-E / D77: the shared host names the shop in the path, and the web Worker
+ * hands the segment to `Internal.fetchForShop`. The shop's verified storefront
+ * hostname replaces the request's host, then the ONE hostname rule applies.
+ * The request below always arrives on the web Worker's own host, which is no
+ * tenant's domain, so a 200 for shop A can only come from the lookup.
+ */
+describe("internal entrypoint: fetchForShop (D77)", () => {
+  const WEB_HOST = "web.entry.test";
+
+  it("routes a request on the web host to the named shop's hostname", async () => {
+    const response = await exports.Internal.fetchForShop(
+      TENANT_A,
+      new Request(`https://${WEB_HOST}/v1/storefront`),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(storefrontName(response)).resolves.toBe(`Shop ${TENANT_A}`);
+  });
+
+  it("serves the NAMED shop whatever tenant header the request carries", async () => {
+    const response = await exports.Internal.fetchForShop(
+      TENANT_B,
+      new Request(`https://${WEB_HOST}/v1/storefront`, {
+        headers: { "X-Tenant-Host": HOST_A, "X-Tenant-Id": TENANT_A },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(storefrontName(response)).resolves.toBe(`Shop ${TENANT_B}`);
+  });
+
+  it("ignores the request's own host, even when it is another shop's domain", async () => {
+    const response = await exports.Internal.fetchForShop(
+      TENANT_B,
+      new Request(`https://${HOST_A}/v1/storefront`),
+    );
+
+    await expect(storefrontName(response)).resolves.toBe(`Shop ${TENANT_B}`);
+  });
+
+  it("carries a POST body through to the route", async () => {
+    // The report intake answers 400 for a well-formed-JSON body it refuses and
+    // the opaque 404 for an unknown storefront: 400 proves the body arrived
+    // and the tenant resolved.
+    const response = await exports.Internal.fetchForShop(
+      TENANT_A,
+      new Request(`https://${WEB_HOST}/v1/reports`, {
+        body: JSON.stringify({ productId: "none" }),
+        headers: { "cf-connecting-ip": "203.0.113.77", "content-type": "application/json" },
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it.each([
+    ["an unknown shop", "no-such-shop"],
+    ["a malformed segment", "Tenant_Entry_A"],
+    ["an empty segment", ""],
+    ["a dot segment", ".."],
+  ])("answers the opaque 404 for %s", async (_label, shop) => {
+    const response = await exports.Internal.fetchForShop(
+      shop,
+      new Request(`https://${WEB_HOST}/v1/storefront`),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "not_found", message: "Route not found" },
+    });
+  });
+});
+
 describe("storefront surface switch (PLAN §2.1 TODO)", () => {
   it("is open to the public entrypoint at CP1", () => {
     expect(PUBLIC_STOREFRONT_ALLOWED).toBe(true);

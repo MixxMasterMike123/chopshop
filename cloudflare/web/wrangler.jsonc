@@ -1,0 +1,72 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  // chopshop-web — the storefront's Worker (docs/cf-port/CP4_BRIEFS.md §E, D77, D88).
+  // It serves the storefront build (vite.storefront.config.js → cloudflare/web/dist/, git-ignored), answers
+  // the head of every storefront address from the API, and forwards the storefront's own
+  // API calls (/_api/…) to chopshop-api's `Internal` entrypoint over a service binding.
+  //
+  // Same shape as cloudflare/wrangler.jsonc, on purpose: NO bindings and NO vars at the top
+  // level (wrangler env sections do not inherit them), and a top-level name that is no real
+  // Worker's, so a bare `wrangler deploy` without --env deploys nothing that works. Every
+  // deploy names its environment. The deploy path (preflight + pinned checks) is reviewer
+  // wiring: see docs/cf-port/CP4_E_REPORT.md, "Reviewer wiring".
+  "name": "chopshop-web-unbound",
+  "account_id": "ee213082783ec86585150e876edb6107",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
+  },
+  "env": {
+    "staging": {
+      "name": "chopshop-web-stg",
+      "workers_dev": true,
+      "preview_urls": false,
+      // The Worker runs FIRST for every request: the security headers, the /_api allowlist
+      // and the head of each page are its work. It reads the build through ASSETS; the asset
+      // layer answers nothing on its own (no HTML handling, no fallback page).
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "run_worker_first": true,
+        "html_handling": "none",
+        "not_found_handling": "none"
+      },
+      "services": [
+        { "binding": "API", "service": "chopshop-api-stg", "entrypoint": "Internal" }
+      ],
+      "vars": {
+        // Must equal pinned.staging.json → origins.web (the shared host, D7/D77).
+        "WEB_ORIGIN": "https://chopshop-web-stg.kent-ee2.workers.dev"
+        // PUBLIC_OBJECT_BASE_URL: the public bucket's address (D78, D95), set with the API's.
+        // Until then no image origin is allowed by the report-only policy and no Open Graph
+        // image is written.
+      }
+    },
+    "production": {
+      "name": "chopshop-web",
+      "workers_dev": false,
+      "preview_urls": false,
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "run_worker_first": true,
+        "html_handling": "none",
+        "not_found_handling": "none"
+      },
+      "services": [
+        { "binding": "API", "service": "chopshop-api", "entrypoint": "Internal" }
+      ],
+      "vars": {
+        // Must equal pinned.production.json → origins.web. CP7 replaces it with the real
+        // domain (D7), here and in the pinned file together.
+        "WEB_ORIGIN": "https://chopshop-web.kent-ee2.workers.dev"
+      }
+    }
+  }
+}
