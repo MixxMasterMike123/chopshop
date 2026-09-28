@@ -138,7 +138,7 @@ P ──► A ──► B ──┐
 E (starts at once) ┘
 ```
 
-A, C and D start when P's interface is reviewed. B starts when A's public product functions are in the tree. D's menu reads the tables of B and C, whose names and columns this file fixes, so D does not wait for them.
+G (the withdrawal function, D96) stands beside the chain: it needs nothing of P–E and F needs it for two pages. A, C and D start when P's interface is reviewed. B starts when A's public product functions are in the tree. D's menu reads the tables of B and C, whose names and columns this file fixes, so D does not wait for them.
 
 ## The address grammar (fixed here, used by D, E, F and S)
 
@@ -387,6 +387,33 @@ The router holds the staying addresses of the grammar above and nothing else; an
 ### Other builders work in `$CF/src` at the same time
 
 E keeps `npx tsc --noEmit` green for its own files and runs its own suites. When the whole suite fails in a file E does not own, E reports it and does not repair it.
+
+---
+
+## G. The withdrawal function
+
+**Goal.** A buyer without an account can withdraw from a purchase on the shop's site, and gets a receipt of it with the time the message arrived. It is a legal duty (DAL 2 kap. 10 a §), in force, and the port had no route for it (D96).
+
+**Source:** `functions/src/withdrawal/functions.ts` — its header states the law and the rules; G reads it whole and ports the GUEST path. Pages: `src/pages/shop/WithdrawalPage.jsx`, `src/components/shop/OrderWithdrawal.jsx`.
+
+### Owns
+
+`$CF/migrations/0044_withdrawals.sql`, `$CF/src/commerce/withdrawals.ts`, `$CF/src/routes/storefront-withdrawals.ts`, `$CF/test/withdrawals.test.ts`, and in `$CF/src/app.ts` two blocks of its own, `CP4-IMPORTS-G` and `CP4-ROUTES-G`, which G adds directly after the D blocks. Read-only use of the order tables and of the outbox and email code; a change G needs there is asked for in the report.
+
+### The rules
+
+1. `POST /v1/withdrawals`, a storefront route, no session. The buyer states the order's number, the address the purchase was made with, a name, and the address the receipt shall go to. G takes the exact fields from the source and from the page.
+2. **One answer for "no such order" and "the address does not match"**: the opaque 404. A rate limit per visitor address (`src/lib/rate-limit.ts`), so order numbers cannot be tried out.
+3. **The time of receipt is the server's**, written once and never changed. The table is append-only, with the triggers that make it so (UPDATE and DELETE refused, and a BEFORE INSERT guard against `INSERT OR REPLACE`).
+4. **The function never refuses while a withdrawal period could still run.** The source's absolute cap (450 days after the order) is the only age limit. Whether the withdrawal is valid is the shop's assessment afterwards; the receipt confirms that the message arrived.
+5. **A personalised order** (`orders.is_personalized = 1`, waived at checkout after the disclosure) is answered as not eligible, with the reason. The answer is recorded too: showing it is the function.
+6. **A second message for the same order** answers the first one's receipt and writes nothing.
+7. **The receipt** is returned in the answer (the page shows it and lets the buyer save it) and sent by mail to the stated address through the outbox and the email queue, in the same batch as the row. A failing mail never fails the withdrawal.
+8. **The shop is told**: a mail to the shop's support address through the same path, and the order's admin read shows the withdrawal with its time. **No money moves**: the refund stays the shop's own action.
+9. **Personal data (D68):** the row holds the name and the address the buyer stated, because the receipt must name them. No visitor address (IP) is stored in the row.
+10. The withdrawal of an order of another shop, of a suspended shop's order and of an order of an unpublished shop: G reads the source and the law's purpose and proposes; the default is that a buyer can always withdraw from an order that exists, whatever the shop's state is today.
+
+The web Worker's allowlist gains `POST /v1/withdrawals` and the client's `withdrawal.js` is aligned by the reviewer when G is reviewed.
 
 ---
 
