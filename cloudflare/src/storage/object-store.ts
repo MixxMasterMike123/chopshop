@@ -1,4 +1,6 @@
 import type { TenantContext } from "../tenancy/resolve-tenant";
+import type { ImageDimensions } from "./image-sniff";
+import { IMAGE_DIMENSION_MAX } from "./image-sniff";
 
 export type ObjectBucket = "private" | "public" | "temp";
 
@@ -53,8 +55,16 @@ export interface ReserveObjectInput {
 }
 
 export interface ActivateObjectInput {
+  // A public image's pixel size, read from its own bytes (0039). Absent or
+  // null records it as unknown.
+  dimensions?: ImageDimensions | null;
   sha256: string;
   sizeBytes: number;
+}
+
+export interface AuthorizedObjectWithDimensions {
+  dimensions: ImageDimensions | null;
+  object: StoredObject;
 }
 
 export interface DeliveredObject {
@@ -65,6 +75,7 @@ export interface DeliveredObject {
 interface StoredObjectRow {
   bucket: ObjectBucket;
   content_type: string;
+  height_px: number | null;
   immutable: number;
   kind: ObjectKind;
   object_id: string;
@@ -72,6 +83,7 @@ interface StoredObjectRow {
   sha256: string | null;
   size_bytes: number | null;
   status: ObjectStatus;
+  width_px: number | null;
 }
 
 // Which bucket each kind is allowed to live in. `temp` is reserved for staging
@@ -101,7 +113,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const SIZE_BYTES_MAX = 5_000_000_000;
 const OBJECT_SELECT = `SELECT
      object_id, tenant_id, bucket, object_key, kind, content_type,
-     size_bytes, sha256, status, immutable
+     size_bytes, sha256, status, immutable, width_px, height_px
    FROM stored_objects
    WHERE tenant_id = ?
      AND object_id = ?
@@ -127,6 +139,27 @@ function safeFileName(fileName: string | undefined): string {
 
 function isBucketAllowed(kind: ObjectKind, bucket: ObjectBucket): boolean {
   return ALLOWED_BUCKETS[kind] === bucket;
+}
+
+/**
+ * The one bucket a kind may live in. A surface that reserves objects takes
+ * the bucket from here and never from its caller.
+ */
+export function bucketForKind(kind: ObjectKind): ObjectBucket {
+  return ALLOWED_BUCKETS[kind];
+}
+
+// 0039's CHECK on width_px and height_px, checked here so a bad size is an
+// `invalid` answer rather than a failed batch.
+function isValidDimensions(dimensions: ImageDimensions | null | undefined): boolean {
+  return (
+    dimensions === undefined ||
+    dimensions === null ||
+    [dimensions.width, dimensions.height].every(
+      (side) =>
+        Number.isSafeInteger(side) && side >= 1 && side <= IMAGE_DIMENSION_MAX,
+    )
+  );
 }
 
 function isValidContentType(contentType: string): boolean {
@@ -260,7 +293,8 @@ export async function reservePendingObject(
 
 /**
  * Finalize an upload: `pending` -> `active`, recording the observed size and
- * content hash. Anything already active or deleted is a conflict.
+ * content hash, and a public image's pixel size when it is known. Anything
+ * already active or deleted is a conflict.
  */
 export async function activateObject(
   db: D1Database,
@@ -273,7 +307,8 @@ export async function activateObject(
     !Number.isSafeInteger(input.sizeBytes) ||
     input.sizeBytes < 0 ||
     input.sizeBytes > SIZE_BYTES_MAX ||
-    !SHA256_PATTERN.test(input.sha256)
+    !SHA256_PATTERN.test(input.sha256) ||
+    !isValidDimensions(input.dimensions)
   ) {
     return { status: "invalid" };
   }
@@ -290,12 +325,21 @@ export async function activateObject(
     db
       .prepare(
         `UPDATE stored_objects
-         SET status = 'active', size_bytes = ?, sha256 = ?, updated_at = ?
+         SET status = 'active', size_bytes = ?, sha256 = ?,
+             width_px = ?, height_px = ?, updated_at = ?
          WHERE tenant_id = ?
            AND object_id = ?
            AND status = 'pending'`,
       )
-      .bind(input.sizeBytes, input.sha256, now, tenant.tenantId, objectId),
+      .bind(
+        input.sizeBytes,
+        input.sha256,
+        input.dimensions?.width ?? null,
+        input.dimensions?.height ?? null,
+        now,
+        tenant.tenantId,
+        objectId,
+      ),
     auditStatement(db, tenant, "object.activate", objectId, now, {
       kind: existing.kind,
     }),
@@ -367,6 +411,29 @@ export async function getAuthorizedObject(
   const row = await loadObject(db, tenant.tenantId, objectId);
 
   return row === null || row.status !== "active" ? null : toStoredObject(row);
+}
+
+/**
+ * `getAuthorizedObject` plus the pixel size recorded at activation (0039),
+ * from the same single read. The size is null unless both sides are known.
+ */
+export async function getAuthorizedObjectWithDimensions(
+  db: D1Database,
+  tenant: TenantContext,
+  objectId: string,
+): Promise<AuthorizedObjectWithDimensions | null> {
+  const row = await loadObject(db, tenant.tenantId, objectId);
+  if (row === null || row.status !== "active") {
+    return null;
+  }
+
+  return {
+    dimensions:
+      row.width_px !== null && row.height_px !== null
+        ? { height: row.height_px, width: row.width_px }
+        : null,
+    object: toStoredObject(row),
+  };
 }
 
 /**

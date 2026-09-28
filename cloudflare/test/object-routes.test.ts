@@ -2,8 +2,17 @@ import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import worker from "../src/index";
+import type { TenantAdminPrincipal } from "../src/auth/live-authorization";
 import { createAuth } from "../src/auth/create-auth";
-import { markObjectImmutable } from "../src/storage/object-store";
+import {
+  getAdminObjectMetadataWithUrl,
+  isKindReservable,
+} from "../src/storage/object-routes";
+import {
+  activateObject,
+  deletePendingOrMutableObject,
+  markObjectImmutable,
+} from "../src/storage/object-store";
 
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
 const HOST_A = "https://admin-a.objectroutes.test";
@@ -644,7 +653,9 @@ describe("admin object upload integrity", () => {
 
 describe("admin object reserve validation", () => {
   it.each([
-    ["public kind", { kind: "product_media" }],
+    // CP4-P: public kinds are admitted now (see "public object admission");
+    // previews stay the render service's, never an admin's.
+    ["preview kind", { kind: "preview_image" }],
     ["temp kind", { kind: "temp_upload" }],
     ["unknown kind", { kind: "not_a_kind" }],
     ["uppercase hash", { sha256: "A".repeat(64) }],
@@ -954,5 +965,690 @@ describe("admin object routes without a bucket binding", () => {
       withoutBucket(),
     );
     expect(content.status).toBe(404);
+  });
+});
+
+// ── CP4-P: public objects (D92, D93) ────────────────────────────────────────
+
+const PUBLIC_BASE = "https://public-objects.test.invalid";
+const PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
+interface PublicMetadataBody {
+  object: MetadataBody["object"] & {
+    height: number | null;
+    url: string | null;
+    width: number | null;
+  };
+}
+
+interface DimensionRow {
+  bucket: string;
+  content_type: string;
+  height_px: number | null;
+  status: string;
+  width_px: number | null;
+}
+
+/** PNG-headed bytes: the signature and an IHDR of this size, then filler. */
+function pngHeaded(width: number, height: number, length = 256): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(length);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  for (let index = 24; index < length; index += 1) {
+    bytes[index] = (index * 31) % 251;
+  }
+  return bytes;
+}
+
+/** SOI, one APP2 segment per entry of `profile` (its total size), SOF0, filler. */
+function jpegHeaded(width: number, height: number, profile: readonly number[] = []): Uint8Array<ArrayBuffer> {
+  const parts: number[] = [0xff, 0xd8];
+  for (const size of profile) {
+    parts.push(0xff, 0xe2, ((size - 2) >>> 8) & 0xff, (size - 2) & 0xff, ...new Array<number>(size - 4).fill(0x41));
+  }
+  parts.push(0xff, 0xc0, 0x00, 0x0b, 0x08, height >>> 8, height & 0xff, width >>> 8, width & 0xff, 0x01, 0x01, 0x11, 0x00);
+  parts.push(0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00, 0x12, 0x34, 0xff, 0xd9);
+  return new Uint8Array(parts);
+}
+
+const CLEAN_LOGO = bytesOf(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><rect width="200" height="60" fill="#111"/></svg>',
+);
+
+async function reservePublic(
+  host: string,
+  cookie: string,
+  bytes: Uint8Array<ArrayBuffer>,
+  overrides: Record<string, unknown> = {},
+): Promise<ReservedBody["object"]> {
+  return reserveOk(host, cookie, bytes, {
+    contentType: "image/png",
+    fileName: "Photo.PNG",
+    kind: "product_media",
+    ...overrides,
+  });
+}
+
+async function uploadTo(
+  host: string,
+  cookie: string,
+  objectId: string,
+  bytes: Uint8Array<ArrayBuffer>,
+  targetEnv?: Env,
+): Promise<Response> {
+  const request = uploadRequest(`${host}/v1/admin/objects/${objectId}/content`, bytes, { cookie });
+  return targetEnv === undefined ? exports.default.fetch(request) : worker.fetch(request, targetEnv);
+}
+
+/** A reserved and uploaded product image of tenant A. */
+async function activePublic(bytes = pngHeaded(640, 480)): Promise<ReservedBody["object"]> {
+  const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+  const uploaded = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes);
+  expect(uploaded.status).toBe(200);
+  return reserved;
+}
+
+async function dimensionRow(objectId: string): Promise<DimensionRow | null> {
+  return env.DB.prepare(
+    `SELECT bucket, content_type, status, width_px, height_px
+     FROM stored_objects
+     WHERE object_id = ?`,
+  )
+    .bind(objectId)
+    .first<DimensionRow>();
+}
+
+/**
+ * The public bucket, with `afterPut` run once the bytes are stored and before
+ * the route goes on: a deterministic stand-in for what a concurrent request
+ * could do in that window. The route only calls put and delete.
+ */
+function bucketWithAfterPut(afterPut: () => Promise<void>): R2Bucket {
+  const real = env.PUBLIC_BUCKET;
+  const wrapper: Pick<R2Bucket, "delete" | "put"> = {
+    delete: (keys) => real.delete(keys),
+    put: async (key, value, options) => {
+      const stored = await real.put(key, value, options);
+      await afterPut();
+      return stored;
+    },
+  };
+  return wrapper as R2Bucket;
+}
+
+function principalOf(user: SignedUpUser, tenantId: string): TenantAdminPrincipal {
+  return { accountType: "tenant_admin", role: "admin", tenantId, userId: user.userId };
+}
+
+describe("public object admission (D92)", () => {
+  it("reserves a product image in the public bucket under the tenant's prefix", async () => {
+    const bytes = pngHeaded(10, 10);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+
+    expect(reserved.objectKey).toBe(`shops/${TENANT_A}/product_media/${reserved.objectId}/v1/photo.png`);
+    expect(await dimensionRow(reserved.objectId)).toEqual({
+      bucket: "public",
+      content_type: "image/png",
+      height_px: null,
+      status: "pending",
+      width_px: null,
+    });
+  });
+
+  it("records a stated image/jpg in its canonical spelling", async () => {
+    const reserved = await reservePublic(HOST_A, adminA.cookie, jpegHeaded(4, 4), { contentType: "image/jpg" });
+
+    expect((await dimensionRow(reserved.objectId))?.content_type).toBe("image/jpeg");
+  });
+
+  it.each([
+    ["product_media", "image/jpeg"],
+    ["product_media", "image/png"],
+    ["product_media", "image/webp"],
+    ["product_media", "image/gif"],
+    ["product_media", "image/avif"],
+    ["shop_branding", "image/jpeg"],
+    ["shop_branding", "image/png"],
+    ["shop_branding", "image/webp"],
+    ["shop_branding", "image/gif"],
+    ["shop_branding", "image/avif"],
+    ["shop_branding", "image/svg+xml"],
+    ["shop_branding", "image/vnd.microsoft.icon"],
+  ])("admits %s stated as %s", async (kind, contentType) => {
+    const response = await reserve(HOST_A, adminA.cookie, {
+      contentType,
+      kind,
+      sha256: "a".repeat(64),
+      sizeBytes: 1_024,
+    });
+
+    expect(response.status).toBe(201);
+  });
+
+  it.each([
+    ["an SVG as a product image", { contentType: "image/svg+xml" }],
+    ["an icon as a product image", { contentType: "image/x-icon" }],
+    ["HTML", { contentType: "text/html" }],
+    ["an octet stream", { contentType: "application/octet-stream" }],
+    ["a type with parameters", { contentType: "image/png; q=1" }],
+    ["a type no public kind admits", { contentType: "image/bmp", kind: "shop_branding" }],
+    ["a product image over 15 MB", { sizeBytes: 15 * 1024 * 1024 + 1 }],
+    ["a branding image over 15 MB", { kind: "shop_branding", sizeBytes: 15 * 1024 * 1024 + 1 }],
+    ["an SVG over 512 KB", { contentType: "image/svg+xml", kind: "shop_branding", sizeBytes: 512 * 1024 + 1 }],
+    ["a preview image", { kind: "preview_image" }],
+  ])("refuses %s at reserve time", async (_label, overrides) => {
+    const response = await reserve(HOST_A, adminA.cookie, {
+      contentType: "image/png",
+      kind: "product_media",
+      sha256: "a".repeat(64),
+      sizeBytes: 1_024,
+      ...overrides,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "invalid_request" } });
+  });
+
+  it("admits exactly the caps", async () => {
+    for (const [kind, contentType, sizeBytes] of [
+      ["product_media", "image/png", 15 * 1024 * 1024],
+      ["shop_branding", "image/svg+xml", 512 * 1024],
+    ] as const) {
+      const response = await reserve(HOST_A, adminA.cookie, { contentType, kind, sha256: "a".repeat(64), sizeBytes });
+      expect(response.status).toBe(201);
+    }
+  });
+
+  it("names a missing public configuration as a reason not to reserve a public kind", () => {
+    expect(isKindReservable(env, "product_media")).toBe(true);
+    expect(isKindReservable({ ...env, PUBLIC_BUCKET: undefined }, "product_media")).toBe(false);
+    expect(isKindReservable({ ...env, PUBLIC_OBJECT_BASE_URL: undefined }, "shop_branding")).toBe(false);
+    expect(isKindReservable({ ...env, PUBLIC_OBJECT_BASE_URL: "http://plain.test" }, "shop_branding")).toBe(false);
+    // Private kinds are unchanged: their binding is checked at upload.
+    expect(isKindReservable({ ...env, PUBLIC_BUCKET: undefined, PRIVATE_BUCKET: undefined }, "print_file")).toBe(true);
+  });
+});
+
+describe("public object upload (D92)", () => {
+  it("stores a proven image in the public bucket with its type, the cache header and its size", async () => {
+    const bytes = pngHeaded(640, 480);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+
+    const uploaded = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes);
+
+    expect(uploaded.status).toBe(200);
+    await expect(uploaded.json()).resolves.toEqual({
+      object: {
+        contentType: "image/png",
+        height: 480,
+        immutable: false,
+        kind: "product_media",
+        objectId: reserved.objectId,
+        sha256: await sha256Hex(bytes),
+        sizeBytes: bytes.length,
+        status: "active",
+        url: `${PUBLIC_BASE}/shops/${TENANT_A}/product_media/${reserved.objectId}/v1/photo.png`,
+        width: 640,
+      },
+    });
+
+    const stored = await env.PUBLIC_BUCKET.get(reserved.objectKey);
+    expect(stored?.httpMetadata).toMatchObject({
+      cacheControl: PUBLIC_CACHE_CONTROL,
+      contentType: "image/png",
+    });
+    await expect(stored?.bytes()).resolves.toEqual(bytes);
+    // Never in the private bucket.
+    await expect(env.PRIVATE_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    expect(await dimensionRow(reserved.objectId)).toMatchObject({
+      height_px: 480,
+      status: "active",
+      width_px: 640,
+    });
+  });
+
+  it("streams a body larger than the sniffed head, in many chunks, byte for byte", async () => {
+    const bytes = pngHeaded(3000, 2000, 300_000);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+
+    const { readable, writable } = new IdentityTransformStream();
+    const writer = writable.getWriter();
+    void (async () => {
+      for (let offset = 0; offset < bytes.length; offset += 16_384) {
+        await writer.write(bytes.slice(offset, offset + 16_384));
+      }
+      await writer.close();
+    })();
+
+    const response = await exports.default.fetch(
+      new Request(`${HOST_A}/v1/admin/objects/${reserved.objectId}/content`, {
+        body: readable,
+        headers: {
+          "content-length": String(bytes.length),
+          cookie: adminA.cookie,
+          origin: HOST_A,
+          "x-shop-id": TENANT_A,
+        },
+        method: "PUT",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const stored = await env.PUBLIC_BUCKET.get(reserved.objectKey);
+    await expect(stored?.bytes()).resolves.toEqual(bytes);
+    expect(await dimensionRow(reserved.objectId)).toMatchObject({ height_px: 2000, width_px: 3000 });
+  });
+
+  it("refuses a body that ends before its declared length and stores nothing", async () => {
+    const bytes = pngHeaded(64, 64, 4_096);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+
+    const { readable, writable } = new IdentityTransformStream();
+    const writer = writable.getWriter();
+    void (async () => {
+      await writer.write(bytes.slice(0, 4_000));
+      await writer.close();
+    })();
+
+    const response = await exports.default.fetch(
+      new Request(`${HOST_A}/v1/admin/objects/${reserved.objectId}/content`, {
+        body: readable,
+        headers: {
+          "content-length": String(bytes.length),
+          cookie: adminA.cookie,
+          origin: HOST_A,
+          "x-shop-id": TENANT_A,
+        },
+        method: "PUT",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("pending");
+  });
+
+  it.each([
+    ["JPEG bytes stated as PNG", "image/png", jpegHeaded(10, 10)],
+    ["PNG bytes stated as JPEG", "image/jpeg", pngHeaded(10, 10)],
+    ["SVG text stated as PNG", "image/png", CLEAN_LOGO],
+    ["HTML stated as GIF", "image/gif", bytesOf("<!doctype html><script>alert(1)</script>")],
+    ["a GIF header before markup, stated as WebP", "image/webp", bytesOf('GIF89a<svg onload="alert(1)"/>')],
+    ["PNG bytes stated as SVG", "image/svg+xml", pngHeaded(10, 10)],
+    ["a GIF header before markup, stated as SVG", "image/svg+xml", bytesOf('GIF89a<svg xmlns="http://www.w3.org/2000/svg"/>')],
+  ])("refuses %s and stores nothing", async (_label, contentType, bytes) => {
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes, { contentType, kind: "shop_branding" });
+
+    const response = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "invalid_request" } });
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    await expect(env.PRIVATE_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("pending");
+  });
+
+  it("refuses a proven image whose hash is not the declared one", async () => {
+    const declared = pngHeaded(20, 20);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, declared);
+    const forged = pngHeaded(20, 20);
+    forged[200] = (forged[200] ?? 0) ^ 0xff;
+
+    const response = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, forged);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "invalid_request", reason: "bytes_not_as_declared" },
+    });
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("pending");
+  });
+
+  it("stores a clean branding SVG with its size from the file", async () => {
+    const reserved = await reservePublic(HOST_A, adminA.cookie, CLEAN_LOGO, {
+      contentType: "image/svg+xml",
+      fileName: "logo.svg",
+      kind: "shop_branding",
+    });
+
+    const response = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, CLEAN_LOGO);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      object: { contentType: "image/svg+xml", height: 60, kind: "shop_branding", width: 200 },
+    });
+    const stored = await env.PUBLIC_BUCKET.head(reserved.objectKey);
+    expect(stored?.httpMetadata).toMatchObject({
+      cacheControl: PUBLIC_CACHE_CONTROL,
+      contentType: "image/svg+xml",
+    });
+  });
+
+  it("refuses an SVG that carries a script and stores nothing", async () => {
+    const bytes = bytesOf(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script></svg>',
+    );
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes, {
+      contentType: "image/svg+xml",
+      kind: "shop_branding",
+    });
+
+    const response = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes);
+
+    expect(response.status).toBe(400);
+    // The admin, and the importer's report, are told why.
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "invalid_request", reason: "svg_script" },
+    });
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("pending");
+  });
+
+  it("stores an image whose size sits beyond the bounded read, with the size unknown", async () => {
+    // The frame header follows ~66 KB of profile: outside the 64 KiB head.
+    const bytes = jpegHeaded(3000, 2000, [65_000, 1_000]);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes, { contentType: "image/jpeg" });
+
+    const response = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ object: { height: null, width: null } });
+    expect(await dimensionRow(reserved.objectId)).toMatchObject({
+      height_px: null,
+      status: "active",
+      width_px: null,
+    });
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.not.toBeNull();
+  });
+
+  it("answers 413 when Content-Length exceeds the SVG cap", async () => {
+    const reserved = await reservePublic(HOST_A, adminA.cookie, CLEAN_LOGO, {
+      contentType: "image/svg+xml",
+      kind: "shop_branding",
+    });
+
+    const response = await exports.default.fetch(
+      uploadRequest(`${HOST_A}/v1/admin/objects/${reserved.objectId}/content`, CLEAN_LOGO, {
+        contentLength: String(512 * 1024 + 1),
+        cookie: adminA.cookie,
+      }),
+    );
+
+    expect(response.status).toBe(413);
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("pending");
+  });
+
+  it("refuses a second upload to an active public object", async () => {
+    const bytes = pngHeaded(30, 30);
+    const reserved = await activePublic(bytes);
+
+    const second = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes);
+
+    expect(second.status).toBe(409);
+    const stored = await env.PUBLIC_BUCKET.get(reserved.objectKey);
+    await expect(stored?.bytes()).resolves.toEqual(bytes);
+  });
+
+  it("leaves no bytes behind when a removal lands while they are in flight", async () => {
+    const bytes = pngHeaded(40, 40);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+    const tenant = { domainKind: "admin" as const, hostname: "", tenantId: TENANT_A };
+
+    const response = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes, {
+      ...env,
+      PUBLIC_BUCKET: bucketWithAfterPut(async () => {
+        await deletePendingOrMutableObject(env.DB, tenant, reserved.objectId, Date.now());
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("deleted");
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+  });
+
+  it("keeps the bytes when a concurrent upload of the same row activated it first", async () => {
+    const bytes = pngHeaded(41, 41);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+    const tenant = { domainKind: "admin" as const, hostname: "", tenantId: TENANT_A };
+
+    const response = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes, {
+      ...env,
+      PUBLIC_BUCKET: bucketWithAfterPut(async () => {
+        await activateObject(
+          env.DB,
+          tenant,
+          reserved.objectId,
+          { sha256: await sha256Hex(bytes), sizeBytes: bytes.length },
+          Date.now(),
+        );
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("active");
+    const stored = await env.PUBLIC_BUCKET.get(reserved.objectKey);
+    await expect(stored?.bytes()).resolves.toEqual(bytes);
+  });
+
+  it.each([
+    ["no public bucket", { PUBLIC_BUCKET: undefined }],
+    ["no public address", { PUBLIC_OBJECT_BASE_URL: undefined }],
+    ["an address with a path", { PUBLIC_OBJECT_BASE_URL: `${PUBLIC_BASE}/images` }],
+    ["a plain-http address", { PUBLIC_OBJECT_BASE_URL: "http://public-objects.test.invalid" }],
+  ])("refuses the upload with %s, and stores nothing", async (_label, overrides) => {
+    const bytes = pngHeaded(12, 12);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+
+    const response = await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes, {
+      ...env,
+      ...overrides,
+    });
+
+    expect(response.status).toBe(404);
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("pending");
+  });
+});
+
+describe("public object reads", () => {
+  it("gives a public object's metadata its size and its address", async () => {
+    const reserved = await activePublic(pngHeaded(800, 600));
+
+    const response = await exports.default.fetch(
+      objectRequest(`${HOST_A}/v1/admin/objects/${reserved.objectId}`, "GET", { cookie: adminA.cookie }),
+    );
+    const body = await response.json<PublicMetadataBody>();
+
+    expect(response.status).toBe(200);
+    expect(body.object).toMatchObject({
+      height: 600,
+      status: "active",
+      url: `${PUBLIC_BASE}/shops/${TENANT_A}/product_media/${reserved.objectId}/v1/photo.png`,
+      width: 800,
+    });
+    expect(body.object).not.toHaveProperty("objectKey");
+
+    await expect(
+      getAdminObjectMetadataWithUrl(env, env.DB, principalOf(adminA, TENANT_A), reserved.objectId),
+    ).resolves.toMatchObject({
+      height: 600,
+      url: `${PUBLIC_BASE}/shops/${TENANT_A}/product_media/${reserved.objectId}/v1/photo.png`,
+      width: 800,
+    });
+    // With no valid base the metadata still answers, without an address.
+    await expect(
+      getAdminObjectMetadataWithUrl(
+        { ...env, PUBLIC_OBJECT_BASE_URL: undefined },
+        env.DB,
+        principalOf(adminA, TENANT_A),
+        reserved.objectId,
+      ),
+    ).resolves.toMatchObject({ url: null, width: 800 });
+  });
+
+  it("keeps a private object's metadata exactly as it was", async () => {
+    const bytes = bytesOf("private-metadata");
+    const reserved = await reserveOk(HOST_A, adminA.cookie, bytes);
+    await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes);
+
+    await expect(
+      getAdminObjectMetadataWithUrl(env, env.DB, principalOf(adminA, TENANT_A), reserved.objectId),
+    ).resolves.toEqual({
+      contentType: "image/png",
+      immutable: false,
+      kind: "print_file",
+      objectId: reserved.objectId,
+      sha256: await sha256Hex(bytes),
+      sizeBytes: bytes.length,
+      status: "active",
+    });
+  });
+
+  it("never proxies a public object's bytes: its content route is the opaque 404", async () => {
+    const reserved = await activePublic();
+
+    const response = await exports.default.fetch(
+      objectRequest(`${HOST_A}/v1/admin/objects/${reserved.objectId}/content`, "GET", { cookie: adminA.cookie }),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "not_found" } });
+  });
+});
+
+describe("object removal takes the bytes out of the bucket the row names (D93)", () => {
+  it("removes a public object from the public bucket and leaves the private bucket alone", async () => {
+    const reserved = await activePublic();
+    // A decoy under the same key in the private bucket: the old code deleted
+    // from the private bucket whatever the row said.
+    await env.PRIVATE_BUCKET.put(reserved.objectKey, "private-decoy");
+
+    const response = await exports.default.fetch(
+      objectRequest(`${HOST_A}/v1/admin/objects/${reserved.objectId}`, "DELETE", { cookie: adminA.cookie }),
+    );
+
+    expect(response.status).toBe(204);
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("deleted");
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    const decoy = await env.PRIVATE_BUCKET.get(reserved.objectKey);
+    await expect(decoy?.text()).resolves.toBe("private-decoy");
+  });
+
+  it("removes a private object from the private bucket and leaves the public bucket alone", async () => {
+    const bytes = bytesOf("private-removal");
+    const reserved = await reserveOk(HOST_A, adminA.cookie, bytes);
+    await uploadTo(HOST_A, adminA.cookie, reserved.objectId, bytes);
+    await env.PUBLIC_BUCKET.put(reserved.objectKey, "public-decoy");
+
+    const response = await exports.default.fetch(
+      objectRequest(`${HOST_A}/v1/admin/objects/${reserved.objectId}`, "DELETE", { cookie: adminA.cookie }),
+    );
+
+    expect(response.status).toBe(204);
+    await expect(env.PRIVATE_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    const decoy = await env.PUBLIC_BUCKET.get(reserved.objectKey);
+    await expect(decoy?.text()).resolves.toBe("public-decoy");
+  });
+
+  it("tombstones a pending public object without touching either bucket", async () => {
+    const bytes = pngHeaded(5, 5);
+    const reserved = await reservePublic(HOST_A, adminA.cookie, bytes);
+    await env.PUBLIC_BUCKET.put(reserved.objectKey, "stray");
+
+    const response = await exports.default.fetch(
+      objectRequest(`${HOST_A}/v1/admin/objects/${reserved.objectId}`, "DELETE", { cookie: adminA.cookie }),
+    );
+
+    expect(response.status).toBe(204);
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("deleted");
+    // Same rule as the private leg: only an active row's bytes are removed.
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.not.toBeNull();
+    await env.PUBLIC_BUCKET.delete(reserved.objectKey);
+  });
+});
+
+describe("public object tenant isolation", () => {
+  it("refuses tenant B's admin every operation on tenant A's public object", async () => {
+    const bytes = pngHeaded(50, 50);
+    const reserved = await activePublic(bytes);
+    const before = await dimensionRow(reserved.objectId);
+
+    const attempts = [
+      objectRequest(`${HOST_B}/v1/admin/objects/${reserved.objectId}`, "GET", { cookie: adminB.cookie }),
+      objectRequest(`${HOST_B}/v1/admin/objects/${reserved.objectId}/content`, "GET", { cookie: adminB.cookie }),
+      uploadRequest(`${HOST_B}/v1/admin/objects/${reserved.objectId}/content`, pngHeaded(50, 50), {
+        cookie: adminB.cookie,
+      }),
+      objectRequest(`${HOST_B}/v1/admin/objects/${reserved.objectId}`, "DELETE", { cookie: adminB.cookie }),
+    ];
+    for (const attempt of attempts) {
+      const response = await exports.default.fetch(attempt);
+      expect(response.status).toBe(404);
+    }
+
+    await expect(
+      getAdminObjectMetadataWithUrl(env, env.DB, principalOf(adminB, TENANT_B), reserved.objectId),
+    ).resolves.toBeNull();
+    expect(await dimensionRow(reserved.objectId)).toEqual(before);
+    const stored = await env.PUBLIC_BUCKET.get(reserved.objectKey);
+    await expect(stored?.bytes()).resolves.toEqual(bytes);
+  });
+
+  it("refuses tenant A's admin a pending upload target of tenant B", async () => {
+    const bytes = pngHeaded(9, 9);
+    const reserved = await reservePublic(HOST_B, adminB.cookie, bytes);
+
+    const response = await exports.default.fetch(
+      uploadRequest(`${HOST_B}/v1/admin/objects/${reserved.objectId}/content`, bytes, {
+        cookie: adminA.cookie,
+        shopId: TENANT_B,
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(env.PUBLIC_BUCKET.head(reserved.objectKey)).resolves.toBeNull();
+    expect((await dimensionRow(reserved.objectId))?.status).toBe("pending");
+  });
+
+  it("refuses tenant A's admin a reservation in tenant B's shop", async () => {
+    const response = await exports.default.fetch(
+      objectRequest(`${HOST_B}/v1/admin/objects`, "POST", {
+        body: { contentType: "image/png", kind: "product_media", sha256: "a".repeat(64), sizeBytes: 10 },
+        cookie: adminA.cookie,
+        shopId: TENANT_B,
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("hides every public-object operation from an ordinary user and from a request without a session", async () => {
+    const bytes = pngHeaded(7, 7);
+    const active = await activePublic(bytes);
+    const pending = await reservePublic(HOST_A, adminA.cookie, bytes);
+
+    for (const cookie of [ordinary.cookie, undefined]) {
+      const attempts = [
+        objectRequest(`${HOST_A}/v1/admin/objects`, "POST", {
+          body: { contentType: "image/png", kind: "product_media", sha256: "a".repeat(64), sizeBytes: 10 },
+          cookie,
+        }),
+        uploadRequest(`${HOST_A}/v1/admin/objects/${pending.objectId}/content`, bytes, { cookie }),
+        objectRequest(`${HOST_A}/v1/admin/objects/${active.objectId}`, "GET", { cookie }),
+        objectRequest(`${HOST_A}/v1/admin/objects/${active.objectId}/content`, "GET", { cookie }),
+        objectRequest(`${HOST_A}/v1/admin/objects/${active.objectId}`, "DELETE", { cookie }),
+      ];
+      for (const attempt of attempts) {
+        const response = await exports.default.fetch(attempt);
+        expect(response.status).toBe(404);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "not_found" } });
+      }
+    }
+
+    expect((await dimensionRow(pending.objectId))?.status).toBe("pending");
+    expect((await dimensionRow(active.objectId))?.status).toBe("active");
+    await expect(env.PUBLIC_BUCKET.head(pending.objectKey)).resolves.toBeNull();
   });
 });

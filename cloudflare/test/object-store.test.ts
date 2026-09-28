@@ -4,9 +4,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { TenantContext } from "../src/tenancy/resolve-tenant";
 import {
   activateObject,
+  bucketForKind,
   deletePendingOrMutableObject,
   deliverPrivateObject,
   getAuthorizedObject,
+  getAuthorizedObjectWithDimensions,
   markObjectImmutable,
   reservePendingObject,
 } from "../src/storage/object-store";
@@ -639,5 +641,136 @@ describe("private delivery", () => {
     await expect(
       deliverPrivateObject(env, env.DB, tenantA, orphan),
     ).resolves.toBeNull();
+  });
+});
+
+// ── CP4-P: public objects (D92) ─────────────────────────────────────────────
+
+describe("bucket per kind", () => {
+  it("takes the bucket from the kind", () => {
+    expect(
+      Object.fromEntries(
+        (
+          [
+            "artwork_original",
+            "document",
+            "export",
+            "preview_image",
+            "print_file",
+            "product_media",
+            "shop_branding",
+            "temp_upload",
+          ] as const
+        ).map((kind) => [kind, bucketForKind(kind)]),
+      ),
+    ).toEqual({
+      artwork_original: "private",
+      document: "private",
+      export: "private",
+      preview_image: "public",
+      print_file: "private",
+      product_media: "public",
+      shop_branding: "public",
+      temp_upload: "temp",
+    });
+  });
+
+  it("refuses every public kind outside the public bucket and every private kind inside it", async () => {
+    const combinations = [
+      { bucket: "private", kind: "product_media" },
+      { bucket: "private", kind: "shop_branding" },
+      { bucket: "private", kind: "preview_image" },
+      { bucket: "temp", kind: "shop_branding" },
+      { bucket: "public", kind: "artwork_original" },
+      { bucket: "public", kind: "document" },
+      { bucket: "public", kind: "export" },
+      { bucket: "public", kind: "print_file" },
+    ] as const;
+
+    for (const combination of combinations) {
+      await expect(
+        reservePendingObject(env.DB, tenantA, { ...combination, contentType: "image/png" }, NOW),
+      ).resolves.toEqual({ status: "invalid" });
+    }
+  });
+});
+
+describe("pixel size at activation (0039)", () => {
+  async function reservePublicPending(): Promise<string> {
+    const reserved = await reservePendingObject(
+      env.DB,
+      tenantA,
+      { bucket: "public", contentType: "image/png", kind: "product_media" },
+      NOW,
+    );
+    if (reserved.status !== "ok") {
+      throw new Error("reserve failed");
+    }
+    return reserved.object.objectId;
+  }
+
+  async function sizeRow(objectId: string) {
+    return env.DB.prepare("SELECT status, width_px, height_px FROM stored_objects WHERE object_id = ?")
+      .bind(objectId)
+      .first<{ height_px: number | null; status: string; width_px: number | null }>();
+  }
+
+  it("records the size and reads it back with the object, which keeps its shape", async () => {
+    const objectId = await reservePublicPending();
+
+    const activated = await activateObject(
+      env.DB,
+      tenantA,
+      objectId,
+      { dimensions: { height: 1080, width: 1920 }, sha256: SHA_A, sizeBytes: 4_096 },
+      NOW + 1,
+    );
+
+    expect(activated.status).toBe("ok");
+    if (activated.status === "ok") {
+      expect(Object.keys(activated.object).sort()).toEqual([
+        "bucket", "contentType", "immutable", "kind", "objectId", "objectKey", "sha256", "sizeBytes", "status",
+      ]);
+    }
+    expect(await sizeRow(objectId)).toEqual({ height_px: 1080, status: "active", width_px: 1920 });
+    await expect(getAuthorizedObjectWithDimensions(env.DB, tenantA, objectId)).resolves.toMatchObject({
+      dimensions: { height: 1080, width: 1920 },
+      object: { bucket: "public", objectId, status: "active" },
+    });
+  });
+
+  it("reads an unknown size as null, and nothing for a pending or foreign object", async () => {
+    const privateId = await reserveActive(tenantA);
+    await expect(getAuthorizedObjectWithDimensions(env.DB, tenantA, privateId)).resolves.toMatchObject({
+      dimensions: null,
+    });
+
+    const pendingId = await reservePublicPending();
+    await expect(getAuthorizedObjectWithDimensions(env.DB, tenantA, pendingId)).resolves.toBeNull();
+    await expect(getAuthorizedObjectWithDimensions(env.DB, tenantB, privateId)).resolves.toBeNull();
+  });
+
+  it.each([
+    ["a zero width", { height: 10, width: 0 }],
+    ["a height over 100000", { height: 100_001, width: 10 }],
+    ["a fractional width", { height: 10, width: 1.5 }],
+  ])("refuses %s and leaves the row pending", async (_label, dimensions) => {
+    const objectId = await reservePublicPending();
+
+    await expect(
+      activateObject(env.DB, tenantA, objectId, { dimensions, sha256: SHA_A, sizeBytes: 1 }, NOW),
+    ).resolves.toEqual({ status: "invalid" });
+    expect(await sizeRow(objectId)).toEqual({ height_px: null, status: "pending", width_px: null });
+  });
+
+  it("holds the range in the table as well", async () => {
+    const objectId = await reservePublicPending();
+
+    for (const statement of [
+      "UPDATE stored_objects SET width_px = 0 WHERE object_id = ?",
+      "UPDATE stored_objects SET height_px = 100001 WHERE object_id = ?",
+    ]) {
+      await expect(env.DB.prepare(statement).bind(objectId).run()).rejects.toThrow(/CHECK constraint failed/);
+    }
   });
 });

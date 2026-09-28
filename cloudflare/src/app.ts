@@ -53,7 +53,8 @@ import {
 import {
   deleteAdminObject,
   deliverAdminObject,
-  getAdminObjectMetadata,
+  getAdminObjectMetadataWithUrl,
+  isKindReservable,
   parseReserveObjectInput,
   reserveAdminObject,
   uploadAdminObject,
@@ -718,6 +719,21 @@ function payloadTooLargeResponse(): Response {
   );
 }
 
+// D92: the admin who sent a file that was refused is told why, in one word
+// the importer's report can count by.
+function uploadRefusedResponse(reason: string): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "invalid_request",
+        message: "Request is not valid",
+        reason,
+      },
+    },
+    400,
+  );
+}
+
 function objectConflictResponse(): Response {
   return jsonResponse(
     {
@@ -756,7 +772,9 @@ async function handleAdminObjectRoute(
     }
 
     const input = parseReserveObjectInput(await readJsonBody(request));
-    if (input === null) {
+    // A public kind is refused while the public bucket or its address is not
+    // configured: the reservation could never be uploaded to.
+    if (input === null || !isKindReservable(env, input.kind)) {
       return invalidRequestResponse();
     }
 
@@ -797,7 +815,9 @@ async function handleAdminObjectRoute(
         return payloadTooLargeResponse();
       }
       if (uploaded.status === "invalid") {
-        return invalidRequestResponse();
+        return uploaded.reason === undefined
+          ? invalidRequestResponse()
+          : uploadRefusedResponse(uploaded.reason);
       }
       return adminNotFoundResponse();
     }
@@ -817,7 +837,8 @@ async function handleAdminObjectRoute(
   }
 
   if (request.method === "GET") {
-    const metadata = await getAdminObjectMetadata(
+    const metadata = await getAdminObjectMetadataWithUrl(
+      env,
       env.DB,
       principal,
       route.objectId,
