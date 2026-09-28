@@ -4,7 +4,42 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP4 — Catalogue + storefront (GO 2026-09-28, started 2026-09-28)
 
-### ▶ RESUMED 2026-09-28 14:00 — F1, F2 and W are committed — START HERE
+### ✅ 2026-09-28 17:00 — CP4's code is complete and reviewed; the staging deploy waits for the migrations — START HERE
+
+**Tree clean, pushed. Everything below this entry is history.**
+
+| Part | Commit | Codex |
+|---|---|---|
+| B collections | `14274ea3` | 2 findings, fixed in `7cef3821` |
+| K consolidation | `6ecd315e` | clean |
+| Two page fixes | `3022da12` | clean |
+| W, the web Worker's deploy path | `eedfa614` | 2 findings, fixed in `7cef3821` |
+| F1 + F2, the page swap | `f26d616e` | 3 findings: 2 fixed in `7cef3821`, 1 accepted by the brief (`CP4_F_REPORT.md`) |
+| The fixes | `7cef3821` | 1 finding, fixed in `474b7466` |
+| The source map fix | `474b7466` | clean |
+| D95, the bucket's address pinned | `fb211b3c` | 1 finding (the generated Worker types were out of date), fixed in this commit |
+| **R, the recipient of an order (D98)** | `9fe3d297` | clean (Codex could not run the Worker's tests in its sandbox; the reviewer ran them) |
+
+**Gate at this commit:** Worker 90 files, 3893 tests, 0 failed; `tsc` clean for both projects; `npm run types:check` up to date; 120 tests under Node; preflight tests 183; deploy tests 48; the storefront build holds no Firebase code; the older build builds; guard PASS (allowlist 298).
+
+**Done by Mikael on 2026-09-28:** D95 (the address of the staging bucket, `https://pub-0e06052f19524b76bbefd4b411baa272.r2.dev`); the go for D98; the three build values, written by the reviewer into `~/.config/chopshop/web.staging.env` (mode 600; the five `VITE_` names of the repository's own `.env` are blanked in it, as the deploy script requires). A build made from that file holds the publishable key, the legal name and the organisation number, and no secret-looking key.
+
+**Next, in this order:**
+
+1. **Mikael: migrations 0039–0045 on staging.** First the read-only list, then the apply:
+   `scripts/cf-preflight.sh staging -- d1 migrations list chopshop-stg --remote`
+   `scripts/cf-preflight.sh staging -- d1 migrations apply chopshop-stg --remote`
+   Applying before the deploy is safe; deploying before them makes `/ready` answer 503.
+2. Attest HEAD (`git notes --ref=reviews add -m "codex: PASS" -m "fable: PASS" HEAD`, push the notes), then `scripts/cf-deploy.sh staging` (Docker Desktop must run). It is the FIRST deploy of the web Worker.
+3. A verified hostname per imported shop through `POST /v1/platform/tenants/:id/domains`, then the design gate page by page (375, 768, 1440 against the baseline). The staging smoke items no local test proves are in `CP4_E_REPORT.md`, "Review round 1".
+4. One real purchase on staging through the PAGES (not the script), with a name and an address, read back in the seller's order and in the fake printer's job.
+5. D's second pass (the preview, D57), S the import scripts. Each needs a builder: ask Mikael first (the budget).
+
+**Open with Mikael:** D97 a–d; the veto on D92–D94; the seven points of `CP4_R_REPORT.md` "Review round 1" (no telephone field in the form, the printer's address format, a collected order's printed goods, personal data in the platform's order list, the rest); the infringement report that needs a product the page can find (`CP4_F_REPORT.md`, finding 3).
+
+**Not proven anywhere yet:** no page has been looked at rendered by the reviewer; the receipt poll's fix is reasoned, not reproduced in a browser; nothing of CP4 has run on staging.
+
+### (history) RESUMED 2026-09-28 14:00 — F1, F2 and W are committed
 
 The pause below is closed. The three stopped builders were finished by the reviewer from what was in the tree; nothing was relaunched. **Tree clean, pushed.**
 
