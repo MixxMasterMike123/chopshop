@@ -484,7 +484,7 @@ def cmd_dist(dist):
                 with open(full, "rb") as fh:
                     # Anywhere on a line (a comment may follow code), and with an address behind the
                     # "=": the bare words inside a string of the code are no source map.
-                    if re.search(rb"(?://|/\*)[#@][ \t]*sourceMappingURL=[^\s\"'`$\\]", fh.read()):
+                    if re.search(rb"(?://|/\*)[#@][ \t]*sourceMappingURL=[ \t]*[^\s\"'`$\\]", fh.read()):
                         refuse(f"{dist} holds a source map: {rel} carries a sourceMappingURL comment - the storefront ships none")
 
 def cmd_stripe(path, code, pinned_acct, key_file):
