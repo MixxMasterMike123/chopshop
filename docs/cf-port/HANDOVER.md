@@ -4,7 +4,36 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP4 — Catalogue + storefront (GO 2026-09-28, started 2026-09-28)
 
-### ⏸ PAUSED 2026-09-28 ~07:35 — START HERE
+### ▶ RESUMED 2026-09-28 14:00 — F1, F2 and W are committed — START HERE
+
+The pause below is closed. The three stopped builders were finished by the reviewer from what was in the tree; nothing was relaunched. **Tree clean, pushed.**
+
+| Part | Commit | Gate |
+|---|---|---|
+| W, the deploy path of the web Worker | `eedfa614` | preflight tests 182, deploy tests 48; 25 mutations of the two scripts, all caught |
+| F1 + F2, the page swap (one commit: both edit `pages.jsx`, F2 builds only with F1's alias list) | `f26d616e` | 110 tests under Node, the storefront build holds no Firebase code, the older build builds, guard PASS (allowlist 298) |
+| The Worker, unchanged | — | 89 files, 3838 tests, 0 failed |
+
+The report of all three is `CP4_F_REPORT.md`: what changes for a visitor, the findings, what was read how closely, what is not done.
+
+**F2's open finding is fixed:** 111 s and 58 polls came from the page being mounted a second time, which began a new 90 s. The 90 s are now the checkout's (`receiptPollTimeLeft`, `src/api/orders.js`).
+
+**Found at the review, a blocker of the first real order (D98): an order holds no name and no delivery address.** The checkout route takes none, no table has a column for them, a printer job carries none. It is its own Worker step (migration 0045) and waits for Mikael's go.
+
+**Codex** was started at 14:52 on `14274ea3` (B), `6ecd315e` (K), `3022da12`, `eedfa614` (W), `f26d616e` (F), one after the other, medium effort; logs in the session's scratchpad as `codex-cp4-<sha>.log` (they die with the session: re-run `codex review -c model_reasoning_effort="medium" --commit <sha>`). **No finding has been read yet; no commit is attested.**
+
+**Next, in this order:**
+
+1. Read Codex's findings, fix, re-review the fix commit, attest HEAD.
+2. D95 is still open: Mikael's command was refused because the pinned value is null. It runs under `--bootstrap`: `scripts/cf-preflight.sh staging --bootstrap -- r2 bucket dev-url enable chopshop-stg-public --jurisdiction eu`. The address it prints goes into `pinned.staging.json` → `r2.publicBaseUrl` and into `env.staging.vars.PUBLIC_OBJECT_BASE_URL` of both `wrangler.jsonc`, in one commit; the preflight refuses every deploy until the three are equal.
+3. Mikael creates `~/.config/chopshop/web.staging.env` (mode 600): `VITE_STRIPE_PUBLISHABLE_KEY=pk_test_…` of the staging sandbox, `VITE_PLATFORM_LEGAL_NAME`, `VITE_PLATFORM_ORG_NUMBER`.
+4. Migrations 0039–0044 on staging (Mikael), then `scripts/cf-deploy.sh staging`.
+5. A verified hostname per imported shop, then the design gate page by page.
+6. D98 (the recipient of an order), D's second pass (the preview, D57), S the import scripts.
+
+**The budget (Mikael, 2026-09-28 14:10):** 81 % of the week and 76 % of the week's Fable were used, five days before the reset. So: no new builder without his go, the reviewer reads diffs and not whole files, Codex is the second reviewer (its own quota), and every reviewed part is committed at once.
+
+### ⏸ PAUSED 2026-09-28 ~07:35 (closed by the entry above)
 
 Mikael closed the computer. **HEAD `3022da12` is pushed and green.** Everything under `cloudflare/src`, `cloudflare/test` and `cloudflare/migrations` is committed. **Three builders were stopped mid-work by the reviewer; their files are in the tree, UNCOMMITTED and UNREVIEWED, and none of them wrote its report:**
 
