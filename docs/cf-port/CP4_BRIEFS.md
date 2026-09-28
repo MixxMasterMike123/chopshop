@@ -156,7 +156,8 @@ The storefront keeps today's addresses. `<root>` is `/<shop>` on the shared host
 | Order | `<root>/order-return`, `<root>/order-confirmation/<orderId>` |
 | Withdrawal | `<root>/angra` |
 | Infringement report | `<root>/rapportera-intrang` |
-| Content page, post, legal page | `<root>/<slug>` |
+| Content page, post | `<root>/<slug>` |
+| Legal page | `<root>/legal/<slug>` (`kopvillkor`, `angerratt-och-returer`, `integritetspolicy`, `plattformsvillkor`), as today |
 
 The browser reaches the API under `<root-host>/_api/<shop>/v1/…` on the shared host and `/_api/v1/…` on a shop's own domain. Every address the API returns inside a body is a path **relative to the shop's root** (`/product/<handle>`); the web Worker and the client put the root in front. The API never builds an absolute storefront address: on the shared host it sees the shop's internal hostname, which no visitor can use.
 

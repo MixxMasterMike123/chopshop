@@ -247,6 +247,12 @@ describe("adopting the legal pages", () => {
       adoption(LEGAL_TEXTS, { custom: null }),
       adoption(LEGAL_TEXTS, { templateVersion: "a b" }),
       adoption(LEGAL_TEXTS, { templateVersion: "x".repeat(33) }),
+      // The adopted text is shown to every visitor as it is: what can run or
+      // fetch is never adopted (src/content/html-refusal.ts).
+      adoption({ ...LEGAL_TEXTS, kopvillkor: "<p>Villkor</p><script>alert(1)</script>" }),
+      adoption({ ...LEGAL_TEXTS, angerratt: '<p onclick="x()">14 dagar</p>' }),
+      adoption({ ...LEGAL_TEXTS, integritetspolicy: '<a href="javascript:x()">Policy</a>' }),
+      adoption({ ...LEGAL_TEXTS, integritetspolicy: '<img src="https://example.com/x.png" onerror="x()">' }),
     ];
     for (const body of bodies) {
       const response = await adminCall(world, shopA, "POST", ACCEPT, body);

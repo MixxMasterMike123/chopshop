@@ -1,6 +1,7 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { enforceRateLimit } from "../lib/rate-limit";
 import { bounded, maySignForSeller, sha256Hex, TERMS_VERSION_PATTERN } from "./platform-terms";
+import { checkHtml } from "../content/html-refusal";
 
 /**
  * The seller ADOPTING the consumer-facing legal pages of its own shop
@@ -200,6 +201,13 @@ export function parseAcceptPagesInput(body: unknown): AcceptPagesInput | null {
     return null;
   }
   if (!LEGAL_PAGE_KEYS.every((key) => typeof pages[key] === "string" && (pages[key] as string).length > 0)) {
+    return null;
+  }
+  // The adopted text is shown to every visitor as it is (src/routes/
+  // public-legal.ts), so it passes the same refusal as a page's HTML: nothing
+  // that can run or fetch is ever adopted. The templates render to plain
+  // structure (headings, paragraphs, lists, links) and pass it.
+  if (!LEGAL_PAGE_KEYS.every((key) => checkHtml(pages[key] as string).ok)) {
     return null;
   }
   return {

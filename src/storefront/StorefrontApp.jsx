@@ -28,7 +28,9 @@ export const STOREFRONT_ROUTES = [
   { path: '/order-confirmation/:orderId', page: 'OrderConfirmation' },
   { path: '/angra', page: 'WithdrawalPage' },
   { path: '/rapportera-intrang', page: 'InfringementReportPage' },
-  // A content page, a post or a legal page: one segment (`<root>/<slug>`).
+  // A legal page keeps today's address, `<root>/legal/<slug>`.
+  { path: '/legal/:slug', page: 'DynamicRouteHandler' },
+  // A content page or a post: one segment (`<root>/<slug>`).
   { path: '/:slug', page: 'DynamicRouteHandler' },
 ];
 
