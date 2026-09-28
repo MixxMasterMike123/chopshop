@@ -42,14 +42,13 @@
       ],
       "vars": {
         // Must equal pinned.staging.json → origins.web (the shared host, D7/D77).
-        "WEB_ORIGIN": "https://chopshop-web-stg.kent-ee2.workers.dev"
-        // PUBLIC_OBJECT_BASE_URL goes here: the public bucket's address (D78). NOT SET YET: the
-        // staging bucket's managed r2.dev address is switched off, and D95 waits for Mikael to
-        // switch it on. The same bare https origin then goes here, into cloudflare/wrangler.jsonc
-        // env.staging.vars and into pinned.staging.json → r2.publicBaseUrl, set together: the
-        // preflight (--web) requires them equal and refuses every deploy while the pinned value is
-        // null. Without it no image origin is allowed by the report-only policy and no Open Graph
-        // image is written.
+        "WEB_ORIGIN": "https://chopshop-web-stg.kent-ee2.workers.dev",
+        // The public bucket's address (D78), the managed r2.dev address switched on 2026-09-28
+        // (D95): the image origin the report-only policy allows and the Open Graph image is
+        // written from. The same bare https origin is in cloudflare/wrangler.jsonc
+        // env.staging.vars and in pinned.staging.json → r2.publicBaseUrl; the preflight (--web)
+        // requires them equal.
+        "PUBLIC_OBJECT_BASE_URL": "https://pub-0e06052f19524b76bbefd4b411baa272.r2.dev"
       }
     },
     "production": {

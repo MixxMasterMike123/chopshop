@@ -15,7 +15,7 @@
     "public": "chopshop-stg-public",
     "private": "chopshop-stg-private",
     "production": "chopshop-stg-production",
-    "publicBaseUrl": null
+    "publicBaseUrl": "https://pub-0e06052f19524b76bbefd4b411baa272.r2.dev"
   },
   "queues": {
     "outbox": "chopshop-stg-outbox",
