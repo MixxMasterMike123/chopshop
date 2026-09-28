@@ -8,6 +8,10 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 **Found while writing P's brief:** the managed address of staging's public bucket is switched off (D95, Mikael switches it on); 444 of the 495 product images carry no file ending, so the type is read from the file itself (D92); 3 branding images are SVG (D92).
 
+**Builders:** P (public objects) and E (client and web Worker) launched 2026-09-28 ~04:25. A, C and D wait for the review of P's interface, B for A's public product functions, F for A–E, S lands last.
+
+**For the storefront proof on staging:** the four imported shops hold the importer's placeholder hostname (`<shop>.import.invalid`) in status `pending`, by design, and no route turns a pending hostname into a verified one. The tenant resolver reads verified hostnames only. Each shop therefore gets a second, verified storefront hostname through `POST /v1/platform/tenants/:id/domains` (which creates it verified) before its pages are shot; three of the four are also unpublished and are published through the platform route for the shots, or seen through the preview (D57).
+
 **Mikael: "CP4 go"**, with D77 and D81 confirmed. D78, D79, D80, D82, D84 on their defaults.
 
 **Start from `CP4_GAP_ANALYSIS.md`.** Eight builders; **P (public objects) first**, or its interface fixed first, since products, collections, branding and the storage copy all stand on it. Next migration 0039. Worker code by the Opus builder when its spend limit allows, otherwise Sonnet; scripts by Sonnet; Fable reviews every diff; Codex before every deploy.
