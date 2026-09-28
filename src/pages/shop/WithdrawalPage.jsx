@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { httpsCallable, getFunctions } from 'firebase/functions';
 import { Helmet } from 'react-helmet-async';
 import ShopNavigation from '../../components/shop/ShopNavigation';
 import ShopFooter from '../../components/shop/ShopFooter';
-import { useShopId } from '../../contexts/ShopContext';
 import { useTranslation } from '../../contexts/TranslationContext';
+import { submitWithdrawal } from '../../api/withdrawal';
+import { toWithdrawalRequest, toWithdrawalView, withdrawalErrorKind } from '../../storefront/adapters/withdrawal';
 
 /**
  * Ångerfunktionen — the public "Ångra avtalet här" page (DAL 2 kap. 10 a § /
@@ -18,16 +18,17 @@ import { useTranslation } from '../../contexts/TranslationContext';
  * expressly confirming ("Bekräfta ångra"). This page is that function for ALL
  * buyers — including guest purchases without an account (requiring login here
  * would be the hoop-jumping the law prohibits). Ownership proof for guests =
- * order number + the purchase email, verified server-side by submitWithdrawal,
- * which also stamps the legally load-bearing submission time and returns the
- * durable mottagningsbevis rendered below.
+ * order number + the purchase email, verified server-side by POST
+ * /v1/withdrawals (the shop from the address, never from the page), which also
+ * stamps the legally load-bearing time of receipt and returns the durable
+ * mottagningsbevis rendered below. A second message for the same order gets
+ * the first message's receipt, with its time.
  *
  * Linked from the footer on every storefront page (continuous availability) and
- * from the legal pages. Account holders can also withdraw from their order list
- * in CustomerAccount (OrderWithdrawal.jsx) — same callable, same record.
+ * from the legal pages. There are no customer accounts on this storefront
+ * (D81): every buyer withdraws here.
  */
 const WithdrawalPage = () => {
-  const shopId = useShopId();
   const { t } = useTranslation();
   const location = useLocation();
   const prefillOrder = new URLSearchParams(location.search).get('order') || '';
@@ -49,27 +50,22 @@ const WithdrawalPage = () => {
     setError(null);
     setRefusal(null);
     try {
-      const functions = getFunctions(undefined, 'us-central1');
-      const submitWithdrawal = httpsCallable(functions, 'submitWithdrawal');
-      const res = await submitWithdrawal({
-        shopId,
-        orderNumber: orderNumber.trim(),
-        statement: { name: name.trim(), contactEmail: contactEmail.trim() },
-      });
-      const data = res?.data || {};
-      if (data.eligible === false) {
-        setRefusal(data.reason || 'unknown');
-      } else if (data.acknowledgement) {
-        setAcknowledgement(data.acknowledgement);
+      const answer = await submitWithdrawal(toWithdrawalRequest({ orderNumber, name, contactEmail }));
+      const view = toWithdrawalView(answer);
+      if (view.refusal) {
+        setRefusal(view.refusal);
+      } else if (view.acknowledgement) {
+        setAcknowledgement(view.acknowledgement);
       }
     } catch (err) {
-      console.error('submitWithdrawal failed', err);
-      if (err?.code === 'functions/not-found') {
+      console.error('submitWithdrawal failed', err?.code);
+      const kind = withdrawalErrorKind(err);
+      if (kind === 'not_found') {
         setError(t(
           'withdrawal_page_not_found',
           'Vi hittade ingen beställning som matchar ordernumret och e-postadressen. Kontrollera uppgifterna — e-postadressen måste vara samma som vid köpet.'
         ));
-      } else if (err?.code === 'functions/resource-exhausted') {
+      } else if (kind === 'rate_limited') {
         setError(t('withdrawal_page_rate_limited', 'För många försök. Vänta en stund och försök igen.'));
       } else {
         setError(t('withdrawal_page_error', 'Något gick fel. Försök igen.'));

@@ -26,3 +26,24 @@ export async function getCollection(ref, { cursor, limit, signal } = {}) {
     throw error;
   }
 }
+
+/** The most pages `getWholeCollection` walks (100 products each). */
+export const MAX_COLLECTION_PAGES = 10;
+
+/**
+ * One collection with every product it answers, following the cursor, 100 at
+ * a time: `{ collection, products }`, or null.
+ */
+export async function getWholeCollection(ref, { signal } = {}) {
+  const first = await getCollection(ref, { limit: 100, signal });
+  if (!first) return null;
+  const products = [...first.products];
+  let cursor = first.nextCursor;
+  for (let page = 1; cursor && page < MAX_COLLECTION_PAGES; page += 1) {
+    const next = await getCollection(ref, { cursor, limit: 100, signal });
+    if (!next) break;
+    products.push(...next.products);
+    cursor = next.nextCursor;
+  }
+  return { collection: first.collection, products };
+}

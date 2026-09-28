@@ -2,7 +2,7 @@
 // cancelled on unmount, with an explicit timeout state and an error state.
 
 import { useEffect, useState } from 'react';
-import { pollReceipt, saveReceiptToken } from './orders.js';
+import { pollReceipt, receiptPollTimeLeft, saveReceiptToken } from './orders.js';
 
 /**
  * `useReceiptPoll(checkoutId)` → one of
@@ -24,7 +24,9 @@ export function useReceiptPoll(checkoutId) {
 
     const controller = new AbortController();
     setState({ status: 'polling' });
-    pollReceipt(checkoutId, { signal: controller.signal }).then(
+    // The time left of THIS checkout: mounting the page again does not begin a new 90 s.
+    const timeoutMs = receiptPollTimeLeft(checkoutId);
+    pollReceipt(checkoutId, { signal: controller.signal, timeoutMs }).then(
       (receipt) => {
         if (controller.signal.aborted) return;
         if (receipt.status === 'ready') saveReceiptToken(receipt.orderId, receipt.receiptToken);

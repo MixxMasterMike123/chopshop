@@ -5,8 +5,8 @@
 // are embedded on each product, so there's no group/variant collapse here.
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { listAllProducts } from '../../api/products.js';
+import { toPageProducts } from '../../storefront/adapters/products.js';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
@@ -37,14 +37,11 @@ const CollectionPage = () => {
     (async () => {
       setLoading(true);
       try {
-        const snap = await getDocs(query(
-          collection(db, 'productsPublic'),
-          where('shopId', '==', shopId),
-          where('isActive', '==', true),
-          where('availability.b2c', '==', true)
-        ));
+        // GET /v1/products?category=<key>, every page of it: the key is the
+        // address's own segment (the category's slug, the API's category key).
+        const list = await listAllProducts({ category: slug });
         if (cancelled) return;
-        setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setProducts(toPageProducts(list));
       } catch (err) {
         console.error('Error loading collection:', err);
         if (!cancelled) setProducts([]);

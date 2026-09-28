@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { httpsCallable, getFunctions } from 'firebase/functions';
-import { doc, getDoc } from 'firebase/firestore';
 import { Helmet } from 'react-helmet-async';
-import { db } from '../../firebase/config';
 import ShopNavigation from '../../components/shop/ShopNavigation';
 import ShopFooter from '../../components/shop/ShopFooter';
-import { useShopId } from '../../contexts/ShopContext';
 import { useTranslation } from '../../contexts/TranslationContext';
+import { storefrontRoot } from '../../api/client';
+import { getProduct } from '../../api/products';
+import { submitReport } from '../../api/reports';
+import { productRefFromLink, reportErrorKind, toReportRequest } from '../../storefront/adapters/report';
 
 /**
  * "Rapportera intrång" — notice & takedown (SnapWear A10).
@@ -15,15 +15,18 @@ import { useTranslation } from '../../contexts/TranslationContext';
  * A public page on EVERY storefront (footer link) where a rights holder, or
  * someone acting for one, reports a product that uses their trademark or
  * copyrighted work. The report goes to the PLATFORM, not the shop (the seller
- * is the reported party) via the submitInfringementReport callable, which
- * resolves the product, stores the report and emails the platform.
+ * is the reported party) via POST /v1/reports, which stores the report and
+ * alerts the platform. A report names a product of this shop by its id.
  *
  * Product pre-fill, two ways:
- *   ?product=<productId>  — explicit link; the name is read from the public
- *                           catalogue mirror (productsPublic) for display.
+ *   ?product=<ref>        — explicit link; the product (id or handle) is read
+ *                           from the public catalogue (GET /v1/products/:ref)
+ *                           for display.
  *   router state `from`   — the footer link carries the page it was clicked
  *                           on, so a report started from a product page gets
  *                           that product's URL filled in automatically.
+ * Without `?product=`, the product is the one the link in the form points at
+ * (a product page of this shop), read when the report is sent.
  *
  * Plain Swedish on purpose: the reader is often a small artist or band, not a
  * lawyer. The good-faith statement is the one legal sentence (Kent's wording).
@@ -37,7 +40,6 @@ const RIGHT_TYPES = [
 const MIN_DESCRIPTION = 20;
 
 const InfringementReportPage = () => {
-  const shopId = useShopId();
   const { t } = useTranslation();
   const location = useLocation();
   const params = new URLSearchParams(location.search);
@@ -56,24 +58,41 @@ const InfringementReportPage = () => {
     website: '', // honeypot
   });
   const [productName, setProductName] = useState('');
+  // The id of the `?product=` product, once the catalogue has answered it.
+  const [prefillProductKey, setPrefillProductKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [reportId, setReportId] = useState(null);
   const [error, setError] = useState(null);
 
-  // ?product=<id> → show which product the report is about. Only a product of
-  // THIS shop counts; anything else is ignored (the server re-checks anyway).
+  // ?product=<ref> → show which product the report is about. Only a product of
+  // THIS shop counts (the API answers this shop's public products only);
+  // anything else is ignored (the server re-checks anyway).
   useEffect(() => {
     if (!prefillProductId) return undefined;
-    let cancelled = false;
-    getDoc(doc(db, 'productsPublic', prefillProductId))
-      .then((snap) => {
-        if (cancelled || !snap.exists() || snap.data().shopId !== shopId) return;
-        const n = snap.data().name;
+    const controller = new AbortController();
+    getProduct(prefillProductId, { signal: controller.signal })
+      .then((product) => {
+        if (controller.signal.aborted || !product) return;
+        const n = product.name;
         setProductName(typeof n === 'string' ? n : (n && Object.values(n)[0]) || '');
+        setPrefillProductKey(product.productId || '');
       })
       .catch(() => {});
-    return () => { cancelled = true; };
-  }, [prefillProductId, shopId]);
+    return () => controller.abort();
+  }, [prefillProductId]);
+
+  // The product a report names: the `?product=` one, else the product page of
+  // this shop the link in the form points at; '' when there is none.
+  const resolveReportedProductId = async () => {
+    if (productName && prefillProductKey) return prefillProductKey;
+    const ref = productRefFromLink(form.productUrl, {
+      origin: window.location.origin,
+      root: storefrontRoot(),
+    });
+    if (!ref) return '';
+    const product = await getProduct(ref);
+    return product?.productId || '';
+  };
 
   const set = (key) => (e) => {
     const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
@@ -97,27 +116,23 @@ const InfringementReportPage = () => {
     setSubmitting(true);
     setError(null);
     try {
-      const functions = getFunctions(undefined, 'us-central1');
-      const submit = httpsCallable(functions, 'submitInfringementReport');
-      const res = await submit({
-        shopId,
-        productId: productName ? prefillProductId : '',
-        productUrl: form.productUrl.trim(),
-        reporterName: form.reporterName.trim(),
-        reporterOrg: form.reporterOrg.trim(),
-        reporterEmail: form.reporterEmail.trim(),
-        rightType: form.rightType,
-        description: form.description.trim(),
-        attestation: form.attestation === true,
-        website: form.website,
-      });
-      setReportId(res?.data?.reportId || '');
+      // A report the page cannot tie to a product of this shop is one the
+      // server refuses (400): say so without spending one of the five
+      // reports an hour.
+      const productId = await resolveReportedProductId();
+      if (!productId) {
+        setError(t('infringement_invalid', 'Något i formuläret stämmer inte. Kontrollera fälten och försök igen.'));
+        return;
+      }
+      const report = await submitReport(toReportRequest(form, productId));
+      setReportId(report?.reportId || '');
       window.scrollTo?.({ top: 0, behavior: 'smooth' });
     } catch (err) {
-      console.error('submitInfringementReport failed', err);
-      if (err?.code === 'functions/resource-exhausted') {
+      console.error('submitInfringementReport failed', err?.code);
+      const kind = reportErrorKind(err);
+      if (kind === 'rate_limited') {
         setError(t('infringement_rate_limited', 'För många försök. Vänta en stund och försök igen.'));
-      } else if (err?.code === 'functions/invalid-argument') {
+      } else if (kind === 'invalid') {
         setError(t('infringement_invalid', 'Något i formuläret stämmer inte. Kontrollera fälten och försök igen.'));
       } else {
         setError(t('infringement_error', 'Något gick fel. Försök igen.'));

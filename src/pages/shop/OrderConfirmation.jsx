@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
-import { db } from '../../firebase/config';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { getOrder, loadPendingCheckout, loadReceiptToken } from '../../api/orders';
+import { useReceiptPoll } from '../../api/useReceiptPoll';
+import { confirmationSource, toPageOrder } from '../../storefront/adapters/order';
 import { CheckCircleIcon, ShoppingBagIcon, TruckIcon, EnvelopeIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
@@ -29,50 +30,76 @@ const OrderConfirmation = () => {
   // Get order number from navigation state for immediate display while fetching full order
   const orderNumberFromState = location.state?.orderNumber;
 
-  // Orders are created server-side by the Stripe webhook (doc ID = payment
-  // intent ID), usually within a couple of seconds of payment. Listen for the
-  // document instead of a one-shot read so the page works even if we arrive
-  // before the webhook has finished.
+  // Orders are created server-side when the payment provider confirms the
+  // payment, usually within a couple of seconds. The address names either
+  //   - the payment this tab just made: the tab holds its checkout (session
+  //     storage), and the receipt poll asks for the order every 2 s for at
+  //     most 90 s; when it is there, the address becomes the order's; or
+  //   - an order whose receipt token this tab holds: the order is read with it.
+  // The token lives in this tab's session storage only (src/api/orders.js).
+  const source = confirmationSource(orderId, { loadReceiptToken, loadPendingCheckout });
+  const receipt = useReceiptPoll(source.kind === 'checkout' ? source.checkoutId : null);
+
   useEffect(() => {
     if (!orderId) {
       setLoading(false);
       toast.error(t('order_confirmation_no_id', 'Ingen order ID hittades.'));
       navigate(getCountryAwareUrl(''));
-      return;
+      return undefined;
     }
 
-    setLoading(true);
-    setWaitTimedOut(false);
-
-    const timeout = setTimeout(() => {
-      setWaitTimedOut(true);
-      setLoading(false);
-    }, 90000);
-
-    const unsubscribe = onSnapshot(
-      doc(db, 'orders', orderId),
-      (snap) => {
-        if (snap.exists()) {
-          clearTimeout(timeout);
-          setOrder({ id: snap.id, ...snap.data() });
+    // GET /v1/orders/:id with the receipt token: the buyer's order, or null.
+    const readOrder = (id, token) => {
+      setLoading(true);
+      setWaitTimedOut(false);
+      const controller = new AbortController();
+      getOrder(id, token, { signal: controller.signal }).then(
+        (found) => {
+          if (controller.signal.aborted) return;
+          setOrder(toPageOrder(found));
+          setLoading(false);
+        },
+        (error) => {
+          if (controller.signal.aborted) return;
+          console.error('Error fetching order:', error?.code);
+          toast.error(t('order_confirmation_fetch_error', 'Ett fel uppstod när din beställning skulle hämtas.'));
           setLoading(false);
         }
-        // If the doc doesn't exist yet, keep listening — the webhook is
-        // probably still creating it.
-      },
-      (error) => {
-        clearTimeout(timeout);
-        console.error('Error fetching order:', error);
-        toast.error(t('order_confirmation_fetch_error', 'Ett fel uppstod när din beställning skulle hämtas.'));
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      clearTimeout(timeout);
-      unsubscribe();
+      );
+      return () => controller.abort();
     };
-  }, [orderId, navigate, t]);
+
+    if (source.kind === 'order') return readOrder(source.orderId, source.token);
+
+    if (source.kind === 'none') {
+      setLoading(false);
+      return undefined;
+    }
+
+    // The receipt poll of this tab's checkout.
+    if (receipt.status === 'ready') {
+      // The order exists. With its token kept for this tab, read it at its own
+      // address (a reload then reads it again); if the tab could not keep it,
+      // read it this once with the token in hand.
+      if (loadReceiptToken(receipt.orderId)) {
+        navigate(getCountryAwareUrl(`order-confirmation/${receipt.orderId}`), { replace: true });
+        return undefined;
+      }
+      return readOrder(receipt.orderId, receipt.receiptToken);
+    } else if (receipt.status === 'timeout' || receipt.status === 'issued') {
+      // Paid, and no order yet within 90 s — or its receipt went to another
+      // tab: never a success and never a failure.
+      setWaitTimedOut(true);
+      setLoading(false);
+    } else if (receipt.status === 'error') {
+      console.error('Error fetching order:', receipt.error?.code);
+      toast.error(t('order_confirmation_fetch_error', 'Ett fel uppstod när din beställning skulle hämtas.'));
+      setLoading(false);
+    }
+    return undefined;
+    // `t` is left out: a new function on a render must not read the order again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId, navigate, source.kind, source.orderId, source.token, receipt.status, receipt.orderId]);
 
   const formatPrice = (price) => {
     if (typeof price !== 'number') return 'N/A';
@@ -412,12 +439,6 @@ const OrderConfirmation = () => {
                     className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
                   >
                     {t('order_confirmation_continue_shopping', 'Fortsätt handla')}
-                  </button>
-                  <button
-                    onClick={() => navigate(getCountryAwareUrl('account'))}
-                    className="w-full bg-gray-100 text-gray-700 px-4 py-3 rounded-lg font-semibold hover:bg-gray-200 transition-colors"
-                  >
-                    {t('order_confirmation_view_orders', 'Visa mina beställningar')}
                   </button>
                 </div>
 

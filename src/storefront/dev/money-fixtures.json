@@ -1,0 +1,65 @@
+{
+  "_comment": "Invented data only (CP4 brief F2). The money answers of the dev API, per shop of fixtures.json. `refusals` names a refusal per route (money-api.mjs).",
+  "shops": {
+    "provbutiken": {
+      "refusals": {},
+      "checkout": {
+        "checkoutId": "5d0c1b2a-3e4f-4a5b-8c6d-7e8f9a0b1c2d",
+        "currency": "SEK",
+        "deliveryMethod": "shipping",
+        "discountCode": null,
+        "discountMinor": 0,
+        "items": [
+          { "itemIndex": 0, "lineTotalMinor": 34900, "name": "Linnetröja", "productId": "p-linnetroja", "quantity": 1, "sku": "LT-100-BLA-M", "unitPriceMinor": 34900, "variantId": "v-lt-bla-m" },
+          { "itemIndex": 1, "lineTotalMinor": 49800, "name": "Ullmössa", "productId": "p-ullmossa", "quantity": 2, "sku": "UM-200", "unitPriceMinor": 24900, "variantId": null }
+        ],
+        "shippingCountry": "SE",
+        "shippingMinor": 5800,
+        "subtotalMinor": 84700,
+        "totalMinor": 90500,
+        "vatMinor": 18100,
+        "vatRateBp": 2500
+      },
+      "payment": {
+        "clientSecret": "pi_dev0000000001_secret_dev0000000001",
+        "paymentIntentId": "pi_dev0000000001"
+      },
+      "receiptToken": "DevReceiptToken0000000000000000000000000001",
+      "order": {
+        "createdAt": "2026-09-28T09:41:00.000Z",
+        "currency": "SEK",
+        "delivery": { "country": "SE", "method": "shipping" },
+        "email": "k***@example.test",
+        "items": [
+          { "lineTotalMinor": 34900, "name": "Linnetröja", "quantity": 1, "unitPriceMinor": 34900 },
+          { "lineTotalMinor": 49800, "name": "Ullmössa", "quantity": 2, "unitPriceMinor": 24900 }
+        ],
+        "orderId": "8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d",
+        "orderNumber": "20260928-K7M3Q9TX",
+        "status": "paid",
+        "totals": { "discountMinor": 0, "shippingMinor": 5800, "subtotalMinor": 84700, "totalMinor": 90500, "vatMinor": 18100 },
+        "withdrawal": { "waived": false }
+      },
+      "withdrawal": {
+        "acknowledgement": {
+          "consumerName": "Testa Köpare",
+          "contactEmail": "kund@example.test",
+          "exemptItems": [],
+          "orderNumber": "20260928-K7M3Q9TX",
+          "shopName": "Provbutiken",
+          "statement": "Jag, Testa Köpare, ångrar härmed mitt köp av order 20260928-K7M3Q9TX. Detta meddelande togs emot 2026-09-28T10:15:30.123Z.",
+          "submittedAt": "2026-09-28T10:15:30.123Z",
+          "withdrawnItems": [
+            { "name": "Linnetröja", "quantity": 1, "sku": "LT-100-BLA-M" },
+            { "name": "Ullmössa", "quantity": 2, "sku": "UM-200" }
+          ]
+        },
+        "alreadyReceived": false,
+        "eligible": true,
+        "reason": null
+      },
+      "reportId": "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a"
+    },
+    "sportbutiken": { "extends": "provbutiken" }
+  }
+}

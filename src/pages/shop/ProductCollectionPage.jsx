@@ -5,8 +5,9 @@
 // not found → redirect to the storefront home.
 import React, { useState, useEffect } from 'react';
 import { useParams, Navigate } from 'react-router-dom';
-import { collection, getDocs, query, where, limit } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { getWholeCollection } from '../../api/collections.js';
+import { toPageProducts } from '../../storefront/adapters/products.js';
+import { toPageCollection } from '../../storefront/adapters/collections.js';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
@@ -37,28 +38,20 @@ const ProductCollectionPage = () => {
     (async () => {
       setStatus('loading');
       try {
-        // Resolve the collection by shopId + handle. Load products in parallel.
-        const [collSnap, prodSnap] = await Promise.all([
-          // published-filter is REQUIRED by rules for anonymous list reads of
-          // collections (drafts are admin-only); the post-read check remains.
-          getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId), where('handle', '==', handle), where('published', '==', true), limit(1))),
-          getDocs(query(
-            collection(db, 'productsPublic'),
-            where('shopId', '==', shopId),
-            where('isActive', '==', true),
-            where('availability.b2c', '==', true)
-          )),
-        ]);
+        // GET /v1/collections/<handle>, every page of its products: the API
+        // answers a published collection only, with its public products in
+        // the collection's order (storefront adapters: a page collection
+        // whose members are exactly those products).
+        const whole = await getWholeCollection(handle);
         if (cancelled) return;
-        const doc0 = collSnap.docs[0];
-        // Unknown handle OR unpublished → treat as missing (published !== true so
-        // a draft never leaks; mirrors the product-active gate).
-        if (!doc0 || doc0.data()?.published !== true) {
+        // Unknown handle OR unpublished → the API answers 404 → missing.
+        if (!whole) {
           setStatus('missing');
           return;
         }
-        setColl({ id: doc0.id, ...doc0.data() });
-        setProducts(prodSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        const members = toPageProducts(whole.products);
+        setColl(toPageCollection(whole.collection, members));
+        setProducts(members);
         setStatus('ok');
       } catch (err) {
         console.error('Error loading collection page:', err);

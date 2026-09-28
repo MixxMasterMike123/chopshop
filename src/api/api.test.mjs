@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { ApiError, apiUrl, parseShopSegment, request, segment, shopHref, storefrontRoot } from './client.js';
 import { createCheckout, createPayment } from './checkout.js';
 import { getProduct, listAllProducts } from './products.js';
-import { getOrder, pollReceipt } from './orders.js';
+import { getOrder, pollReceipt, receiptPollTimeLeft } from './orders.js';
 
 const realFetch = globalThis.fetch;
 let calls;
@@ -287,5 +287,25 @@ describe('the receipt poll', () => {
     stubFetch(() => answer(200, { order: { orderId: 'o1' } }));
     assert.deepEqual(await getOrder('o1', 'tok'), { orderId: 'o1' });
     assert.equal(calls[0].init.headers.authorization, 'Bearer tok');
+  });
+});
+
+describe("the time left of a checkout's receipt poll", () => {
+  it('is the 90 s of the checkout, not of the page: asked again later, it is what is left', () => {
+    assert.equal(receiptPollTimeLeft('left-1', 1_000), 90_000);
+    assert.equal(receiptPollTimeLeft('left-1', 22_000), 69_000);
+    assert.equal(receiptPollTimeLeft('left-1', 89_000), 2_000);
+  });
+
+  it('is never less than one interval: a page mounted after the time is up asks once', () => {
+    assert.equal(receiptPollTimeLeft('left-2', 0), 90_000);
+    assert.equal(receiptPollTimeLeft('left-2', 90_500), 2_000);
+    assert.equal(receiptPollTimeLeft('left-2', 500_000), 2_000);
+  });
+
+  it('is kept per checkout', () => {
+    assert.equal(receiptPollTimeLeft('left-3', 50_000), 90_000);
+    assert.equal(receiptPollTimeLeft('left-4', 60_000), 90_000);
+    assert.equal(receiptPollTimeLeft('left-3', 60_000), 80_000);
   });
 });

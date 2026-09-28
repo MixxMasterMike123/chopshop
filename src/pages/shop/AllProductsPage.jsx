@@ -4,8 +4,8 @@
 // "Visa alla produkter" links land when the frontpage is curated (a showcase
 // category or "Endast utvalda"). Same NORD grid as CollectionPage.
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { listAllProducts } from '../../api/products.js';
+import { toPageProducts } from '../../storefront/adapters/products.js';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
@@ -33,14 +33,10 @@ const AllProductsPage = () => {
     (async () => {
       setLoading(true);
       try {
-        const snap = await getDocs(query(
-          collection(db, 'productsPublic'),
-          where('shopId', '==', shopId),
-          where('isActive', '==', true),
-          where('availability.b2c', '==', true)
-        ));
+        // GET /v1/products, every page of it (a shop has more than 100).
+        const list = await listAllProducts();
         if (cancelled) return;
-        setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setProducts(toPageProducts(list));
       } catch (err) {
         console.error('Error loading products:', err);
         if (!cancelled) setProducts([]);

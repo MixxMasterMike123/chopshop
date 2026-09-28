@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useParams, useLocation, Navigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { useStorefront } from '../../storefront/providers/Storefront.jsx';
+import { toGateState } from '../../storefront/adapters/storefront.js';
 import { COUNTRY_PREFIXES } from '../../config/tenancy';
 import LandingPage from '../../pages/LandingPage';
 
@@ -27,39 +27,15 @@ import LandingPage from '../../pages/LandingPage';
 const ShopGate = ({ children }) => {
   const { shopId } = useParams();
   const location = useLocation();
-  const [state, setState] = useState({ status: 'checking', shop: null });
+  // The shop as the storefront response answers it (GET /v1/storefront, read
+  // once per shop by the storefront's provider): loading → 'checking'; a
+  // public shop → 'ok'; a shop the API does not answer (unknown, suspended,
+  // unpublished: one 404) → the "not available" page; an address that names
+  // no shop → 'unknown'; the API unreachable → fail open, as before
+  // (src/storefront/adapters/storefront.js).
+  const state = toGateState(useStorefront());
 
   const isLegacyCountry = COUNTRY_PREFIXES.includes((shopId || '').toLowerCase());
-
-  useEffect(() => {
-    let cancelled = false;
-    if (isLegacyCountry) {
-      setState({ status: 'legacy', shop: null });
-      return;
-    }
-    (async () => {
-      try {
-        const snap = await getDoc(doc(db, 'shops', shopId));
-        if (cancelled) return;
-        if (!snap.exists()) {
-          // No shops/{id} doc → unknown shop, always. (Until 2026-08-15 the
-          // default shop was special-cased as "always valid" so a missing seed
-          // doc couldn't infinite-loop; there is no default shop any more, and
-          // 'unknown' renders the Landing Page rather than redirecting, so
-          // there is no loop to guard against.)
-          setState({ status: 'unknown', shop: null });
-        } else {
-          setState({ status: 'ok', shop: { id: snap.id, ...snap.data() } });
-        }
-      } catch (e) {
-        // On a read error, fail open to render (rules allow public shop read);
-        // don't hard-block the storefront on a transient hiccup.
-        console.warn('ShopGate: shop lookup failed, rendering anyway:', e?.message);
-        if (!cancelled) setState({ status: 'ok', shop: null });
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [shopId, isLegacyCountry]);
 
   // 1. Legacy country code (/se/...) → the platform Landing Page. Storefronts
   //    live ONLY at an explicit /{shopId}; a legacy country prefix is NOT a shop,

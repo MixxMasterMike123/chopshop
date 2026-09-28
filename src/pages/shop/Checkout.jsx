@@ -1,14 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, addDoc, serverTimestamp, query, where, getDocs, getDoc, updateDoc, doc } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
-import { httpsCallable, getFunctions } from 'firebase/functions';
-import { db, auth } from '../../firebase/config';
-
-// Initialize Firebase Functions
-const functions = getFunctions();
-import { useCart, cartStorageKey } from '../../contexts/CartContext';
-import { useSimpleAuth } from '../../contexts/SimpleAuthContext';
+import { getProduct } from '../../api/products';
+import { toCheckoutTotals } from '../../storefront/adapters/checkout';
+import { useCart } from '../../contexts/CartContext';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import { getCountryAwareUrl, getCheckoutSeoTitle, getCheckoutSeoDescription } from '../../utils/productUrls';
@@ -25,27 +19,31 @@ import {
 } from '@heroicons/react/24/outline';
 import StripePaymentForm from '../../components/shop/StripePaymentForm';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
-import { useShopId } from '../../contexts/ShopContext';
-import { withShopId } from '../../config/withShopId';
 import { formatPickupDayShort } from '../../utils/pickupDates';
 import { requiresWithdrawalGate, resolveWithdrawalNotice } from '../../utils/withdrawal';
-import { loadShopConfig } from '../../config/shopConfig';
-import { getLegalReadiness } from '../../utils/legalPageReadiness';
 
 const Checkout = () => {
   const {
-    cart, calculateTotals, clearCart, updateShippingCountry, reconcileCart,
+    cart, clearCart, updateShippingCountry, reconcileCart,
     deliveryMethod, pickupLocation, pickupDate, setPickupDate, selectHomeDelivery, selectPickup,
     cartAllowsHome, cartAllowsPickup, hasDeliveryConflict,
   } = useCart();
   const store = useStoreSettings();
   const pickupLocations = Array.isArray(store?.pickupLocations) ? store.pickupLocations : [];
 
+  // The server's answer to the checkout (POST /v1/checkout, sent by the
+  // payment form on the payment step): the priced order whose figures the
+  // summary shows, or why the shop cannot take it. `waiverRequired`: the
+  // server found a personalised line the cart did not flag.
+  const [quote, setQuote] = useState(null);
+  const [waiverRequired, setWaiverRequired] = useState(false);
+
   // Right-of-withdrawal (POD): if any cart item is personalized, the buyer must
   // accept the no-withdrawal notice before payment. The notice text + version
-  // come from the shop's legal config (with a neutral default); the accepted
-  // wording is persisted with the order as proof.
-  const needsWithdrawalGate = requiresWithdrawalGate(cart?.items);
+  // are the platform's (the server records that version as the proof; a
+  // shop's own text is not carried). The server decides which lines are
+  // personalised: when it asks for the waiver, the gate shows too.
+  const needsWithdrawalGate = requiresWithdrawalGate(cart?.items) || waiverRequired;
   const withdrawalNotice = resolveWithdrawalNotice(store?.legal);
   const [withdrawalAccepted, setWithdrawalAccepted] = useState(false);
   // Has the async shop config resolved? Until then `pickupLocations` is the
@@ -108,32 +106,22 @@ const Checkout = () => {
       setPickupDate(onlyOption.date || '');
     }
   }, [isPickup, pickupLocation?.id, onlyOption?.key]); // eslint-disable-line react-hooks/exhaustive-deps
-  const shopId = useShopId();
 
-  // Legal readiness gate (client-side friendly front). The SERVER is the real
-  // gate — createPaymentIntent.ts refuses the PaymentIntent while any hard
-  // blocker holds (legalCheckoutBlockReason) — this only spares the buyer a
-  // dead-end error card. `null` = not resolved yet: treated as ready so the
-  // payment form doesn't flash a notice on every checkout. Fail-OPEN on a read
-  // error too (the server backstop still refuses); never lock a working shop
-  // out of its own checkout because a config read hiccuped.
+  // Legal readiness: the SERVER is the gate. A shop that may not sell (its
+  // platform terms, its legal pages, its payment account) answers the
+  // checkout with a 404, and the page then shows the same "not accepting
+  // orders" block it showed for the client gate. `null` = not answered yet:
+  // treated as open, so the payment form doesn't flash a notice.
   const [legalReady, setLegalReady] = useState(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const identity = (await loadShopConfig(shopId)) || {};
-        if (!cancelled) setLegalReady(getLegalReadiness(identity).ready);
-      } catch (e) {
-        console.warn('Checkout: could not load shop config for legal gate:', e?.message);
-        if (!cancelled) setLegalReady(true); // fail open — server is the backstop
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [shopId]);
   const checkoutLegallyOpen = legalReady !== false;
 
-  const { currentUser, login } = useSimpleAuth();
+  // What the payment form reports of the server's answer.
+  const handleCheckoutAnswer = (answer) => {
+    setQuote(answer?.status === 'ready' ? answer.checkout : null);
+    if (answer?.status === 'closed') setLegalReady(false);
+    if (answer?.status === 'waiver_required') setWaiverRequired(true);
+  };
+
   const { t, currentLanguage } = useTranslation();
   // Who the buyer actually contracts with: the seller's registered legal entity,
   // falling back to the shop's trading name.
@@ -145,27 +133,13 @@ const Checkout = () => {
   const { getContentValue } = useContentTranslation();
   const navigate = useNavigate();
 
-  const [loadingProfile, setLoadingProfile] = useState(false);
   const [processingPayment, setProcessingPayment] = useState(false);
   const [step, setStep] = useState('contact'); // 'contact', 'shipping', 'payment'
-  
-  // Login modal state
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [loginCredentials, setLoginCredentials] = useState({
-    email: '',
-    password: ''
-  });
-  const [loginLoading, setLoginLoading] = useState(false);
 
   // Form data
   const [contactInfo, setContactInfo] = useState({
-    email: currentUser?.email || '',
+    email: '',
     marketing: false,
-    // Abandoned-checkout reminder opt-in ("Övergiven kassa" add-on). Pre-unticked;
-    // persisted (minus password) with the rest of contactInfo for the Klarna
-    // return flow.
-    remindMe: false,
-    password: ''  // Add password field to state
   });
 
   const [shippingInfo, setShippingInfo] = useState({
@@ -178,39 +152,22 @@ const Checkout = () => {
     country: 'SE'
   });
 
-  // Existing-customer linkage passed into the payment metadata so the
-  // webhook-created order is tied to the account
-  const [customerLinkage, setCustomerLinkage] = useState(null);
-
-
-
-  const { subtotal, vat, shipping, total, discountAmount, discountCode, discountPercentage, discountSource } = calculateTotals();
-
-  // Debug: Show current affiliate status
-  const [showDebug, setShowDebug] = useState(false);
-  const debugAffiliateStatus = () => {
-    const affiliateRef = localStorage.getItem('b8s_affiliate_ref');
-    const cartData = localStorage.getItem(cartStorageKey(shopId));
-    
-    return {
-      localStorage: affiliateRef ? JSON.parse(affiliateRef) : null,
-      cartDiscount: discountCode,
-      cartData: cartData ? JSON.parse(cartData) : null
-    };
-  };
-
+  // The summary's figures are the SERVER's (the priced checkout of the payment
+  // step); before it has priced the order there are none. Nothing here adds,
+  // taxes or ships anything.
+  const { subtotal, vat, shipping, total, vatRate, discountAmount, discountCode, discountPercentage, discountSource } =
+    toCheckoutTotals(step === 'payment' ? quote : null, store.vatRate);
+  // A quote belongs to the visit of the payment step that asked for it: the
+  // buyer may change the delivery before coming back.
   useEffect(() => {
-    // Load customer profile data if user is logged in
-    if (currentUser?.uid) {
-      loadCustomerProfile();
-    }
-  }, [currentUser]);
+    if (step !== 'payment') setQuote(null);
+  }, [step]);
 
   // Reconcile the persisted cart against LIVE products once per checkout
   // visit. localStorage carts outlive admin edits — a renamed size / deleted
-  // variant / deactivated product would otherwise 400 at payment ("Unknown
-  // variant") with no pointer to the cause. Dropped lines get a toast;
-  // surviving lines refresh price/label so the display matches the charge.
+  // variant / deactivated product would otherwise be refused at checkout
+  // with no pointer to the cause. Dropped lines get a toast; surviving lines
+  // refresh price/label so the lines shown match the public prices.
   useEffect(() => {
     const ids = [...new Set(cart.items.map((i) => i.productId || i.id).filter(Boolean))];
     if (ids.length === 0) return;
@@ -218,10 +175,9 @@ const Checkout = () => {
       try {
         const entries = await Promise.all(
           ids.map(async (id) => {
-            // productsPublic mirrors products/{id} under the SAME doc id; an
-            // unpublished product is simply absent → null → line removed.
-            const snap = await getDoc(doc(db, 'productsPublic', id));
-            return [id, snap.exists() ? snap.data() : null];
+            // GET /v1/products/:id answers only a product a visitor may see
+            // (and buy); anything else is null → the line is removed.
+            return [id, await getProduct(id)];
           })
         );
         const removed = reconcileCart(Object.fromEntries(entries));
@@ -244,16 +200,6 @@ const Checkout = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save customer and shipping info to localStorage for Klarna return flow
-  // (never persist the password — only email/marketing are needed on return)
-  useEffect(() => {
-    if (step === 'payment') {
-      const { password, ...safeContactInfo } = contactInfo;
-      localStorage.setItem('b8s_checkout_customer', JSON.stringify(safeContactInfo));
-      localStorage.setItem('b8s_checkout_shipping', JSON.stringify(shippingInfo));
-    }
-  }, [step, contactInfo, shippingInfo]);
-
   // Keep cart shipping country in sync with the address chosen at checkout,
   // so shipping cost and totals reflect the actual destination
   useEffect(() => {
@@ -275,92 +221,11 @@ const Checkout = () => {
     }
   }, [deliveryMethod, pickupAvailable, homeAvailable, selectHomeDelivery]);
 
-  const loadCustomerProfile = async () => {
-    try {
-      setLoadingProfile(true);
-      const customersRef = collection(db, 'b2cCustomers');
-      const customerQuery = query(customersRef, where('shopId', '==', shopId), where('firebaseAuthUid', '==', currentUser.uid));
-      const customerSnapshot = await getDocs(customerQuery);
-      
-      if (!customerSnapshot.empty) {
-        const customerDoc = customerSnapshot.docs[0];
-        const customerData = customerDoc.data();
-
-        setCustomerLinkage({
-          b2cCustomerId: customerDoc.id,
-          b2cCustomerAuthId: currentUser.uid
-        });
-
-        // Pre-fill contact information
-        setContactInfo(prev => ({
-          ...prev,
-          email: customerData.email || currentUser.email || '',
-          marketing: customerData.marketingConsent || false
-        }));
-        
-        // Pre-fill shipping information
-        setShippingInfo(prev => ({
-          ...prev,
-          firstName: customerData.firstName || '',
-          lastName: customerData.lastName || '',
-          address: customerData.address || '',
-          apartment: customerData.apartment || '',
-          postalCode: customerData.postalCode || '',
-          city: customerData.city || '',
-          country: customerData.country || 'SE'
-        }));
-        
-        console.log('Customer profile loaded and form pre-filled:', customerData);
-        toast.success(t('checkout_profile_loaded', 'Dina uppgifter har fyllts i automatiskt'));
-      } else {
-        // If no customer profile exists, just pre-fill email
-        setContactInfo(prev => ({ ...prev, email: currentUser.email || '' }));
-      }
-    } catch (error) {
-      console.error('Error loading customer profile:', error);
-      // Fallback to just pre-filling email
-      setContactInfo(prev => ({ ...prev, email: currentUser.email || '' }));
-    } finally {
-      setLoadingProfile(false);
-    }
-  };
-
-  const handleCheckoutLogin = async (e) => {
-    e.preventDefault();
-    setLoginLoading(true);
-    
-    try {
-      await login(loginCredentials.email, loginCredentials.password);
-      toast.success(t('checkout_login_success', 'Inloggning lyckades! Dina uppgifter fylls i automatiskt.'));
-      setShowLoginModal(false);
-      
-      // Clear login form
-      setLoginCredentials({
-        email: '',
-        password: ''
-      });
-      
-      // Customer profile will be loaded automatically by the useEffect watching currentUser
-    } catch (error) {
-      console.error('Checkout login error:', error);
-      toast.error(t('checkout_login_error', 'Inloggningsfel. Kontrollera dina uppgifter och försök igen.'));
-    } finally {
-      setLoginLoading(false);
-    }
-  };
-
   const validateStep = (currentStep) => {
     switch (currentStep) {
       case 'contact':
         if (!contactInfo.email || !contactInfo.email.includes('@')) {
           toast.error(t('checkout_invalid_email', 'Vänligen ange en giltig e-postadress.'));
-          return false;
-        }
-        // Optional account password: if the guest chose to set one, enforce the
-        // same minimum as CustomerRegister (6+ chars) — otherwise a one-char
-        // password creates a weak account on the fly.
-        if (contactInfo.password && contactInfo.password.trim().length > 0 && contactInfo.password.trim().length < 6) {
-          toast.error(t('checkout_password_too_short', 'Lösenordet måste vara minst 6 tecken (eller lämna fältet tomt för att handla utan konto).'));
           return false;
         }
         return true;
@@ -413,154 +278,30 @@ const Checkout = () => {
     else if (step === 'payment') setStep('shipping');
   };
 
-  // Helper function to create B2C customer account
-  const createB2CCustomerAccount = async () => {
-    if (!contactInfo.password || contactInfo.password.trim().length === 0) {
-      return { b2cCustomerId: null, b2cCustomerAuthId: null };
-    }
-
-    try {
-      console.log('Creating B2C customer account for:', contactInfo.email);
-
-      // Note: no guest-time lookup of existing customers — anonymous visitors
-      // cannot (and should not) read b2cCustomers. If the email already has an
-      // account, createUserWithEmailAndPassword fails and we tell them to log in.
-      {
-        // Create new Firebase Auth account
-        const userCredential = await createUserWithEmailAndPassword(
-          auth,
-          contactInfo.email,
-          contactInfo.password
-        );
-        const b2cCustomerAuthId = userCredential.user.uid;
-        console.log('Created Firebase Auth account:', b2cCustomerAuthId);
-        
-        // Send custom email verification via orchestrator
-        try {
-          const sendCustomEmailVerification = httpsCallable(functions, 'sendCustomEmailVerification');
-          await sendCustomEmailVerification({
-            customerInfo: {
-              firstName: shippingInfo.firstName,
-              lastName: shippingInfo.lastName,
-              email: contactInfo.email,
-              preferredLang: currentLanguage
-            },
-            firebaseAuthUid: userCredential.user.uid,
-            source: 'checkout',
-            language: currentLanguage
-          });
-          console.log('Custom verification email sent to:', contactInfo.email);
-        } catch (verificationError) {
-          console.error('Error sending custom verification email:', verificationError);
-          // Fallback to Firebase default if custom fails
-          await sendEmailVerification(userCredential.user);
-          console.log('Fallback verification email sent to:', contactInfo.email);
-        }
-        
-        // Create B2C customer document
-        const customerData = {
-          email: contactInfo.email,
-          firstName: shippingInfo.firstName,
-          lastName: shippingInfo.lastName,
-          phone: '', // Not collected in checkout yet
-          
-          // Address info
-          address: shippingInfo.address,
-          apartment: shippingInfo.apartment || '',
-          city: shippingInfo.city,
-          postalCode: shippingInfo.postalCode,
-          country: shippingInfo.country,
-          
-          // Account info
-          firebaseAuthUid: b2cCustomerAuthId,
-          emailVerified: false,
-          marketingConsent: contactInfo.marketing,
-          
-          // Analytics
-          stats: {
-            totalOrders: 0,
-            totalSpent: 0,
-            averageOrderValue: 0,
-            lastOrderDate: null,
-            firstOrderDate: serverTimestamp()
-          },
-          
-          // Metadata
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          lastLoginAt: null,
-          
-          // Integration
-          preferredLang: currentLanguage,
-          customerSegment: 'new',
-          source: 'b2c_checkout'
-        };
-        
-        const customerDocRef = await addDoc(collection(db, 'b2cCustomers'), withShopId(customerData, shopId));
-        const b2cCustomerId = customerDocRef.id;
-        console.log('Created B2C customer document:', b2cCustomerId);
-        
-        toast.success(t('checkout_account_created', 'Konto skapat! Kontrollera din e-post för verifiering.'), {
-          duration: 5000
-        });
-        
-        return { b2cCustomerId, b2cCustomerAuthId };
-      }
-    } catch (customerError) {
-      console.error('Error creating B2C customer account:', customerError);
-
-      if (customerError.code === 'auth/email-already-in-use') {
-        // The email already has an account; the order still goes through and
-        // appears on their account page via email matching once logged in.
-        toast(t('checkout_account_exists', 'Du har redan ett konto med denna e-post. Logga in för att se din beställning.'), { duration: 6000 });
-      } else {
-        toast.error(t('checkout_account_error', 'Kunde inte skapa konto, men din beställning behandlas.'), { duration: 5000 });
-      }
-      return { b2cCustomerId: null, b2cCustomerAuthId: null };
-    }
-  };
-
   // Handle successful Stripe payment.
-  // The order itself is created SERVER-SIDE by the Stripe webhook (order doc
-  // ID = payment intent ID), so the client never writes orders — it just
-  // creates the optional account and navigates to the confirmation page,
-  // which waits for the webhook-created order to appear.
+  // The order itself is created SERVER-SIDE when the payment provider confirms
+  // the payment, so the client never writes orders — it navigates to the
+  // confirmation page by the payment's id; that page finds the checkout this
+  // tab paid (session storage) and waits for its order (the receipt poll).
   const handlePaymentSuccess = async (paymentIntent) => {
-    console.log('✅ Payment successful', paymentIntent.id);
+    console.log('✅ Payment successful');
 
     // Set processing state to prevent empty cart page
     setProcessingPayment(true);
 
-    try {
-      // Create B2C customer account if the customer chose a password
-      await createB2CCustomerAccount();
-    } catch (error) {
-      console.error('❌ Account creation after payment failed (order unaffected):', error);
-    }
-
     navigate(getCountryAwareUrl(`order-confirmation/${paymentIntent.id}`));
 
-    // Clear the cart and saved checkout info after navigation
+    // Clear the cart after navigation
     setTimeout(() => {
       clearCart();
-      localStorage.removeItem('b8s_checkout_customer');
-      localStorage.removeItem('b8s_checkout_shipping');
       setProcessingPayment(false);
     }, 100);
   };
 
-  // Handle payment errors
+  // Handle payment errors (the payment provider's own refusals at confirm;
+  // the checkout's refusals are the payment form's and handleCheckoutAnswer's).
   const handlePaymentError = (error) => {
-    console.error('❌ Payment failed:', error);
-    // The server refuses the PaymentIntent with 403 { error: 'Shop is not
-    // accepting orders', reason: 'legal-…' } while the shop's legal pages are
-    // incomplete. Never surface that internal wording (or the blocker name) to
-    // the customer — say the same friendly thing the client gate says.
-    const msg = String(error?.message || '');
-    if (/not accepting orders/i.test(msg) || /^legal-/i.test(String(error?.reason || ''))) {
-      toast.error(t('checkout_legal_not_ready_toast', 'Butiken tar inte emot beställningar ännu. Försök igen lite senare.'));
-      return;
-    }
+    console.error('❌ Payment failed:', error?.code || error?.type || 'error');
     toast.error(t('checkout_payment_failed_with_message', 'Betalning misslyckades: {{message}}', { message: error.message }));
   };
 
@@ -736,11 +477,6 @@ const Checkout = () => {
                     <div>
                       <label className="block text-sm font-semibold text-ink mb-2">
                         {t('checkout_email_label', 'E-postadress *')}
-                        {currentUser && contactInfo.email && (
-                          <span className="ml-2 text-xs text-accent bg-accent/10 px-2 py-1 rounded-full font-semibold">
-                            {t('checkout_from_account', 'från ditt konto')}
-                          </span>
-                        )}
                       </label>
                       <input
                         type="email"
@@ -750,25 +486,6 @@ const Checkout = () => {
                         placeholder={t('checkout_email_placeholder', 'din@epost.se')}
                         required
                       />
-                      
-                      {/* Login option for non-logged-in users */}
-                      {!currentUser && (
-                        <div className="mt-3 p-3 bg-accent/5 rounded-el">
-                          <p className="text-sm text-ink mb-2">
-                            {t('checkout_has_account', 'Har du redan ett konto?')}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => setShowLoginModal(true)}
-                            className="text-accent hover:opacity-80 font-semibold text-sm underline"
-                          >
-                            {t('checkout_login_to_account', 'Logga in på ditt konto')}
-                          </button>
-                          <p className="text-xs text-ink-muted mt-1">
-                            {t('checkout_login_benefit', 'Få alla dina uppgifter automatiskt ifyllda')}
-                          </p>
-                        </div>
-                      )}
                     </div>
 
                     <div className="flex items-start space-x-3">
@@ -781,19 +498,6 @@ const Checkout = () => {
                       />
                       <label htmlFor="marketing" className="text-sm text-ink-muted leading-relaxed">
                         {t('checkout_marketing_opt_in', 'Skicka mig nyheter och erbjudanden via e-post')}
-                      </label>
-                    </div>
-
-                    <div className="flex items-start space-x-3">
-                      <input
-                        type="checkbox"
-                        id="remindMe"
-                        checked={contactInfo.remindMe}
-                        onChange={(e) => setContactInfo({...contactInfo, remindMe: e.target.checked})}
-                        className="h-4 w-4 text-accent accent-[var(--color-accent)] focus:ring-accent/30 border-ink/20 rounded-sm mt-0.5 shrink-0"
-                      />
-                      <label htmlFor="remindMe" className="text-sm text-ink-muted leading-relaxed">
-                        {t('checkout_remind_me', 'Påminn mig via e-post om jag inte slutför köpet')}
                       </label>
                     </div>
                   </div>
@@ -1019,37 +723,6 @@ const Checkout = () => {
                   </>
                   )}
 
-                  {/* Optional Account Creation - Only show if user is not logged in */}
-                  {!currentUser && (
-                    <div className="mt-6 p-4 bg-accent/5 rounded-el">
-                      <div className="flex items-start space-x-3">
-                        <div className="shrink-0 w-5 h-5 bg-accent rounded-full flex items-center justify-center mt-0.5">
-                          <LockClosedIcon className="w-3 h-3 text-white" />
-                        </div>
-                        <div className="flex-1">
-                          <h3 className="text-sm font-semibold text-ink mb-2">
-                            {t('checkout_save_info_title', 'Spara dina uppgifter för framtida beställningar')}
-                          </h3>
-                          <p className="text-sm text-ink-muted mb-3">
-                            {t('checkout_save_info_description', 'Lägg till ett lösenord för att skapa ett konto och göra framtida beställningar snabbare.')}
-                          </p>
-                          <div>
-                            <label className="block text-sm font-semibold text-ink mb-2">
-                              {t('checkout_password_optional', 'Lösenord (valfritt)')}
-                            </label>
-                            <input
-                              type="password"
-                              value={contactInfo.password}
-                              onChange={(e) => setContactInfo({...contactInfo, password: e.target.value})}
-                              className="w-full px-3 py-2 border border-ink/15 bg-white rounded-el focus:outline-hidden focus:ring-4 focus:ring-accent/10 focus:border-accent text-base transition-colors"
-                              placeholder={t('checkout_password_placeholder', 'Ange lösenord för att skapa konto')}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
                   <button
                     onClick={handleNextStep}
                     className="mt-6 w-full bg-accent text-white px-4 sm:px-6 py-3.5 rounded-full font-bold hover:opacity-90 transition-opacity text-base"
@@ -1136,7 +809,6 @@ const Checkout = () => {
                       firstName: shippingInfo.firstName,
                       lastName: shippingInfo.lastName,
                       marketing: contactInfo.marketing,
-                      remindMe: contactInfo.remindMe,
                       preferredLang: currentLanguage
                     }}
                     shippingInfo={{
@@ -1153,7 +825,7 @@ const Checkout = () => {
                       pickupLocation: isPickup ? pickupLocation : null,
                       pickupDate: isPickup ? (pickupDate || '') : ''
                     }}
-                    customerLinkage={customerLinkage}
+                    onCheckout={handleCheckoutAnswer}
                     onPaymentSuccess={handlePaymentSuccess}
                     onPaymentError={handlePaymentError}
                   />
@@ -1259,7 +931,7 @@ const Checkout = () => {
                     </span>
                   </div>
                   <div className="flex justify-between text-xs text-ink-faint -mt-1 sm:-mt-2">
-                      <span>{t('checkout_vat_rate', 'Varav Moms ({{rate}}%)', { rate: Math.round(store.vatRate * 100) })}</span>
+                      <span>{t('checkout_vat_rate', 'Varav Moms ({{rate}}%)', { rate: Math.round(vatRate * 100) })}</span>
                       <span>
                         <SmartPrice 
                           sekPrice={vat} 
@@ -1310,97 +982,6 @@ const Checkout = () => {
         {/* Footer */}
         {/* ShopFooter component was removed from imports, so it's removed from here */}
       </div>
-      
-      {/* Login Modal */}
-      {showLoginModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-tile p-6 max-w-md w-full mx-4 shadow-lift">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="font-display text-xl font-bold text-ink">
-                {t('checkout_login_title', 'Logga in på ditt konto')}
-              </h2>
-              <button
-                onClick={() => setShowLoginModal(false)}
-                className="text-ink-faint hover:text-ink transition-colors"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            
-            <p className="text-sm text-ink-muted mb-4">
-              {t('checkout_login_description', 'Logga in för att få alla dina uppgifter automatiskt ifyllda.')}
-            </p>
-            
-            <form onSubmit={handleCheckoutLogin} className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-ink mb-1">
-                  {t('checkout_login_email', 'E-postadress')}
-                </label>
-                <input
-                  type="email"
-                  value={loginCredentials.email}
-                  onChange={(e) => setLoginCredentials({...loginCredentials, email: e.target.value})}
-                  className="w-full px-3 py-2 border border-ink/15 bg-white rounded-el focus:outline-hidden focus:ring-4 focus:ring-accent/10 focus:border-accent transition-colors"
-                  placeholder={t('checkout_login_email_placeholder', 'din@epost.se')}
-                  required
-                  disabled={loginLoading}
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-semibold text-ink mb-1">
-                  {t('checkout_login_password', 'Lösenord')}
-                </label>
-                <input
-                  type="password"
-                  value={loginCredentials.password}
-                  onChange={(e) => setLoginCredentials({...loginCredentials, password: e.target.value})}
-                  className="w-full px-3 py-2 border border-ink/15 bg-white rounded-el focus:outline-hidden focus:ring-4 focus:ring-accent/10 focus:border-accent transition-colors"
-                  placeholder={t('checkout_login_password_placeholder', 'Ditt lösenord')}
-                  required
-                  disabled={loginLoading}
-                />
-              </div>
-              
-              <div className="flex space-x-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowLoginModal(false)}
-                  className="flex-1 px-4 py-2 text-ink border border-ink/15 rounded-full hover:bg-canvas disabled:opacity-50 font-medium transition-colors"
-                  disabled={loginLoading}
-                >
-                  {t('checkout_login_cancel', 'Avbryt')}
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-accent text-white rounded-full hover:opacity-90 disabled:opacity-50 font-bold transition-opacity"
-                  disabled={loginLoading}
-                >
-                  {loginLoading ? t('checkout_login_loading', 'Loggar in...') : t('checkout_login_submit', 'Logga in')}
-                </button>
-              </div>
-            </form>
-            
-            <div className="mt-4 pt-4 border-t border-ink/10">
-              <p className="text-sm text-ink-muted text-center">
-                {t('checkout_login_forgot', 'Glömt lösenordet?')}{' '}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowLoginModal(false);
-                    navigate(getCountryAwareUrl('/forgot-password'));
-                  }}
-                  className="text-accent hover:opacity-80 underline"
-                >
-                  {t('checkout_login_reset', 'Återställ här')}
-                </button>
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 };

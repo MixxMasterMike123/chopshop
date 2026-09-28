@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { listAllProducts } from '../../api/products.js';
+import { getCollection, listCollections } from '../../api/collections.js';
+import { toPageProducts } from '../../storefront/adapters/products.js';
+import { toPageCollection } from '../../storefront/adapters/collections.js';
 import { getProductImage } from '../../utils/productImages';
 import { getProductUrl, getCategoryUrl, getAllProductsUrl, getCollectionUrl, getShopSeoTitle, getShopSeoDescription, generateShopStructuredData } from '../../utils/productUrls';
 import { useNavigate } from 'react-router-dom';
@@ -77,24 +79,10 @@ const PublicStorefront = () => {
   const loadProducts = async () => {
     try {
       setLoading(true);
-      const productsQuery = query(
-        // productsPublic = server-projected public catalogue (published-only,
-        // field-allowlisted); raw `products` is no longer world-readable.
-        collection(db, 'productsPublic'),
-        where('shopId', '==', shopId),
-        where('isActive', '==', true),
-        where('availability.b2c', '==', true) // Only show B2C available products
-      );
-      const querySnapshot = await getDocs(productsQuery);
-      
-      const productList = [];
-      querySnapshot.forEach((doc) => {
-        productList.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
-      
+      // GET /v1/products, every page of it: the shop's public catalogue (the
+      // server's one predicate), in the page's shape (storefront adapters).
+      const productList = toPageProducts(await listAllProducts());
+
       // Storefront display order: the admin's drag order (sortOrder) first,
       // then alphabetically by translated name (the pre-sortOrder behavior).
       const nameOf = (p) => {
@@ -115,14 +103,19 @@ const PublicStorefront = () => {
     }
   };
 
-  // Featured collections for the homepage "Populära samlingar" strip. The
-  // published filter is in the QUERY — rules deny anonymous reads of drafts,
-  // so an unfiltered list would be rejected wholesale. Featured + sortOrder
-  // stay client-side (equality-only queries need no composite index).
+  // Featured collections for the homepage "Populära samlingar" strip.
+  // GET /v1/collections answers the published ones. A card is shown only for
+  // a collection with a product to buy (the filter below the render reads
+  // it), so each featured collection is asked for its first product
+  // (GET /v1/collections/<handle>?limit=1); one that fails counts as empty.
+  // Featured + sortOrder stay client-side.
   const loadFeaturedCollections = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId), where('published', '==', true)));
-      const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const featured = (await listCollections()).filter((c) => c.featured === true);
+      const all = (await Promise.all(featured.map(async (c) => {
+        const first = await getCollection(c.handle, { limit: 1 }).catch(() => null);
+        return toPageCollection(c, first ? toPageProducts(first.products) : []);
+      }))).filter(Boolean);
       const feat = all
         .filter((c) => c.featured === true)
         .sort((a, b) => {

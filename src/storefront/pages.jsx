@@ -20,25 +20,32 @@ import { pending, pendingGate } from './Pending.jsx';
 export const NotFound = NotFoundPage;
 
 // Shell.
-export const ShopGate = pendingGate(NotFoundPage);
+export { default as ShopGate } from '../components/shop/ShopGate.jsx';
 
 // Catalogue.
-export const PublicStorefront = pending('PublicStorefront');
-export const AllProductsPage = pending('AllProductsPage');
-export const TagPage = pending('TagPage');
-export const CollectionPage = pending('CollectionPage');
-export const ProductCollectionPage = pending('ProductCollectionPage');
-export const PublicProductPage = pending('PublicProductPage');
+export { default as PublicStorefront } from '../pages/shop/PublicStorefront.jsx';
+export { default as AllProductsPage } from '../pages/shop/AllProductsPage.jsx';
+export { default as TagPage } from '../pages/shop/TagPage.jsx';
+export { default as CollectionPage } from '../pages/shop/CollectionPage.jsx';
+export { default as ProductCollectionPage } from '../pages/shop/ProductCollectionPage.jsx';
+export { default as PublicProductPage } from '../pages/shop/PublicProductPage.jsx';
 
 // Content.
-export const DynamicRouteHandler = pending('DynamicRouteHandler');
+// An address that is no content page renders the handler's children: the
+// shop's not-found page (the Firebase router sent it to the shop's home).
+import DynamicRouteHandlerPage from '../components/shop/DynamicRouteHandler.jsx';
+export const DynamicRouteHandler = () => (
+  <DynamicRouteHandlerPage>
+    <NotFoundPage />
+  </DynamicRouteHandlerPage>
+);
 
 // Reports.
-export const InfringementReportPage = pending('InfringementReportPage');
+export { default as InfringementReportPage } from '../pages/shop/InfringementReportPage.jsx';
 
 // Money.
-export const ShoppingCart = pending('ShoppingCart');
-export const Checkout = pending('Checkout');
-export const OrderReturn = pending('OrderReturn');
-export const OrderConfirmation = pending('OrderConfirmation');
-export const WithdrawalPage = pending('WithdrawalPage');
+export { default as ShoppingCart } from '../pages/shop/ShoppingCart.jsx';
+export { default as Checkout } from '../pages/shop/Checkout.jsx';
+export { default as OrderReturn } from '../pages/shop/OrderReturn.jsx';
+export { default as OrderConfirmation } from '../pages/shop/OrderConfirmation.jsx';
+export { default as WithdrawalPage } from '../pages/shop/WithdrawalPage.jsx';

@@ -1,0 +1,1020 @@
+{
+  "_about": "Invented data for the storefront dev API (src/storefront/dev/dev-api.mjs). No real shop, product, name, text or image. Shapes: the API's public answers (CP4 A-D). A shop not listed here answers 404, as an unknown, suspended or unpublished shop does.",
+  "shops": {
+    "provbutiken": {
+      "storefront": {
+        "name": "Provbutiken",
+        "locale": "sv-SE",
+        "currency": "SEK",
+        "identity": {
+          "legalName": "Provbutiken AB",
+          "tagline": "Plagg i linne och ull.",
+          "heroHeadline": "Sommarens plagg",
+          "heroSubtitle": "Linne, ull och kanvas, sytt i små serier. Allt här är påhittat.",
+          "companyDescription": "Plagg i linne och ull. En påhittad butik för utveckling.",
+          "address": "Provbutiken AB<br>Exempelgatan 1<br>123 45 Exempelstad",
+          "supportEmail": "hej@example.test",
+          "orgNumber": "559999-0000",
+          "productsSubtitle": "Allt vi har just nu.",
+          "social": {
+            "instagram": "https://example.test/provbutiken"
+          }
+        },
+        "branding": {
+          "emailLogo": null,
+          "favicon": null,
+          "hero": {
+            "contentType": "image/svg+xml",
+            "height": 900,
+            "objectId": "obj-hero-provbutiken",
+            "url": "/_dev/images/hero-provbutiken.svg",
+            "width": 1600
+          },
+          "logo": {
+            "contentType": "image/svg+xml",
+            "height": 64,
+            "objectId": "obj-logo-provbutiken",
+            "url": "/_dev/images/logo-provbutiken.svg",
+            "width": 360
+          }
+        },
+        "menu": [],
+        "features": {
+          "abandonedCheckout": false,
+          "contentStudio": false,
+          "discountCodes": false,
+          "marketingMaterials": false,
+          "pod": true,
+          "productReviews": false
+        },
+        "pickupLocations": [
+          {
+            "address": "Exempelgatan 1, Exempelstad",
+            "dates": [],
+            "hours": "Mån–fre 10–17",
+            "id": "lagret",
+            "name": "Lagret"
+          }
+        ],
+        "templateId": null,
+        "theme": {},
+        "accent": null
+      },
+      "products": [
+        {
+          "productId": "p-linnetroja",
+          "sku": "LT-100",
+          "name": "Linnetröja",
+          "description": "En luftig tröja i tvättat linne, sydd i en liten serie.",
+          "priceMinor": 39900,
+          "currency": "SEK",
+          "handle": "linnetroja_LT-100",
+          "path": "/product/linnetroja_LT-100",
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 800,
+            "objectId": "obj-linnetroja-fram",
+            "url": "/_dev/images/linnetroja-fram.svg",
+            "width": 800,
+            "alt": null
+          },
+          "lowestPriceMinor": 34900,
+          "isFromPrice": true,
+          "compareAtPriceMinor": null,
+          "featured": true,
+          "sortOrder": 1,
+          "category": "Tröjor",
+          "tags": [
+            "Nyhet",
+            "Sommar 2026"
+          ],
+          "swatches": [
+            {
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-linnetroja-havsbla",
+                "url": "/_dev/images/linnetroja-havsbla.svg",
+                "width": 800,
+                "alt": null
+              },
+              "label": "Havsblå"
+            },
+            {
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-linnetroja-sand",
+                "url": "/_dev/images/linnetroja-sand.svg",
+                "width": 800,
+                "alt": null
+              },
+              "label": "Sand"
+            }
+          ],
+          "allowPickup": true,
+          "allowShipping": true,
+          "brand": "Provbutiken",
+          "eanCode": null,
+          "images": [
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-linnetroja-fram",
+              "url": "/_dev/images/linnetroja-fram.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": null
+            },
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-linnetroja-bak",
+              "url": "/_dev/images/linnetroja-bak.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": null
+            },
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-linnetroja-havsbla",
+              "url": "/_dev/images/linnetroja-havsbla.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": "v-lt-bla-s"
+            },
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-linnetroja-sand",
+              "url": "/_dev/images/linnetroja-sand.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": "v-lt-sand-s"
+            }
+          ],
+          "isPersonalized": false,
+          "launchDate": null,
+          "moreInfo": "<p>Tvättas i 40 grader. <strong>Krymper inte</strong> efter första tvätten.</p>",
+          "pod": null,
+          "size": null,
+          "sizeGuide": "S: bröstvidd 96 cm\nM: bröstvidd 102 cm\nL: bröstvidd 108 cm",
+          "stock": null,
+          "variants": [
+            {
+              "group": "Havsblå",
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-linnetroja-havsbla",
+                "url": "/_dev/images/linnetroja-havsbla.svg",
+                "width": 800,
+                "alt": null
+              },
+              "images": [
+                {
+                  "contentType": "image/svg+xml",
+                  "height": 800,
+                  "objectId": "obj-linnetroja-havsbla",
+                  "url": "/_dev/images/linnetroja-havsbla.svg",
+                  "width": 800,
+                  "alt": null
+                }
+              ],
+              "label": "Havsblå / S",
+              "position": 0,
+              "priceMinor": 34900,
+              "size": "S",
+              "sku": "LT-100-BLA-S",
+              "variantId": "v-lt-bla-s"
+            },
+            {
+              "group": "Havsblå",
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-linnetroja-havsbla",
+                "url": "/_dev/images/linnetroja-havsbla.svg",
+                "width": 800,
+                "alt": null
+              },
+              "images": [
+                {
+                  "contentType": "image/svg+xml",
+                  "height": 800,
+                  "objectId": "obj-linnetroja-havsbla",
+                  "url": "/_dev/images/linnetroja-havsbla.svg",
+                  "width": 800,
+                  "alt": null
+                }
+              ],
+              "label": "Havsblå / M",
+              "position": 1,
+              "priceMinor": 34900,
+              "size": "M",
+              "sku": "LT-100-BLA-M",
+              "variantId": "v-lt-bla-m"
+            },
+            {
+              "group": "Havsblå",
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-linnetroja-havsbla",
+                "url": "/_dev/images/linnetroja-havsbla.svg",
+                "width": 800,
+                "alt": null
+              },
+              "images": [
+                {
+                  "contentType": "image/svg+xml",
+                  "height": 800,
+                  "objectId": "obj-linnetroja-havsbla",
+                  "url": "/_dev/images/linnetroja-havsbla.svg",
+                  "width": 800,
+                  "alt": null
+                }
+              ],
+              "label": "Havsblå / L",
+              "position": 2,
+              "priceMinor": 34900,
+              "size": "L",
+              "sku": "LT-100-BLA-L",
+              "variantId": "v-lt-bla-l"
+            },
+            {
+              "group": "Sand",
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-linnetroja-sand",
+                "url": "/_dev/images/linnetroja-sand.svg",
+                "width": 800,
+                "alt": null
+              },
+              "images": [
+                {
+                  "contentType": "image/svg+xml",
+                  "height": 800,
+                  "objectId": "obj-linnetroja-sand",
+                  "url": "/_dev/images/linnetroja-sand.svg",
+                  "width": 800,
+                  "alt": null
+                }
+              ],
+              "label": "Sand / S",
+              "position": 3,
+              "priceMinor": 39900,
+              "size": "S",
+              "sku": "LT-100-SAND-S",
+              "variantId": "v-lt-sand-s"
+            },
+            {
+              "group": "Sand",
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-linnetroja-sand",
+                "url": "/_dev/images/linnetroja-sand.svg",
+                "width": 800,
+                "alt": null
+              },
+              "images": [
+                {
+                  "contentType": "image/svg+xml",
+                  "height": 800,
+                  "objectId": "obj-linnetroja-sand",
+                  "url": "/_dev/images/linnetroja-sand.svg",
+                  "width": 800,
+                  "alt": null
+                }
+              ],
+              "label": "Sand / M",
+              "position": 4,
+              "priceMinor": 39900,
+              "size": "M",
+              "sku": "LT-100-SAND-M",
+              "variantId": "v-lt-sand-m"
+            }
+          ]
+        },
+        {
+          "productId": "p-ullmossa",
+          "sku": "UM-200",
+          "name": "Ullmössa",
+          "description": "Stickad mössa i merinoull.",
+          "priceMinor": 24900,
+          "currency": "SEK",
+          "handle": "ullmossa_UM-200",
+          "path": "/product/ullmossa_UM-200",
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 800,
+            "objectId": "obj-ullmossa",
+            "url": "/_dev/images/ullmossa.svg",
+            "width": 800,
+            "alt": null
+          },
+          "lowestPriceMinor": 24900,
+          "isFromPrice": false,
+          "compareAtPriceMinor": 29900,
+          "featured": false,
+          "sortOrder": 2,
+          "category": "Accessoarer",
+          "tags": [
+            "Vinter"
+          ],
+          "swatches": [],
+          "allowPickup": true,
+          "allowShipping": true,
+          "brand": null,
+          "eanCode": null,
+          "images": [
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-ullmossa",
+              "url": "/_dev/images/ullmossa.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": null
+            }
+          ],
+          "isPersonalized": false,
+          "launchDate": null,
+          "moreInfo": null,
+          "pod": null,
+          "size": null,
+          "sizeGuide": null,
+          "stock": null,
+          "variants": []
+        },
+        {
+          "productId": "p-kanvasvaska",
+          "sku": "KV-300",
+          "name": "Kanvasväska",
+          "description": "Rymlig väska i tjock kanvas med innerficka.",
+          "priceMinor": 19900,
+          "currency": "SEK",
+          "handle": "kanvasvaska_KV-300",
+          "path": "/product/kanvasvaska_KV-300",
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 800,
+            "objectId": "obj-kanvasvaska",
+            "url": "/_dev/images/kanvasvaska.svg",
+            "width": 800,
+            "alt": null
+          },
+          "lowestPriceMinor": 19900,
+          "isFromPrice": false,
+          "compareAtPriceMinor": null,
+          "featured": true,
+          "sortOrder": null,
+          "category": "Accessoarer",
+          "tags": [
+            "Nyhet"
+          ],
+          "swatches": [],
+          "allowPickup": true,
+          "allowShipping": true,
+          "brand": null,
+          "eanCode": null,
+          "images": [
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-kanvasvaska",
+              "url": "/_dev/images/kanvasvaska.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": null
+            }
+          ],
+          "isPersonalized": false,
+          "launchDate": null,
+          "moreInfo": null,
+          "pod": null,
+          "size": null,
+          "sizeGuide": null,
+          "stock": null,
+          "variants": []
+        },
+        {
+          "productId": "p-fjarilstryck",
+          "sku": "FT-400",
+          "name": "Tröja med fjärilstryck",
+          "description": "Tryckt på beställning med ett fjärilsmotiv.",
+          "priceMinor": 44900,
+          "currency": "SEK",
+          "handle": "troja-med-fjarilstryck_FT-400",
+          "path": "/product/troja-med-fjarilstryck_FT-400",
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 800,
+            "objectId": "obj-fjarilstryck",
+            "url": "/_dev/images/fjarilstryck.svg",
+            "width": 800,
+            "alt": null
+          },
+          "lowestPriceMinor": 44900,
+          "isFromPrice": false,
+          "compareAtPriceMinor": null,
+          "featured": false,
+          "sortOrder": null,
+          "category": "Tröjor",
+          "tags": [
+            "Sommar 2026"
+          ],
+          "swatches": [
+            {
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-fjarilstryck-vit",
+                "url": "/_dev/images/fjarilstryck-vit.svg",
+                "width": 800,
+                "alt": null
+              },
+              "label": "Vit"
+            }
+          ],
+          "allowPickup": true,
+          "allowShipping": true,
+          "brand": null,
+          "eanCode": null,
+          "images": [
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-fjarilstryck",
+              "url": "/_dev/images/fjarilstryck.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": null
+            },
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-fjarilstryck-vit",
+              "url": "/_dev/images/fjarilstryck-vit.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": "v-ft-s"
+            }
+          ],
+          "isPersonalized": false,
+          "launchDate": null,
+          "moreInfo": null,
+          "pod": {
+            "previewUrls": [
+              "/v1/storefront/pod-previews/p-fjarilstryck/art-ft-400"
+            ],
+            "printAreas": [
+              {
+                "heightMm": 350,
+                "slot": "front",
+                "widthMm": 250
+              }
+            ]
+          },
+          "size": null,
+          "sizeGuide": null,
+          "stock": null,
+          "variants": [
+            {
+              "group": "Vit",
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-fjarilstryck-vit",
+                "url": "/_dev/images/fjarilstryck-vit.svg",
+                "width": 800,
+                "alt": null
+              },
+              "images": [
+                {
+                  "contentType": "image/svg+xml",
+                  "height": 800,
+                  "objectId": "obj-fjarilstryck-vit",
+                  "url": "/_dev/images/fjarilstryck-vit.svg",
+                  "width": 800,
+                  "alt": null
+                }
+              ],
+              "label": "Vit / S",
+              "position": 0,
+              "priceMinor": 44900,
+              "size": "S",
+              "sku": "FT-400-S",
+              "variantId": "v-ft-s"
+            },
+            {
+              "group": "Vit",
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-fjarilstryck-vit",
+                "url": "/_dev/images/fjarilstryck-vit.svg",
+                "width": 800,
+                "alt": null
+              },
+              "images": [
+                {
+                  "contentType": "image/svg+xml",
+                  "height": 800,
+                  "objectId": "obj-fjarilstryck-vit",
+                  "url": "/_dev/images/fjarilstryck-vit.svg",
+                  "width": 800,
+                  "alt": null
+                }
+              ],
+              "label": "Vit / M",
+              "position": 1,
+              "priceMinor": 44900,
+              "size": "M",
+              "sku": "FT-400-M",
+              "variantId": "v-ft-m"
+            },
+            {
+              "group": "Vit",
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-fjarilstryck-vit",
+                "url": "/_dev/images/fjarilstryck-vit.svg",
+                "width": 800,
+                "alt": null
+              },
+              "images": [
+                {
+                  "contentType": "image/svg+xml",
+                  "height": 800,
+                  "objectId": "obj-fjarilstryck-vit",
+                  "url": "/_dev/images/fjarilstryck-vit.svg",
+                  "width": 800,
+                  "alt": null
+                }
+              ],
+              "label": "Vit / L",
+              "position": 2,
+              "priceMinor": 44900,
+              "size": "L",
+              "sku": "FT-400-L",
+              "variantId": "v-ft-l"
+            }
+          ]
+        },
+        {
+          "productId": "p-randstrumpor",
+          "sku": "RS-500",
+          "name": "Randiga strumpor",
+          "description": "Två par i bomull.",
+          "priceMinor": 8900,
+          "currency": "SEK",
+          "handle": "randiga-strumpor_RS-500",
+          "path": "/product/randiga-strumpor_RS-500",
+          "image": null,
+          "lowestPriceMinor": 8900,
+          "isFromPrice": false,
+          "compareAtPriceMinor": null,
+          "featured": false,
+          "sortOrder": null,
+          "category": "Accessoarer",
+          "tags": [],
+          "swatches": [],
+          "allowPickup": true,
+          "allowShipping": true,
+          "brand": null,
+          "eanCode": null,
+          "images": [],
+          "isPersonalized": false,
+          "launchDate": null,
+          "moreInfo": null,
+          "pod": null,
+          "size": null,
+          "sizeGuide": null,
+          "stock": null,
+          "variants": []
+        },
+        {
+          "productId": "p-forklade",
+          "sku": "FL-600",
+          "name": "Förkläde i linne",
+          "description": "Kommer i vår.",
+          "priceMinor": 34900,
+          "currency": "SEK",
+          "handle": "forklade-i-linne_FL-600",
+          "path": "/product/forklade-i-linne_FL-600",
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 800,
+            "objectId": "obj-forklade",
+            "url": "/_dev/images/forklade.svg",
+            "width": 800,
+            "alt": null
+          },
+          "lowestPriceMinor": 34900,
+          "isFromPrice": false,
+          "compareAtPriceMinor": null,
+          "featured": false,
+          "sortOrder": null,
+          "category": "Kök",
+          "tags": [],
+          "swatches": [],
+          "allowPickup": true,
+          "allowShipping": true,
+          "brand": null,
+          "eanCode": null,
+          "images": [
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-forklade",
+              "url": "/_dev/images/forklade.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": null
+            }
+          ],
+          "isPersonalized": false,
+          "launchDate": "2027-03-01",
+          "moreInfo": null,
+          "pod": null,
+          "size": null,
+          "sizeGuide": null,
+          "stock": null,
+          "variants": []
+        },
+        {
+          "productId": "p-kokshandduk",
+          "sku": "KH-700",
+          "name": "Kökshandduk",
+          "description": "Handduk i halvlinne.",
+          "priceMinor": 12900,
+          "currency": "SEK",
+          "handle": "kokshandduk_KH-700",
+          "path": "/product/kokshandduk_KH-700",
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 800,
+            "objectId": "obj-kokshandduk",
+            "url": "/_dev/images/kokshandduk.svg",
+            "width": 800,
+            "alt": null
+          },
+          "lowestPriceMinor": 12900,
+          "isFromPrice": false,
+          "compareAtPriceMinor": null,
+          "featured": false,
+          "sortOrder": null,
+          "category": "Kök",
+          "tags": [
+            "Nyhet"
+          ],
+          "swatches": [],
+          "allowPickup": true,
+          "allowShipping": false,
+          "brand": null,
+          "eanCode": null,
+          "images": [
+            {
+              "contentType": "image/svg+xml",
+              "height": 800,
+              "objectId": "obj-kokshandduk",
+              "url": "/_dev/images/kokshandduk.svg",
+              "width": 800,
+              "alt": null,
+              "variantId": null
+            }
+          ],
+          "isPersonalized": false,
+          "launchDate": null,
+          "moreInfo": null,
+          "pod": null,
+          "size": null,
+          "sizeGuide": null,
+          "stock": null,
+          "variants": []
+        }
+      ],
+      "collections": [
+        {
+          "handle": "sommar",
+          "externalRef": null,
+          "title": "Sommar",
+          "description": "Lätta plagg för varma dagar.",
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 900,
+            "objectId": "obj-cover-sommar",
+            "url": "/_dev/images/cover-sommar.svg",
+            "width": 1600
+          },
+          "path": "/samling/sommar",
+          "featured": true,
+          "sortOrder": 1,
+          "published": true,
+          "productIds": [
+            "p-linnetroja",
+            "p-kanvasvaska",
+            "p-fjarilstryck"
+          ]
+        },
+        {
+          "handle": "vinter",
+          "externalRef": null,
+          "title": "Vinter",
+          "description": null,
+          "image": null,
+          "path": "/samling/vinter",
+          "featured": true,
+          "sortOrder": 2,
+          "published": true,
+          "productIds": [
+            "p-ullmossa"
+          ]
+        },
+        {
+          "handle": "tom",
+          "externalRef": null,
+          "title": "Tom samling",
+          "description": null,
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 900,
+            "objectId": "obj-cover-tom",
+            "url": "/_dev/images/cover-tom.svg",
+            "width": 1600
+          },
+          "path": "/samling/tom",
+          "featured": true,
+          "sortOrder": 3,
+          "published": true,
+          "productIds": []
+        },
+        {
+          "handle": "kok",
+          "externalRef": "ext-kok",
+          "title": "Kök",
+          "description": "Textilier för köket.",
+          "image": null,
+          "path": "/samling/kok",
+          "featured": false,
+          "sortOrder": null,
+          "published": true,
+          "productIds": [
+            "p-forklade",
+            "p-kokshandduk"
+          ]
+        },
+        {
+          "handle": "utkast",
+          "externalRef": null,
+          "title": "Utkast",
+          "description": null,
+          "image": null,
+          "path": "/samling/utkast",
+          "featured": true,
+          "sortOrder": 0,
+          "published": false,
+          "productIds": [
+            "p-linnetroja"
+          ]
+        }
+      ],
+      "pages": [
+        {
+          "slug": "om-oss",
+          "path": "/om-oss",
+          "kind": "page",
+          "status": "published",
+          "lang": "sv-SE",
+          "title": "Om oss",
+          "summary": null,
+          "author": null,
+          "image": null,
+          "metaTitle": null,
+          "metaDescription": "Om Provbutiken.",
+          "publishedAt": "2026-06-01T09:00:00.000Z",
+          "updatedAt": "2026-09-01T09:00:00.000Z",
+          "content": "<h2>Vi syr i små serier</h2><p>Provbutiken är en påhittad butik. Allt här är exempeldata för utveckling.</p><ul><li>Linne</li><li>Ull</li><li>Kanvas</li></ul><p>Skriv till <a href=\"mailto:hej@example.test\">hej@example.test</a>.</p>"
+        },
+        {
+          "slug": "kontakt",
+          "path": "/kontakt",
+          "kind": "page",
+          "status": "published",
+          "lang": "sv-SE",
+          "title": "Kontakt",
+          "summary": null,
+          "author": null,
+          "image": null,
+          "metaTitle": "Kontakta oss",
+          "metaDescription": null,
+          "publishedAt": "2026-06-02T09:00:00.000Z",
+          "updatedAt": "2026-06-02T09:00:00.000Z",
+          "content": "<p>Vi svarar inom två arbetsdagar.</p>"
+        },
+        {
+          "slug": "hostnytt",
+          "path": "/hostnytt",
+          "kind": "post",
+          "status": "published",
+          "lang": "sv-SE",
+          "title": "Nytt i höst",
+          "summary": "Tre nya plagg.",
+          "author": "Exempelförfattare",
+          "image": {
+            "contentType": "image/svg+xml",
+            "height": 900,
+            "objectId": "obj-cover-host",
+            "url": "/_dev/images/cover-host.svg",
+            "width": 1600
+          },
+          "metaTitle": null,
+          "metaDescription": null,
+          "publishedAt": "2026-09-15T09:00:00.000Z",
+          "updatedAt": "2026-09-15T09:00:00.000Z",
+          "content": "<p>I höst kommer tre nya plagg.</p>"
+        },
+        {
+          "slug": "utkast",
+          "path": "/utkast",
+          "kind": "page",
+          "status": "draft",
+          "lang": "sv-SE",
+          "title": "Utkast",
+          "summary": null,
+          "author": null,
+          "image": null,
+          "metaTitle": null,
+          "metaDescription": null,
+          "publishedAt": null,
+          "updatedAt": "2026-09-15T09:00:00.000Z",
+          "content": "<p>Syns inte.</p>"
+        }
+      ],
+      "legal": {
+        "kopvillkor": {
+          "adoptedAt": "2026-09-10T08:00:00.000Z",
+          "html": "<p><em>Senast uppdaterad: 2026-09-10</em></p><h2>1. Säljare</h2><p>Provbutiken AB, Exempelgatan 1, 123 45 Exempelstad. E-post: hej@example.test.</p><h2>2. Priser</h2><p>Alla priser anges i svenska kronor inklusive moms.</p><h2>3. Leverans</h2><p>Vi skickar inom tre arbetsdagar. Upphämtning kan väljas i kassan.</p><h2>4. Ångerrätt</h2><p>Du har 14 dagars ångerrätt enligt lag. Se sidan Ångerrätt &amp; returer.</p><h2>5. Reklamation</h2><p>Du har rätt att reklamera en vara med fel i tre år.</p><h2>6. Kontakt</h2><p>Frågor besvaras på hej@example.test.</p>"
+        },
+        "angerratt": {
+          "adoptedAt": "2026-09-10T08:00:00.000Z",
+          "html": "<p><em>Senast uppdaterad: 2026-09-10</em></p><h2>Ångerrätt</h2><p>Du har rätt att ångra ditt köp inom 14 dagar från att du tog emot varan.</p><h2>Så ångrar du</h2><p>Använd funktionen <a href=\"/provbutiken/angra\">Ångra avtalet här</a> eller skriv till oss.</p><h2>Returadress</h2><p>Provbutiken AB, Exempelgatan 1, 123 45 Exempelstad.</p><h2>Reklamation</h2><p>En vara med fel reklamerar du till samma adress.</p>"
+        },
+        "integritetspolicy": {
+          "adoptedAt": "2026-09-10T08:00:00.000Z",
+          "html": "<p><em>Senast uppdaterad: 2026-09-10</em></p><h2>Personuppgiftsansvarig</h2><p>Provbutiken AB ansvarar för dina personuppgifter.</p><h2>Vilka uppgifter</h2><p>Namn, adress och e-post, för att leverera din beställning.</p><h2>Dina rättigheter</h2><p>Du kan begära utdrag, rättelse och radering.</p><h2>Klagomål</h2><p>Du kan klaga till Integritetsskyddsmyndigheten.</p>"
+        },
+        "plattformsvillkor": {
+          "version": "2026-09-07",
+          "publishedAt": "2026-09-07T00:00:00.000Z",
+          "text": "{\"version\":\"2026-09-07\",\"terms\":\"> **EXEMPEL.** Påhittad text för utveckling.\\n\\n*Senast uppdaterad: {{last_updated}}*\\n\\n## 1. Parter\\n\\nDessa villkor gäller mellan {{platform_legal_name}}{{platform_org_suffix}} och säljaren.\\n\\n## 2. Avgifter\\n\\n| Plan | Avgift | Provision |\\n|---|---|---|\\n| Bas | 0 kr i månaden | en procentsats av försäljningen |\\n| Plus | en fast månadsavgift | en lägre procentsats av försäljningen |\\n\\n## 3. Uppsägning\\n\\nVillkoren kan sägas upp med en månads varsel.\",\"dpa\":\"*Senast uppdaterad: {{last_updated}}*\\n\\n## 1. Bakgrund\\n\\nDetta avtal reglerar behandlingen av personuppgifter.\\n\\n## 2. Säkerhet\\n\\n- Behörighet\\n- Loggning\\n- Kryptering\"}"
+        }
+      }
+    },
+    "sportbutiken": {
+      "extends": "provbutiken",
+      "storefront": {
+        "name": "Sportbutiken",
+        "identity": {
+          "legalName": "Sportbutiken AB",
+          "tagline": "Matchdag varje dag.",
+          "heroHeadline": "Säsongen börjar",
+          "heroSubtitle": "Linne, ull och kanvas, sytt i små serier. Allt här är påhittat.",
+          "companyDescription": "Plagg i linne och ull. En påhittad butik för utveckling.",
+          "address": "Provbutiken AB<br>Exempelgatan 1<br>123 45 Exempelstad",
+          "supportEmail": "hej@example.test",
+          "orgNumber": "559999-0000",
+          "productsSubtitle": "Allt vi har just nu.",
+          "social": {
+            "instagram": "https://example.test/provbutiken"
+          },
+          "heroMark": "SB",
+          "frontpageCategory": "Tröjor",
+          "gallery": [
+            {
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-galleri-1",
+                "url": "/_dev/images/galleri-1.svg",
+                "width": 800
+              },
+              "label": "Linnetröja",
+              "path": "/product/linnetroja_LT-100"
+            },
+            {
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-galleri-2",
+                "url": "/_dev/images/galleri-2.svg",
+                "width": 800
+              },
+              "label": "Ullmössa",
+              "path": "/product/ullmossa_UM-200"
+            },
+            {
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-galleri-3",
+                "url": "/_dev/images/galleri-3.svg",
+                "width": 800
+              },
+              "label": "Kanvasväska",
+              "path": null
+            },
+            {
+              "image": {
+                "contentType": "image/svg+xml",
+                "height": 800,
+                "objectId": "obj-galleri-4",
+                "url": "/_dev/images/galleri-4.svg",
+                "width": 800
+              },
+              "label": "Kök",
+              "path": null
+            }
+          ],
+          "story": [
+            {
+              "title": "Sytt här",
+              "text": "Varje plagg sys i en liten serie."
+            },
+            {
+              "title": "Snabbt hem",
+              "text": "Vi skickar inom tre dagar."
+            },
+            {
+              "title": "Hämta själv",
+              "text": "Eller hämta på lagret."
+            }
+          ],
+          "storyTitle": "Så arbetar vi"
+        },
+        "branding": {
+          "emailLogo": null,
+          "favicon": null,
+          "hero": null,
+          "logo": {
+            "contentType": "image/svg+xml",
+            "height": 64,
+            "objectId": "obj-logo-sportbutiken",
+            "url": "/_dev/images/logo-sportbutiken.svg",
+            "width": 360
+          }
+        },
+        "menu": [
+          {
+            "label": "Hem",
+            "path": "/",
+            "target": "",
+            "type": "home",
+            "url": null
+          },
+          {
+            "label": "Alla produkter",
+            "path": "/produkter",
+            "target": "",
+            "type": "all-products",
+            "url": null
+          },
+          {
+            "label": "Tröjor",
+            "path": "/kategori/trojor",
+            "target": "Tröjor",
+            "type": "category",
+            "url": null
+          },
+          {
+            "label": "Sommar",
+            "path": "/samling/sommar",
+            "target": "sommar",
+            "type": "collection",
+            "url": null
+          },
+          {
+            "label": "Om oss",
+            "path": "/om-oss",
+            "target": "om-oss",
+            "type": "page",
+            "url": null
+          },
+          {
+            "label": "Exempel",
+            "path": null,
+            "target": "https://example.test/",
+            "type": "url",
+            "url": "https://example.test/"
+          }
+        ],
+        "templateId": "sport"
+      }
+    }
+  }
+}

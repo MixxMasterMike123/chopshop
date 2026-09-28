@@ -2,14 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { getCountryAwareUrl } from '../../utils/productUrls';
 import { useTranslation } from '../../contexts/TranslationContext';
-import { useSimpleAuth } from '../../contexts/SimpleAuthContext';
-import { db } from '../../firebase/config';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { listAllPages } from '../../api/pages.js';
+import { toFooterPages } from '../../storefront/adapters/pages.js';
 // 🇸🇪 SE-ONLY LAUNCH: hidden with its usage below. Re-enable for internationalization.
 // import LanguageCurrencySelector from './LanguageCurrencySelector';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
 import { useShopId } from '../../contexts/ShopContext';
-import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import DOMPurify from 'dompurify';
 import { PLATFORM_TERMS_SLUG } from '../../config/legalTemplates';
 
@@ -27,35 +25,24 @@ const SOCIAL_LINKS = [
 
 const ShopFooter = () => {
   const { t } = useTranslation();
-  const { currentUser } = useSimpleAuth();
   const store = useStoreSettings();
   const shopId = useShopId();
   const location = useLocation();
-  const { isEnabled: isAddonEnabled } = useShopFeatures();
-  const affiliateEnabled = isAddonEnabled('affiliate');
-  const [isActiveAffiliate, setIsActiveAffiliate] = useState(false);
-  const [affiliateCheckLoading, setAffiliateCheckLoading] = useState(false);
   const [cmsPages, setCmsPages] = useState([]);
   const currentYear = new Date().getFullYear();
 
   // Published CMS pages (Kontakta oss, FAQ, etc.) → footer links. Auto-listed:
   // publish a page in admin and it appears here. ponytail: no per-link curation —
   // control the footer by controlling what you publish.
+  // GET /v1/pages?kind=page, every page of it (posts are not footer links).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const snap = await getDocs(query(
-          collection(db, 'pages'),
-          where('shopId', '==', shopId),
-          where('status', '==', 'published')
-        ));
+        const pages = await listAllPages({ kind: 'page' });
         if (cancelled) return;
-        const pageTitle = (tt) => (typeof tt === 'string' ? tt : (tt?.['sv-SE'] || Object.values(tt || {}).find((v) => typeof v === 'string') || ''));
         setCmsPages(
-          snap.docs
-            .map((d) => ({ slug: d.data().slug, title: pageTitle(d.data().title) }))
-            .filter((p) => p.slug && p.title)
+          toFooterPages(pages)
             .sort((a, b) => a.title.localeCompare(b.title, 'sv'))
         );
       } catch (e) {
@@ -66,36 +53,8 @@ const ShopFooter = () => {
     return () => { cancelled = true; };
   }, [shopId]);
 
-  // Check if current user is an active affiliate
-  useEffect(() => {
-    const checkAffiliateStatus = async () => {
-      // Affiliate add-on off → skip the check (links hidden anyway).
-      if (!affiliateEnabled || !currentUser?.email) {
-        setIsActiveAffiliate(false);
-        return;
-      }
-
-      try {
-        setAffiliateCheckLoading(true);
-        const affiliatesRef = collection(db, 'affiliates');
-        const affiliateQuery = query(
-          affiliatesRef,
-          where('shopId', '==', shopId),
-          where('email', '==', currentUser.email),
-          where('status', '==', 'active')
-        );
-        const querySnapshot = await getDocs(affiliateQuery);
-        setIsActiveAffiliate(!querySnapshot.empty);
-      } catch (error) {
-        console.error('Error checking affiliate status:', error);
-        setIsActiveAffiliate(false);
-      } finally {
-        setAffiliateCheckLoading(false);
-      }
-    };
-
-    checkAffiliateStatus();
-  }, [currentUser, shopId, affiliateEnabled]);
+  // D81: no customer accounts and no affiliate program on the storefront; the
+  // account link and the two affiliate links of the columns below are gone.
 
   return (
     <footer className="bg-ink text-white font-body">
@@ -137,11 +96,6 @@ const ShopFooter = () => {
                 </Link>
               </li>
               <li>
-                <Link to={getCountryAwareUrl('account')} className="text-white/70 hover:text-white transition-colors">
-                  {t('footer_my_account', 'Mitt konto')}
-                </Link>
-              </li>
-              <li>
                 <a href={`mailto:${store.supportEmail}`} className="text-white/70 hover:text-white transition-colors">
                   {t('footer_contact', 'Kontakt')}
                 </a>
@@ -178,38 +132,6 @@ const ShopFooter = () => {
                   {t('footer_withdraw_here', 'Ångra avtalet här')}
                 </Link>
               </li>
-              {affiliateEnabled && (
-              <li>
-                <Link to={getCountryAwareUrl('affiliate-registration')} className="text-white/70 hover:text-white transition-colors">
-                  {t('footer_become_affiliate', 'Bli en affiliate')}
-                </Link>
-              </li>
-              )}
-              {affiliateEnabled && (
-              <li>
-                <Link
-                  to={getCountryAwareUrl(isActiveAffiliate ? 'affiliate-portal' : 'affiliate-login')}
-                  className="text-white/70 hover:text-white transition-colors flex items-center"
-                >
-                  {affiliateCheckLoading ? (
-                    <>
-                      <span className="animate-spin rounded-full h-3 w-3 border border-white/40 border-t-transparent mr-2"></span>
-                      {t('footer_affiliate_checking', 'Kontrollerar...')}
-                    </>
-                  ) : (
-                    <>
-                      {isActiveAffiliate ?
-                        t('footer_affiliate_portal', 'Affiliate-portal') :
-                        t('footer_affiliate_login', 'Affiliate-inloggning')
-                      }
-                      {isActiveAffiliate && (
-                        <span className="ml-2 text-green-400 text-xs">●</span>
-                      )}
-                    </>
-                  )}
-                </Link>
-              </li>
-              )}
               <li>
                 <a href={`mailto:${store.supportEmail}`} className="text-white/70 hover:text-white transition-colors">
                   {t('footer_customer_support', 'Kundtjänst')}

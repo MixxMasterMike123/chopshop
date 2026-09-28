@@ -101,6 +101,22 @@ export async function pollReceipt(
   }
 }
 
+// When this tab began to poll a checkout. The 90 s are the checkout's, not the
+// page's: a page that is mounted again (its parent rendered it from nothing, a
+// development reload) continues the same poll and does not begin a new 90 s.
+// Kept in memory only: a reload by the buyer asks again.
+const pollStartedAt = new Map();
+
+/**
+ * What is left of a checkout's 90 s, for `pollReceipt`'s `timeoutMs`. Never
+ * less than one interval: a page mounted after the time is up still asks once.
+ */
+export function receiptPollTimeLeft(checkoutId, now = Date.now()) {
+  if (!pollStartedAt.has(checkoutId)) pollStartedAt.set(checkoutId, now);
+  const left = RECEIPT_POLL_TIMEOUT_MS - (now - pollStartedAt.get(checkoutId));
+  return Math.max(RECEIPT_POLL_INTERVAL_MS, left);
+}
+
 const TOKEN_KEY = (orderId) => `receipt-token:${orderId}`;
 
 /** Keeps a receipt token for this tab (sessionStorage), so a reload can still read the order. */
@@ -115,6 +131,31 @@ export function saveReceiptToken(orderId, receiptToken) {
 export function loadReceiptToken(orderId) {
   try {
     return globalThis.sessionStorage?.getItem(TOKEN_KEY(orderId)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Added by CP4-F2. The checkout a payment belongs to, kept for this tab only
+// (sessionStorage), by the payment's id. The payment form stores it when the
+// payment is created; the confirmation page is reached by the payment's id
+// (after a card payment, and back from a payment method's own page, which
+// returns to this tab) and polls that checkout for its order. The checkout id
+// is a capability for the receipt: it never goes into an address.
+const PENDING_CHECKOUT_KEY = (paymentIntentId) => `pending-checkout:${paymentIntentId}`;
+
+export function savePendingCheckout(paymentIntentId, checkoutId) {
+  try {
+    globalThis.sessionStorage?.setItem(PENDING_CHECKOUT_KEY(paymentIntentId), checkoutId);
+  } catch {
+    // Storage refused: the confirmation page then shows its "not found" state
+    // and the order confirmation arrives by mail.
+  }
+}
+
+export function loadPendingCheckout(paymentIntentId) {
+  try {
+    return globalThis.sessionStorage?.getItem(PENDING_CHECKOUT_KEY(paymentIntentId)) ?? null;
   } catch {
     return null;
   }

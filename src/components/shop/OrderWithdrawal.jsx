@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { httpsCallable, getFunctions } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import { useTranslation } from '../../contexts/TranslationContext';
+import { submitWithdrawal } from '../../api/withdrawal';
+import { toWithdrawalRequest, toWithdrawalView } from '../../storefront/adapters/withdrawal';
 
 /**
  * Ångerfunktion — the consumer right-of-withdrawal function on the storefront
@@ -13,16 +14,18 @@ import { useTranslation } from '../../contexts/TranslationContext';
  * with its content + the date and time of submission.
  *
  * This component is the client half. The submission TIME, eligibility, and the
- * durable acknowledgement are all decided SERVER-side by the submitWithdrawal
- * callable — the client only collects the statement, calls it, and renders the
- * returned acknowledgement as an on-screen, savable mottagningsbevis.
+ * durable acknowledgement are all decided SERVER-side by POST /v1/withdrawals
+ * (the guest path: the order's number and its purchase address; there are no
+ * signed-in buyers, D81) — the client only collects the statement, calls it,
+ * and renders the returned acknowledgement as an on-screen, savable
+ * mottagningsbevis.
  *
  * Regime split (from the order, never recomputed here):
  *   - order.withdrawal.required === true → personalised / made-to-order → the
  *     server returns reason 'personalized_exempt' and we show "ingen ångerrätt".
  *   - otherwise → standard order, withdrawal applies.
  */
-const OrderWithdrawal = ({ order, shopId }) => {
+const OrderWithdrawal = ({ order }) => {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(order?.customerInfo?.name || '');
@@ -44,35 +47,28 @@ const OrderWithdrawal = ({ order, shopId }) => {
   const handleConfirm = async () => {
     setSubmitting(true);
     try {
-      const functions = getFunctions(undefined, 'us-central1');
-      const submitWithdrawal = httpsCallable(functions, 'submitWithdrawal');
-      const res = await submitWithdrawal({
-        shopId,
-        orderId: order.id,
-        // Also send the order number: the server accepts orderNumber + matching
-        // purchase email as ownership proof, which covers account holders whose
-        // token email is not (yet) verified — uid-owned orders pass either way.
-        orderNumber: order.orderNumber || '',
-        statement: { name, contactEmail },
-      });
-      const data = res?.data || {};
-      if (data.eligible === false) {
-        if (data.reason === 'personalized_exempt') {
+      // The order's number and the purchase address are the ownership proof.
+      const answer = await submitWithdrawal(
+        toWithdrawalRequest({ orderNumber: order.orderNumber || '', name, contactEmail })
+      );
+      const view = toWithdrawalView(answer);
+      if (view.refusal) {
+        if (view.refusal === 'personalized_exempt') {
           setExemptReason('personalized_exempt');
-        } else if (data.reason === 'window_passed') {
+        } else if (view.refusal === 'window_passed') {
           toast.error(t('order_withdrawal_window_passed', 'Det har gått för lång tid sedan beställningen för att den ska kunna ångras här.'));
         } else {
           toast.error(t('order_withdrawal_not_eligible', 'Den här beställningen kan inte ångras.'));
         }
         return;
       }
-      if (data.acknowledgement) {
-        setAcknowledgement(data.acknowledgement);
+      if (view.acknowledgement) {
+        setAcknowledgement(view.acknowledgement);
         setOpen(false);
         toast.success(t('order_withdrawal_received', 'Din ångeranmälan har tagits emot.'));
       }
     } catch (err) {
-      console.error('submitWithdrawal failed', err);
+      console.error('submitWithdrawal failed', err?.code);
       toast.error(t('order_withdrawal_error', 'Något gick fel. Försök igen.'));
     } finally {
       setSubmitting(false);

@@ -3,20 +3,22 @@
  * Integrates Stripe Elements with the storefront checkout flow
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { getStripe, STRIPE_CONFIG } from '../../utils/stripeClient';
 import { useCart } from '../../contexts/CartContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { getCountryAwareUrl } from '../../utils/productUrls';
-import { functionUrl } from '../../config/urls';
+import { createCheckout, createPayment, newIdempotencyKey } from '../../api/checkout';
+import { savePendingCheckout } from '../../api/orders';
+import { buildCheckoutRequest, checkoutRefusal } from '../../storefront/adapters/checkout';
 import toast from 'react-hot-toast';
 
-const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentError, clientSecret, gateBlocked, onResetPaymentMethods }) => {
+const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentError, clientSecret, payableTotal, gateBlocked, onResetPaymentMethods }) => {
   const stripe = useStripe();
   const elements = useElements();
-  const { cart, calculateTotals, clearCart } = useCart();
+  const { clearCart } = useCart();
   const { t } = useTranslation();
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
@@ -47,14 +49,7 @@ const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentEr
     setPaymentError(null);
 
     try {
-      // Get cart totals
-      const totals = calculateTotals();
-      
-      console.log('💳 Processing payment...', {
-        total: totals.total,
-        items: cart.items.length,
-        customer: customerInfo.email
-      });
+      console.log('💳 Processing payment...');
 
       // Confirm payment with Stripe
       const { error, paymentIntent } = await stripe.confirmPayment({
@@ -67,7 +62,7 @@ const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentEr
       });
 
       if (error) {
-        console.error('❌ Payment failed:', error);
+        console.error('❌ Payment failed:', error.code || error.type);
         setPaymentError(error.message);
         onPaymentError?.(error);
         toast.error(`Betalning misslyckades: ${error.message}`);
@@ -76,7 +71,7 @@ const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentEr
         
         if (paymentIntent.status === 'succeeded') {
           // Payment completed immediately (cards)
-          console.log('✅ Payment succeeded immediately!', paymentIntent);
+          console.log('✅ Payment succeeded immediately!');
           
           // Clear cart after successful payment
           clearCart();
@@ -98,7 +93,7 @@ const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentEr
           
         } else if (paymentIntent.status === 'processing') {
           // Payment is being processed (some payment methods)
-          console.log('⏳ Payment processing...', paymentIntent);
+          console.log('⏳ Payment processing...');
           toast(t('stripe_payment_processing', 'Betalning behandlas...'));
           
         } else {
@@ -109,7 +104,7 @@ const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentEr
       }
 
     } catch (error) {
-      console.error('❌ Payment processing error:', error);
+      console.error('❌ Payment processing error:', error?.code || error?.name);
       setPaymentError(error.message);
       onPaymentError?.(error);
       toast.error('Ett fel uppstod vid betalning');
@@ -245,7 +240,7 @@ const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentEr
         ) : !isElementReady ? (
           t('loading_payment', 'Laddar betalning...')
         ) : (
-          `${t('pay_now', 'Betala nu')} - ${calculateTotals().total.toFixed(2)} kr`
+          `${t('pay_now', 'Betala nu')} - ${payableTotal.toFixed(2)} kr`
         )}
       </button>
 
@@ -265,13 +260,15 @@ const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentEr
   );
 };
 
-const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, customerLinkage, withdrawalGate, onPaymentSuccess, onPaymentError }) => {
+const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, withdrawalGate, onCheckout, onPaymentSuccess, onPaymentError }) => {
   const { t } = useTranslation();
-  const { cart, calculateTotals } = useCart();
+  const { cart, checkoutItems } = useCart();
   const shopId = useShopId();
   // Block confirm until the no-withdrawal notice is accepted (when required).
   const gateBlocked = withdrawalGate?.required === true && withdrawalGate?.accepted !== true;
   const [clientSecret, setClientSecret] = useState('');
+  // The amount of the payment: the SERVER's total of the priced checkout.
+  const [payableTotal, setPayableTotal] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   // Bumping this key remounts the Elements provider (same clientSecret — a
@@ -281,173 +278,130 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, customerL
   // after a failed attempt if the element collapsed to one.
   const [elementsKey, setElementsKey] = useState(0);
   const resetPaymentMethods = () => setElementsKey((k) => k + 1);
+  // One idempotency key per distinct request: a repeat of the same request
+  // (a re-render, a remount) replays the same checkout and the same payment;
+  // a changed request is a new checkout.
+  const idempotencyKeys = useRef(new Map());
 
-  // PI recreation fingerprint (2026-08-15 verifier + 07-25 audit fixes).
-  // Checkout passes customerInfo/shippingInfo as FRESH inline literals every
-  // render, so depending on those objects recreated the PaymentIntent on every
-  // parent re-render ("PI-per-keystroke"). This key is a PRIMITIVE built from
-  // exactly the inputs the server prices from — the effect refires only when
-  // one of them actually changes. Crucially it includes the APPLIED DISCOUNT:
-  // without it, a code applied after PI creation left the old (higher) PI
-  // amount live while the UI showed the discounted total (overcharge).
-  const totalsNow = calculateTotals();
-  const paymentInputsKey = JSON.stringify({
-    lines: cart.items.map((i) => [i.productId || i.id, i.variantSku || '', i.quantity]),
-    email: customerInfo?.email || '',
-    country: shippingInfo?.country || '',
-    shopId,
-    method: deliveryInfo?.method || 'home',
-    discount: totalsNow.discountCode || '',
-    gateBlocked,
-    nv: withdrawalGate?.noticeVersion || '',
-    nf: withdrawalGate?.noticeFingerprint || '',
+  // What the server prices (POST /v1/checkout): products, variants and
+  // quantities, the buyer's e-mail address, the delivery and the
+  // consents. Never a price, a total, a carriage or a VAT figure.
+  const checkoutRequest = buildCheckoutRequest({
+    items: checkoutItems(),
+    email: customerInfo?.email,
+    deliveryMethod: deliveryInfo?.method,
+    shippingCountry: shippingInfo?.country,
+    marketing: customerInfo?.marketing,
+    withdrawal: withdrawalGate,
   });
 
+  // Recreation fingerprint (2026-08-15 verifier + 07-25 audit fixes).
+  // Checkout passes customerInfo/shippingInfo as FRESH inline literals every
+  // render, so depending on those objects recreated the payment on every
+  // parent re-render ("PI-per-keystroke"). This key is a PRIMITIVE built from
+  // exactly the inputs the server prices from — the effect refires only when
+  // one of them actually changes.
+  const paymentInputsKey = JSON.stringify({ request: checkoutRequest, shopId, gateBlocked });
+
   useEffect(() => {
-    // Defer creating the PaymentIntent until the no-withdrawal notice is
-    // accepted (when required), so the consent proof is guaranteed to be in the
-    // PI metadata the webhook reads — rather than creating a PI on mount and
-    // re-creating it on consent. Until then we show the gate (not a spinner).
+    // Defer the checkout until the no-withdrawal notice is accepted (when
+    // required): the consent is frozen with the checkout, so it must be in the
+    // request that creates it. Until then we show the gate (not a spinner).
     if (gateBlocked) {
-      // Clear any PI created before an un-check so the UI consistently shows the
-      // gate (and a stale consented secret is never reused after un-checking).
+      // Clear any payment created before an un-check so the UI consistently
+      // shows the gate (and a stale consented secret is never reused).
       setClientSecret('');
       setIsLoading(false);
-      return;
+      onCheckout?.({ status: 'pending' });
+      return undefined;
     }
+
+    let stale = false;
+    const controller = new AbortController();
+    const fingerprint = JSON.stringify(checkoutRequest);
+    const keyFor = (fresh) => {
+      if (fresh || !idempotencyKeys.current.has(fingerprint)) {
+        idempotencyKeys.current.set(fingerprint, newIdempotencyKey());
+      }
+      return idempotencyKeys.current.get(fingerprint);
+    };
+
     const initializePayment = async () => {
       try {
         setIsLoading(true);
         setError(null);
+        setClientSecret('');
+        onCheckout?.({ status: 'pending' });
 
-        const totals = calculateTotals();
-        
-        console.log('🔄 Creating payment intent...', {
-          total: totals.total,
-          items: cart.items.length
-        });
+        console.log('🔄 Creating checkout and payment...', { items: checkoutRequest.items.length });
 
-        // 🔍 DEBUG: Log what we're sending to createPaymentIntentV2
-        const paymentData = {
-          amount: totals.total, // Amount in SEK
-          currency: 'sek',
-          // Tenant id — server writes it into the PaymentIntent metadata and
-          // the webhook stamps it onto the order (see multi-tenant Phase 1).
-          shopId,
-          cartItems: cart.items,
-          customerInfo,
-          shippingInfo: {
-            // Use complete shipping info from checkout form
-            ...shippingInfo,
-            // Add shipping cost for payment processing
-            cost: totals.shipping
-          },
-          // Delivery method (Click & Collect). The server re-applies the
-          // pickup→no-shipping rule (so the charge matches), and the webhook
-          // stamps method + location onto the order.
-          ...(deliveryInfo?.method && {
-            deliveryInfo: {
-              method: deliveryInfo.method,
-              ...(deliveryInfo.pickupLocation && {
-                pickupLocationId: deliveryInfo.pickupLocation.id || '',
-                pickupLocationName: deliveryInfo.pickupLocation.name || '',
-                pickupLocationAddress: deliveryInfo.pickupLocation.address || '',
-                // Chosen pickup date (ISO YYYY-MM-DD), when the location offers
-                // specific dates. Carried to the order via PI metadata + webhook.
-                pickupLocationDate: deliveryInfo.pickupDate || ''
-              })
-            }
-          }),
-          // Enhanced totals breakdown for complete order recovery
-          totals: {
-            subtotal: totals.subtotal,
-            vat: totals.vat,
-            shipping: totals.shipping,
-            discountAmount: totals.discountAmount,
-            total: totals.total
-          },
-          ...(totals.discountCode && {
-            discountInfo: {
-              code: totals.discountCode,
-              amount: totals.discountAmount,
-              percentage: totals.discountPercentage
-            }
-          }),
-          ...(totals.affiliateClickId && {
-            affiliateInfo: {
-              code: totals.discountCode,
-              clickId: totals.affiliateClickId
-            }
-          }),
-          // Link the order to an existing customer account (set server-side
-          // into the payment metadata; the webhook copies it onto the order)
-          ...(customerLinkage?.b2cCustomerId && {
-            b2cCustomerId: customerLinkage.b2cCustomerId,
-            b2cCustomerAuthId: customerLinkage.b2cCustomerAuthId || ''
-          }),
-          // Right-of-withdrawal consent proof (POD). Only sent when the gate was
-          // required AND accepted; the server writes it into the PI metadata and
-          // the webhook stamps order.withdrawal as the record of what the buyer
-          // accepted (version + fingerprint of the exact notice shown).
-          ...(withdrawalGate?.required && withdrawalGate?.accepted === true && {
-            withdrawalConsent: {
-              accepted: true,
-              noticeVersion: withdrawalGate.noticeVersion || '',
-              noticeFingerprint: withdrawalGate.noticeFingerprint || ''
-            }
-          })
-        };
-
-        // Create payment intent on server via HTTP
-        const response = await fetch(functionUrl('createPaymentIntentV2'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(paymentData)
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          console.error('❌ Payment intent creation failed:', errorData);
-          throw new Error(errorData.details || errorData.error || 'Failed to create payment intent');
+        // 1. The server prices the order.
+        let checkout;
+        try {
+          ({ checkout } = await createCheckout(
+            { ...checkoutRequest, idempotencyKey: keyFor(false) },
+            { signal: controller.signal },
+          ));
+        } catch (checkoutError) {
+          // 409: the key was used for another request (a price or a carriage
+          // changed on the server between two attempts). Once more, new key.
+          if (checkoutRefusal(checkoutError) !== 'conflict') throw checkoutError;
+          ({ checkout } = await createCheckout(
+            { ...checkoutRequest, idempotencyKey: keyFor(true) },
+            { signal: controller.signal },
+          ));
         }
+        if (stale) return;
+        onCheckout?.({ status: 'ready', checkout });
 
-        const result = await response.json();
-        
-        if (result.success) {
-          setClientSecret(result.paymentIntent.client_secret);
-          console.log('✅ Payment intent created:', result.paymentIntent.id);
-        } else {
-          console.error('❌ Payment intent result failed:', result);
-          throw new Error(result.details || result.error || 'Failed to create payment intent');
-        }
-
+        // 2. The payment of exactly that checkout (its frozen total).
+        const payment = await createPayment(checkout.checkoutId, { signal: controller.signal });
+        if (stale) return;
+        // This tab's record of which checkout the payment pays, so the
+        // confirmation page (reached by the payment's id) can wait for its order.
+        savePendingCheckout(payment.paymentIntentId, checkout.checkoutId);
+        setPayableTotal(checkout.totalMinor / 100);
+        setClientSecret(payment.clientSecret);
+        console.log('✅ Checkout priced and payment created');
       } catch (error) {
-        console.error('❌ Error initializing payment:', error);
-        // A stale cart line (variant renamed/removed since it was added) is
-        // the one failure the customer can fix themselves — say how, instead
-        // of surfacing the raw server message as a dead end.
-        const msg = String(error.message || '');
-        if (/unknown variant|unknown product|invalid cart/i.test(msg)) {
-          setError('Något i varukorgen är inte längre tillgängligt. Gå tillbaka till varukorgen, uppdatera sidan och försök igen.');
-        } else if (/not accepting orders/i.test(msg)) {
-          // Server legal/live gate (createPaymentIntent.ts: shop not published,
-          // killed, or legal pages incomplete/unaccepted). Never the raw English
-          // or the blocker name — the same friendly line Checkout's gate shows.
+        if (stale || error?.name === 'AbortError') return;
+        const refusal = checkoutRefusal(error);
+        console.error('❌ Error initializing payment:', refusal, error?.code);
+        if (refusal === 'closed') {
+          // The shop does not sell (its legal gate, its payment account, or it
+          // is not open): Checkout shows its "not accepting orders" block.
+          onCheckout?.({ status: 'closed' });
           setError('Butiken tar inte emot beställningar ännu. Försök igen lite senare.');
+          return;
+        }
+        if (refusal === 'waiver_required') {
+          // The basket holds a personalised line: Checkout shows the gate, and
+          // this form waits for it.
+          onCheckout?.({ status: 'waiver_required' });
+          toast.error(t('checkout_withdrawal_required', 'Du måste godkänna villkoren för specialtillverkade produkter innan du betalar.'));
+          return;
+        }
+        onCheckout?.({ status: 'refused' });
+        if (refusal === 'unpurchasable') {
+          // A line that cannot be bought (or not the chosen way) is the one
+          // failure the customer can fix themselves — say how.
+          setError('Något i varukorgen är inte längre tillgängligt. Gå tillbaka till varukorgen, uppdatera sidan och försök igen.');
         } else {
           setError(error.message);
         }
         toast.error('Kunde inte initiera betalning');
       } finally {
-        setIsLoading(false);
+        if (!stale) setIsLoading(false);
       }
     };
 
     if (cart.items.length > 0 && customerInfo?.email) {
       initializePayment();
     }
+    return () => {
+      stale = true;
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paymentInputsKey]);
 
@@ -503,6 +457,7 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, customerL
         onPaymentSuccess={onPaymentSuccess}
         onPaymentError={onPaymentError}
         clientSecret={clientSecret} // Pass clientSecret to form for validation
+        payableTotal={payableTotal}
         gateBlocked={gateBlocked}
         onResetPaymentMethods={resetPaymentMethods}
       />

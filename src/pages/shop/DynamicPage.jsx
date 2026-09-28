@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { getPage } from '../../api/pages.js';
+import { getLegalPage } from '../../api/legal.js';
+import { toPagePage } from '../../storefront/adapters/pages.js';
+import { toPageLegal, toPagePlatformTerms } from '../../storefront/adapters/legal.js';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useShopId } from '../../contexts/ShopContext';
@@ -14,11 +16,8 @@ import { getLegalSeoTitle, getLegalSeoDescription } from '../../utils/productUrl
 import { Helmet } from 'react-helmet-async';
 import DOMPurify from 'dompurify';
 import { isLegalSlug, LEGAL_PAGES, LEGAL_PAGE_KEYS, PLATFORM_TERMS_SLUG } from '../../config/legalTemplates';
-import { renderLegalPage } from '../../utils/legalPageRenderer';
-import { getLegalReadiness } from '../../utils/legalPageReadiness';
-import { loadShopConfig } from '../../config/shopConfig';
-import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
-import { renderPlatformTerms } from '../../utils/platformTermsRenderer';
+import { renderLegalTemplate } from '../../utils/legalPageRenderer';
+import { PLATFORM_DPA_TITLE } from '../../config/platformTerms';
 import { PLATFORM } from '../../config/platform';
 
 const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => {
@@ -71,62 +70,64 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
   // the same slug, if any, is APPENDED below the locked legal block (seller can
   // add, not remove the mandatory text).
   const isLegal = isLegalSlug(slug);
-  const [legal, setLegal] = useState(null); // { title, html, ready, blockers, custom }
+  // { title, html, ready, blockers, custom }; null while it loads, false when
+  // the shop has adopted no text for this page (the not-found branch below).
+  const [legal, setLegal] = useState(null);
 
   // The PLATFORM's own terms page. Public, seller-independent: no shop config,
-  // no readiness gate, no CMS page — so it is handled BEFORE every branch that
-  // depends on a Firestore read, and never falls through to the 404 branch.
+  // no readiness gate, no CMS page. Its text is the archived text of the
+  // current version (GET /v1/legal/plattformsvillkor), rendered as before;
+  // null while it loads, false when there is none.
   const isPlatformTerms = slug === PLATFORM_TERMS_SLUG;
+  const [platform, setPlatform] = useState(null);
 
-  // POD entitlement drives the print-vocabulary branches in the legal templates
-  // ([[IF pod]]). Same source as every other add-on gate — shops/{id}.features.pod
-  // via useShopFeatures(); a things shop must never publish "Print on Demand",
-  // "sprucket tryck" or a "tryckeri/produktionspartner" recipient to its customers.
-  const { isEnabled: isAddonEnabled, loading: featuresLoading } = useShopFeatures();
-  const podEnabled = isAddonEnabled('pod');
-
+  // GET /v1/legal/<the address's last segment>: the text the seller ADOPTED,
+  // as adopted (D79), print wording and a copy-on-write text included. It is
+  // cleaned with DOMPurify before it is rendered (storefront adapters).
   useEffect(() => {
     if (!isLegal) { setLegal(null); return; }
-    // Wait for the entitlement read before rendering: `podEnabled` picks the
-    // print-vocabulary branch of the templates, and features start as {} (=OFF,
-    // pod being opt-in). Rendering early would flash the neutral wording on a
-    // POD shop and then swap the legal text under the reader's eyes.
-    //
-    // This cannot hang the page: ShopFeaturesProvider clears `loading` in a
-    // .finally(), so a rules denial / offline read still settles (to {} = pod
-    // OFF, the safe wording). Nor does it add a round-trip in practice — the
-    // provider's read starts at app mount against the SAME shops/{shopId} doc
-    // this effect's loadShopConfig() reads, so it is normally already resolved
-    // by the time a legal page mounts. Until then line ~167's existing spinner
-    // (with nav + footer) shows, never a blank or "not found" page.
-    if (featuresLoading) return;
+    setLegal(null); // another legal page's text never shows under this one
     let cancelled = false;
     (async () => {
-      let identity = {};
+      let adopted = null;
       try {
-        identity = (await loadShopConfig(shopId)) || {};
+        adopted = toPageLegal(await getLegalPage(slug.split('/').pop()), {
+          sanitize: (html) => DOMPurify.sanitize(html),
+        });
       } catch (e) {
-        console.warn('DynamicPage: could not load shop config for legal page:', e?.message);
+        console.warn('DynamicPage: could not load the legal page:', e?.message);
       }
       if (cancelled) return;
-      const rendered = renderLegalPage(slug, identity, { pod: podEnabled });
-      const readiness = getLegalReadiness(identity);
-      // `custom` is the copy-on-write flag per legal page: when true the SELLER
-      // owns the text (a published CMS page on the same slug replaces the
-      // generated block entirely). Kept in render state so the render branch
-      // below can decide without a second read.
-      setLegal(rendered
-        ? { ...rendered, ready: readiness.ready, blockers: readiness.blockers, custom: identity.legal?.custom || {} }
-        : null);
+      setLegal(adopted ?? false);
     })();
     return () => { cancelled = true; };
-  }, [isLegal, slug, shopId, featuresLoading, podEnabled]);
+  }, [isLegal, slug, shopId]);
+
+  useEffect(() => {
+    if (!isPlatformTerms) { setPlatform(null); return; }
+    setPlatform(null);
+    let cancelled = false;
+    (async () => {
+      let terms = null;
+      try {
+        terms = toPagePlatformTerms(await getLegalPage('plattformsvillkor'), {
+          render: (markdown) => renderLegalTemplate(markdown, {}, {}),
+          dpaTitle: PLATFORM_DPA_TITLE,
+        });
+      } catch (e) {
+        console.warn('DynamicPage: could not load the platform terms:', e?.message);
+      }
+      if (cancelled) return;
+      setPlatform(terms ?? false);
+    })();
+    return () => { cancelled = true; };
+  }, [isPlatformTerms, shopId]);
 
   useEffect(() => {
     const fetchPage = async () => {
-      // The platform-terms slug is build-time content with no `pages` doc —
-      // skip the lookup entirely (it would only ever miss).
-      if (!slug || !isCmsPage || slug === PLATFORM_TERMS_SLUG) {
+      // The platform-terms slug and the legal slugs are no content page (no
+      // page can take a legal address) — skip the lookup entirely.
+      if (!slug || !isCmsPage || slug === PLATFORM_TERMS_SLUG || isLegal) {
         setLoading(false);
         return;
       }
@@ -134,35 +135,16 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
       try {
         console.log('🔍 DynamicPage: Fetching page with slug:', slug);
         
-        // Query for the page with the given slug and published status
-        const pagesRef = collection(db, 'pages');
-        const q = query(
-          pagesRef,
-          where('shopId', '==', shopId),
-          where('slug', '==', slug),
-          where('status', '==', 'published')
-        );
+        // GET /v1/pages/<slug>: the published page or post, public fields
+        // only, its texts in one language (storefront adapters).
+        const pageData = toPagePage(await getPage(slug));
         
-        const querySnapshot = await getDocs(q);
-        
-        if (querySnapshot.empty) {
+        if (!pageData) {
           console.log('🔍 DynamicPage: No published page found with slug:', slug);
           setError('Page not found');
           setLoading(false);
           return;
         }
-
-        // Get the first (and should be only) matching page. Strip the admin
-        // audit fields (createdBy/updatedBy = admin Firebase UIDs) from state.
-        // Hygiene only, not a security boundary: published page docs remain
-        // directly readable and rules cannot redact fields — keeping UIDs out
-        // of pages entirely would need a projection like productsPublic.
-        const pageDoc = querySnapshot.docs[0];
-        const { createdBy, updatedBy, ...publicFields } = pageDoc.data();
-        const pageData = {
-          id: pageDoc.id,
-          ...publicFields
-        };
 
         console.log('🔍 DynamicPage: Found page:', pageData);
         setPage(pageData);
@@ -186,10 +168,9 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
     }
   }, [page, getContentValue]);
 
-  // Platform terms: fully build-time content, nothing to wait for and nothing
-  // to look up. Render before the loading / !isCmsPage / 404 branches.
-  if (isPlatformTerms) {
-    const platform = renderPlatformTerms();
+  // Platform terms: the archived text, once it is here. Render before the
+  // loading / !isCmsPage / 404 branches.
+  if (isPlatformTerms && platform) {
     return (
       <>
         <Helmet>
@@ -238,8 +219,8 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
     );
   }
 
-  // On legal slugs also wait for the generated content to be ready.
-  if (loading || (isLegal && !legal)) {
+  // On legal slugs (and the platform terms) also wait for the text.
+  if (loading || (isLegal && legal === null) || (isPlatformTerms && platform === null)) {
     return (
       <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100">
         <ShopNavigation />

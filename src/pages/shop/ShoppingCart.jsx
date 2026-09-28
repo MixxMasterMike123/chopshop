@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../../contexts/CartContext';
 import { SHIPPING_COSTS } from '../../contexts/CartContext';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
-import toast from 'react-hot-toast';
 import ShopNavigation from '../../components/shop/ShopNavigation';
 import ShopFooter from '../../components/shop/ShopFooter';
 import SeoHreflang from '../../components/shop/SeoHreflang';
@@ -14,25 +13,20 @@ import { Helmet } from 'react-helmet-async';
 import { STORE } from '../../config/store';
 
 const ShoppingCart = () => {
-  const { cart, updateQuantity, removeFromCart, updateShippingCountry, calculateTotals, applyDiscountCode, removeDiscount, getTotalItems, getShippingTierInfo } = useCart();
+  const { cart, updateQuantity, removeFromCart, updateShippingCountry, calculateTotals } = useCart();
   const { t } = useTranslation();
   const { getContentValue } = useContentTranslation();
   const navigate = useNavigate();
-  const [discountCodeInput, setDiscountCodeInput] = useState('');
 
   console.log('[ShoppingCart] Rendering with cart items:', cart.items);
 
-  const { subtotal, vat, shipping, total, discountAmount, discountCode, discountPercentage, discountSource } = calculateTotals();
-  
-  // Pre-fill discount input if a code is applied to the cart from context
-  useEffect(() => {
-    if (discountCode) {
-      setDiscountCodeInput(discountCode);
-    } else {
-      setDiscountCodeInput('');
-    }
-  }, [discountCode]);
-  
+  // Before checkout the cart shows the sum of its lines at the public prices
+  // (`subtotal`), and nothing else: the carriage, the total and the VAT are the
+  // server's, priced at checkout from the product's own carriage table and
+  // weight, which no public read carries (the cart's estimate could differ
+  // from what the server charges). No discount code exists (D81).
+  const { subtotal, discountAmount, discountPercentage, discountSource } = calculateTotals();
+
   const getCountryName = (countryCode) => {
     switch(countryCode) {
         case 'SE': return t('country_sweden', 'Sverige');
@@ -61,23 +55,6 @@ const ShoppingCart = () => {
 
   const handleCountryChange = (event) => {
     updateShippingCountry(event.target.value);
-  };
-
-  const handleApplyDiscount = async () => {
-    if (!discountCodeInput.trim()) return;
-
-    try {
-      const result = await applyDiscountCode(discountCodeInput.trim());
-      if (result?.success) {
-        toast.success(t('discount_code_applied', 'Rabattkod applicerad!'));
-        setDiscountCodeInput('');
-      } else {
-        toast.error(result?.message || t('invalid_discount_code', 'Ogiltig rabattkod'));
-      }
-    } catch (error) {
-      console.error('Error applying discount code:', error);
-      toast.error(t('invalid_discount_code', 'Ogiltig rabattkod'));
-    }
   };
 
   const handleCheckout = () => {
@@ -236,28 +213,6 @@ const ShoppingCart = () => {
                   </select>
                 </div>
 
-                {/* Discount Code Section */}
-                <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile">
-                  <h3 className="font-display text-base sm:text-lg font-bold text-ink mb-3 sm:mb-4">{t('discount_code', 'Rabattkod')}</h3>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="text"
-                      value={discountCodeInput}
-                      onChange={(e) => setDiscountCodeInput(e.target.value)}
-                      placeholder={t('enter_your_code', 'Ange din kod')}
-                      className="w-full px-3 sm:px-4 py-3 border border-ink/15 bg-white rounded-el focus:outline-hidden focus:ring-4 focus:ring-accent/10 focus:border-accent text-sm sm:text-base transition-colors"
-                      disabled={!!discountCode}
-                    />
-                    <button
-                      onClick={handleApplyDiscount}
-                      disabled={!!discountCode}
-                      className="px-4 sm:px-6 py-3 bg-ink text-white font-bold rounded-el hover:opacity-90 disabled:bg-ink-faint disabled:cursor-not-allowed transition-opacity text-sm sm:text-base whitespace-nowrap"
-                    >
-                      {t('apply_button', 'Applicera')}
-                    </button>
-                  </div>
-                </div>
-
                 {/* Order Summary */}
                 <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile">
                   <h3 className="font-display text-base sm:text-lg font-bold text-ink mb-3 sm:mb-4">{t('order_summary', 'Ordersammanfattning')}</h3>
@@ -290,47 +245,6 @@ const ShoppingCart = () => {
                          </span>
                        </div>
                     )}
-
-                    <div className="flex justify-between text-ink-muted text-sm sm:text-base">
-                      <span>{t('shipping_cost_label', 'Frakt ({{country}})', { country: getCountryName(cart.shippingCountry) })}</span>
-                      <SmartPrice 
-                        sekPrice={shipping} 
-                        variant="compact"
-                        showOriginal={false}
-                      />
-                    </div>
-                    
-                    {/* Shipping tier explanation */}
-                    {getTotalItems() > 3 && (
-                      <div className="text-xs text-ink-faint mt-1">
-                        {(() => {
-                          const tierInfo = getShippingTierInfo(cart.shippingCountry);
-                          return tierInfo.explanation;
-                        })()}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="border-t border-ink/10 my-3 sm:my-4"></div>
-
-                  <div className="space-y-1">
-                    <div className="flex justify-between font-display font-bold text-ink text-lg sm:text-xl">
-                      <span>{t('total', 'Totalt')}</span>
-                      <SmartPrice 
-                        sekPrice={total} 
-                        variant="large"
-                        showOriginal={false}
-                        className="font-display font-bold text-lg sm:text-xl"
-                      />
-                    </div>
-                    <div className="flex justify-end text-xs sm:text-sm text-ink-faint">
-                      <span>
-                        {t('vat_included_rate', 'Varav Moms ({{rate}}%) {{amount}} kr', {
-                          rate: Math.round(STORE.vatRate * 100),
-                          amount: vat.toFixed(2)
-                        })}
-                      </span>
-                    </div>
                   </div>
                 </div>
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { getPage } from '../../api/pages.js';
+import { storefrontRoot } from '../../api/client.js';
 import { useShopId } from '../../contexts/ShopContext';
 import DynamicPage from '../../pages/shop/DynamicPage';
 import { isLegalSlug, PLATFORM_TERMS_SLUG } from '../../config/legalTemplates';
@@ -19,15 +19,17 @@ const DynamicRouteHandler = ({ children }) => {
 
   useEffect(() => {
     const checkForCmsPage = async () => {
-      // Path-prefix grammar: /{shopId}/{slug...} — the CMS slug is everything
-      // AFTER the shopId (first) segment.
-      const pathSegments = (location.pathname || '/').split('/').filter(Boolean);
-      if (pathSegments.length < 2) {
+      // The CMS slug is the path under the storefront's root (D77): everything
+      // AFTER the shopId (first) segment on the shared host, the whole path on
+      // a shop's own domain.
+      const root = storefrontRoot(location.pathname || '/') ?? '';
+      const pathSegments = (location.pathname || '/').slice(root.length).split('/').filter(Boolean);
+      if (pathSegments.length < 1) {
         setLoading(false);
         return;
       }
 
-      const slugPath = pathSegments.slice(1).join('/');
+      const slugPath = pathSegments.join('/');
 
       // Auto-generated legal pages (köpvillkor, ångerrätt & returer,
       // integritetspolicy) ALWAYS render — even with no CMS page in Firestore —
@@ -60,23 +62,11 @@ const DynamicRouteHandler = ({ children }) => {
       try {
         console.log('🔍 DynamicRouteHandler: Checking for CMS page with slug:', slugPath);
 
-        // Tenant isolation: scope the slug existence-check to the CURRENT shop
-        // (mirrors DynamicPage's fetch). Without this, a slug that exists only
-        // in another shop would flip isCmsPage=true, and DynamicPage's
-        // shop-scoped re-query would then find nothing and render a "page not
-        // found" error instead of the normal storefront route — plus it leaks
-        // cross-tenant slug existence. See TENANT_ISOLATION_AUDIT_2026-06-18 (H29).
-        const pagesRef = collection(db, 'pages');
-        const q = query(
-          pagesRef,
-          where('shopId', '==', shopId),
-          where('slug', '==', slugPath),
-          where('status', '==', 'published')
-        );
+        // GET /v1/pages/<slug>: a published page or post of THIS shop (the API
+        // takes the shop from the address, never from the browser), else 404.
+        const published = await getPage(slugPath);
         
-        const querySnapshot = await getDocs(q);
-        
-        if (!querySnapshot.empty) {
+        if (published) {
           console.log('🔍 DynamicRouteHandler: Found CMS page with slug:', slugPath);
           setIsCmsPage(true);
           setCmsSlug(slugPath);

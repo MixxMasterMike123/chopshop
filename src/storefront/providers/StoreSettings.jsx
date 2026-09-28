@@ -17,6 +17,7 @@ import { STORE } from '../../config/store';
 import { resolveTheme, ensureTemplateFonts } from '../../config/nordTokens';
 import { getTemplate } from '../../config/templates';
 import { useStorefront } from './Storefront.jsx';
+import { skuOfProductPath } from '../adapters/products.js';
 
 const StoreSettingsContext = createContext(STORE);
 
@@ -40,10 +41,13 @@ export function settingsFromStorefront(storefront) {
   if (branding.favicon?.url) saved.faviconUrl = branding.favicon.url;
   // A gallery tile as the page reads it: the image's address, and the path of
   // the product it links (relative to the shop's root; shopHref adds the root).
+  // The home page links a tile by `linkSku` (the sku its product's address
+  // ends in, which the API resolves), as the store identity held it.
   if (Array.isArray(saved.gallery)) {
     saved.gallery = saved.gallery.map((tile) => ({
       ...tile,
       imageUrl: tile?.image?.url ?? null,
+      linkSku: skuOfProductPath(tile?.path),
     }));
   }
   for (const key of ['menu', 'pickupLocations', 'templateId', 'theme', 'accent']) {

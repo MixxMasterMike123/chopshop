@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { getProduct, previewImageUrl } from '../../api/products.js';
+import { toPageProduct } from '../../storefront/adapters/products.js';
 import { getProductImage } from '../../utils/productImages';
 import {
-  getSkuFromSlug,
   getProductSeoTitle,
   getProductSeoDescription,
   getCountryAwareUrl
@@ -179,24 +178,18 @@ const PublicProductPage = () => {
     try {
       setLoading(true);
       
-      const sku = getSkuFromSlug(slug);
-      if (!sku) {
-        console.error('Product not found: invalid slug', slug);
-        navigate(getCountryAwareUrl(''));
-        return;
-      }
-      
-      const productsRef = collection(db, 'productsPublic');
-      const productQuery = query(productsRef, where('shopId', '==', shopId), where('sku', '==', sku), where('isActive', '==', true), where('availability.b2c', '==', true));
-      const querySnapshot = await getDocs(productQuery);
+      // GET /v1/products/<the address's segment>: the API finds the product
+      // by its id, its handle, or the sku after the last '_' (the source's
+      // rule), and answers only a public one. The print previews of a POD
+      // product are addresses through /_api (storefront adapters).
+      const mainProduct = toPageProduct(await getProduct(slug), { apiUrl: previewImageUrl });
 
-      if (querySnapshot.empty) {
-        console.error('Product not found: no matching documents', sku);
+      if (!mainProduct) {
+        console.error('Product not found:', slug);
         navigate(getCountryAwareUrl(''));
         return;
       }
 
-      const mainProduct = { id: querySnapshot.docs[0].id, ...querySnapshot.docs[0].data() };
       setProduct(mainProduct);
 
       // Variants are embedded on the product. Presence is derived from the
