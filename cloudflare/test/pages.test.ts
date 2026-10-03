@@ -1046,8 +1046,12 @@ describe("the admin list", () => {
     expectNewestFirst(posts.pages);
     const first = posts.pages[0] as ListRow & Record<string, unknown>;
     expect(first).toEqual({
+      // CP5-WJ: the languages with content, and the SEO texts as stored.
+      contentLanguages: ["sv-SE"],
       createdAt: expect.stringMatching(ISO),
       kind: "post",
+      metaDescription: null,
+      metaTitle: null,
       pageId: expect.stringMatching(UUID),
       path: `/${first.slug}`,
       publishedAt: expect.stringMatching(ISO),
@@ -1062,6 +1066,45 @@ describe("the admin list", () => {
       "drafts",
     );
     expect(drafts.pages).toHaveLength(3);
+  });
+
+  it("CP5-WJ: each item carries its SEO texts as stored and the languages whose content is a non-empty text — never the content", async () => {
+    const own = await createPage(
+      shop,
+      draft("lista-seo", {
+        content: { "en-GB": "<p>Content</p>", "sv-SE": "<p>Hemligt innehåll</p>" },
+        metaDescription: { "sv-SE": "Beskrivning" },
+        metaTitle: { "en-GB": "SEO title", "sv-SE": "SEO-titel" },
+        title: { "en-GB": "Title", "en-US": "Title", "sv-SE": "Titel" },
+      }),
+    );
+    // A language whose content is empty does not count (the stored map, as an
+    // import may leave it; the route itself refuses no empty text here).
+    await env.DB.prepare("UPDATE pages SET content_json = json_set(content_json, '$.\"en-US\"', '') WHERE page_id = ?")
+      .bind(own.pageId)
+      .run();
+    // Another shop's page with the same slug never shows here.
+    await createPage(shopB, draft("lista-seo", { metaTitle: { "sv-SE": "Främmande" } }));
+
+    const response = await adminAs(shop, "GET", "/v1/admin/pages?limit=100");
+    const text = await response.clone().text();
+    const body = await expectJson<{ pages: Array<Record<string, unknown>> }>(response, 200, "list");
+    const item = body.pages.find((page) => page.pageId === own.pageId);
+    expect(item).toMatchObject({
+      contentLanguages: ["en-GB", "sv-SE"],
+      metaDescription: { "sv-SE": "Beskrivning" },
+      metaTitle: { "en-GB": "SEO title", "sv-SE": "SEO-titel" },
+      title: { "en-GB": "Title", "en-US": "Title", "sv-SE": "Titel" },
+    });
+    expect(item).not.toHaveProperty("content");
+    expect(text).not.toContain("Hemligt");
+    expect(text).not.toContain("Främmande");
+    expect(body.pages.filter((page) => page.slug === "lista-seo")).toHaveLength(1);
+    // The page itself still reads in full.
+    expect(
+      (await expectJson<PageBody>(await adminAs(shop, "GET", `/v1/admin/pages/${own.pageId}`), 200, "read")).page.content,
+    ).toEqual({ "en-GB": "<p>Content</p>", "en-US": "", "sv-SE": "<p>Hemligt innehåll</p>" });
+    await expectJson(await adminAs(shop, "DELETE", `/v1/admin/pages/${own.pageId}`), 204, "clean up");
   });
 
   it.each([

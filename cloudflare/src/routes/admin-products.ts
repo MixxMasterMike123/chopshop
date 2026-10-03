@@ -9,6 +9,7 @@ import {
 import {
   getAdminProductDetail,
   listAdminProducts,
+  listAdminTags,
   parseAdminProductListQuery,
 } from "../catalog/admin-product-reads";
 import type { ImagesWriteResult } from "../catalog/product-images";
@@ -41,7 +42,10 @@ import { isSameOriginRequest } from "../lib/same-origin";
  * the body is looked at, and so does a state change that is not same-origin
  * (checked before the body is read). Reads need no same-origin check.
  *
- *   GET    /v1/admin/products                                  list
+ *   GET    /v1/admin/products                                  list; each item carries
+ *                                                              `tags` and `variantCount` (CP5-WJ)
+ *   GET    /v1/admin/tags                                      the shop's distinct tags (CP5-WJ):
+ *          200 { tags: [{ tag, tagKey, productCount }], truncated }   no query parameter
  *   GET    /v1/admin/products/:productId                       one product
  *   PUT    /v1/admin/products/order                            the display order
  *   POST   /v1/admin/products/:productId/variants              a variant
@@ -58,6 +62,7 @@ import { isSameOriginRequest } from "../lib/same-origin";
  */
 
 export const ADMIN_PRODUCT_LIST_PATH = "/v1/admin/products";
+export const ADMIN_TAG_LIST_PATH = "/v1/admin/tags";
 export const ADMIN_PRODUCT_ORDER_PATH = "/v1/admin/products/order";
 export const ADMIN_PRODUCT_ROUTE = "/v1/admin/products/:productId";
 export const ADMIN_PRODUCT_VARIANTS_ROUTE = "/v1/admin/products/:productId/variants";
@@ -139,6 +144,18 @@ export async function handleAdminProductListRoute(env: Env, request: Request): P
     return invalidRequestResponse();
   }
   return jsonResponse(await listAdminProducts(env, env.DB, principal.tenantId, query));
+}
+
+/** GET /v1/admin/tags — no parameter of any kind is accepted (400). */
+export async function handleAdminTagListRoute(env: Env, request: Request): Promise<Response> {
+  const principal = await adminGuard(env, request, ["GET"]);
+  if (principal === null) {
+    return routeNotFoundResponse();
+  }
+  if (new URL(request.url).search !== "") {
+    return invalidRequestResponse();
+  }
+  return jsonResponse(await listAdminTags(env.DB, principal.tenantId));
 }
 
 export async function handleAdminProductReadRoute(env: Env, request: Request): Promise<Response> {

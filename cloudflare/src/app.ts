@@ -413,6 +413,7 @@ import {
 // CP5-IMPORTS-H — begin
 // CP5-IMPORTS-H — end
 // CP5-IMPORTS-I — begin
+import { ADMIN_TAG_LIST_PATH, handleAdminTagListRoute } from "./routes/admin-products";
 // CP5-IMPORTS-I — end
 
 const HEALTH_PATH = "/health";
@@ -2389,6 +2390,12 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // CP5-ROUTES-H — begin
   // CP5-ROUTES-H — end
   // CP5-ROUTES-I — begin
+  // The shop's distinct tags (src/routes/admin-products.ts, CP5-WJ): an exact
+  // path no earlier route claims.
+  app.all(
+    ADMIN_TAG_LIST_PATH,
+    onMethods(["GET"], (c) => handleAdminTagListRoute(c.env, c.req.raw)),
+  );
   // CP5-ROUTES-I — end
 
   // Public reads answer through the ETag/304 handlers (src/storefront/public-routes.ts):

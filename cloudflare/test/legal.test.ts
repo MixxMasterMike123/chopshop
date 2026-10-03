@@ -139,6 +139,7 @@ describe("seller: the platform-terms gate", () => {
       currentVersion: CURRENT_TERMS_VERSION,
       graceDeadline: null,
       inGrace: false,
+      latestAcceptance: null,
       readiness: READY,
     });
 
@@ -169,6 +170,12 @@ describe("seller: the platform-terms gate", () => {
       currentVersion: CURRENT_TERMS_VERSION,
       graceDeadline: null,
       inGrace: false,
+      // CP5-WJ: who accepted (the shop's own admin, named to the shop) and when.
+      latestAcceptance: {
+        acceptedAt,
+        acceptedBy: { email: `admin@${shop.host}`, kind: "admin", name: "admin" },
+        version: CURRENT_TERMS_VERSION,
+      },
       readiness: READY,
     });
     expect(await hasAcceptedCurrentTerms(env.DB, shop.tenantId, Date.now())).toBe(true);

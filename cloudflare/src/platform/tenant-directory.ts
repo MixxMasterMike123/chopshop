@@ -1,4 +1,5 @@
 import type { PlatformPrincipal } from "../auth/live-authorization";
+import { readTenantLegalView, type TenantLegalView } from "../legal/legal-pages";
 import { MAX_DEFAULT_COMMISSION_BPS } from "./platform-settings";
 import {
   type FeatureView,
@@ -160,6 +161,12 @@ export interface TenantDetail {
   /** True when the tenant has more domains than `domains` shows (use the domain route). */
   domainsTruncated: boolean;
   features: FeatureView[];
+  /**
+   * CP5-WJ: the shop's legal readiness — the checkout's own legal gate
+   * (legal-pages.ts readLegalCheckoutGate: `checkoutOpen`, `readiness`, the
+   * terms gate) plus who adopted the pages and accepted the terms, and when.
+   */
+  legal: TenantLegalView;
   settings: { returnAddressSet: boolean; vatAnswered: boolean };
   tenant: {
     catalogVersion: number;
@@ -209,6 +216,7 @@ interface TenantRow {
 export async function readTenantDetail(
   db: D1Database,
   tenantId: string,
+  now: number = Date.now(),
 ): Promise<TenantDetail | null> {
   const row = await db
     .prepare(
@@ -232,6 +240,7 @@ export async function readTenantDetail(
     domains: domainPage?.domains ?? [],
     domainsTruncated: domainPage?.nextCursor !== null && domainPage?.nextCursor !== undefined,
     features: await readTenantFeatures(db, tenantId),
+    legal: await readTenantLegalView(db, tenantId, now),
     settings: await readSettingsSummary(db, tenantId),
     tenant: {
       catalogVersion: row.catalog_version,
@@ -430,7 +439,7 @@ export async function updateTenant(
     return { status: "conflict" };
   }
 
-  const detail = await readTenantDetail(db, tenantId);
+  const detail = await readTenantDetail(db, tenantId, now);
   return detail === null ? { status: "not_found" } : { detail, status: "ok" };
 }
 
@@ -487,7 +496,7 @@ export async function setTenantPublished(
     return { status: "conflict" };
   }
 
-  const detail = await readTenantDetail(db, tenantId);
+  const detail = await readTenantDetail(db, tenantId, now);
   return detail === null ? { status: "not_found" } : { detail, status: "ok" };
 }
 
@@ -671,6 +680,6 @@ export async function closeTenant(
     }
   }
 
-  const detail = await readTenantDetail(db, tenantId);
+  const detail = await readTenantDetail(db, tenantId, now);
   return detail === null ? { status: "not_found" } : { detail, status: "ok" };
 }

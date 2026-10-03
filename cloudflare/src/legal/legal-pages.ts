@@ -1,7 +1,18 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { enforceRateLimit } from "../lib/rate-limit";
-import { bounded, maySignForSeller, sha256Hex, TERMS_VERSION_PATTERN } from "./platform-terms";
-import { checkHtml } from "../content/html-refusal";
+import {
+  bounded,
+  maySignForSeller,
+  readLatestTermsAcceptance,
+  readTermsStatus,
+  sha256Hex,
+  type TermsAcceptanceView,
+  type TermsStatus,
+  termsGateOpenOf,
+  TERMS_VERSION_PATTERN,
+} from "./platform-terms";
+import { type SignerColumns, signerColumnsSql, type SignerView, type SignerViewer, signerView } from "./signer";
+import { checkHtml, type HtmlRefusal } from "../content/html-refusal";
 
 /**
  * The seller ADOPTING the consumer-facing legal pages of its own shop
@@ -169,12 +180,51 @@ function parseCustom(value: unknown): Pick<AcceptPagesInput, "custom" | "customP
   return { custom: LEGAL_PAGE_KEYS.some((key) => customPages[key]), customPages };
 }
 
+export type ParsedAcceptPages =
+  | { input: AcceptPagesInput; status: "ok" }
+  /** The body's shape, a version, a flag or an empty text. */
+  | { status: "invalid" }
+  /**
+   * A well-formed body whose HTML the refusal refuses (CP5-WJ item 2):
+   * `pages` = every refused page key in LEGAL_PAGE_KEYS order, `page` and
+   * `reason` = the first of them and why.
+   */
+  | { page: PageKey; pages: PageKey[]; reason: HtmlRefusal; status: "content_refused" };
+
 /**
  * Strict body: exactly `{ templateVersion, texts, pod, custom }`; `texts` is
  * exactly the three page keys, each a non-empty string (the HTML adopted);
- * `custom` is a boolean or the per-page map (`parseCustom`).
+ * `custom` is a boolean or the per-page map (`parseCustom`). The shape is
+ * judged first; only a well-formed body is told which page's HTML is refused.
  */
-export function parseAcceptPagesInput(body: unknown): AcceptPagesInput | null {
+export function parseAcceptPagesInput(body: unknown): ParsedAcceptPages {
+  const shaped = parseAcceptPagesShape(body);
+  if (shaped === null) {
+    return { status: "invalid" };
+  }
+  // The adopted text is shown to every visitor as it is (src/routes/
+  // public-legal.ts), so it passes the same refusal as a page's HTML: nothing
+  // that can run or fetch is ever adopted. The templates render to plain
+  // structure (headings, paragraphs, lists, links) and pass it.
+  const refused: Array<{ page: PageKey; reason: HtmlRefusal }> = [];
+  for (const page of LEGAL_PAGE_KEYS) {
+    const verdict = checkHtml(shaped.texts[page]);
+    if (!verdict.ok) {
+      refused.push({ page, reason: verdict.reason });
+    }
+  }
+  const first = refused[0];
+  return first === undefined
+    ? { input: shaped, status: "ok" }
+    : {
+        page: first.page,
+        pages: refused.map((entry) => entry.page),
+        reason: first.reason,
+        status: "content_refused",
+      };
+}
+
+function parseAcceptPagesShape(body: unknown): AcceptPagesInput | null {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return null;
   }
@@ -201,13 +251,6 @@ export function parseAcceptPagesInput(body: unknown): AcceptPagesInput | null {
     return null;
   }
   if (!LEGAL_PAGE_KEYS.every((key) => typeof pages[key] === "string" && (pages[key] as string).length > 0)) {
-    return null;
-  }
-  // The adopted text is shown to every visitor as it is (src/routes/
-  // public-legal.ts), so it passes the same refusal as a page's HTML: nothing
-  // that can run or fetch is ever adopted. The templates render to plain
-  // structure (headings, paragraphs, lists, links) and pass it.
-  if (!LEGAL_PAGE_KEYS.every((key) => checkHtml(pages[key] as string).ok)) {
     return null;
   }
   return {
@@ -339,6 +382,8 @@ export async function acceptLegalPages(
 export interface PagesAcceptanceView {
   acceptanceId: string;
   acceptedAt: string;
+  /** Who adopted (src/legal/signer.ts), as the shop's admins may see it. */
+  acceptedBy: SignerView;
   custom: boolean | null;
   /** The per-page custom map as stored (custom_json), or null when only the summary was kept. */
   customPages: Record<string, unknown> | null;
@@ -352,7 +397,7 @@ export interface PagesAcceptanceView {
   version: string | null;
 }
 
-interface PagesRow {
+interface PagesRow extends SignerColumns {
   acceptance_id: string;
   accepted_at: string;
   custom_json: string | null;
@@ -369,6 +414,9 @@ function flag(value: number | null): boolean | null {
   return value === null ? null : value === 1;
 }
 
+/** The signer of a legal_acceptances row aliased `la` (its own stored address first). */
+const PAGES_SIGNER = signerColumnsSql("la", "la.email");
+
 /** The shop's LATEST legal-pages acceptance (by acceptance time), or null. */
 export async function readLatestLegalPagesAcceptance(
   db: D1Database,
@@ -376,11 +424,15 @@ export async function readLatestLegalPagesAcceptance(
 ): Promise<PagesAcceptanceView | null> {
   const row = await db
     .prepare(
-      `SELECT acceptance_id, accepted_at, custom_json, is_custom, is_pod, source, template_version,
-              texts_json, texts_sha256, version
-       FROM legal_acceptances
-       WHERE tenant_id = ? AND type = 'legalPages'
-       ORDER BY accepted_at DESC, acceptance_id DESC
+      `SELECT la.acceptance_id AS acceptance_id, la.accepted_at AS accepted_at,
+              la.custom_json AS custom_json, la.is_custom AS is_custom, la.is_pod AS is_pod,
+              la.source AS source, la.template_version AS template_version,
+              la.texts_json AS texts_json, la.texts_sha256 AS texts_sha256, la.version AS version,
+              ${PAGES_SIGNER.columns}
+       FROM legal_acceptances AS la
+       ${PAGES_SIGNER.joins}
+       WHERE la.tenant_id = ? AND la.type = 'legalPages'
+       ORDER BY la.accepted_at DESC, la.acceptance_id DESC
        LIMIT 1`,
     )
     .bind(tenantId)
@@ -401,6 +453,7 @@ export async function readLatestLegalPagesAcceptance(
   return {
     acceptanceId: row.acceptance_id,
     acceptedAt: row.accepted_at,
+    acceptedBy: signerView(row, "shop"),
     custom: flag(row.is_custom),
     customPages: row.custom_json === null ? null : (JSON.parse(row.custom_json) as Record<string, unknown>),
     pageSha256,
@@ -483,7 +536,138 @@ export async function readLegalReadiness(db: D1Database, tenantId: string): Prom
   };
 }
 
-/** THE second checkout gate (next to the terms gate in createCheckout). */
+/** The second checkout gate alone (the readiness). */
 export async function isLegallyReady(db: D1Database, tenantId: string): Promise<boolean> {
   return (await readLegalReadiness(db, tenantId)).ready;
+}
+
+// ── THE checkout's legal gate: both gates, one predicate ────────────────────
+
+export interface LegalCheckoutGate {
+  /** The checkout's legal answer: `termsGateOpen && readiness.ready`. */
+  checkoutOpen: boolean;
+  readiness: LegalReadiness;
+  terms: TermsStatus;
+  /** The terms gate (`termsGateOpenOf`): the current version accepted, or D47 grace. */
+  termsGateOpen: boolean;
+}
+
+/**
+ * Both legal gates of `createCheckout`, read once: the platform terms
+ * (`readTermsStatus` + `termsGateOpenOf`) and the legal readiness
+ * (`readLegalReadiness`). `checkoutOpen` IS the checkout's predicate
+ * (`isCheckoutLegallyOpen`), so a view that shows it (the platform's shop
+ * detail) cannot drift from what the checkout does.
+ */
+export async function readLegalCheckoutGate(
+  db: D1Database,
+  tenantId: string,
+  now: number,
+): Promise<LegalCheckoutGate> {
+  const [terms, readiness] = await Promise.all([
+    readTermsStatus(db, tenantId, now),
+    readLegalReadiness(db, tenantId),
+  ]);
+  const termsGateOpen = termsGateOpenOf(terms);
+  return { checkoutOpen: termsGateOpen && readiness.ready, readiness, terms, termsGateOpen };
+}
+
+/** THE legal gate of createCheckout: the terms gate AND the legal readiness. */
+export async function isCheckoutLegallyOpen(db: D1Database, tenantId: string, now: number): Promise<boolean> {
+  return (await readLegalCheckoutGate(db, tenantId, now)).checkoutOpen;
+}
+
+// ── the platform's view of a shop's legal state (CP5-WJ item 3) ─────────────
+
+export interface PagesAdoptionSummary {
+  acceptedAt: string;
+  acceptedBy: SignerView;
+  /** The page keys the adopted snapshot holds a text for, sorted. */
+  pages: string[];
+  /** The template version adopted (an imported row may carry `version` instead). */
+  templateVersion: string | null;
+}
+
+export interface TenantLegalView {
+  checkoutOpen: boolean;
+  /** The latest legal-pages adoption, or null when the seller adopted none. */
+  pagesAdoption: PagesAdoptionSummary | null;
+  readiness: LegalReadiness;
+  terms: {
+    /** The CURRENT version is accepted (grace does not count). */
+    acceptedCurrent: boolean;
+    currentVersion: string | null;
+    /** The terms gate: accepted, or inside the D47 grace. */
+    gateOpen: boolean;
+    graceDeadline: string | null;
+    inGrace: boolean;
+    /** The latest version accepted, when and by whom; may be older than `currentVersion`. */
+    latestAcceptance: TermsAcceptanceView | null;
+  };
+}
+
+/** The latest adoption's time, signer and pages — not its texts. */
+async function readLatestPagesAdoption(
+  db: D1Database,
+  tenantId: string,
+  viewer: SignerViewer,
+): Promise<PagesAdoptionSummary | null> {
+  const row = await db
+    .prepare(
+      `SELECT la.accepted_at AS accepted_at,
+              COALESCE(la.template_version, la.version) AS template_version,
+              (SELECT json_group_array(page.key) FROM (
+                 SELECT key FROM json_each(la.texts_json) WHERE type = 'text' ORDER BY key
+               ) AS page) AS pages_json,
+              ${PAGES_SIGNER.columns}
+       FROM legal_acceptances AS la
+       ${PAGES_SIGNER.joins}
+       WHERE la.tenant_id = ? AND la.type = 'legalPages'
+       ORDER BY la.accepted_at DESC, la.acceptance_id DESC
+       LIMIT 1`,
+    )
+    .bind(tenantId)
+    .first<SignerColumns & { accepted_at: string; pages_json: string; template_version: string | null }>();
+  if (row === null) {
+    return null;
+  }
+  const pages = (JSON.parse(row.pages_json) as unknown[]).filter(
+    (key): key is string => typeof key === "string",
+  );
+  return {
+    acceptedAt: row.accepted_at,
+    acceptedBy: signerView(row, viewer),
+    pages: pages.sort(),
+    templateVersion: row.template_version,
+  };
+}
+
+/**
+ * GET /v1/platform/tenants/:id's `legal`: the checkout's legal gate as
+ * `readLegalCheckoutGate` reads it, plus who signed what and when. The
+ * platform sees the signer as a person (viewer "platform").
+ */
+export async function readTenantLegalView(
+  db: D1Database,
+  tenantId: string,
+  now: number,
+): Promise<TenantLegalView> {
+  const [gate, pagesAdoption, latestAcceptance] = await Promise.all([
+    readLegalCheckoutGate(db, tenantId, now),
+    readLatestPagesAdoption(db, tenantId, "platform"),
+    readLatestTermsAcceptance(db, tenantId, now, "platform"),
+  ]);
+  return {
+    checkoutOpen: gate.checkoutOpen,
+    pagesAdoption,
+    readiness: gate.readiness,
+    terms: {
+      acceptedCurrent: gate.terms.acceptedAt !== null,
+      currentVersion: gate.terms.currentVersion,
+      gateOpen: gate.termsGateOpen,
+      graceDeadline: gate.terms.graceDeadline,
+      inGrace: gate.terms.inGrace,
+      latestAcceptance,
+    },
+  };
 }

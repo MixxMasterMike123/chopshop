@@ -425,6 +425,12 @@ export interface TermsStatusBody {
   currentVersion: string | null;
   graceDeadline: string | null;
   inGrace: boolean;
+  /** CP5-WJ: the latest acceptance, its time and its signer. */
+  latestAcceptance: {
+    acceptedAt: string;
+    acceptedBy: { email: string | null; kind: "admin" | "platform"; name: string | null };
+    version: string;
+  } | null;
   readiness: {
     legalPagesAccepted: boolean;
     ready: boolean;

@@ -510,6 +510,21 @@ export async function getAdminPage(
   };
 }
 
+/**
+ * One item of GET /v1/admin/pages (CP5-WJ): the summary, the SEO texts as
+ * stored, and the languages whose content is a non-empty text — read in SQL,
+ * so the list never carries a page's content.
+ */
+export interface AdminPageListItem extends AdminPageSummary {
+  /** Language tags whose `content` is a non-empty string, sorted. */
+  contentLanguages: string[];
+  metaDescription: LanguageMap | null;
+  metaTitle: LanguageMap | null;
+}
+
+type ListItemRow = SummaryRow &
+  Pick<PageRow, "meta_description_json" | "meta_title_json"> & { content_languages_json: string };
+
 // ── lists: the query and the keyset cursor ──────────────────────────────────
 
 export interface PageListQuery {
@@ -602,7 +617,7 @@ export async function listAdminPages(
   db: D1Database,
   tenantId: string,
   query: AdminPageListQuery,
-): Promise<{ nextCursor: string | null; pages: AdminPageSummary[] }> {
+): Promise<{ nextCursor: string | null; pages: AdminPageListItem[] }> {
   const where = ["tenant_id = ?"];
   const binds: unknown[] = [tenantId];
   if (query.kind !== null) {
@@ -619,21 +634,34 @@ export async function listAdminPages(
   }
   const rows = await db
     .prepare(
-      `SELECT page_id, slug, kind, status, title_json, published_at, created_at, updated_at
+      `SELECT page_id, slug, kind, status, title_json, published_at, created_at, updated_at,
+              meta_title_json, meta_description_json,
+              (SELECT json_group_array(language.key) FROM (
+                 SELECT key FROM json_each(pages.content_json)
+                 WHERE type = 'text' AND length(value) > 0
+                 ORDER BY key
+               ) AS language) AS content_languages_json
        FROM pages
        WHERE ${where.join(" AND ")}
        ORDER BY created_at DESC, page_id DESC
        LIMIT ?`,
     )
     .bind(...binds, query.limit + 1)
-    .all<SummaryRow>();
+    .all<ListItemRow>();
 
   const page = rows.results.slice(0, query.limit);
   const last = page.at(-1);
   return {
     nextCursor:
       rows.results.length > query.limit && last !== undefined ? `${last.created_at}~${last.page_id}` : null,
-    pages: page.map(adminSummary),
+    pages: page.map((row) => ({
+      ...adminSummary(row),
+      contentLanguages: (JSON.parse(row.content_languages_json) as unknown[])
+        .filter((key): key is string => typeof key === "string")
+        .sort(),
+      metaDescription: readMap(row.meta_description_json),
+      metaTitle: readMap(row.meta_title_json),
+    })),
   };
 }
 

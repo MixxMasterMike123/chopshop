@@ -181,6 +181,13 @@ describe("D47 grace at the real clock, through the routes", () => {
       currentVersion: R,
       graceDeadline: iso(Date.parse(rAt) + FOURTEEN_DAYS),
       inGrace: true,
+      // CP5-WJ: the latest acceptance (R0). Its fixture names a user id with no
+      // account behind it, so the signer is a person nobody can name.
+      latestAcceptance: {
+        acceptedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+        acceptedBy: { email: null, kind: "admin", name: null },
+        version: R0,
+      },
       readiness: READY,
     });
     // Accepted only the seed: two versions behind, no grace (D54).
@@ -191,6 +198,11 @@ describe("D47 grace at the real clock, through the routes", () => {
       currentVersion: R,
       graceDeadline: null,
       inGrace: false,
+      latestAcceptance: {
+        acceptedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        acceptedBy: { email: `admin@${behindShop.host}`, kind: "admin", name: "admin" },
+        version: CURRENT_TERMS_VERSION,
+      },
       readiness: READY,
     });
     // Never accepted.
@@ -201,6 +213,7 @@ describe("D47 grace at the real clock, through the routes", () => {
       currentVersion: R,
       graceDeadline: null,
       inGrace: false,
+      latestAcceptance: null,
       readiness: READY,
     });
   });
@@ -230,6 +243,26 @@ describe("D47 grace at the real clock, through the routes", () => {
       expect(await expectJson(gated, 404, shop.tenantId), "byte-identical to an unknown shop").toEqual(unknownShop);
       expect(await checkoutCount(shop.tenantId)).toBe(0);
     }
+
+    // CP5-WJ item 3: the platform's shop detail says what the checkout just did.
+    const legalOf = async (shop: Tenant) =>
+      (
+        await expectJson<{ legal: { checkoutOpen: boolean; terms: Record<string, unknown> } }>(
+          await platformCall(world, "GET", `/v1/platform/tenants/${shop.tenantId}`),
+          200,
+          `detail ${shop.tenantId}`,
+        )
+      ).legal;
+    expect(await legalOf(graceShop)).toMatchObject({
+      checkoutOpen: true,
+      terms: { acceptedCurrent: false, currentVersion: R, gateOpen: true, inGrace: true },
+    });
+    for (const shop of [behindShop, neverShop]) {
+      expect(await legalOf(shop), shop.tenantId).toMatchObject({
+        checkoutOpen: false,
+        terms: { acceptedCurrent: false, gateOpen: false, inGrace: false },
+      });
+    }
   });
 
   it("re-accepting the current version: open, no grace, no deadline", async () => {
@@ -241,6 +274,11 @@ describe("D47 grace at the real clock, through the routes", () => {
       currentVersion: R,
       graceDeadline: null,
       inGrace: false,
+      latestAcceptance: {
+        acceptedAt,
+        acceptedBy: { email: `admin@${graceShop.host}`, kind: "admin", name: "admin" },
+        version: R,
+      },
       readiness: READY,
     });
     expect(await readTermsStatus(env.DB, graceShop.tenantId, Date.now())).toMatchObject({

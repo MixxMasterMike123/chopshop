@@ -2,7 +2,12 @@ import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { addressSlug, productHandle, productPath } from "../src/catalog/admin-catalog";
-import { decodeDisplayCursor, encodeDisplayCursor } from "../src/catalog/admin-product-reads";
+import {
+  ADMIN_TAG_LIST_LIMIT,
+  decodeDisplayCursor,
+  encodeDisplayCursor,
+  listAdminProducts,
+} from "../src/catalog/admin-product-reads";
 import { readScreeningGuard, screeningStatementsFor } from "../src/catalog/screening";
 import { productScreeningTexts } from "../src/catalog/screening-core";
 import {
@@ -11,6 +16,7 @@ import {
   call,
   type CallOptions,
   createTenant,
+  instrumentedDb,
   publishProduct,
 } from "./slice-harness";
 import {
@@ -687,6 +693,125 @@ describe("GET /v1/admin/products and /v1/admin/products/:id", () => {
       variants: [],
       variantsTruncated: false,
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("CP5-WJ: the list's variantCount and tags, and GET /v1/admin/tags", () => {
+  let tagShop: Tenant;
+  let otherShop: Tenant;
+
+  async function seedVariant(tenantId: string, productId: string, n: number, active: boolean): Promise<void> {
+    await env.DB.prepare(
+      `INSERT INTO product_variants (variant_id, tenant_id, product_id, sku, label, price_minor, active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 9900, ?, ?, ?)`,
+    )
+      .bind(`${productId}-v${n}`, tenantId, productId, `${productId}-V${n}`, `V${n}`, active ? 1 : 0, NOW, NOW)
+      .run();
+  }
+
+  beforeAll(async () => {
+    tagShop = await extraShop("wj-tags-a");
+    otherShop = await extraShop("wj-tags-b");
+    const a = tagShop.tenantId;
+    await seedProduct(a, { name: "Tröja", productId: "wj-1", sortOrder: 1, tags: ["Sommar", "Bomull"] });
+    await seedProduct(a, { name: "Mössa", productId: "wj-2", sortOrder: 2, tags: ["sommar"] });
+    await seedProduct(a, { name: "Gammal", productId: "wj-3", sortOrder: 3, status: "archived", tags: ["Arkiv"] });
+    await seedProduct(a, { name: "Utkast", productId: "wj-4", sortOrder: 4, status: "draft", published: false, tags: ["Vinter"] });
+    await seedVariant(a, "wj-1", 1, true);
+    await seedVariant(a, "wj-1", 2, true);
+    await seedVariant(a, "wj-1", 3, false);
+    await seedVariant(a, "wj-2", 1, false);
+    // Another shop: its tags, variants and products must never count here.
+    await seedProduct(otherShop.tenantId, { name: "Främmande", productId: "wj-b-1", tags: ["Sommar", "Hemlig"] });
+    await seedVariant(otherShop.tenantId, "wj-b-1", 1, true);
+  });
+
+  it("each list item carries the ACTIVE variant count and the tags in the seller's order", async () => {
+    const body = await expectJson<{ products: Array<Record<string, unknown> & { productId: string }> }>(
+      await admin(tagShop, "GET", "/v1/admin/products?limit=100"),
+      200,
+      "list",
+    );
+    const byId = new Map(body.products.map((p) => [p.productId, p]));
+    expect(byId.get("wj-1")).toMatchObject({ tags: ["Sommar", "Bomull"], variantCount: 2 });
+    expect(byId.get("wj-2")).toMatchObject({ tags: ["sommar"], variantCount: 0 });
+    expect(byId.get("wj-4")).toMatchObject({ tags: ["Vinter"], variantCount: 0 });
+    expect(JSON.stringify(body)).not.toContain("Hemlig");
+  });
+
+  it("the list reads tags and variant counts in a bounded number of operations, not one per product", async () => {
+    const tenantId = otherShop.tenantId;
+    for (let n = 2; n <= 100; n += 1) {
+      await seedProduct(tenantId, { name: `Bulk ${String(n).padStart(3, "0")}`, productId: `wj-bulk-${n}`, tags: ["Bulk"] });
+    }
+    const { db, ops } = instrumentedDb(() => undefined);
+    const listed = await listAdminProducts(env, db, tenantId, { cursor: null, limit: 100, q: null, status: null });
+    expect(listed.products).toHaveLength(100);
+    expect(listed.products.every((p) => p.tags.length > 0)).toBe(true);
+    // One list SELECT (the count is a subquery in it), the tag batch, the
+    // image batch, and the image resolution: never a statement per product.
+    const statements = ops.reduce((total, op) => total + op.sql.length, 0);
+    expect(statements, ops.map((op) => op.sql.map((sql) => sql.slice(0, 40)).join(" | ")).join("\n")).toBeLessThanOrEqual(8);
+    expect(ops.filter((op) => op.sql.some((sql) => /FROM product_tags/.test(sql))).flatMap((op) => op.sql)).toHaveLength(2);
+  });
+
+  it("GET /v1/admin/tags: one entry per key, sorted, counted over products not archived, this shop's only", async () => {
+    expect(
+      await expectJson(await admin(tagShop, "GET", "/v1/admin/tags"), 200, "tags"),
+    ).toEqual({
+      tags: [
+        { productCount: 1, tag: "Bomull", tagKey: "bomull" },
+        // "Sommar" and "sommar" are one tag (one key); the least spelling names it.
+        { productCount: 2, tag: "Sommar", tagKey: "sommar" },
+        { productCount: 1, tag: "Vinter", tagKey: "vinter" },
+      ],
+      truncated: false,
+    });
+    const other = await expectJson<{ tags: Array<{ tag: string }> }>(
+      await admin(otherShop, "GET", "/v1/admin/tags"),
+      200,
+      "other tags",
+    );
+    expect(other.tags.map((t) => t.tag)).toEqual(["Bulk", "Hemlig", "Sommar"]);
+  });
+
+  it("GET /v1/admin/tags refuses: no session, another shop, a platform session, a query, another method", async () => {
+    await expectOpaque404(await call(world, "GET", `${ADMIN}/v1/admin/tags`, { shopId: tagShop.tenantId }), "no session");
+    await expectOpaque404(
+      await call(world, "GET", `${ADMIN}/v1/admin/tags`, { cookie: otherShop.adminCookie, shopId: tagShop.tenantId }),
+      "another shop's admin",
+    );
+    await expectOpaque404(
+      await call(world, "GET", `${ADMIN}/v1/admin/tags`, { cookie: world.platformCookie, shopId: tagShop.tenantId }),
+      "platform without a grant",
+    );
+    for (const method of ["POST", "PUT", "DELETE"]) {
+      await expectOpaque404(await admin(tagShop, method, "/v1/admin/tags", {}), method);
+    }
+    expect((await admin(tagShop, "GET", "/v1/admin/tags?limit=5")).status).toBe(400);
+  });
+
+  it("caps the answer and says when more exist", async () => {
+    const tenantId = (await extraShop("wj-tags-cap")).tenantId;
+    const productIds: string[] = [];
+    for (let n = 0; n < Math.ceil((ADMIN_TAG_LIST_LIMIT + 1) / 20); n += 1) {
+      productIds.push(`wj-cap-${n}`);
+      await seedProduct(tenantId, {
+        name: `Cap ${n}`,
+        productId: `wj-cap-${n}`,
+        tags: Array.from({ length: 20 }, (_, i) => `t${String(n * 20 + i).padStart(4, "0")}`),
+      });
+    }
+    const shop = world.tenants.find((t) => t.tenantId === tenantId) as Tenant;
+    const body = await expectJson<{ tags: Array<{ tagKey: string }>; truncated: boolean }>(
+      await admin(shop, "GET", "/v1/admin/tags"),
+      200,
+      "capped",
+    );
+    expect(body.tags).toHaveLength(ADMIN_TAG_LIST_LIMIT);
+    expect(body.truncated).toBe(true);
+    expect(body.tags[0]?.tagKey).toBe("t0000");
   });
 });
 

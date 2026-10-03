@@ -1,4 +1,11 @@
 import type { PlatformPrincipal, TenantAdminPrincipal } from "../auth/live-authorization";
+import {
+  type SignerColumns,
+  signerColumnsSql,
+  type SignerView,
+  type SignerViewer,
+  signerView,
+} from "./signer";
 
 /**
  * The seller's acceptance of the platform terms (Plattformsvillkor + the
@@ -169,14 +176,55 @@ export async function hasAcceptedCurrentTerms(
   return (await readTermsStatus(db, tenantId, now)).acceptedAt !== null;
 }
 
+/** THE terms gate over a status read: the current version accepted, or inside the D47 grace. */
+export function termsGateOpenOf(status: TermsStatus): boolean {
+  return status.acceptedAt !== null || status.inGrace;
+}
+
 /** THE checkout gate: the current version accepted, or inside the D47 grace. */
 export async function isTermsGateOpen(
   db: D1Database,
   tenantId: string,
   now: number,
 ): Promise<boolean> {
-  const status = await readTermsStatus(db, tenantId, now);
-  return status.acceptedAt !== null || status.inGrace;
+  return termsGateOpenOf(await readTermsStatus(db, tenantId, now));
+}
+
+export interface TermsAcceptanceView {
+  acceptedAt: string;
+  /** Who accepted (src/legal/signer.ts), as `viewer` may see it. */
+  acceptedBy: SignerView;
+  version: string;
+}
+
+/**
+ * The tenant's LATEST platform-terms acceptance — the version `readTermsStatus`
+ * calls `acceptedVersion` (latest in publication order among the versions
+ * published by `now`), with its time and its signer. Null when none. When the
+ * current version is accepted, this is that acceptance.
+ */
+export async function readLatestTermsAcceptance(
+  db: D1Database,
+  tenantId: string,
+  now: number,
+  viewer: SignerViewer,
+): Promise<TermsAcceptanceView | null> {
+  const signer = signerColumnsSql("a", null);
+  const row = await db
+    .prepare(
+      `SELECT a.terms_version AS terms_version, a.accepted_at AS accepted_at, ${signer.columns}
+       FROM platform_terms_acceptances AS a
+       INNER JOIN platform_terms_versions AS v ON v.version = a.terms_version
+       ${signer.joins}
+       WHERE a.tenant_id = ? AND v.published_at <= ?
+       ORDER BY v.published_at DESC, v.version DESC
+       LIMIT 1`,
+    )
+    .bind(tenantId, iso(now))
+    .first<SignerColumns & { accepted_at: string; terms_version: string }>();
+  return row === null
+    ? null
+    : { acceptedAt: row.accepted_at, acceptedBy: signerView(row, viewer), version: row.terms_version };
 }
 
 /**

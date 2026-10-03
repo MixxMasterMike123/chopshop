@@ -87,6 +87,21 @@ beforeAll(async () => {
   )
     .bind(third.orderId, TENANT_A, new Date(T0).toISOString())
     .run();
+  // CP5-WJ: the first order's recipient has Nordic capitals in the name; the
+  // other shop's order is for a namesake of the third's.
+  for (const [orderId, tenantId, name] of [
+    [first.orderId, TENANT_A, "Åsa Öberg-Lund"],
+    [foreign.orderId, TENANT_B, "Kim Köpare"],
+  ] as const) {
+    await env.DB.prepare(
+      `INSERT INTO order_recipients (
+         order_id, tenant_id, delivery_method, name, pickup_location_id,
+         pickup_location_name, created_at
+       ) VALUES (?, ?, 'pickup', ?, 'butiken', 'Butiken på torget', ?)`,
+    )
+      .bind(orderId, tenantId, name, new Date(T0).toISOString())
+      .run();
+  }
   // The second is cancelled, the first is being processed.
   await env.DB.prepare(
     "UPDATE orders SET cancelled_at = ?, cancel_reason = 'buyer asked' WHERE order_id = ?",
@@ -124,7 +139,12 @@ describe("the list's refusals", () => {
       "?cursor=nope",
       "?cursor=123~not-a-uuid",
       "?q=",
+      "?q=%20%20",
       "?q=a%25b",
+      "?q=a_b",
+      "?q=a%5Cb",
+      "?q=%3Cscript%3E",
+      `?q=${"a".repeat(101)}`,
       "?q=not@an@email",
       "?status=paid&status=refunded",
     ]) {
@@ -215,6 +235,36 @@ describe("the list", () => {
     const window = await listBody("?status=cancelled");
     expect(window.count).toBe(1);
     expect(window.totalMinor).toBe(94_600);
+  });
+
+  it("CP5-WJ: q also finds the recipient's name — a part of it, case-insensitive (ASCII and Å Ä Ö …), this shop's only", async () => {
+    const ids = async (query: string) =>
+      (await listBody(query)).orders.map((order) => order.orderId);
+
+    // A part of the name, any case.
+    expect(await ids("?q=kim")).toEqual([third.orderId]);
+    expect(await ids("?q=%C3%B6pa")).toEqual([third.orderId]); // "öpa"
+    expect(await ids("?q=K%C3%96PARE")).toEqual([third.orderId]); // "KÖPARE"
+    expect(await ids(`?q=${encodeURIComponent("Kim Köp")}`)).toEqual([third.orderId]);
+    expect(await ids(`?q=${encodeURIComponent("åsa")}`)).toEqual([first.orderId]);
+    expect(await ids(`?q=${encodeURIComponent("ÅSA ÖBERG-LUND")}`)).toEqual([first.orderId]);
+    expect(await ids(`?q=${encodeURIComponent("  öberg ")}`)).toEqual([first.orderId]);
+    // The other shop's recipient of the same name is never matched.
+    expect(await ids("?q=kim")).not.toContain(foreign.orderId);
+    // An order without a recipient row (before 0045) is found by its number only.
+    expect(await ids("?q=nobody")).toEqual([]);
+    // A number prefix still matches by the number, OR'd with the name.
+    expect(await ids(`?q=${third.orderNumber.slice(0, 10)}`)).toContain(third.orderId);
+
+    const window = await listBody("?q=kim");
+    expect(window.count).toBe(1);
+    expect(window.totalMinor).toBe(29_900);
+    // The answer carries what the list always carried, nothing more of the recipient.
+    expect(Object.keys(window.orders[0] ?? {}).sort()).toEqual([
+      "cancelledAt", "createdAt", "currency", "customerEmail", "deliveryMethod", "fulfilment",
+      "itemCount", "orderId", "orderNumber", "paidAt", "pickupPlace", "recipientName",
+      "refundedMinor", "status", "totalMinor",
+    ]);
   });
 
   it("never names a fee, a printer, a job or a cost (the seller sees ONE number)", async () => {

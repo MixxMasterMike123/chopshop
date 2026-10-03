@@ -12,6 +12,7 @@ import {
   acceptPlatformTerms,
   maySignForSeller,
   parseAcceptTermsInput,
+  readLatestTermsAcceptance,
   readTermsStatus,
   readTermsText,
 } from "../legal/platform-terms";
@@ -31,8 +32,12 @@ import { isSameOriginRequest } from "../lib/same-origin";
  *   GET  /v1/admin/legal/status        (an acting-as platform user may read it)
  *        200 { currentVersion: string | null, accepted: boolean, acceptedAt: string | null,
  *              acceptedVersion: string | null, inGrace: boolean, graceDeadline: string | null,
- *              readiness: { returnAddress, vatAnswered, legalPagesAccepted, ready } }
+ *              readiness: { returnAddress, vatAnswered, legalPagesAccepted, ready },
+ *              latestAcceptance: { version, acceptedAt, acceptedBy } | null }
  *        Always this shape. acceptedVersion = the latest version the shop accepted;
+ *        latestAcceptance = that acceptance: its version, time (server clock) and
+ *        signer (src/legal/signer.ts: { kind: "admin", name, email } — a person
+ *        of the shop — or { kind: "platform", name: null, email: null });
  *        graceDeadline is set when it accepted the version right before the current
  *        one (also once passed; inGrace then false). `readiness` is the legal
  *        readiness gate (booleans only — never the address itself): why a shop
@@ -50,7 +55,8 @@ import { isSameOriginRequest } from "../lib/same-origin";
  *            when no version is published
  *
  *   GET  /v1/admin/legal/pages
- *        200 { acceptance: PagesAcceptanceView | null }   the latest legal-pages adoption
+ *        200 { acceptance: PagesAcceptanceView | null }   the latest legal-pages adoption,
+ *            with `acceptedBy` (the signer, as in the status) and `acceptedAt`
  *
  *   POST /v1/admin/legal/accept-pages   { templateVersion, texts: { kopvillkor, angerratt,
  *                                          integritetspolicy }, pod, custom }
@@ -58,7 +64,12 @@ import { isSameOriginRequest } from "../lib/same-origin";
  *        of booleans (then stored as custom_json and summarised as custom)
  *        201 { acceptance: { acceptanceId, acceptedAt, templateVersion, textsSha256, pod,
  *                            custom, customPages } }
- *        400 invalid_request · 413 payload_too_large · 429 rate_limited
+ *        400 invalid_request                               a malformed body
+ *        400 { error: { code: "invalid_request", page, pages, reason } }
+ *            a well-formed body whose HTML html-refusal.ts refuses: `page` the
+ *            first refused page key (angerratt, integritetspolicy, kopvillkor
+ *            order), `pages` every refused key, `reason` the first one's refusal
+ *        413 payload_too_large · 429 rate_limited
  *
  *   404  everything else — no session, no membership, cross-origin on a POST,
  *        and an ACTING-AS platform user on either accept route (the seller
@@ -107,9 +118,11 @@ export async function handleAdminLegalStatusRoute(
     return routeNotFoundResponse();
   }
 
-  const [status, readiness] = await Promise.all([
-    readTermsStatus(env.DB, principal.tenantId, Date.now()),
+  const now = Date.now();
+  const [status, readiness, latestAcceptance] = await Promise.all([
+    readTermsStatus(env.DB, principal.tenantId, now),
     readLegalReadiness(env.DB, principal.tenantId),
+    readLatestTermsAcceptance(env.DB, principal.tenantId, now, "shop"),
   ]);
   return jsonResponse({
     accepted: status.acceptedAt !== null,
@@ -118,6 +131,7 @@ export async function handleAdminLegalStatusRoute(
     currentVersion: status.currentVersion,
     graceDeadline: status.graceDeadline,
     inGrace: status.inGrace,
+    latestAcceptance,
     readiness,
   });
 }
@@ -215,15 +229,31 @@ export async function handleAdminLegalAcceptPagesRoute(env: Env, request: Reques
   if (body.status === "too_large") {
     return payloadTooLargeResponse();
   }
-  const input = parseAcceptPagesInput(body.value);
-  if (input === null) {
+  const parsed = parseAcceptPagesInput(body.value);
+  if (parsed.status === "invalid") {
     return invalidRequestResponse();
+  }
+  if (parsed.status === "content_refused") {
+    // The code stays `invalid_request` (the answer the page already handles);
+    // `page`/`pages` name the refused texts, `reason` why (html-refusal.ts).
+    return jsonResponse(
+      {
+        error: {
+          code: "invalid_request",
+          message: "A text holds markup that cannot be published",
+          page: parsed.page,
+          pages: parsed.pages,
+          reason: parsed.reason,
+        },
+      },
+      400,
+    );
   }
 
   const result = await acceptLegalPages(
     env.DB,
     principal,
-    input,
+    parsed.input,
     {
       ip: request.headers.has("cf-connecting-ip") ? clientIp(request) : null,
       userAgent: request.headers.get("user-agent"),

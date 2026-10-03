@@ -16,8 +16,16 @@ import { isFulfilmentState } from "./fulfilment";
  *   fulfilment  a value of `orders.fulfilment_status` (0046)
  *   since       ISO-8601 UTC, inclusive, on the order's creation
  *   until       ISO-8601 UTC, exclusive
- *   q           an order number prefix, or (when it holds `@`) a customer's
- *               e-mail address, exact and lower-cased (checkout stores it so)
+ *   q           (when it holds `@`) a customer's e-mail address, exact and
+ *               lower-cased (checkout stores it so); otherwise 1–100 letters,
+ *               digits, spaces, `'`, `’`, `.` or `-` (NAME_QUERY_PATTERN), which
+ *               match an order when EITHER its number starts with q (only when
+ *               q is an order-number prefix, ASCII case-insensitive) OR its
+ *               recipient's name (order_recipients, D98) CONTAINS q —
+ *               case-insensitive for ASCII letters and for the letters of
+ *               FOLDED_LETTERS, nothing else folded. An order without a
+ *               recipient row (made before 0045) matches by its number only.
+ *               The answer carries no recipient field beyond `recipientName`.
  *   cursor      the previous page's `nextCursor`
  *   limit       1..100, default 50
  * Paging is by (created_at, order_id) descending on the tenant-first index
@@ -48,12 +56,41 @@ const CURSOR_PATTERN =
 /** Order numbers are `YYYYMMDD-XXXXXXXX` (webhook.ts generateOrderNumber). */
 const ORDER_NUMBER_PREFIX_PATTERN = /^[0-9A-Za-z-]{1,40}$/;
 const EMAIL_PATTERN = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
+/**
+ * A name query: letters, combining marks, digits, the space, the apostrophes,
+ * the full stop and the hyphen. No LIKE wildcard (`%`, `_`) and no escape
+ * character can reach the pattern, so it needs no ESCAPE clause.
+ */
+const NAME_QUERY_PATTERN = /^[\p{L}\p{M}\p{N} '’.-]{1,100}$/u;
+/**
+ * The upper-case letters folded to lower case on BOTH sides of the name match
+ * (SQLite's LIKE folds ASCII only): the Nordic letters and a few common ones.
+ */
+const FOLDED_LETTERS = ["Å", "Ä", "Ö", "Æ", "Ø", "É", "È", "Ü", "Ñ"] as const;
+
+function foldName(text: string): string {
+  let folded = text;
+  for (const letter of FOLDED_LETTERS) {
+    folded = folded.split(letter).join(letter.toLowerCase());
+  }
+  return folded;
+}
+
+/** The same fold in SQL, over the column `expression`. */
+function foldNameSql(expression: string): string {
+  return FOLDED_LETTERS.reduce(
+    (sql, letter) => `replace(${sql}, '${letter}', '${letter.toLowerCase()}')`,
+    expression,
+  );
+}
 
 export interface AdminOrderListQuery {
   cursor: { createdAt: number; orderId: string } | null;
   email: string | null;
   fulfilment: FulfilmentState | null;
   limit: number;
+  /** A name query: matched as a part of the recipient's name, folded (foldName). */
+  name: string | null;
   orderNumberPrefix: string | null;
   since: number | null;
   status: (typeof ORDER_STATUSES)[number] | null;
@@ -113,6 +150,7 @@ export function parseAdminOrderListQuery(url: URL): AdminOrderListQuery | null {
   }
 
   let email: string | null = null;
+  let name: string | null = null;
   let orderNumberPrefix: string | null = null;
   const qRaw = params.get("q");
   if (qRaw !== null) {
@@ -123,10 +161,11 @@ export function parseAdminOrderListQuery(url: URL): AdminOrderListQuery | null {
       }
       email = q.toLowerCase();
     } else {
-      if (!ORDER_NUMBER_PREFIX_PATTERN.test(q)) {
+      if (!NAME_QUERY_PATTERN.test(q)) {
         return null;
       }
-      orderNumberPrefix = q.toUpperCase();
+      name = foldName(q);
+      orderNumberPrefix = ORDER_NUMBER_PREFIX_PATTERN.test(q) ? q.toUpperCase() : null;
     }
   }
 
@@ -135,6 +174,7 @@ export function parseAdminOrderListQuery(url: URL): AdminOrderListQuery | null {
     email,
     fulfilment: fulfilmentRaw as FulfilmentState | null,
     limit,
+    name,
     orderNumberPrefix,
     since,
     status: statusRaw as AdminOrderListQuery["status"],
@@ -216,8 +256,19 @@ function windowWhere(
     where.push("o.customer_email = ?");
     binds.push(query.email);
   }
-  if (query.orderNumberPrefix !== null) {
-    // The prefix holds only [0-9A-Z-]: no GLOB metacharacter can reach here.
+  // The prefix holds only [0-9A-Z-]: no GLOB metacharacter can reach here.
+  // The name holds no LIKE wildcard (NAME_QUERY_PATTERN). The recipient row
+  // is the order's own and this shop's (order_id AND tenant_id).
+  const byName = `EXISTS (SELECT 1 FROM order_recipients AS r
+                  WHERE r.order_id = o.order_id AND r.tenant_id = o.tenant_id
+                    AND ${foldNameSql("r.name")} LIKE ?)`;
+  if (query.name !== null && query.orderNumberPrefix !== null) {
+    where.push(`(o.order_number GLOB ? OR ${byName})`);
+    binds.push(`${query.orderNumberPrefix}*`, `%${query.name}%`);
+  } else if (query.name !== null) {
+    where.push(byName);
+    binds.push(`%${query.name}%`);
+  } else if (query.orderNumberPrefix !== null) {
     where.push("o.order_number GLOB ?");
     binds.push(`${query.orderNumberPrefix}*`);
   }

@@ -139,6 +139,8 @@ describe("adopting the legal pages", () => {
       acceptance: {
         acceptanceId,
         acceptedAt,
+        // CP5-WJ: who adopted — the shop's own admin, named to the shop.
+        acceptedBy: { email: "admin@pages-a.example.com", kind: "admin", name: "admin" },
         custom: false,
         customPages: null,
         pageSha256: {
@@ -254,12 +256,10 @@ describe("adopting the legal pages", () => {
       adoption(LEGAL_TEXTS, { custom: null }),
       adoption(LEGAL_TEXTS, { templateVersion: "a b" }),
       adoption(LEGAL_TEXTS, { templateVersion: "x".repeat(33) }),
-      // The adopted text is shown to every visitor as it is: what can run or
-      // fetch is never adopted (src/content/html-refusal.ts).
-      adoption({ ...LEGAL_TEXTS, kopvillkor: "<p>Villkor</p><script>alert(1)</script>" }),
-      adoption({ ...LEGAL_TEXTS, angerratt: '<p onclick="x()">14 dagar</p>' }),
-      adoption({ ...LEGAL_TEXTS, integritetspolicy: '<a href="javascript:x()">Policy</a>' }),
-      adoption({ ...LEGAL_TEXTS, integritetspolicy: '<img src="https://example.com/x.png" onerror="x()">' }),
+      // The shape is judged before the HTML: a malformed body that also holds
+      // refused HTML is a plain 400 that names no page.
+      adoption({ ...LEGAL_TEXTS, kopvillkor: "<script>x()</script>" }, { pod: "yes" }),
+      adoption({ angerratt: "<script>x()</script>", kopvillkor: "K" }),
     ];
     for (const body of bodies) {
       const response = await adminCall(world, shopA, "POST", ACCEPT, body);
@@ -273,6 +273,43 @@ describe("adopting the legal pages", () => {
       shopId: shopA.tenantId,
     });
     expect(notJson.status).toBe(400);
+    expect(await rowCount(shopA.tenantId)).toBe(before);
+  });
+
+  it("a refused text names its page (CP5-WJ): page = the first refused key, pages = all of them, reason = why; nothing written", async () => {
+    const before = await rowCount(shopA.tenantId);
+    const refusal = (page: string, pages: string[], reason: string) => ({
+      error: {
+        code: "invalid_request",
+        message: "A text holds markup that cannot be published",
+        page,
+        pages,
+        reason,
+      },
+    });
+    // The adopted text is shown to every visitor as it is: what can run or
+    // fetch is never adopted (src/content/html-refusal.ts).
+    const cases: Array<[Record<string, unknown>, ReturnType<typeof refusal>]> = [
+      [{ ...LEGAL_TEXTS, kopvillkor: "<p>Villkor</p><script>alert(1)</script>" }, refusal("kopvillkor", ["kopvillkor"], "script")],
+      [{ ...LEGAL_TEXTS, angerratt: '<p onclick="x()">14 dagar</p>' }, refusal("angerratt", ["angerratt"], "event_attribute")],
+      [
+        { ...LEGAL_TEXTS, integritetspolicy: '<a href="javascript:x()">Policy</a>' },
+        refusal("integritetspolicy", ["integritetspolicy"], "javascript_url"),
+      ],
+      [
+        { ...LEGAL_TEXTS, integritetspolicy: '<img src="https://example.com/x.png" onerror="x()">' },
+        refusal("integritetspolicy", ["integritetspolicy"], "event_attribute"),
+      ],
+      // Two refused pages: both listed (LEGAL_PAGE_KEYS order), the first one's reason.
+      [
+        { ...LEGAL_TEXTS, kopvillkor: "<script>x()</script>", angerratt: '<p onclick="x()">x</p>' },
+        refusal("angerratt", ["angerratt", "kopvillkor"], "event_attribute"),
+      ],
+    ];
+    for (const [texts, expected] of cases) {
+      const response = await adminCall(world, shopA, "POST", ACCEPT, adoption(texts));
+      expect(await expectJson(response, 400, expected.error.page)).toEqual(expected);
+    }
     expect(await rowCount(shopA.tenantId)).toBe(before);
   });
 
@@ -589,6 +626,7 @@ describe("the legal readiness gate at checkout (return address, VAT answer, page
       "currentVersion",
       "graceDeadline",
       "inGrace",
+      "latestAcceptance",
       "readiness",
     ]);
 

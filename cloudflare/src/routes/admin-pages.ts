@@ -21,7 +21,12 @@ import { isSameOriginRequest } from "../lib/same-origin";
  *
  *   GET    /v1/admin/pages?kind=page|post&status=draft|published&cursor&limit=1..100 (50)
  *          200 { pages: [{ pageId, slug, path, kind, status, title: { <lang>: text },
- *                          publishedAt, createdAt, updatedAt }], nextCursor: string | null }
+ *                          publishedAt, createdAt, updatedAt,
+ *                          metaTitle: { <lang>: text } | null,
+ *                          metaDescription: { <lang>: text } | null,
+ *                          contentLanguages: [<lang>, …] }], nextCursor: string | null }
+ *          (CP5-WJ) metaTitle/metaDescription as stored; contentLanguages = the
+ *          languages whose content is a non-empty text, sorted (never the content)
  *          newest first by creation; the cursor is the answer's `nextCursor`
  *   POST   /v1/admin/pages   { slug, title, content, kind?, status?, summary?, metaTitle?,
  *                              metaDescription?, author?, imageObjectId?, publishedAt? }

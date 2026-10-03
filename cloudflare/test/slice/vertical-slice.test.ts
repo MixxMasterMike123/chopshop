@@ -203,6 +203,7 @@ describe("CP2 vertical slice", () => {
         currentVersion: "2026-09-07",
         graceDeadline: null,
         inGrace: false,
+        latestAcceptance: null,
         readiness: legallyReady,
       });
       const gated = await storefrontCall(world, tenant, "POST", "/v1/checkout", {
@@ -231,6 +232,12 @@ describe("CP2 vertical slice", () => {
         currentVersion: "2026-09-07",
         graceDeadline: null,
         inGrace: false,
+        // CP5-WJ: who accepted and when — the shop's own admin.
+        latestAcceptance: {
+          acceptedAt,
+          acceptedBy: { email: `admin@${HOST}`, kind: "admin", name: "admin" },
+          version: "2026-09-07",
+        },
         readiness: legallyReady,
       });
       const evidence = await env.DB.prepare(

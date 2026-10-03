@@ -9,8 +9,7 @@ import {
   parseCheckoutConsent,
   sameConsent,
 } from "../legal/consent";
-import { isLegallyReady } from "../legal/legal-pages";
-import { isTermsGateOpen } from "../legal/platform-terms";
+import { isCheckoutLegallyOpen } from "../legal/legal-pages";
 import {
   ELIGIBLE_PRODUCTS_FROM,
   PUBLIC_ELIGIBILITY_PREDICATE,
@@ -1101,10 +1100,9 @@ export async function createCheckout(
   // address, VAT answer, the seller's adoption of the pages). It says so with
   // the same opaque 404 an unknown shop gets: nothing about either gate
   // reaches a buyer. First, so a gated shop resolves no line and writes nothing.
-  if (
-    !(await isTermsGateOpen(db, tenant.tenantId, now)) ||
-    !(await isLegallyReady(db, tenant.tenantId))
-  ) {
+  // ONE predicate (legal-pages.ts isCheckoutLegallyOpen), which the platform's
+  // shop detail also shows (readTenantLegalView), so the two cannot drift.
+  if (!(await isCheckoutLegallyOpen(db, tenant.tenantId, now))) {
     return { status: "not_found" };
   }
 

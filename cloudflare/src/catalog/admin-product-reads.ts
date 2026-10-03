@@ -771,8 +771,12 @@ export interface AdminProductListItem {
   sku: string;
   sortOrder: number | null;
   status: ProductStatus;
+  /** CP5-WJ: the product's tags as the seller typed them, in the seller's order. */
+  tags: string[];
   takenDown: boolean;
   updatedAt: string;
+  /** CP5-WJ: the product's ACTIVE variants (what a buyer can choose), counted in SQL. */
+  variantCount: number;
 }
 
 interface AdminListRow {
@@ -791,6 +795,7 @@ interface AdminListRow {
   status: ProductStatus;
   takedown_at: string | null;
   updated_at: number;
+  variant_count: number;
 }
 
 const ADMIN_ORDER_COLUMNS: DisplayOrderColumns = {
@@ -846,7 +851,11 @@ export async function listAdminProducts(
               product.featured, product.sort_order, product.category,
               product.is_pod, product.takedown_at, product.updated_at,
               publication.published AS published,
-              screening.status AS screening_status
+              screening.status AS screening_status,
+              (SELECT COUNT(*) FROM product_variants AS variant
+               WHERE variant.tenant_id = product.tenant_id
+                 AND variant.product_id = product.product_id
+                 AND variant.active = 1) AS variant_count
        FROM products AS product
        LEFT JOIN product_publications AS publication
          ON publication.product_id = product.product_id
@@ -862,7 +871,12 @@ export async function listAdminProducts(
     .all<AdminListRow>();
 
   const page = rows.results.slice(0, query.limit);
-  const imageRows = await loadImageRowsFor(db, tenantId, page.map((row) => row.product_id));
+  const productIds = page.map((row) => row.product_id);
+  // One batch per 90 products each (a page is at most 100): never a read per row.
+  const [imageRows, tags] = await Promise.all([
+    loadImageRowsFor(db, tenantId, productIds),
+    loadTagsFor(db, tenantId, productIds),
+  ]);
   const resolved = await resolveProductImages(env, db, tenantId, imageRows.values());
   const last = page.at(-1);
   return {
@@ -885,9 +899,58 @@ export async function listAdminProducts(
       sku: row.sku,
       sortOrder: row.sort_order,
       status: row.status,
+      tags: tags.get(row.product_id) ?? [],
       takenDown: row.takedown_at !== null,
       updatedAt: new Date(row.updated_at).toISOString(),
+      variantCount: row.variant_count,
     })),
+  };
+}
+
+/** At most this many distinct tags answer GET /v1/admin/tags (`truncated` says when more exist). */
+export const ADMIN_TAG_LIST_LIMIT = 500;
+
+export interface AdminTag {
+  /** How many of the shop's products that are not archived carry it. */
+  productCount: number;
+  /** As typed; when spellings share one key, the least in byte order (SQLite MIN). */
+  tag: string;
+  /** Its address form (product_tags.tag_key): what /tagg/<key> and a collection's tag rule match. */
+  tagKey: string;
+}
+
+/**
+ * GET /v1/admin/tags — the shop's distinct tags (one per tag_key), on its
+ * products that are not archived (the admin list hides archived ones), sorted
+ * by key, at most ADMIN_TAG_LIST_LIMIT. One aggregate over the tenant-first
+ * index (product_tags_tenant_tag_idx).
+ */
+export async function listAdminTags(
+  db: D1Database,
+  tenantId: string,
+): Promise<{ tags: AdminTag[]; truncated: boolean }> {
+  const rows = await db
+    .prepare(
+      `SELECT tag.tag_key AS tag_key, MIN(tag.tag) AS tag,
+              COUNT(DISTINCT tag.product_id) AS product_count
+       FROM product_tags AS tag
+       INNER JOIN products AS product
+         ON product.product_id = tag.product_id
+        AND product.tenant_id = tag.tenant_id
+       WHERE tag.tenant_id = ? AND product.status <> 'archived'
+       GROUP BY tag.tag_key
+       ORDER BY tag.tag_key
+       LIMIT ?`,
+    )
+    .bind(tenantId, ADMIN_TAG_LIST_LIMIT + 1)
+    .all<{ product_count: number; tag: string; tag_key: string }>();
+  return {
+    tags: rows.results.slice(0, ADMIN_TAG_LIST_LIMIT).map((row) => ({
+      productCount: row.product_count,
+      tag: row.tag,
+      tagKey: row.tag_key,
+    })),
+    truncated: rows.results.length > ADMIN_TAG_LIST_LIMIT,
   };
 }
 
