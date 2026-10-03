@@ -46,7 +46,8 @@
 #   admin.<env>.env (OPTIONAL: the admin build needs no value today, so a missing file means "no
 #   build values"; when it exists it is checked as strictly as the other, and no name is required):
 #     only VITE_PLATFORM_LEGAL_NAME, VITE_PLATFORM_ORG_NUMBER, VITE_STRIPE_PUBLISHABLE_KEY (pk_… of
-#     the env, as above) — any other VITE_ name is refused, never silently built into public files.
+#     the env, as above) — any other VITE_ name WITH A VALUE is refused, never silently built into
+#     public files; any name may be blanked (an empty value), which is how a root .env name is covered.
 # Only VITE_ names are handed to a build (any other line is ignored), every VITE_ variable the
 # shell holds is dropped first, and a value that looks like a secret key (sk_, sk-, rk_, whsec_)
 # is refused: whatever the build reads ends up in public files. Vite ALSO reads .env, .env.local,
@@ -155,7 +156,9 @@ ALLOWED= # empty: any VITE_ name; else the names (space-separated, spaces around
 check_entry() { # check_entry KEY VALUE — refuses; records the VITE_ names in VALUE_NAMES
   case $1 in VITE_*) ;; *) return 0 ;; esac
   case $1 in *[!A-Za-z0-9_]*) refuse "$VALUES: '$1' is not a variable name" ;; esac
-  if [ -n "$ALLOWED" ]; then
+  # An EMPTY value of any name is a blank, not a value: it is how a name the repository's own
+  # .env files define is kept out of the build, so the allowlist asks only about names with a value.
+  if [ -n "$ALLOWED" ] && [ -n "$2" ]; then
     case $ALLOWED in
       *" $1 "*) ;;
       *) refuse "$VALUES: $1 is not one of the $WHAT's build values (only${ALLOWED% }) — an unknown public value is not built into the $WHAT" ;;

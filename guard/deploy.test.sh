@@ -441,6 +441,15 @@ expect_refused "root .env VITE_ name, no admin.staging.env → refused (admin on
 new_case; printf 'VITE_FIREBASE_API_KEY=root-value\n' >"$T/repo/.env"; run staging web
 expect_refused "root .env VITE_ name not in web.staging.env → refused (web only; unchanged)" "" "web.staging.env does not"
 
+new_case; printf 'VITE_FIREBASE_API_KEY=root-value\n' >"$T/repo/.env"
+values staging "$T" 600 admin <<EOF
+VITE_FIREBASE_API_KEY=
+EOF
+run staging admin
+if [ "$RC" -eq 0 ] && [ "$(steps)" = "abuild admin" ] && grep -qx 'abuild-env VITE_FIREBASE_API_KEY=' "$T/log"; then
+  ok "a root .env name OUTSIDE the admin's allowlist, blanked in admin.staging.env → deploys, and the admin build sees it empty"
+else bad "a root .env name OUTSIDE the admin's allowlist, blanked in admin.staging.env → deploys, and the admin build sees it empty"; fi
+
 new_case; printf 'VITE_PLATFORM_LEGAL_NAME=root-value\n' >"$T/repo/.env.local"
 values staging "$T" 600 admin <<EOF
 VITE_PLATFORM_LEGAL_NAME=
