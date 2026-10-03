@@ -59,10 +59,14 @@
         // pinned.staging.json → origins (the preflight checks it). D7: workers.dev until CP7.
         "CANONICAL_ORIGINS": {
           "api": "https://chopshop-api-stg.kent-ee2.workers.dev",
-          "web": "https://chopshop-web-stg.kent-ee2.workers.dev"
+          "web": "https://chopshop-web-stg.kent-ee2.workers.dev",
+          // The admin Worker's host (cloudflare/admin, pinned origins.admin): where a reset or an
+          // invite link lands and where the Connect onboarding returns.
+          "admin": "https://chopshop-admin-stg.kent-ee2.workers.dev"
         },
         "AUTH_BASE_URL": "https://chopshop-api-stg.kent-ee2.workers.dev",
-        "AUTH_TRUSTED_ORIGINS": "https://chopshop-api-stg.kent-ee2.workers.dev,https://chopshop-web-stg.kent-ee2.workers.dev",
+        // The admin origin too (pinned origins.admin): Better Auth refuses every sign-in from the admin host otherwise.
+        "AUTH_TRUSTED_ORIGINS": "https://chopshop-api-stg.kent-ee2.workers.dev,https://chopshop-web-stg.kent-ee2.workers.dev,https://chopshop-admin-stg.kent-ee2.workers.dev",
         // The R2 S3 endpoint's account id. A VAR, not a secret, and deliberately:
         // it appears in plaintext inside every presigned URL the POD surface mints,
         // and it is already recorded as a non-secret configuration identifier

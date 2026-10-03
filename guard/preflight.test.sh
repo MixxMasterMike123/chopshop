@@ -4,7 +4,7 @@
 # No network, no real credentials. Every case runs a COPY of the script inside a throwaway
 # tree: fake credentials file (via CHOPSHOP_CF_ENV_FILE), the repo's real pinned files (edited
 # per case), a JSONC wrangler.jsonc, a JSONC cloudflare/web/wrangler.jsonc and a built
-# cloudflare/web/dist (for --web), a fake wrangler at cloudflare/node_modules/.bin/wrangler
+# cloudflare/web/dist (for --web), the same pair under cloudflare/admin/ (for --admin), a fake wrangler at cloudflare/node_modules/.bin/wrangler
 # (the preflight resolves wrangler by path, never via $PATH, so that is where the fake lives),
 # a fake `curl` first on PATH, and HOME inside the tree (so ~/.config/chopshop/stripe.*.env is
 # the test's). The shell deliberately exports WRONG Cloudflare credentials, which the preflight
@@ -47,9 +47,11 @@ env_section() { # env_section <env> <stg|prod> [python on e, p] — an env.<env>
   python3 -c 'import json, sys
 env, short, edit, p, base = sys.argv[1], sys.argv[2], sys.argv[3], json.load(open(sys.argv[4])), sys.argv[5]
 o = p["origins"]
+# CANONICAL_ORIGINS deep-equals the pinned origins (the admin key only once it is pinned);
+# AUTH_TRUSTED_ORIGINS lists the admin origin once pinned.
 e = {"name": p["workerName"],
-     "vars": {"APP_ENV": env, "CANONICAL_ORIGINS": dict(o), "AUTH_BASE_URL": o["api"],
-              "AUTH_TRUSTED_ORIGINS": o["api"] + "," + o["web"],
+     "vars": {"APP_ENV": env, "CANONICAL_ORIGINS": {k: v for k, v in o.items() if v is not None}, "AUTH_BASE_URL": o["api"],
+              "AUTH_TRUSTED_ORIGINS": ",".join([o["api"], o["web"]] + ([o["admin"]] if o["admin"] else [])),
               "SERVICE_NAME": p["workerName"], "R2_PRIVATE_BUCKET_NAME": p["r2"]["private"],
               "R2_JURISDICTION": "eu", "DISPATCH_TARGET": p["dispatchTarget"],
               "PUBLIC_OBJECT_BASE_URL": base},
@@ -88,6 +90,25 @@ print(json.dumps({env: e}))' "$1" "${2:-}" "$REPO/cloudflare/pinned.$1.json" "$(
 }
 WEB_STAGING=$(web_section staging)
 WEB_PRODUCTION=$(web_section production)
+# production has no admin domain yet (pinned origins.admin null): the tests that deploy it pin this one.
+ADMIN_PROD_ORIGIN=https://admin.prod.test.invalid
+PIN_PROD_ADMIN="$PIN_PROD; p['origins']['admin'] = '$ADMIN_PROD_ORIGIN'"
+ENV_PRODUCTION_ADMIN=$(env_section production prod "e['vars']['AUTH_TRUSTED_ORIGINS'] += ',$ADMIN_PROD_ORIGIN'")
+admin_section() { # admin_section <env> [python on e, p] [argument] — a correct env.<env> block of the ADMIN
+  # Worker's configuration, bound to the repo's pinned.<env>.json (adminWorkerName, workerName,
+  # origins.admin, or ADMIN_PROD_ORIGIN while production's is null) and PUB_<STG|PROD>.
+  python3 -c 'import json, sys
+env, edit, p, base, prod_admin = sys.argv[1], sys.argv[2], json.load(open(sys.argv[3])), sys.argv[4], sys.argv[6]
+e = {"name": p["adminWorkerName"], "workers_dev": env == "staging", "preview_urls": False,
+     "assets": {"directory": "./dist", "binding": "ASSETS", "run_worker_first": True,
+                "html_handling": "none", "not_found_handling": "none"},
+     "services": [{"binding": "API", "service": p["workerName"], "entrypoint": "Internal"}],
+     "vars": {"ADMIN_ORIGIN": p["origins"]["admin"] or prod_admin, "PUBLIC_OBJECT_BASE_URL": base}}
+exec(edit)
+print(json.dumps({env: e}))' "$1" "${2:-}" "$REPO/cloudflare/pinned.$1.json" "$(pub_base "$1")" "${3:-}" "$ADMIN_PROD_ORIGIN"
+}
+ADMIN_STAGING=$(admin_section staging)
+ADMIN_PRODUCTION=$(admin_section production)
 
 # Inherited credentials the preflight must ignore.
 export CLOUDFLARE_API_TOKEN=INHERITED-WRONG-TOKEN CLOUDFLARE_API_KEY=inherited-global-key \
@@ -115,6 +136,22 @@ write_web_jsonc() { # write_web_jsonc <tree> <account_id> [env-section-json] [to
 {
   // test config of the web Worker — "quotes" and // inside comments and strings
   "name": "chopshop-web-unbound",
+  "account_id": "$2", /* pinned? */
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  ${4:-}
+  $envline
+}
+EOF
+}
+
+write_admin_jsonc() { # write_admin_jsonc <tree> <account_id> [env-section-json] [top-level lines, each ending in ","]
+  local envline=
+  if [ -n "${3:-}" ]; then envline="\"env\": $3,"; fi
+  cat >"$1/cloudflare/admin/wrangler.jsonc" <<EOF
+{
+  // test config of the admin Worker — "quotes" and // inside comments and strings
+  "name": "chopshop-admin-unbound",
   "account_id": "$2", /* pinned? */
   "main": "src/index.ts",
   "compatibility_date": "2026-08-15",
@@ -155,11 +192,14 @@ put(tree + "/cloudflare/web/wrangler.jsonc", web, web + ", " + line)' "$1" "$2" 
 
 make_tree() { # make_tree <tree> — defaults: staging bootstrap-able, token + account correct
   local d=$1
-  mkdir -p "$d/scripts" "$d/cloudflare/node_modules/.bin" "$d/home/.config/chopshop" "$d/bin" "$d/cloudflare/web/dist/assets"
+  mkdir -p "$d/scripts" "$d/cloudflare/node_modules/.bin" "$d/home/.config/chopshop" "$d/bin" "$d/cloudflare/web/dist/assets" "$d/cloudflare/admin/dist/assets"
   cp "$REPO/scripts/cf-preflight.sh" "$d/scripts/"
   cp "$REPO/cloudflare/pinned.staging.json" "$REPO/cloudflare/pinned.production.json" "$d/cloudflare/"
   write_jsonc "$d" "$GOOD"
   write_web_jsonc "$d" "$GOOD"
+  write_admin_jsonc "$d" "$GOOD"
+  printf '<!doctype html><div id="root"></div>\n' >"$d/cloudflare/admin/dist/index.html"
+  printf 'console.log("admin");\n' >"$d/cloudflare/admin/dist/assets/index-adm123.js"
   printf '<!doctype html><div id="root"></div>\n' >"$d/cloudflare/web/dist/index.html"
   printf 'console.log("storefront");\n' >"$d/cloudflare/web/dist/assets/index-abc123.js"
   printf 'CF_ACCOUNT_ID=%s\nCF_ACCOUNT_NAME="Test"\nCLOUDFLARE_API_TOKEN=%s\n' "$GOOD" "$TOKEN" >"$d/cf.env"
@@ -353,11 +393,11 @@ expect_refused "env.staging without a name → wrangler's effective '<top>-stagi
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['CANONICAL_ORIGINS']['web'] = 'https://chopshop-web.kent-ee2.workers.dev'")"; run staging -- deploy
-expect_refused "CANONICAL_ORIGINS.web != pinned origins.web → refused" "env.staging.vars.CANONICAL_ORIGINS is {\"api\": \"https://chopshop-api-stg.kent-ee2.workers.dev\", \"web\": \"https://chopshop-web.kent-ee2.workers.dev\"}"
+expect_refused "CANONICAL_ORIGINS.web != pinned origins.web → refused" "env.staging.vars.CANONICAL_ORIGINS is {\"admin\": \"https://chopshop-admin-stg.kent-ee2.workers.dev\", \"api\": \"https://chopshop-api-stg.kent-ee2.workers.dev\", \"web\": \"https://chopshop-web.kent-ee2.workers.dev\"}"
 
 new_tree; pin "$T" staging "$PIN_STG"
-write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['CANONICAL_ORIGINS']['admin'] = p['origins']['web']")"; run staging -- deploy
-expect_refused "CANONICAL_ORIGINS with an extra key → refused (deep equality)" "\"admin\": \"https://chopshop-web-stg.kent-ee2.workers.dev\""
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['CANONICAL_ORIGINS']['platform'] = p['origins']['web']")"; run staging -- deploy
+expect_refused "CANONICAL_ORIGINS with an extra key → refused (deep equality)" "\"platform\": \"https://chopshop-web-stg.kent-ee2.workers.dev\""
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['vars']['CANONICAL_ORIGINS']")"; run staging -- deploy
@@ -375,8 +415,8 @@ expect_refused "pinned origin with a query + fragment → refused" "origins.web 
 new_tree; pin "$T" staging "del p['origins']['web']"; run staging --bootstrap -- whoami
 expect_refused "pinned origins without web → refused" "origins.web is missing"
 
-new_tree; pin "$T" staging "p['origins']['admin'] = 'https://admin.example.test'"; run staging --bootstrap -- whoami
-expect_refused "unknown pinned origins key → refused (extend the preflight first)" "unknown key(s) origins.admin - extend the preflight first"
+new_tree; pin "$T" staging "p['origins']['platform'] = 'https://platform.example.test'"; run staging --bootstrap -- whoami
+expect_refused "unknown pinned origins key → refused (extend the preflight first)" "unknown key(s) origins.platform - extend the preflight first"
 
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['AUTH_BASE_URL'] = p['origins']['web']")"; run staging -- deploy
@@ -802,6 +842,284 @@ if python3 -c 'import json, sys; sys.exit(json.load(open(sys.argv[1]))["r2"]["pu
 else
   ok "repo pinned.staging.json has r2.publicBaseUrl set: the committed files are checked as they are above"
 fi
+
+# =====================================================================================================
+# --admin: the third Worker (CP5-W2). Mirrors every --web check against cloudflare/admin/wrangler.jsonc.
+# =====================================================================================================
+ADMIN_EXEC_STG="FAKE-WRANGLER EXEC: --env staging deploy | account=$GOOD token=ok cwd=admin config=cloudflare/admin/wrangler.jsonc"
+admin_tree() { # admin_tree <staging|production> [admin env-section json] [API env-section json] — fully pinned for an --admin deploy
+  new_tree
+  if [ "$1" = staging ]; then
+    pin "$T" staging "$PIN_STG"; write_admin_jsonc "$T" "$GOOD" "${2:-$ADMIN_STAGING}"; write_jsonc "$T" "$GOOD" "${3:-$ENV_STAGING}"; stripe_file "$T" staging "$SKEY_TEST"
+  else
+    pin "$T" production "$PIN_PROD_ADMIN"; write_admin_jsonc "$T" "$GOOD" "${2:-$ADMIN_PRODUCTION}"; write_jsonc "$T" "$GOOD" "${3:-$ENV_PRODUCTION_ADMIN}"; stripe_file "$T" production "$SKEY_LIVE"
+    launch_todo_all_done "$T"
+  fi
+}
+
+# --- the new pinned keys: adminWorkerName, origins.admin -------------------------------------------
+new_tree; pin "$T" staging "del p['adminWorkerName']"; run staging --bootstrap -- whoami
+expect_refused "pinned file without adminWorkerName → refused" "adminWorkerName is missing"
+
+new_tree; pin "$T" staging "del p['origins']['admin']"; run staging --bootstrap -- whoami
+expect_refused "pinned origins without admin → refused (null is a value, absence is not)" "origins.admin is missing"
+
+new_tree; pin "$T" staging "p['adminWorkerName'] = p['workerName']"; run staging --bootstrap -- whoami
+expect_refused "adminWorkerName == the API's workerName → refused (even under --bootstrap)" "adminWorkerName 'chopshop-api-stg' is the API's or the web Worker's name"
+
+new_tree; pin "$T" staging "p['adminWorkerName'] = p['webWorkerName']"; run staging --bootstrap -- whoami
+expect_refused "adminWorkerName == the web Worker's name → refused (even under --bootstrap)" "adminWorkerName 'chopshop-web-stg' is the API's or the web Worker's name"
+
+new_tree; pin "$T" staging "p['origins']['admin'] = 'http://chopshop-admin-stg.kent-ee2.workers.dev'"; run staging --bootstrap -- whoami
+expect_refused "pinned origins.admin over http:// → refused" "origins.admin 'http://chopshop-admin-stg.kent-ee2.workers.dev' is not a bare https:// origin"
+
+new_tree; pin "$T" staging "p['origins']['admin'] = 'https://chopshop-admin-stg.kent-ee2.workers.dev/platform'"; run staging --bootstrap -- whoami
+expect_refused "pinned origins.admin with a path → refused" "origins.admin 'https://chopshop-admin-stg.kent-ee2.workers.dev/platform' is not a bare https:// origin"
+
+new_tree; pin "$T" staging "p['origins']['admin'] = ''"; run staging --bootstrap -- whoami
+expect_refused "pinned origins.admin empty → refused" "origins.admin must be a non-empty string or null"
+
+# null origins.admin: refuses --admin ONLY, with its own line; never the API or the web Worker
+admin_tree production "$ADMIN_PRODUCTION"; pin "$T" production "p['origins']['admin'] = None"; run_prod --admin -- deploy
+expect_refused "production --admin while pinned origins.admin is null → refused with its own line" "origins.admin is null - production has no admin domain yet (D7), so the admin Worker is not deployed there"
+
+admin_tree staging; pin "$T" staging "p['origins']['admin'] = None"; run_stg --admin -- deploy
+expect_refused "staging --admin while pinned origins.admin is null → refused too" "origins.admin is null - staging has no admin domain yet"
+
+new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$ENV_PRODUCTION"; stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"; run_prod -- deploy
+expect_exec "API production deploy is NOT blocked by a null origins.admin" "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok"
+
+new_tree; pin "$T" production "$PIN_PROD"; write_web_jsonc "$T" "$GOOD" "$WEB_PRODUCTION"; stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"; run_prod --web -- deploy
+expect_exec "web production deploy is NOT blocked by a null origins.admin" "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok cwd=web"
+
+# --- --admin: arguments ---------------------------------------------------------------------------
+new_tree; run staging --bootstrap --admin -- whoami
+expect_refused "--bootstrap with --admin → refused" "--bootstrap with --admin is not allowed — the admin Worker creates no resource"
+new_tree; run staging --admin --bootstrap -- whoami
+expect_refused "--admin with --bootstrap (other order) → refused" "--bootstrap with --admin is not allowed"
+new_tree; run staging --web --admin -- whoami
+expect_refused "--web with --admin → refused" "--web with --admin is not allowed"
+new_tree; run staging --admin --web -- whoami
+expect_refused "--admin with --web (other order) → refused" "--web with --admin is not allowed"
+new_tree; run staging --admin --admin2 -- whoami
+expect_refused "unknown flag beside --admin → refused" "unexpected argument '--admin2' before '--'"
+for cmd in "secret put STRIPE_SECRET_KEY" "secret bulk" "d1 list" "r2 bucket list" "kv namespace list" "queues list" "secrets-store store list" "containers list"; do
+  new_tree; run staging --admin -- $cmd
+  expect_refused "--admin with '$cmd' → refused" "wrangler subcommand '${cmd%% *}' is not allowed with --admin"
+done
+for cmd in "versions upload" "versions secret put STRIPE_SECRET_KEY" "versions"; do
+  second=$(printf '%s\n' "$cmd" | awk '{print $2}')
+  new_tree; run staging --admin -- $cmd
+  expect_refused "--admin with '$cmd' → refused" "wrangler 'versions $second' is not allowed with --admin"
+done
+for extra in "--var ADMIN_ORIGIN:https://evil.example.test" "--assets ./elsewhere" "--routes admin.example.test" \
+  "src/other.ts" "--dry-run --keep-vars" "--keep-vars"; do
+  new_tree; run staging --admin -- deploy $extra
+  expect_refused "--admin deploy $extra → refused" "with --admin, deploy takes no argument but --dry-run"
+done
+new_tree; run staging --admin -- deploy --config=cloudflare/wrangler.jsonc
+expect_refused "--admin deploy --config smuggled → refused" "'--config=cloudflare/wrangler.jsonc' is not allowed"
+
+# --- --admin: the admin Worker's configuration (check 4) -----------------------------------------
+new_tree; pin "$T" staging "$PIN_STG"; write_admin_jsonc "$T" "$OTHER" "$ADMIN_STAGING"; run staging --admin -- deploy
+expect_refused "admin wrangler.jsonc account_id != pinned → refused" "admin/wrangler.jsonc account_id is '$OTHER', pinned cloudflareAccountId is $GOOD"
+
+admin_tree staging "$(admin_section staging "e['account_id'] = '$OTHER'")"; run staging --admin -- deploy
+expect_refused "admin env.staging.account_id != pinned → refused" "admin/wrangler.jsonc env.staging.account_id is '$OTHER'"
+
+# --- --admin: env section and name ----------------------------------------------------------------
+new_tree; pin "$T" staging "$PIN_STG"; run staging --admin -- deploy
+expect_refused "admin config without env.staging → refused" "admin/wrangler.jsonc has no env.staging section"
+
+admin_tree staging "$ADMIN_PRODUCTION"; run staging --admin -- deploy
+expect_refused "staging --admin with only an env.production section → refused" "admin/wrangler.jsonc has no env.staging section"
+
+admin_tree staging "$(admin_section staging "e['name'] = p['workerName']")"; run_stg --admin -- deploy
+expect_refused "admin env.staging.name is the API Worker's name → refused" "env.staging.name is 'chopshop-api-stg', pinned adminWorkerName is 'chopshop-admin-stg'"
+
+admin_tree staging "$(admin_section staging "e['name'] = p['webWorkerName']")"; run_stg --admin -- deploy
+expect_refused "admin env.staging.name is the web Worker's name → refused" "env.staging.name is 'chopshop-web-stg', pinned adminWorkerName is 'chopshop-admin-stg'"
+
+admin_tree staging "$(admin_section staging "e['name'] = 'chopshop-admin'")"; run_stg --admin -- deploy
+expect_refused "admin env.staging.name is production's admin Worker → refused" "env.staging.name is 'chopshop-admin', pinned adminWorkerName is 'chopshop-admin-stg'"
+
+admin_tree staging "$(admin_section staging "del e['name']")"; run_stg --admin -- deploy
+expect_refused "admin env.staging without a name → wrangler's effective '<top>-staging' → refused" "env.staging.name is 'chopshop-admin-unbound-staging' (wrangler's effective name: top-level name + '-staging'), pinned adminWorkerName is 'chopshop-admin-stg'"
+
+# --- --admin: assets exactly ----------------------------------------------------------------------
+for edit in "e['assets']['run_worker_first'] = False" "e['assets']['run_worker_first'] = ['/_api/*']" "e['assets']['run_worker_first'] = 1" \
+  "e['assets']['html_handling'] = 'auto-trailing-slash'" "e['assets']['not_found_handling'] = 'single-page-application'" \
+  "e['assets']['directory'] = '../../dist'" "e['assets']['binding'] = 'STATIC'" "e['assets']['headers'] = '_headers'" "del e['assets']"; do
+  admin_tree staging "$(admin_section staging "$edit")"; run_stg --admin -- deploy
+  expect_refused "admin assets: $edit → refused" "env.staging.assets is"
+done
+
+# --- --admin: exactly one service binding, the API of the same env through Internal ---------------
+for edit in "e['services'].append({'binding': 'API2', 'service': p['workerName'], 'entrypoint': 'Internal'})" \
+  "e['services'][0]['service'] = 'chopshop-api'" "del e['services'][0]['entrypoint']" "e['services'][0]['entrypoint'] = 'default'" \
+  "e['services'][0]['binding'] = 'BACKEND'" "e['services'][0]['environment'] = 'production'" "del e['services']"; do
+  admin_tree staging "$(admin_section staging "$edit")"; run_stg --admin -- deploy
+  expect_refused "admin services: $edit → refused" "env.staging.services is"
+done
+
+# --- --admin: vars exactly ADMIN_ORIGIN + PUBLIC_OBJECT_BASE_URL ----------------------------------
+admin_tree staging "$(admin_section staging "e['vars']['ADMIN_ORIGIN'] = p['origins']['web']")"; run_stg --admin -- deploy
+expect_refused "admin ADMIN_ORIGIN != pinned origins.admin → refused" "env.staging.vars.ADMIN_ORIGIN is 'https://chopshop-web-stg.kent-ee2.workers.dev', pinned origins.admin is 'https://chopshop-admin-stg.kent-ee2.workers.dev'"
+
+admin_tree staging "$(admin_section staging "e['vars']['PUBLIC_OBJECT_BASE_URL'] = 'https://pub-other.r2.test.invalid'")"; run_stg --admin -- deploy
+expect_refused "admin PUBLIC_OBJECT_BASE_URL != pinned r2.publicBaseUrl → refused" "env.staging.vars.PUBLIC_OBJECT_BASE_URL is 'https://pub-other.r2.test.invalid', pinned r2.publicBaseUrl is '$PUB_STG'"
+
+admin_tree staging "$(admin_section staging "del e['vars']['PUBLIC_OBJECT_BASE_URL']")"; run_stg --admin -- deploy
+expect_refused "admin PUBLIC_OBJECT_BASE_URL missing → refused" "env.staging.vars are ['ADMIN_ORIGIN'], expected exactly ['ADMIN_ORIGIN', 'PUBLIC_OBJECT_BASE_URL']"
+
+admin_tree staging "$(admin_section staging "e['vars']['WEB_ORIGIN'] = p['origins']['web']")"; run_stg --admin -- deploy
+expect_refused "admin vars with an extra var → refused" "env.staging.vars are ['ADMIN_ORIGIN', 'PUBLIC_OBJECT_BASE_URL', 'WEB_ORIGIN'], expected exactly"
+
+admin_tree staging "$(admin_section staging "del e['vars']")"; run_stg --admin -- deploy
+expect_refused "admin vars missing → refused" "env.staging.vars are null, expected exactly"
+
+admin_tree staging; pin "$T" staging "p['r2']['publicBaseUrl'] = None"; run_stg --admin -- deploy
+expect_refused "admin deploy while pinned r2.publicBaseUrl is null (D95) → refused" "still has null (not yet created) values: r2.publicBaseUrl - create them"
+
+# --- --admin: no other binding of any kind, no route, no cron (env section and top level) ---------
+for kv in 'd1_databases=[{"binding": "DB", "database_name": "chopshop-stg", "database_id": "x"}]' \
+  'r2_buckets=[{"binding": "PUBLIC_BUCKET", "bucket_name": "chopshop-stg-public", "jurisdiction": "eu"}]' \
+  'kv_namespaces=[{"binding": "KV", "id": "abc"}]' \
+  'queues={"producers": [{"binding": "OUTBOX_QUEUE", "queue": "chopshop-stg-outbox"}]}' \
+  'durable_objects={"bindings": [{"name": "RENDER_CONTAINER", "class_name": "RenderContainer", "script_name": "chopshop-api-stg"}]}' \
+  'containers=[{"class_name": "RenderContainer", "image": "./render/Dockerfile"}]' \
+  'secrets_store_secrets=[{"binding": "KEY", "store_id": "s", "secret_name": "n"}]' \
+  'ai={"binding": "AI"}' \
+  'routes=[{"pattern": "admin.example.test/*", "zone_name": "example.test"}]' \
+  'route="admin.example.test/*"' \
+  'triggers={"crons": ["*/15 * * * *"]}' \
+  'secrets={"required": ["STRIPE_SECRET_KEY"]}' \
+  'build={"command": "make"}'; do
+  key=${kv%%=*}
+  admin_tree staging "$(admin_section staging "e['$key'] = json.loads(sys.argv[5])" "${kv#*=}")"; run_stg --admin -- deploy
+  expect_refused "admin env.staging with $key → refused" "admin/wrangler.jsonc env.staging has $key - the admin Worker holds no data, no secret, no route and no trigger"
+done
+for top in '"routes": ["admin.example.test/*"],' '"triggers": {"crons": ["* * * * *"]},' '"workers_dev": true,' '"kv_namespaces": [{"binding": "KV", "id": "abc"}],' '"assets": {"directory": "./other"},'; do
+  key=${top#\"}; key=${key%%\"*}
+  admin_tree staging; write_admin_jsonc "$T" "$GOOD" "$ADMIN_STAGING" "$top"; run_stg --admin -- deploy
+  expect_refused "admin top level with $key (inherited into env.staging) → refused" "admin/wrangler.jsonc top level has $key - it may only hold"
+done
+
+# --- --admin: production keeps workers.dev off, explicitly ---------------------------------------
+for edit in "e['workers_dev'] = True" "del e['workers_dev']" "e['preview_urls'] = True" "del e['preview_urls']"; do
+  key=workers_dev; case $edit in *preview_urls*) key=preview_urls ;; esac
+  admin_tree production "$(admin_section production "$edit")"; run_prod --admin -- deploy
+  expect_refused "admin production: $edit → refused" "env.production.$key is"
+done
+
+# --- --admin: the API's side of the admin origin (AUTH_TRUSTED_ORIGINS) --------------------------
+admin_tree staging "" "$(env_section staging stg "e['vars']['AUTH_TRUSTED_ORIGINS'] = p['origins']['api'] + ',' + p['origins']['web']")"; run_stg --admin -- deploy
+expect_refused "--admin: the API's AUTH_TRUSTED_ORIGINS lacks the admin origin → refused" "cloudflare/wrangler.jsonc env.staging.vars.AUTH_TRUSTED_ORIGINS is 'https://chopshop-api-stg.kent-ee2.workers.dev,https://chopshop-web-stg.kent-ee2.workers.dev', it must be exactly the pinned origins https://chopshop-api-stg.kent-ee2.workers.dev,https://chopshop-web-stg.kent-ee2.workers.dev,https://chopshop-admin-stg.kent-ee2.workers.dev"
+
+admin_tree staging "" "$(env_section staging stg "e['vars']['AUTH_TRUSTED_ORIGINS'] += ',https://elsewhere.example.test'")"; run_stg --admin -- deploy
+expect_refused "--admin: the API's AUTH_TRUSTED_ORIGINS with an extra origin → refused" "https://elsewhere.example.test', it must be exactly the pinned origins"
+
+admin_tree staging; write_jsonc "$T" "$GOOD"; run_stg --admin -- deploy
+expect_refused "--admin: the API's config without env.staging → refused" "cloudflare/wrangler.jsonc has no env.staging section - the admin origin cannot be shown"
+
+admin_tree staging; write_jsonc "$T" "$OTHER" "$ENV_STAGING"; run_stg --admin -- deploy
+expect_refused "--admin: the API's config on another account → refused" "cloudflare/wrangler.jsonc account_id is '$OTHER'"
+
+admin_tree staging; write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['AUTH_TRUSTED_ORIGINS'] = p['origins']['api'] + ',' + p['origins']['web']")"; run_stg -- deploy
+expect_refused "API deploy: AUTH_TRUSTED_ORIGINS without the pinned admin origin → refused" "env.staging.vars.AUTH_TRUSTED_ORIGINS is 'https://chopshop-api-stg.kent-ee2.workers.dev,https://chopshop-web-stg.kent-ee2.workers.dev', it must be exactly the pinned origins"
+
+admin_tree staging; pin "$T" staging "p['origins']['admin'] = None"; write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['AUTH_TRUSTED_ORIGINS'] = p['origins']['api'] + ',' + p['origins']['web']; del e['vars']['CANONICAL_ORIGINS']['admin']")"; run_stg -- deploy
+expect_exec "API deploy with a null origins.admin: AUTH_TRUSTED_ORIGINS is exactly {api, web} → execs" "FAKE-WRANGLER EXEC: --env staging deploy | account=$GOOD token=ok cwd=cloudflare"
+
+admin_tree staging; pin "$T" staging "p['origins']['admin'] = None"; write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['vars']['CANONICAL_ORIGINS']['admin']")"; run_stg -- deploy
+expect_refused "API deploy with a null origins.admin but the admin origin trusted anyway → refused (exact set)" "env.staging.vars.AUTH_TRUSTED_ORIGINS is 'https://chopshop-api-stg.kent-ee2.workers.dev,https://chopshop-web-stg.kent-ee2.workers.dev,https://chopshop-admin-stg.kent-ee2.workers.dev', it must be exactly the pinned origins https://chopshop-api-stg.kent-ee2.workers.dev,https://chopshop-web-stg.kent-ee2.workers.dev"
+
+# --- CANONICAL_ORIGINS and the admin key ---------------------------------------------------------
+admin_tree staging; run_stg -- deploy
+expect_exec "CANONICAL_ORIGINS deep-equals the pinned origins including admin → execs" "FAKE-WRANGLER EXEC: --env staging deploy | account=$GOOD token=ok cwd=cloudflare"
+
+admin_tree staging "" "$(env_section staging stg "del e['vars']['CANONICAL_ORIGINS']['admin']")"; run_stg -- deploy
+expect_refused "CANONICAL_ORIGINS without the admin key while origins.admin is pinned → refused" "pinned origins are {\"admin\": \"https://chopshop-admin-stg.kent-ee2.workers.dev\", \"api\""
+
+admin_tree staging "" "$(env_section staging stg "e['vars']['CANONICAL_ORIGINS']['admin'] = 'https://elsewhere.example.test'")"; run_stg -- deploy
+expect_refused "CANONICAL_ORIGINS.admin != pinned origins.admin → refused" "env.staging.vars.CANONICAL_ORIGINS is {\"admin\": \"https://elsewhere.example.test\""
+
+new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$ENV_PRODUCTION"; stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"; run_prod -- deploy
+expect_exec "a null origins.admin needs no admin key in CANONICAL_ORIGINS → execs" "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok cwd=cloudflare"
+
+new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$(env_section production prod "e['vars']['CANONICAL_ORIGINS']['admin'] = 'https://chopshop-admin.kent-ee2.workers.dev'")"; stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"; run_prod -- deploy
+expect_refused "a null origins.admin with an admin key in CANONICAL_ORIGINS → refused" "env.production.vars.CANONICAL_ORIGINS is {\"admin\""
+
+# --- --admin: the build (deploy only) --------------------------------------------------------------
+admin_tree staging; rm "$T/cloudflare/admin/dist/index.html"; run_stg --admin -- deploy
+expect_refused "admin deploy without dist/index.html → refused" "admin/dist/index.html not found - the admin is not built"
+
+admin_tree staging; rm -rf "$T/cloudflare/admin/dist"; run_stg --admin -- deploy
+expect_refused "admin deploy without dist at all → refused" "admin/dist/index.html not found"
+
+admin_tree staging; printf '{}' >"$T/cloudflare/admin/dist/assets/index-adm123.js.map"; run_stg --admin -- deploy
+expect_refused "admin deploy with a *.map file in dist → refused" "holds a source map: assets/index-adm123.js.map - the admin ships none"
+
+admin_tree staging; printf '//# sourceMappingURL=data:application/json;base64,e30=\n' >>"$T/cloudflare/admin/dist/assets/index-adm123.js"; run_stg --admin -- deploy
+expect_refused "admin deploy with an inline source map comment → refused" "holds a source map: assets/index-adm123.js carries a sourceMappingURL comment"
+
+admin_tree staging; printf 'body{color:red}/*# sourceMappingURL=data:application/json;base64,e30= */\n' >"$T/cloudflare/admin/dist/assets/index-def456.css"; run_stg --admin -- deploy
+expect_refused "admin deploy with a CSS source map comment behind code → refused" "holds a source map: assets/index-def456.css carries a sourceMappingURL comment"
+
+admin_tree staging; printf 'var s="//# sourceMappingURL=";\n' >>"$T/cloudflare/admin/dist/assets/index-adm123.js"; run_stg --admin -- deploy
+expect_exec_line "admin deploy: the words inside code are not a source map comment → execs" "$ADMIN_EXEC_STG"
+
+admin_tree staging; rm -rf "$T/cloudflare/admin/dist"; run_stg --admin -- whoami
+expect_exec_line "admin whoami without a build → execs (the build is the deploy's concern)" \
+  "FAKE-WRANGLER EXEC: --env staging whoami | account=$GOOD token=ok cwd=admin config=cloudflare/admin/wrangler.jsonc"
+
+# --- --admin: launch gate (6) and Stripe (7) apply as to the API ---------------------------------
+admin_tree production; rm "$T/docs/SnapWearDocs/LAUNCH_TODO.md"; cp "$REPO/docs/SnapWearDocs/LAUNCH_TODO.md" "$T/docs/SnapWearDocs/"; run_prod --admin -- deploy
+expect_refused "admin production with the real LAUNCH_TODO (open A/B items) → refused" "production launch gate:"
+
+new_tree; pin "$T" staging "$PIN_STG"; write_admin_jsonc "$T" "$GOOD" "$ADMIN_STAGING"; write_jsonc "$T" "$GOOD" "$ENV_STAGING"; run staging --admin -- deploy
+expect_refused "admin deploy without a Stripe key file → refused" "a deploy must prove the pinned Stripe account"
+
+admin_tree staging; FAKE_STRIPE_KEY=$SKEY_TEST FAKE_STRIPE_ACCOUNT=acct_SOMEBODYELSE run staging --admin -- deploy
+expect_refused "admin deploy with the Stripe key of another account → refused" "belongs to acct_SOMEBODYELSE, pinned stripeAccountId is $STRIPE_STG"
+
+admin_tree staging; FAKE_ACCOUNTS="[{\"id\": \"$OTHER\", \"name\": \"Somebody else\"}]" run_stg --admin -- deploy
+expect_refused "admin deploy with a token of another account → refused" "the token's account Somebody else ($OTHER) != CF_ACCOUNT_ID"
+
+# --- --admin: the passing paths --------------------------------------------------------------------
+admin_tree staging; run_stg --admin -- deploy
+if [ "$RC" -eq 0 ] && [ "$(grep '^FAKE-WRANGLER EXEC: ' "$OUT")" = "$ADMIN_EXEC_STG" ] &&
+  grep -qF 'preflight: OK — admin Worker chopshop-admin-stg: wrangler --env staging --config cloudflare/admin/wrangler.jsonc deploy (cwd cloudflare/admin)' "$OUT"; then
+  ok "admin staging deploy, everything in order → execs in cloudflare/admin with --config cloudflare/admin/wrangler.jsonc"
+else bad "admin staging deploy, everything in order → execs in cloudflare/admin with --config cloudflare/admin/wrangler.jsonc"; fi
+
+admin_tree staging; run_stg --admin -- deploy --dry-run
+expect_exec_line "admin deploy --dry-run → execs" \
+  "FAKE-WRANGLER EXEC: --env staging deploy --dry-run | account=$GOOD token=ok cwd=admin config=cloudflare/admin/wrangler.jsonc"
+
+for cmd in "tail" "deployments list" "rollback" "versions list"; do
+  admin_tree staging; run_stg --admin -- $cmd
+  expect_exec_line "admin '$cmd' → execs" "FAKE-WRANGLER EXEC: --env staging $cmd | account=$GOOD token=ok cwd=admin config=cloudflare/admin/wrangler.jsonc"
+done
+
+admin_tree production; run_prod --admin -- deploy
+expect_exec_line "admin production (origins.admin pinned, launch gate done, live Stripe, workers.dev off) → execs" \
+  "FAKE-WRANGLER EXEC: --env production deploy | account=$GOOD token=ok cwd=admin config=cloudflare/admin/wrangler.jsonc"
+
+admin_tree staging "$(admin_section staging "e['workers_dev'] = False")"; run_stg --admin -- deploy
+expect_exec_line "admin staging with workers_dev false → execs (only production is required off)" "$ADMIN_EXEC_STG"
+
+# --- the repo's REAL cloudflare/admin/wrangler.jsonc agrees with the repo's real pinned files -------
+new_tree; cp "$REPO/cloudflare/wrangler.jsonc" "$T/cloudflare/"; cp "$REPO/cloudflare/admin/wrangler.jsonc" "$T/cloudflare/admin/"
+fill_public_base "$T" staging; pin "$T" staging "p['stripeWebhookEndpointId'] = 'we_stg'; p['stripeConnectWebhookEndpointId'] = 'we_stgc'"
+stripe_file "$T" staging "$SKEY_TEST"; run_stg --admin -- deploy
+expect_exec_line "repo admin wrangler.jsonc + the repo API's AUTH_TRUSTED_ORIGINS pass every staging --admin check against repo pinned.staging.json" "$ADMIN_EXEC_STG"
+
+new_tree; cp "$REPO/cloudflare/wrangler.jsonc" "$T/cloudflare/"; cp "$REPO/cloudflare/web/wrangler.jsonc" "$T/cloudflare/web/"; cp "$REPO/cloudflare/admin/wrangler.jsonc" "$T/cloudflare/admin/"
+fill_public_base "$T" production
+pin "$T" production "p['stripeAccountId'] = 'acct_PRODTEST'; p['stripeWebhookEndpointId'] = 'we_prod'; p['stripeConnectWebhookEndpointId'] = 'we_prodc'"
+stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"; run_prod --admin -- deploy
+expect_refused "repo files as committed: production --admin refused while pinned origins.admin is null (no domain yet)" "origins.admin is null - production has no admin domain yet"
 
 # --- secrets never surface ----------------------------------------------------------------
 RC=0 OUT=$ALL_OUT

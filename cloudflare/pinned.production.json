@@ -3,9 +3,11 @@
   "cloudflareAccountName": "Kent@meteorpr.se's Account",
   "workerName": "chopshop-api",
   "webWorkerName": "chopshop-web",
+  "adminWorkerName": "chopshop-admin",
   "origins": {
     "api": "https://chopshop-api.kent-ee2.workers.dev",
-    "web": "https://chopshop-web.kent-ee2.workers.dev"
+    "web": "https://chopshop-web.kent-ee2.workers.dev",
+    "admin": null
   },
   "d1": {
     "name": "chopshop-prod",

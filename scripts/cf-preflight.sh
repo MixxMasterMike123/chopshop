@@ -2,7 +2,7 @@
 # scripts/cf-preflight.sh — the ONLY entry point for wrangler against Cloudflare
 # (docs/cf-port/PLAN.md §0 "Correct account, always", §6).
 #
-#   scripts/cf-preflight.sh <staging|production> [--bootstrap] [--web] -- <wrangler args…>
+#   scripts/cf-preflight.sh <staging|production> [--bootstrap] [--web|--admin] -- <wrangler args…>
 #
 # Runs  cloudflare/node_modules/.bin/wrangler --env <env> <args…>  (cwd cloudflare/) only if
 # every check passes; otherwise prints ONE line "PREFLIGHT REFUSED: …" and exits 1.
@@ -11,13 +11,22 @@
 #   wrangler --env <env> --config <repo>/cloudflare/web/wrangler.jsonc <args…>  (cwd cloudflare/web/)
 # — the configuration named explicitly, so no wrangler.json found higher up and no
 # .wrangler/deploy redirect can replace the file these checks read.
+# With --admin the target is the third Worker (chopshop-admin, cloudflare/admin/), checked check for
+# check as --web checks the web Worker (its own pinned adminWorkerName, origins.admin, dist and
+# configuration; run as wrangler --env <env> --config <repo>/cloudflare/admin/wrangler.jsonc …, cwd
+# cloudflare/admin/). --web and --admin together, and --bootstrap with either, are refused.
+# --admin ALSO checks the API's side of the admin origin: cloudflare/wrangler.jsonc env.<env>
+# must list origins.admin in AUTH_TRUSTED_ORIGINS (Better Auth refuses every admin sign-in
+# otherwise). The plain (API) mode requires the same whenever pinned origins.admin is not null.
+# origins.admin is null in production until the real domain exists (D7): --admin REFUSES then.
 #   1. credentials file ($CHOPSHOP_CF_ENV_FILE, default ~/.config/chopshop/cloudflare.env) is
 #      mode 600 and defines CF_ACCOUNT_ID + CLOUDFLARE_API_TOKEN; CF_ACCOUNT_ID == pinned id;
 #   2. cloudflare/pinned.<env>.json has the full shape, stripeMode is sandbox (staging) or
 #      live (production), production's dispatchTarget is "snapwear", the two Stripe webhook
 #      endpoint ids (platform + connect) are we_ ids or null, origins.api / origins.web and
 #      r2.publicBaseUrl (when set; null until D95) are bare https:// origins (no path, query or
-#      fragment), and webWorkerName is not the API's workerName;
+#      fragment; origins.admin may be null), and webWorkerName / adminWorkerName are not the API's
+#      workerName nor each other's;
 #   3. `wrangler whoami --json`, run with THAT token, sees exactly one account, and its id ==
 #      CF_ACCOUNT_ID == pinned cloudflareAccountId;
 #   4. the configuration's account_id — cloudflare/wrangler.jsonc, or with --web
@@ -29,8 +38,9 @@
 #      PRIVATE_BUCKET / PRODUCTION_BUCKET / OUTBOX_QUEUE / EMAIL_QUEUE / RENDER_JOBS_QUEUE (+ the
 #      three consumers) each on its own pinned resource (every R2 binding in "eu"), one container
 #      RenderContainer (./render/Dockerfile, max_instances 1, EU) bound as RENDER_CONTAINER, whose vars.CANONICAL_ORIGINS deep-equals pinned
-#      origins, AUTH_BASE_URL == origins.api, AUTH_TRUSTED_ORIGINS == exactly the set
-#      {origins.api, origins.web}, SERVICE_NAME == pinned workerName, R2_PRIVATE_BUCKET_NAME
+#      origins (its `admin` key excluded while pinned origins.admin is null), AUTH_BASE_URL == origins.api,
+#      AUTH_TRUSTED_ORIGINS == exactly the set {origins.api, origins.web} plus origins.admin when
+#      that is not null, SERVICE_NAME == pinned workerName, R2_PRIVATE_BUCKET_NAME
 #      == pinned r2.private, R2_JURISDICTION == "eu", DISPATCH_TARGET == pinned dispatchTarget
 #      and PUBLIC_OBJECT_BASE_URL == pinned r2.publicBaseUrl (without that section wrangler silently deploys the top-level config);
 #      web (--web, cloudflare/web/wrangler.jsonc): env.<env> whose name (or `<top>-<env>`) ==
@@ -47,18 +57,22 @@
 #      workers_dev and preview_urls are exactly false (absent, wrangler turns workers_dev on);
 #      and for `deploy`, cloudflare/web/dist/index.html exists (the storefront was built) and
 #      dist holds no source map (no *.map file, no sourceMappingURL comment);
-#   6. production without --bootstrap (with --web too: the web Worker is part of the same
+#      admin (--admin, cloudflare/admin/wrangler.jsonc): the same, with adminWorkerName, vars
+#      EXACTLY ADMIN_ORIGIN == pinned origins.admin and PUBLIC_OBJECT_BASE_URL, the same key lists
+#      and services entry, cloudflare/admin/dist, and the API's AUTH_TRUSTED_ORIGINS as above;
+#   6. production without --bootstrap (with --web / --admin too: those Workers are part of the same
 #      launch): every launch-gate item of docs/SnapWearDocs/LAUNCH_TODO.md
 #      (A1–A7, A9–A11, A13–A14, B1–B10 — PLAN §0) is ☑;
-#   7. Stripe (with --web too), via ~/.config/chopshop/stripe.<env>.env (mode 600,
+#   7. Stripe (with --web / --admin too), via ~/.config/chopshop/stripe.<env>.env (mode 600,
 #      STRIPE_SECRET_KEY; REQUIRED unless --bootstrap): the key prefix matches stripeMode
 #      (sk_/rk_ + test_ for sandbox, live_ for live), GET /v1/account id == pinned
 #      stripeAccountId, and the pinned stripeWebhookEndpointId (when set) exists on that account.
 #
 # --bootstrap (creating resources before their ids are pinned) allows only whoami, d1, r2 and
-# queues, and never --web: the web Worker creates no resource. --web allows only deploy (with no
-# argument but --dry-run: what is deployed is the checked file and the checked build), whoami,
-# deployments, rollback, tail and versions list|view|deploy — never `secret`: it holds none.
+# queues, and never --web or --admin: those Workers create no resource. --web and --admin allow only
+# deploy (with no argument but --dry-run: what is deployed is the checked file and the checked
+# build), whoami, deployments, rollback, tail and versions list|view|deploy — never `secret`: they
+# hold none.
 #
 # Secrets: the Cloudflare token is never printed and never put on a command line — it reaches
 # wrangler only through the environment; the Stripe key reaches curl only through stdin.
@@ -72,7 +86,7 @@ set +x
 refuse() { printf 'PREFLIGHT REFUSED: %s\n' "$*" >&2; exit 1; }
 note() { printf 'preflight: %s\n' "$*" >&2; }
 
-USAGE='usage: scripts/cf-preflight.sh <staging|production> [--bootstrap] [--web] -- <wrangler args…>'
+USAGE='usage: scripts/cf-preflight.sh <staging|production> [--bootstrap] [--web|--admin] -- <wrangler args…>'
 [ $# -ge 1 ] || refuse "$USAGE"
 ENV_NAME=$1
 shift
@@ -82,16 +96,22 @@ case $ENV_NAME in
 esac
 BOOTSTRAP=0
 WEB=0
+ADMIN=0
 while [ $# -gt 0 ] && [ "$1" != -- ]; do
   case $1 in
     --bootstrap) BOOTSTRAP=1 ;;
     --web) WEB=1 ;;
+    --admin) ADMIN=1 ;;
     *) refuse "unexpected argument '$1' before '--' — $USAGE" ;;
   esac
   shift
 done
 [ "$BOOTSTRAP$WEB" != 11 ] ||
   refuse "--bootstrap with --web is not allowed — the web Worker creates no resource; --bootstrap exists for the API's resources only"
+[ "$WEB$ADMIN" != 11 ] ||
+  refuse "--web with --admin is not allowed — one Worker per run; scripts/cf-deploy.sh runs them one after the other"
+[ "$BOOTSTRAP$ADMIN" != 11 ] ||
+  refuse "--bootstrap with --admin is not allowed — the admin Worker creates no resource; --bootstrap exists for the API's resources only"
 [ $# -gt 0 ] || refuse "missing '--' before the wrangler arguments — $USAGE"
 shift
 [ $# -gt 0 ] || refuse "no wrangler arguments after '--' — $USAGE"
@@ -110,33 +130,40 @@ if [ "$BOOTSTRAP" = 1 ]; then
     *) refuse "wrangler subcommand '$1' is not allowed under --bootstrap (only whoami, d1, r2, queues) — deploys go through scripts/cf-deploy.sh with the full checks" ;;
   esac
 fi
-# --web: the web Worker holds no data and no secret, and a deploy must be the checked
+# --web / --admin: these Workers hold no data and no secret, and a deploy must be the checked
 # configuration with the checked build — no --var, --assets, --routes, script path or other
-# override of what was checked. Only these subcommands may run with it.
-if [ "$WEB" = 1 ]; then
+# override of what was checked. Only these subcommands may run with them.
+EDGE=
+[ "$WEB" = 0 ] || EDGE=web
+[ "$ADMIN" = 0 ] || EDGE=admin
+if [ -n "$EDGE" ]; then
   case $1 in
     deploy)
       case "$#:${2:-}" in
         1: | 2:--dry-run) ;;
-        *) refuse "with --web, deploy takes no argument but --dry-run — the web Worker is deployed from cloudflare/web/wrangler.jsonc and cloudflare/web/dist exactly as checked" ;;
+        *) refuse "with --$EDGE, deploy takes no argument but --dry-run — the $EDGE Worker is deployed from cloudflare/$EDGE/wrangler.jsonc and cloudflare/$EDGE/dist exactly as checked" ;;
       esac ;;
     whoami | deployments | rollback | tail) ;;
     versions)
       case ${2:-} in
         list | view | deploy) ;;
-        *) refuse "wrangler 'versions ${2:-}' is not allowed with --web (only versions list, view, deploy) — the web Worker holds no secret and uploads only through deploy" ;;
+        *) refuse "wrangler 'versions ${2:-}' is not allowed with --$EDGE (only versions list, view, deploy) — the $EDGE Worker holds no secret and uploads only through deploy" ;;
       esac ;;
-    *) refuse "wrangler subcommand '$1' is not allowed with --web (only deploy, whoami, deployments, rollback, tail, versions list|view|deploy) — the web Worker holds no data and no secret" ;;
+    *) refuse "wrangler subcommand '$1' is not allowed with --$EDGE (only deploy, whoami, deployments, rollback, tail, versions list|view|deploy) — the $EDGE Worker holds no data and no secret" ;;
   esac
 fi
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 CF_DIR=$ROOT/cloudflare
 WEB_DIR=$CF_DIR/web
+ADMIN_DIR=$CF_DIR/admin
 PINNED=$CF_DIR/pinned.$ENV_NAME.json
 if [ "$WEB" = 1 ]; then
   JSONC=$WEB_DIR/wrangler.jsonc
   RUN_DIR=$WEB_DIR
+elif [ "$ADMIN" = 1 ]; then
+  JSONC=$ADMIN_DIR/wrangler.jsonc
+  RUN_DIR=$ADMIN_DIR
 else
   JSONC=$CF_DIR/wrangler.jsonc
   RUN_DIR=$CF_DIR
@@ -231,7 +258,10 @@ SHAPE = {
     "cloudflareAccountId": str, "cloudflareAccountName": str, "workerName": str,
     # The storefront's Worker (cloudflare/web/wrangler.jsonc env.<env>.name), deployed with --web.
     "webWorkerName": str,
-    "origins": {"api": str, "web": str},
+    # The admin's Worker (cloudflare/admin/wrangler.jsonc env.<env>.name), deployed with --admin.
+    "adminWorkerName": str,
+    # origins.admin: null in production until its real domain exists (D7); --admin refuses then.
+    "origins": {"api": str, "web": str, "admin": str},
     "d1": {"name": str, "id": str},
     # publicBaseUrl: the origin the PUBLIC bucket is read from (D78) — PUBLIC_OBJECT_BASE_URL of
     # both Workers. Null while that address does not exist (D95: staging's r2.dev address is
@@ -244,7 +274,7 @@ SHAPE = {
     # disputes) only on one created without it — two endpoints, two signing secrets.
     "stripeConnectWebhookEndpointId": str, "dispatchTarget": str,
 }
-NULLABLE = {"d1.id", "r2.publicBaseUrl", "stripeAccountId", "stripeWebhookEndpointId", "stripeConnectWebhookEndpointId"}  # null = not created yet
+NULLABLE = {"d1.id", "r2.publicBaseUrl", "origins.admin", "stripeAccountId", "stripeWebhookEndpointId", "stripeConnectWebhookEndpointId"}  # null = not created yet
 # A bare https origin exactly as a browser serialises it: lowercase host, optional port, and
 # nothing after it — no path (not even "/"), query, fragment or userinfo. Reset/verification
 # links are built from these (PLAN §2.1), so anything looser is a link-injection surface.
@@ -268,7 +298,7 @@ def walk(obj, shape, prefix, nulls, where):
         elif not isinstance(val, str) or not val:
             refuse(f"{where}: {path} must be a non-empty string" + (" or null" if path in NULLABLE else ""))
 
-def cmd_pinned(path, env, bootstrap):
+def cmd_pinned(path, env, bootstrap, admin="0"):
     p = load_json(path, path)
     nulls = []
     walk(p, SHAPE, "", nulls, path)
@@ -277,19 +307,27 @@ def cmd_pinned(path, env, bootstrap):
     for key, pat in (("stripeAccountId", r"acct_[A-Za-z0-9]+"), ("stripeWebhookEndpointId", r"we_[A-Za-z0-9]+"), ("stripeConnectWebhookEndpointId", r"we_[A-Za-z0-9]+")):
         if p[key] is not None and not re.fullmatch(pat, p[key]):
             refuse(f"{path}: {key} {p[key]!r} is not a Stripe {pat.split('_')[0]}_ id")
-    for key in ("api", "web"):
-        if not re.fullmatch(ORIGIN, p["origins"][key]):
+    for key in ("api", "web", "admin"):
+        if p["origins"][key] is not None and not re.fullmatch(ORIGIN, p["origins"][key]):
             refuse(f"{path}: origins.{key} {p['origins'][key]!r} is not a bare https:// origin (lowercase host, optional port; no path, query or fragment)")
     base = p["r2"]["publicBaseUrl"]
     if base is not None and not re.fullmatch(ORIGIN, base):
         refuse(f"{path}: r2.publicBaseUrl {base!r} is not a bare https:// origin (lowercase host, optional port; no path, query or fragment)")
     if p["webWorkerName"] == p["workerName"]:
         refuse(f"{path}: webWorkerName {p['webWorkerName']!r} is the API's workerName - a web deploy would replace the API Worker")
+    if p["adminWorkerName"] in (p["workerName"], p["webWorkerName"]):
+        refuse(f"{path}: adminWorkerName {p['adminWorkerName']!r} is the API's or the web Worker's name - an admin deploy would replace that Worker")
     want_mode = "sandbox" if env == "staging" else "live"
     if p["stripeMode"] != want_mode:
         refuse(f"{path}: stripeMode is {p['stripeMode']!r}, {env} requires {want_mode!r}")
     if env == "production" and p["dispatchTarget"] != "snapwear":
         refuse(f"{path}: production dispatchTarget is {p['dispatchTarget']!r} - only 'snapwear' may be deployed to production")
+    # origins.admin is null until the real domain exists: that blocks ONLY the admin Worker's
+    # deploy (its own line, not the generic "create it under --bootstrap"), never the API's or the web Worker's.
+    if "origins.admin" in nulls:
+        nulls.remove("origins.admin")
+        if admin == "1":
+            refuse(f"{path}: origins.admin is null - {env} has no admin domain yet (D7), so the admin Worker is not deployed there; pin origins.admin together with the admin wrangler.jsonc ADMIN_ORIGIN and the API's AUTH_TRUSTED_ORIGINS")
     if nulls and bootstrap != "1":
         refuse(f"{path} still has null (not yet created) values: {', '.join(nulls)} - create them under --bootstrap, pin the ids, then deploy")
     print("|".join([p["cloudflareAccountId"], p["stripeAccountId"] or "", p["stripeMode"],
@@ -326,6 +364,22 @@ def check_account(cfg, jsonc, env, pid):
         refuse(f"{jsonc} env.{env}.account_id is {e['account_id']!r}, pinned cloudflareAccountId is {pid}")
     return e
 
+def check_trusted(jsonc, env, v, origins):
+    """Better Auth trusts exactly the pinned api and web origins, plus the admin origin once pinned."""
+    want = [origins["api"], origins["web"]] + ([origins["admin"]] if origins["admin"] is not None else [])
+    trusted = v.get("AUTH_TRUSTED_ORIGINS")
+    if not isinstance(trusted, str) or {o.strip() for o in trusted.split(",")} != set(want):
+        refuse(f"{jsonc} env.{env}.vars.AUTH_TRUSTED_ORIGINS is {trusted!r}, it must be exactly the pinned origins {','.join(want)}")
+
+def cmd_apitrust(jsonc, pinned_path, env):
+    """For --admin: the API's own configuration trusts the admin origin (the same check as the API's deploy)."""
+    cfg = load_jsonc(jsonc)
+    p = load_json(pinned_path, pinned_path)
+    e = check_account(cfg, jsonc, env, p["cloudflareAccountId"])
+    if not isinstance(e, dict):
+        refuse(f"{jsonc} has no env.{env} section - the admin origin cannot be shown to be in the API's AUTH_TRUSTED_ORIGINS")
+    check_trusted(jsonc, env, e.get("vars") or {}, p["origins"])
+
 def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     cfg = load_jsonc(jsonc)
     p = load_json(pinned_path, pinned_path)
@@ -345,8 +399,11 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     if app_env != env:
         refuse(f"{jsonc} env.{env}.vars.APP_ENV is {app_env!r}, expected {env!r}")
     origins = p["origins"]
-    if v.get("CANONICAL_ORIGINS") != origins:
-        refuse(f"{jsonc} env.{env}.vars.CANONICAL_ORIGINS is {json.dumps(v.get('CANONICAL_ORIGINS'), sort_keys=True)}, pinned origins are {json.dumps(origins, sort_keys=True)}")
+    want_canonical = dict(origins)
+    if want_canonical["admin"] is None:  # no admin host pinned yet (production before its domain)
+        del want_canonical["admin"]
+    if v.get("CANONICAL_ORIGINS") != want_canonical:
+        refuse(f"{jsonc} env.{env}.vars.CANONICAL_ORIGINS is {json.dumps(v.get('CANONICAL_ORIGINS'), sort_keys=True)}, pinned origins are {json.dumps(want_canonical, sort_keys=True)}")
     if v.get("AUTH_BASE_URL") != origins["api"]:
         refuse(f"{jsonc} env.{env}.vars.AUTH_BASE_URL is {v.get('AUTH_BASE_URL')!r}, pinned origins.api is {origins['api']!r}")
     if v.get("SERVICE_NAME") != p["workerName"]:
@@ -360,9 +417,7 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     # Public objects' addresses are built from this var (D78); the web Worker holds the same one.
     if v.get("PUBLIC_OBJECT_BASE_URL") != p["r2"]["publicBaseUrl"]:
         refuse(f"{jsonc} env.{env}.vars.PUBLIC_OBJECT_BASE_URL is {v.get('PUBLIC_OBJECT_BASE_URL')!r}, pinned r2.publicBaseUrl is {p['r2']['publicBaseUrl']!r}")
-    trusted = v.get("AUTH_TRUSTED_ORIGINS")
-    if not isinstance(trusted, str) or {o.strip() for o in trusted.split(",")} != {origins["api"], origins["web"]}:
-        refuse(f"{jsonc} env.{env}.vars.AUTH_TRUSTED_ORIGINS is {trusted!r}, it must be exactly the pinned origins {origins['api']},{origins['web']}")
+    check_trusted(jsonc, env, v, origins)
     # Every binding the Worker code reads must exist and point at exactly its pinned resource:
     # a missing binding fails closed at runtime (bad), a binding on the wrong resource does not
     # (worse — PRIVATE_BUCKET on the public bucket would publish private uploads).
@@ -418,8 +473,8 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     if consumers != sorted(want_q.values()):
         refuse(f"{jsonc} env.{env} queue consumers are {consumers}, expected exactly the pinned {sorted(want_q.values())}")
 
-# The web Worker (cloudflare/web/wrangler.jsonc) holds no data, no secret, no route and no trigger:
-# these are the ONLY keys its configuration may have. Anything else — any binding kind wrangler
+# The web and admin Workers (cloudflare/web/wrangler.jsonc, cloudflare/admin/wrangler.jsonc) hold no
+# data, no secret, no route and no trigger: these are the ONLY keys their configurations may have. Anything else — any binding kind wrangler
 # knows today or adds later, a route, a cron trigger, a build command — is refused until the
 # preflight is extended for it. The top level counts too: wrangler inherits routes, triggers,
 # workers_dev, assets and build from it into every env section.
@@ -432,60 +487,68 @@ def canon(value):
     """Exact JSON equality: key order is free, but true is not 1 and "1" is not 1."""
     return json.dumps(value, sort_keys=True)
 
-def cmd_webjsonc(jsonc, pinned_path, env):
+def check_edge(kind, jsonc, pinned_path, env):
+    """kind is "web" or "admin": the same checks, bound to that Worker's pinned name, origin and var."""
     cfg = load_jsonc(jsonc)
     p = load_json(pinned_path, pinned_path)
+    name_key, origin_var = kind + "WorkerName", kind.upper() + "_ORIGIN"
     e = check_account(cfg, jsonc, env, p["cloudflareAccountId"])
     if not isinstance(e, dict):
         refuse(f"{jsonc} has no env.{env} section - wrangler would silently deploy the top-level config")
     extra = sorted(set(cfg) - WEB_TOP_KEYS)
     if extra:
-        refuse(f"{jsonc} top level has {', '.join(extra)} - it may only hold {', '.join(sorted(WEB_TOP_KEYS))} (wrangler inherits routes, triggers, workers_dev, assets and build into env.{env}; the web Worker holds no data, no secret, no route and no trigger)")
+        refuse(f"{jsonc} top level has {', '.join(extra)} - it may only hold {', '.join(sorted(WEB_TOP_KEYS))} (wrangler inherits routes, triggers, workers_dev, assets and build into env.{env}; the {kind} Worker holds no data, no secret, no route and no trigger)")
     extra = sorted(set(e) - WEB_ENV_KEYS)
     if extra:
-        refuse(f"{jsonc} env.{env} has {', '.join(extra)} - the web Worker holds no data, no secret, no route and no trigger: env.{env} may only hold {', '.join(sorted(WEB_ENV_KEYS))}")
+        refuse(f"{jsonc} env.{env} has {', '.join(extra)} - the {kind} Worker holds no data, no secret, no route and no trigger: env.{env} may only hold {', '.join(sorted(WEB_ENV_KEYS))}")
     name = e.get("name", f"{cfg.get('name')}-{env}")
-    if name != p["webWorkerName"]:
+    if name != p[name_key]:
         inherited = "" if "name" in e else " (wrangler's effective name: top-level name + '-" + env + "')"
-        refuse(f"{jsonc} env.{env}.name is {name!r}{inherited}, pinned webWorkerName is {p['webWorkerName']!r}")
+        refuse(f"{jsonc} env.{env}.name is {name!r}{inherited}, pinned {name_key} is {p[name_key]!r}")
     if canon(e.get("assets")) != canon(WEB_ASSETS):
         refuse(f"{jsonc} env.{env}.assets is {canon(e.get('assets'))}, expected exactly {canon(WEB_ASSETS)}")
     # The API of the SAME environment, through the entrypoint that carries fetchForShop (D77).
     want_services = [{"binding": "API", "service": p["workerName"], "entrypoint": "Internal"}]
     if canon(e.get("services")) != canon(want_services):
         refuse(f"{jsonc} env.{env}.services is {canon(e.get('services'))}, expected exactly {canon(want_services)} (pinned workerName, entrypoint Internal)")
-    want_vars = {"WEB_ORIGIN": p["origins"]["web"], "PUBLIC_OBJECT_BASE_URL": p["r2"]["publicBaseUrl"]}
+    want_vars = {origin_var: p["origins"][kind], "PUBLIC_OBJECT_BASE_URL": p["r2"]["publicBaseUrl"]}
     v = e.get("vars")
     if not isinstance(v, dict) or set(v) != set(want_vars):
         refuse(f"{jsonc} env.{env}.vars are {sorted(v) if isinstance(v, dict) else canon(v)}, expected exactly {sorted(want_vars)}")
-    if v["WEB_ORIGIN"] != want_vars["WEB_ORIGIN"]:
-        refuse(f"{jsonc} env.{env}.vars.WEB_ORIGIN is {v['WEB_ORIGIN']!r}, pinned origins.web is {want_vars['WEB_ORIGIN']!r}")
+    if v[origin_var] != want_vars[origin_var]:
+        refuse(f"{jsonc} env.{env}.vars.{origin_var} is {v[origin_var]!r}, pinned origins.{kind} is {want_vars[origin_var]!r}")
     if v["PUBLIC_OBJECT_BASE_URL"] != want_vars["PUBLIC_OBJECT_BASE_URL"]:
         refuse(f"{jsonc} env.{env}.vars.PUBLIC_OBJECT_BASE_URL is {v['PUBLIC_OBJECT_BASE_URL']!r}, pinned r2.publicBaseUrl is {want_vars['PUBLIC_OBJECT_BASE_URL']!r}")
     if env == "production":
         # Absent is not off: without a route wrangler turns workers_dev on.
         for key in ("workers_dev", "preview_urls"):
             if e.get(key) is not False:
-                refuse(f"{jsonc} env.production.{key} is {canon(e.get(key))}, production requires false (nothing of the production web Worker on workers.dev; absent, wrangler turns workers_dev on)")
-    print(p["webWorkerName"])
+                refuse(f"{jsonc} env.production.{key} is {canon(e.get(key))}, production requires false (nothing of the production {kind} Worker on workers.dev; absent, wrangler turns workers_dev on)")
+    print(p[name_key])
 
-def cmd_dist(dist):
-    """For `deploy --web`: the storefront was built, and ships no source map."""
+def cmd_webjsonc(jsonc, pinned_path, env):
+    check_edge("web", jsonc, pinned_path, env)
+
+def cmd_adminjsonc(jsonc, pinned_path, env):
+    check_edge("admin", jsonc, pinned_path, env)
+
+def cmd_dist(dist, what="the storefront", builder="check-storefront-build.mjs"):
+    """For `deploy --web` / `--admin`: the build exists, and ships no source map."""
     if not os.path.isfile(os.path.join(dist, "index.html")):
-        refuse(f"{dist}/index.html not found - the storefront is not built (node cloudflare/web/check-storefront-build.mjs; scripts/cf-deploy.sh builds it)")
+        refuse(f"{dist}/index.html not found - {what} is not built (node {builder}; scripts/cf-deploy.sh builds it)")
     for d, dirs, files in os.walk(dist):
         dirs.sort()
         for f in sorted(files):
             full = os.path.join(d, f)
             rel = os.path.relpath(full, dist)
             if f.endswith(".map"):
-                refuse(f"{dist} holds a source map: {rel} - the storefront ships none")
+                refuse(f"{dist} holds a source map: {rel} - {what} ships none")
             if f.endswith((".js", ".mjs", ".css", ".html")):
                 with open(full, "rb") as fh:
                     # Anywhere on a line (a comment may follow code), and with an address behind the
                     # "=": the bare words inside a string of the code are no source map.
                     if re.search(rb"(?://|/\*)[#@][ \t]*sourceMappingURL=[ \t]*[^\s\"'`$\\]", fh.read()):
-                        refuse(f"{dist} holds a source map: {rel} carries a sourceMappingURL comment - the storefront ships none")
+                        refuse(f"{dist} holds a source map: {rel} carries a sourceMappingURL comment - {what} ships none")
 
 def cmd_stripe(path, code, pinned_acct, key_file):
     s = load_json(path, "Stripe /v1/account response")
@@ -531,7 +594,7 @@ def cmd_launch(path):
         refuse(f"production launch gate: {path} items not marked done: {', '.join(not_done)}")
 
 {"pinned": cmd_pinned, "whoami": cmd_whoami, "jsonc": cmd_jsonc, "webjsonc": cmd_webjsonc,
- "dist": cmd_dist, "stripe": cmd_stripe, "webhook": cmd_webhook, "launch": cmd_launch}[sys.argv[1]](*sys.argv[2:])
+ "adminjsonc": cmd_adminjsonc, "apitrust": cmd_apitrust, "dist": cmd_dist, "stripe": cmd_stripe, "webhook": cmd_webhook, "launch": cmd_launch}[sys.argv[1]](*sys.argv[2:])
 PY
 
 # --- 1. credentials file -----------------------------------------------------------------
@@ -544,7 +607,7 @@ TOKEN=$(env_value "$ENV_FILE" CLOUDFLARE_API_TOKEN)
 [ -n "$TOKEN" ] || refuse "$ENV_FILE defines no CLOUDFLARE_API_TOKEN"
 
 # --- 2. pinned identity -------------------------------------------------------------------
-out=$(python3 -c "$PY" pinned "$PINNED" "$ENV_NAME" "$BOOTSTRAP") || refuse "${out:-python3 helper failed on $PINNED}"
+out=$(python3 -c "$PY" pinned "$PINNED" "$ENV_NAME" "$BOOTSTRAP" "$ADMIN") || refuse "${out:-python3 helper failed on $PINNED}"
 IFS='|' read -r PINNED_ID STRIPE_ACCT STRIPE_MODE WEBHOOK_ID CONNECT_WEBHOOK_ID NULLS <<<"$out"
 [ "$FILE_ACCOUNT_ID" = "$PINNED_ID" ] ||
   refuse "CF_ACCOUNT_ID $FILE_ACCOUNT_ID in $ENV_FILE != pinned cloudflareAccountId $PINNED_ID"
@@ -568,7 +631,15 @@ if [ "$WEB" = 1 ]; then
   out=$(python3 -c "$PY" webjsonc "$JSONC" "$PINNED" "$ENV_NAME") || refuse "${out:-python3 helper failed on $JSONC}"
   WEB_WORKER=$out
   if [ "$1" = deploy ]; then
-    out=$(python3 -c "$PY" dist "$WEB_DIR/dist") || refuse "${out:-python3 helper failed on $WEB_DIR/dist}"
+    out=$(python3 -c "$PY" dist "$WEB_DIR/dist" "the storefront" "cloudflare/web/check-storefront-build.mjs") || refuse "${out:-python3 helper failed on $WEB_DIR/dist}"
+  fi
+elif [ "$ADMIN" = 1 ]; then
+  out=$(python3 -c "$PY" adminjsonc "$JSONC" "$PINNED" "$ENV_NAME") || refuse "${out:-python3 helper failed on $JSONC}"
+  ADMIN_WORKER=$out
+  # The API's side of the admin origin: without it in AUTH_TRUSTED_ORIGINS every admin sign-in is refused.
+  out=$(python3 -c "$PY" apitrust "$CF_DIR/wrangler.jsonc" "$PINNED" "$ENV_NAME") || refuse "${out:-python3 helper failed on $CF_DIR/wrangler.jsonc}"
+  if [ "$1" = deploy ]; then
+    out=$(python3 -c "$PY" dist "$ADMIN_DIR/dist" "the admin" "cloudflare/admin/check-admin-build.mjs") || refuse "${out:-python3 helper failed on $ADMIN_DIR/dist}"
   fi
 else
   out=$(python3 -c "$PY" jsonc "$JSONC" "$PINNED" "$ENV_NAME" "$BOOTSTRAP") || refuse "${out:-python3 helper failed on $JSONC}"
@@ -625,12 +696,14 @@ if [ "$BOOTSTRAP" = 1 ]; then
   note "OK (BOOTSTRAP: unset ids and env.$ENV_NAME bindings not enforced${NULLS:+; null: $NULLS}) — wrangler --env $ENV_NAME $*"
 elif [ "$WEB" = 1 ]; then
   note "OK — web Worker $WEB_WORKER: wrangler --env $ENV_NAME --config cloudflare/web/wrangler.jsonc $* (cwd cloudflare/web)"
+elif [ "$ADMIN" = 1 ]; then
+  note "OK — admin Worker $ADMIN_WORKER: wrangler --env $ENV_NAME --config cloudflare/admin/wrangler.jsonc $* (cwd cloudflare/admin)"
 else
   note "OK — wrangler --env $ENV_NAME $*"
 fi
 cd "$RUN_DIR"
 export CLOUDFLARE_API_TOKEN=$TOKEN CLOUDFLARE_ACCOUNT_ID=$PINNED_ID
-if [ "$WEB" = 1 ]; then
+if [ "$WEB" = 1 ] || [ "$ADMIN" = 1 ]; then
   exec "$WRANGLER" --env "$ENV_NAME" --config "$JSONC" "$@"
 fi
 exec "$WRANGLER" --env "$ENV_NAME" "$@"
