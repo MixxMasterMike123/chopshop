@@ -48,7 +48,7 @@ Gates at HEAD: 557 tests under Node, 440 script tests, Worker 99 files / 4237, t
 
 **Open for Mikael from FK and WJ:** a printer price edit reaches existing products at once (Firebase froze the cost at publish) and products under the floor are only reported; removing a garment from a printer is refused on the page; the printers page's new texts; an imported legal row whose user was not carried over is shown to the shop by its stored address; should `variantCount` count inactive variants; should a tag's count cover only published products.
 
-**Update 2026-10-04 01:15 — three commits wait for Codex; WH is running.**
+**Update 2026-10-04 01:14 — three commits wait for Codex; WH is running.**
 
 | Commit | What | Codex |
 |---|---|---|
