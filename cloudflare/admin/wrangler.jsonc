@@ -1,0 +1,80 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  // chopshop-admin — the admin's and the platform console's Worker (docs/cf-port/CP5_BRIEFS.md
+  // §WX, D102: one host, one Worker; /platform/* is the platform tree, everything else the admin).
+  // It serves the admin build (vite.admin.config.js → cloudflare/admin/dist/, git-ignored) and
+  // forwards the admin's own API calls (/_api/v1/admin/…, /_api/v1/platform/…, /_api/v1/me,
+  // /_api/api/auth/…) to chopshop-api's `Internal` entrypoint over a service binding, with the
+  // session cookie.
+  //
+  // Same shape as cloudflare/web/wrangler.jsonc, on purpose: NO bindings and NO vars at the top
+  // level (wrangler env sections do not inherit them), and a top-level name that is no real
+  // Worker's, so a bare `wrangler deploy` without --env deploys nothing that works. Every deploy
+  // names its environment: scripts/cf-deploy.sh, through scripts/cf-preflight.sh <env> --admin
+  // (reviewer wiring, CP5_WX_REPORT.md), which checks this file against cloudflare/pinned.<env>.json.
+  "name": "chopshop-admin-unbound",
+  "account_id": "ee213082783ec86585150e876edb6107",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
+  },
+  "env": {
+    "staging": {
+      "name": "chopshop-admin-stg",
+      "workers_dev": true,
+      "preview_urls": false,
+      // The Worker runs FIRST for every request: the security headers, the /_api allowlist and
+      // the SPA fallback are its work. It reads the build through ASSETS; the asset layer
+      // answers nothing on its own (no HTML handling, no fallback page).
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "run_worker_first": true,
+        "html_handling": "none",
+        "not_found_handling": "none"
+      },
+      "services": [
+        { "binding": "API", "service": "chopshop-api-stg", "entrypoint": "Internal" }
+      ],
+      "vars": {
+        // Must equal pinned.staging.json → origins.admin (NOT PINNED YET: reviewer wiring), the
+        // API's CANONICAL_ORIGINS.admin, and be listed in the API's AUTH_TRUSTED_ORIGINS: Better
+        // Auth refuses a sign-in whose Origin it does not trust.
+        "ADMIN_ORIGIN": "https://chopshop-admin-stg.kent-ee2.workers.dev",
+        // The public bucket's address (D78, D95), the same bare https origin as
+        // cloudflare/wrangler.jsonc env.staging.vars, cloudflare/web/wrangler.jsonc and
+        // pinned.staging.json → r2.publicBaseUrl; the preflight (--admin) requires them equal.
+        "PUBLIC_OBJECT_BASE_URL": "https://pub-0e06052f19524b76bbefd4b411baa272.r2.dev"
+      }
+    },
+    "production": {
+      "name": "chopshop-admin",
+      "workers_dev": false,
+      "preview_urls": false,
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "run_worker_first": true,
+        "html_handling": "none",
+        "not_found_handling": "none"
+      },
+      "services": [
+        { "binding": "API", "service": "chopshop-api", "entrypoint": "Internal" }
+      ],
+      "vars": {
+        // Must equal pinned.production.json → origins.admin. CP7 replaces it with the real
+        // domain (D7), here and in the pinned file together; the preflight refuses production
+        // until then.
+        "ADMIN_ORIGIN": "https://chopshop-admin.kent-ee2.workers.dev"
+        // PUBLIC_OBJECT_BASE_URL goes here with production's public bucket address (CP7, D78),
+        // equal to cloudflare/wrangler.jsonc env.production.vars and pinned r2.publicBaseUrl.
+      }
+    }
+  }
+}

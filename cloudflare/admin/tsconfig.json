@@ -1,0 +1,11 @@
+{
+  // chopshop-admin's own sources, checked with the API's compiler settings:
+  // `cd cloudflare && npx tsc --noEmit -p admin`. The admin Worker imports nothing
+  // outside admin/src; the runtime types come from @cloudflare/workers-types, not
+  // from the API's generated file (that one pulls in the API's own modules).
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src/**/*.ts"]
+}
