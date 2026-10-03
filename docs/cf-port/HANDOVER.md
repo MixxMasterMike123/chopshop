@@ -31,6 +31,23 @@ Gates at HEAD: 557 tests under Node, 440 script tests, Worker 99 files / 4237, t
 
 **Next, in this order:** FK (the platform printers page) and WJ's remaining items (the legal status' signer and time, a refused legal text names its page, the platform detail's legal readiness, `variantCount` + `tags` in the product list and `GET /v1/admin/tags`, the pages list's SEO and languages, order search by the recipient's name, a coarse payment method if stored) → FM (artwork library + mapping; brings melodie-mc's 6 POD products back) → WH → FN (the studio) → WE, WD, FL.
 
+**Update 2026-10-04 00:45 — the printers page is on staging; the Worker follow-ups wait for Codex.**
+
+| Commit | What | Codex |
+|---|---|---|
+| `94abceb5` | FK (Opus, 352k tokens): `/platform/printers` on the API; a save writes only what the operator changed, fenced on the revision; no print-shop accounts, no routing per garment in this build | 1 finding (P1), fixed `842c7b6f` |
+| `842c7b6f` | after a save the form follows the stored printer (`resync`) | 1 finding (P1), fixed `97d421c8` |
+| `97d421c8` | the editor is locked while its save runs | clean |
+| `14976ab0` | WJ (Opus, 334k tokens): signer and time of the legal evidence; a refused legal text names its page; the platform detail's `legal` (the checkout's ONE legal predicate, `isCheckoutLegallyOpen`); `variantCount` + `tags` in the product list and `GET /v1/admin/tags`; the pages list's SEO fields and languages; order search by the recipient's name. Payment method: not stored, not built. No migration. Worker 100 files / 4254 | **NOT read by Codex: its usage limit, back 02:34.** A detached job reviews it then: `~/chopshop-export/codex-2026-10-03/run-wait-0236.sh` → `codex-14976ab0.log` + `done.txt` |
+
+**Deployed:** the admin Worker at `97d421c8` (attested), version `3bc8228e-9c8e-4e4e-9d95-fb965f11c05c`, from a clean checkout (builders were writing in the tree). `/platform/printers` verified in a browser: "Fake printer (staging)" active, "Snapwear (Łódź)" inactive. The API and web Workers are still `abc10141`: **`14976ab0` is NOT deployed and NOT attested.**
+
+**Running since 00:35 (they die with the window; finish from the tree):** FM (Opus; the artwork library and the mapping page, `/admin/pod`; report `CP5_FM_REPORT.md`) and FW (Sonnet; the pages read WJ's new fields; `CP5_FW_REPORT.md`). FW's fields exist on staging only once `14976ab0` is deployed.
+
+**Next:** read Codex on `14976ab0` → fix → review FM and FW, Codex on both → attest HEAD → `scripts/cf-deploy.sh staging` → smoke (`/admin/pod`: upload an artwork, map one of melodie-mc's six POD products) → WH (studio assets, migration 0049) → FN (the studio, split FN1/FN2) → WE, WD, FL.
+
+**Open for Mikael from FK and WJ:** a printer price edit reaches existing products at once (Firebase froze the cost at publish) and products under the floor are only reported; removing a garment from a printer is refused on the page; the printers page's new texts; an imported legal row whose user was not carried over is shown to the shop by its stored address; should `variantCount` count inactive variants; should a tag's count cover only published products.
+
 ### (history) 🔁 HANDOVER 2026-10-03 23:10 — every launch-scope page but the printers page is COMMITTED; Codex found 10 things to fix before the next deploy
 
 **Tree clean, HEAD `a5b3cfa1` pushed, no builder running, no job waiting.** Staging is unchanged since 19:10: it serves `63760063` (the sign-in works, stand-ins behind it; the entry below).
