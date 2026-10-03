@@ -4,7 +4,7 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP5 — Admin (started 2026-10-03 on Mikael's "keep going … full autonomy")
 
-### 🚀 2026-10-03 ~23:15 — the admin Worker is ON STAGING and a real sign-in works — START HERE
+### 🚀 2026-10-03 19:10 — the admin Worker is ON STAGING and a real sign-in works — START HERE
 
 Sources of truth: `CP5_GAP_ANALYSIS.md` (page → route map, the units), `CP5_BRIEFS.md` (rules, D99–D103 on defaults, the contracts, the briefs), one `CP5_<unit>_REPORT.md` per builder.
 
@@ -22,7 +22,7 @@ Sources of truth: `CP5_GAP_ANALYSIS.md` (page → route map, the units), `CP5_BR
 
 **Codex on CP5 so far:** `33490f79` (D2), `f3329972` (WX), `b3aa5605` (WA+WB), `be9c6fc2` (W2), `b609ce4b`, `63760063` clean; `a6612e86` (FA) two findings: an upload could change shop midway (fixed `63760063`), the arrival's `?shopId=` outranked a later choice (fixed in unit FB's `ActiveShop.jsx`, lands with FB).
 
-**Built and waiting in the tree (uncommitted; they share `pages.jsx`, `vite.admin.config.js`, the dev API):** FF payments, FE settings and legal adoption, FC products. **Still running:** FB the shells and acting-as, FD orders and dashboard. `guard/allowlist.txt`: a page that loses its Firebase code makes its entry stale, and its old-build data module (`<page>Data.js`, Firebase on purpose) needs an entry: one out, one in, the size never grows.
+**Update 19:15.** The page units FB, FC, FD, FE and FF are committed as ONE commit, `6f62a958` (shells with acting-as and the terms gate, products, orders and dashboard, settings with the legal adoption, payments): 397 tests under Node, the admin build free of Firebase code and of the earlier brand's name. **NOT deployed and NOT attested: Codex hit its usage limit on it (back 21:32); a waiting job runs the review then** (`~/chopshop-export/codex-2026-10-03/codex-6f62a958.log`). Staging's admin therefore still shows the stand-ins. Running: FG (catalogue content pages), WC (shop members routes), FI (platform shop pages), FJ (platform add-ons, users, reports). `guard/allowlist.txt`: a page that loses its Firebase code makes its entry stale, and its old-build data module (`<page>Data.js`, Firebase on purpose) needs an entry: one out, one in, the size never grows.
 
 **Found on the way, open:**
 - Nothing writes `order_items.production_state` yet, so an order with a POD line cannot be marked shipped or ready for pickup by the seller (it waits for the printer's status signal, CP6).
