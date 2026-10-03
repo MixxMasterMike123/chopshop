@@ -4,7 +4,34 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP5 — Admin (started 2026-10-03 on Mikael's "keep going … full autonomy")
 
-### 🔁 HANDOVER 2026-10-03 23:10 — every launch-scope page but the printers page is COMMITTED; Codex found 10 things to fix before the next deploy — START HERE
+### 🚀 2026-10-04 00:25 — the admin's PAGES are on staging; Codex's ten findings are fixed — START HERE
+
+**Deployed SHA `d92458f1`, attested, tree clean, pushed.** API `dbd1b35d-3d0e-4bd7-8f42-65741591190f`, web `5fccd42f-aa75-485d-858d-7c92750867d9` (both at `abc10141`), admin `f3ad5bff-603c-4a9f-9b38-48435898a8b0` (`d92458f1`). Migration 0048 applied on staging (bookmark BEFORE `000002cd-00000000-000050f9-66a757f1e50aa3fdacb674dc560f14ed`); `/ready` answers 0048.
+
+| Commit | What | Codex |
+|---|---|---|
+| `4b9abd7f` | WJ4 (Opus, 313k tokens): an invited admin is created WITHOUT a password in one batch (`createInvitedUser`); `POST /v1/platform/users` takes `{ accountType, email }`; the directory's `invite.pending`; findings 4 and 8. No migration | 1 finding (P2), fixed in `abc10141` |
+| `8856baf0` | FX (Opus, 465k tokens): findings 1, 2, 3, 5, 6, 7, 9, each with a test; finding 10 (the seed's `rightsConfirmed`) by the reviewer | clean |
+| `abc10141` | the password-less creation refuses an address the sign-in would refuse (`isSignInEmail`, Better Auth's own `z.email()`); zod is a direct dependency | clean |
+| `d92458f1` | the payments page MOUNTED: its line in `src/admin-app/pages.jsx` was still a stand-in (FF left it so, the swap was never made; found by the smoke) | clean |
+
+`a5b3cfa1` (WG) is now read line by line by the reviewer: nothing to change (noted: a rename of an artwork that vanishes mid-request still writes its audit row).
+
+Gates at HEAD: 557 tests under Node, 440 script tests, Worker 99 files / 4237, tsc clean ×3, preflight tests 302, deploy tests 90, the three builds and their checks, guard PASS (296).
+
+**Smoke in a real browser (no console error but the signed-out 401 of `/v1/me`):** sign-in as `staging-review+ninetone@example.com` → the terms gate (accepted for ninetone ONLY; the other three shops still show it) → dashboard, products (58), orders, collections (6), menu, pages, look (images and template thumbs load), settings, payments ("Ej aktiverat"), admins. Sign-in as the platform user → shops (7), shop detail (the new publication texts), add-ons, users, reports (the screening tab shows 29). **An upload through the admin proxy works** (reserve 201, content 200, the preview from the public bucket; not saved; one unreferenced `shop_branding` object `7894201a-…` is left on ninetone). NOT smoke-tested: saving a product, an order detail, the reset and invite mails (no mail account on staging). Stand-ins left: `/platform/printers` (FK), `/admin/pod` (FM/FN).
+
+**Found on the way:**
+- `scripts/cf-deploy.sh` refuses a BLANK `VITE_STRIPE_PUBLISHABLE_KEY` in `admin.staging.env` although its header says any name may be blanked. Worked around by putting the public `pk_test_…` there (allowed for the admin; backup `admin.staging.env.bak-2026-10-03`). To fix in the script with a test, when it is next touched.
+- A browser that held the earlier build showed a stand-in until a reload (the page shell is cached).
+- `test/password-reset.test.ts` compared two clock reads for equality and failed once; it now allows the tick.
+- The platform console's wordmark reads "meteorpr" (older than the port).
+
+**Open for Mikael (new, none blocks):** a print operator cannot be created without a password (nothing could give it one); staging admins with a random password and NO invite row do not get the invite button (they can use "forgot password"; `CP5_WJ4_REPORT.md` has the query); "AVPUBLICERA" and the other publication texts (`CP5_FX_REPORT.md`'s table); a page is mounted afresh when the shop changes (unsaved edits are dropped); re-pricing a group whose sizes differed sets all its sizes, said in a notice after the save.
+
+**Next, in this order:** FK (the platform printers page) and WJ's remaining items (the legal status' signer and time, a refused legal text names its page, the platform detail's legal readiness, `variantCount` + `tags` in the product list and `GET /v1/admin/tags`, the pages list's SEO and languages, order search by the recipient's name, a coarse payment method if stored) → FM (artwork library + mapping; brings melodie-mc's 6 POD products back) → WH → FN (the studio) → WE, WD, FL.
+
+### (history) 🔁 HANDOVER 2026-10-03 23:10 — every launch-scope page but the printers page is COMMITTED; Codex found 10 things to fix before the next deploy
 
 **Tree clean, HEAD `a5b3cfa1` pushed, no builder running, no job waiting.** Staging is unchanged since 19:10: it serves `63760063` (the sign-in works, stand-ins behind it; the entry below).
 
