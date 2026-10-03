@@ -11,7 +11,8 @@
 //   2. PUT /v1/platform/tenants/:id/features — the Butikstyp preset's values
 //      for the keys the API allows.
 //   3. POST /v1/platform/tenants/:id/unpublish — the API creates a shop
-//      published; the console's rule is that a new shop starts hidden.
+//      published; the console's rule is that a new shop starts unpublished
+//      (here: closed to visitors, D57).
 // If 2 or 3 fails the shop exists: the modal closes as created and a toast
 // names what to redo on the shop's detail page.
 //
@@ -29,6 +30,9 @@ import {
 import { API_FEATURE_KEYS, isConflict, provisionFeaturesOf } from '../adapters/platformShops.js';
 
 export const ACCENT_FIELD = false;
+
+/** The note under the form: a new shop starts unpublished, closed to visitors (D57). */
+export { NEW_SHOP_NOTE } from './publishCopy.js';
 
 export async function provisionShop({ id, name, preset }) {
   try {
@@ -49,7 +53,7 @@ export async function provisionShop({ id, name, preset }) {
     await setTenantPublished(id, false);
   } catch (error) {
     console.error('Provision: unpublish failed', error);
-    unfinished.push('dölj butiken (TA UR SÖK)');
+    unfinished.push('avpublicera butiken (AVPUBLICERA)');
   }
   if (unfinished.length > 0) {
     toast.error(`Butiken skapades, men detta gick inte: ${unfinished.join(', ')}. Gör om det på butikens detaljsida.`, {

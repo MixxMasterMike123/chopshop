@@ -14,6 +14,9 @@ import { db } from '../../firebase/config';
 /** The accent colour is written with the new shop here. */
 export const ACCENT_FIELD = true;
 
+/** The note under the form: a new shop starts hidden from search engines, open by link. */
+export { NEW_SHOP_NOTE } from '../../pages/platform/publishCopy.js';
+
 /**
  * Creates shops/{id}. Resolves 'exists' when the id is taken (nothing is
  * written), else 'created'.

@@ -111,6 +111,38 @@ describe('collections', () => {
     assert.equal(smart.rule.tag, 'Tryck');
   });
 
+  it('a second save compares with the first save, not with the load: add then remove a product sends both lists (CP5-FX, finding 6)', async () => {
+    // The page keeps the first load's form for every save of the session.
+    const form = await collectionEdit.loadCollection('col-hem');
+    const original = [...form.productIds];
+    const data = { title: 'Hem och linne', handle: 'hem-och-linne', description: '', imageUrl: form.imageUrl, type: 'manual', productIds: original, rule: { tag: '' }, published: true, featured: false, sortOrder: 0 };
+    await collectionEdit.saveCollection({ id: 'col-hem', isNew: false, shopId: 'test-shop-a', data: { ...data, productIds: [...original, 'prod-cap'] }, form });
+    log.length = 0;
+    await collectionEdit.saveCollection({ id: 'col-hem', isNew: false, shopId: 'test-shop-a', data, form });
+    assert.deepEqual(log.map(([m]) => m), ['PATCH', 'PUT'], 'the removal is sent');
+    assert.deepEqual((await collectionEdit.loadCollection('col-hem')).productIds, original);
+  });
+
+  it('the same for the cover: set then removed across two saves clears it', async () => {
+    const form = await collectionEdit.loadCollection('col-nytt');
+    assert.equal(form.savedImageUrl, '');
+    const file = new File([Buffer.from([0x89, 0x50, 0x4e, 0x47, 4, 5, 6])], 'cover.png', { type: 'image/png' });
+    const url = await collectionEdit.uploadCollectionCover(file, 'test-shop-a');
+    const data = { title: 'Nyheter i höst', handle: 'nyheter', description: '', imageUrl: url, type: 'manual', productIds: form.productIds, rule: { tag: '' }, published: false, featured: false };
+    await collectionEdit.saveCollection({ id: 'col-nytt', isNew: false, shopId: 'test-shop-a', data, form });
+    await collectionEdit.saveCollection({ id: 'col-nytt', isNew: false, shopId: 'test-shop-a', data: { ...data, imageUrl: '' }, form });
+    assert.equal((await collectionEdit.loadCollection('col-nytt')).imageUrl, '');
+  });
+
+  it('a refused member list is sent again on the next save', async () => {
+    const form = await collectionEdit.loadCollection('col-hem');
+    const data = { title: 'Hem och linne', handle: 'hem-och-linne', description: '', imageUrl: form.imageUrl, type: 'manual', productIds: [...form.productIds, 'prod-gone'], rule: { tag: '' }, published: true, featured: false, sortOrder: 0 };
+    await rejectsWith(collectionEdit.saveCollection({ id: 'col-hem', isNew: false, shopId: 'test-shop-a', data, form }), /produktlistan kunde inte sparas/);
+    log.length = 0;
+    await rejectsWith(collectionEdit.saveCollection({ id: 'col-hem', isNew: false, shopId: 'test-shop-a', data, form }), /produktlistan kunde inte sparas/);
+    assert.deepEqual(log.map(([m]) => m), ['PATCH', 'PUT']);
+  });
+
   it('the cover: uploaded as a product_media object, written by id, cleared by an empty address', async () => {
     const file = new File([Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])], 'cover.png', { type: 'image/png' });
     const url = await collectionEdit.uploadCollectionCover(file, 'test-shop-a');
@@ -192,6 +224,41 @@ describe('the storefront\'s look', () => {
     await storefront.saveBranding({ logoUrl: '' }, 'test-shop-a');
     const cleared = (await (await fetch('/_api/v1/admin/settings', { headers: { 'x-shop-id': 'test-shop-a' } })).json()).settings.storeIdentity;
     assert.equal(cleared.logoObjectId, null);
+  });
+
+  it('images whose reads fail are kept by a save of another field (CP5-FX, finding 7)', async () => {
+    const png = (n) => new File([Buffer.from([0x89, 0x50, 0x4e, 0x47, n, n, n])], `i${n}.png`, { type: 'image/png' });
+    const hero = await storefront.uploadBrandImage(png(1), 'hero', 'test-shop-a');
+    const favicon = await storefront.uploadBrandImage(png(2), 'favicon', 'test-shop-a');
+    const tile = await storefront.uploadBrandImage(png(3), 'hero', 'test-shop-a');
+    await storefront.saveBranding({ heroImageUrl: hero, faviconUrl: favicon, gallery: [{ imageUrl: tile, label: 'Ett', linkSku: '' }] }, 'test-shop-a');
+    const identity = async () => (await (await fetch('/_api/v1/admin/settings', { headers: { 'x-shop-id': 'test-shop-a' } })).json()).settings.storeIdentity;
+    const before = await identity();
+    assert.match(before.heroObjectId, /^obj-/);
+    assert.match(before.gallery[0].imageObjectId, /^obj-/);
+
+    // The object reads now fail (a network error or a 500): no preview.
+    const working = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      if ((init.method ?? 'GET') === 'GET' && /\/v1\/admin\/objects\//.test(String(url))) {
+        return new Response(JSON.stringify({ error: { code: 'internal' } }), { status: 500 });
+      }
+      return working(url, init);
+    };
+    try {
+      const loaded = await storefront.loadBranding('test-shop-a');
+      assert.equal(loaded.heroImageUrl, undefined, 'no address to show');
+      // The page: the defaults under what it was handed, then a save of the accent.
+      const form = { logoUrl: '/images/logo.svg', faviconUrl: '', heroImageUrl: '', ...loaded, accent: '#445566' };
+      await storefront.saveBranding({ accent: form.accent, logoUrl: form.logoUrl, faviconUrl: form.faviconUrl, heroImageUrl: form.heroImageUrl, gallery: form.gallery }, 'test-shop-a');
+    } finally {
+      globalThis.fetch = working;
+    }
+    const after = await identity();
+    assert.equal(after.accent, '#445566');
+    assert.equal(after.heroObjectId, before.heroObjectId);
+    assert.equal(after.faviconObjectId, before.faviconObjectId);
+    assert.deepEqual(after.gallery, before.gallery);
   });
 
   it('the categories of the products; a file that is not an image is refused in words', async () => {

@@ -13,7 +13,7 @@
 // THE SELLER SEES ONE NUMBER: these calls hand the server's answer on as it
 // is; nothing here computes a fee, a payout or a price.
 
-import { AdminApiError, adminRequest, segment, withQuery } from './client.js';
+import { AdminApiError, adminRequest, getRequestShopId, segment, withQuery } from './client.js';
 
 /** The list's page size the walk asks for (the route's maximum). */
 export const LIST_PAGE_SIZE = 100;
@@ -36,11 +36,14 @@ export function searchQueryOf(text) {
   return ORDER_NUMBER_PREFIX.test(q) ? q : null;
 }
 
-/** One page of the list: `{ orders, nextCursor, count, totalMinor }`. */
-export async function listOrders(filters = {}, { signal } = {}) {
+/**
+ * One page of the list: `{ orders, nextCursor, count, totalMinor }`.
+ * `shopId`: the shop asked (default: the active shop, as every admin call).
+ */
+export async function listOrders(filters = {}, { signal, shopId } = {}) {
   const { status, fulfilment, since, until, q, cursor, limit } = filters;
   const path = withQuery('/v1/admin/orders', { status, fulfilment, since, until, q, cursor, limit });
-  const { data } = await adminRequest('GET', path, { signal });
+  const { data } = await adminRequest('GET', path, { signal, shopId });
   return {
     orders: Array.isArray(data?.orders) ? data.orders : [],
     nextCursor: typeof data?.nextCursor === 'string' ? data.nextCursor : null,
@@ -52,14 +55,16 @@ export async function listOrders(filters = {}, { signal } = {}) {
 /**
  * Every page of the list for `filters`, walked by the cursor, newest first.
  * `count` and `totalMinor` are the route's (the whole window); `truncated` is
- * true when the walk stopped at `maxPages` with orders left.
+ * true when the walk stopped at `maxPages` with orders left. Every page goes
+ * to ONE shop: `shopId`, else the shop active when the walk began (a cursor
+ * of one shop is never sent to another).
  */
-export async function listAllOrders(filters = {}, { signal, maxPages = MAX_LIST_PAGES } = {}) {
+export async function listAllOrders(filters = {}, { signal, maxPages = MAX_LIST_PAGES, shopId = getRequestShopId() } = {}) {
   const orders = [];
   let cursor = null;
   let first = null;
   for (let page = 0; page < maxPages; page += 1) {
-    const answer = await listOrders({ ...filters, cursor, limit: LIST_PAGE_SIZE }, { signal });
+    const answer = await listOrders({ ...filters, cursor, limit: LIST_PAGE_SIZE }, { signal, shopId });
     first ??= answer;
     orders.push(...answer.orders);
     cursor = answer.nextCursor;
@@ -69,9 +74,9 @@ export async function listAllOrders(filters = {}, { signal, maxPages = MAX_LIST_
 }
 
 /** The detail (`order` of the route), or null when the route answers 404. */
-export async function getOrder(orderId, { signal } = {}) {
+export async function getOrder(orderId, { signal, shopId } = {}) {
   try {
-    const { data } = await adminRequest('GET', `/v1/admin/orders/${segment(orderId)}`, { signal });
+    const { data } = await adminRequest('GET', `/v1/admin/orders/${segment(orderId)}`, { signal, shopId });
     return data?.order ?? null;
   } catch (error) {
     if (error instanceof AdminApiError && error.status === 404) return null;
@@ -110,8 +115,9 @@ export async function withIdempotencyKey(send, { attempts = 3, key = newIdempote
 /**
  * Moves the order's fulfilment one step. `change`: { to, trackingNumber?,
  * carrier?, note? }. Resolves `{ orderId, from, to, at, shipment }`.
+ * `options`: { shopId } and the retry's ({ attempts, key, pauseMs }).
  */
-export async function changeFulfilment(orderId, change, options = {}) {
+export async function changeFulfilment(orderId, change, { shopId, ...retry } = {}) {
   const body = { to: change.to };
   for (const key of ['trackingNumber', 'carrier', 'note']) {
     const value = typeof change[key] === 'string' ? change[key].trim() : '';
@@ -121,9 +127,10 @@ export async function changeFulfilment(orderId, change, options = {}) {
     const { data } = await adminRequest('POST', `/v1/admin/orders/${segment(orderId)}/fulfilment`, {
       json: body,
       idempotencyKey,
+      shopId,
     });
     return data?.fulfilment ?? null;
-  }, options);
+  }, retry);
 }
 
 /**
@@ -142,9 +149,10 @@ export async function refundOrder(orderId, { amountMinor, reason }, options = {}
 }
 
 /** Cancels the order's production (no money moves). Resolves the route's `cancellation`. */
-export async function cancelOrder(orderId, { reason }) {
+export async function cancelOrder(orderId, { reason }, { shopId } = {}) {
   const { data } = await adminRequest('POST', `/v1/admin/orders/${segment(orderId)}/cancel`, {
     json: { reason },
+    shopId,
   });
   return data?.cancellation ?? null;
 }

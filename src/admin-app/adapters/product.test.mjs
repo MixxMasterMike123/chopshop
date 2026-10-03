@@ -18,6 +18,7 @@ import {
   productFromListItem,
   productWriteBody,
   refusalMessage,
+  repricedMixedGroups,
   sameImageList,
   screeningNoticeFor,
   shippingRatesOf,
@@ -222,6 +223,95 @@ describe('the variant sync', () => {
     const plan = planVariantSync(existing, [{ sku: 'tee-rod', label: 'Röd', group: 'Röd', size: null, priceMinor: 24900, position: 0 }]);
     assert.deepEqual(plan.creates, []);
     assert.deepEqual(plan.updates, [{ variantId: 'v-old', sku: 'tee-rod', body: { position: 0, active: true } }]);
+  });
+});
+
+describe('a group whose sizes have different prices (CP5-FX, finding 2)', () => {
+  // An imported hoodie: the sizes of "Svart" have their own prices; "Vit"
+  // follows the product price.
+  const HOODIE = {
+    product: { ...TEE.product, productId: 'p-hood', sku: 'hood', name: 'Hoodie', priceMinor: 39900 },
+    publication: { published: true },
+    variants: [
+      { variantId: 'v-s', sku: 'hood-svart-s', label: 'Svart / S', priceMinor: 42900, active: true, group: 'Svart', size: 'S', position: 0 },
+      { variantId: 'v-m', sku: 'hood-svart-m', label: 'Svart / M', priceMinor: 42900, active: true, group: 'Svart', size: 'M', position: 1 },
+      { variantId: 'v-xl', sku: 'hood-svart-xl', label: 'Svart / XL', priceMinor: 47900, active: true, group: 'Svart', size: 'XL', position: 2 },
+      { variantId: 'v-vit', sku: 'hood-vit', label: 'Vit', priceMinor: 39900, active: true, group: 'Vit', size: null, position: 3 },
+    ],
+    variantsTruncated: false,
+    images: [],
+  };
+  const product = productFromDetail(HOODIE, { skuFromName });
+
+  // The form's edit state: ProductForm.jsx normalizeGroups keeps label, sku,
+  // price (null → ''), images and sizes, and nothing else.
+  const formGroups = () => product.variantGroups.map((g) => ({
+    label: g.label, sku: g.sku || '', price: g.price ?? '', images: [], sizes: g.sizes.map((s) => s.toUpperCase()),
+  }));
+
+  // The save's variant step (replacements/productFormData.js saveProduct).
+  function save(editedGroups, { price = product.b2cPrice } = {}) {
+    const { cleanGroups, cleanVariants } = deriveVariantsFromGroups(editedGroups.map((g) => ({ ...g, images: [] })), {
+      productSku: 'hood', productPrice: price, skuFromName,
+    });
+    const desired = desiredVariants(cleanVariants, cleanGroups);
+    const railPriceOf = product._server.railPriceOf;
+    const plan = planVariantSync(product._server.variants, desired, { railPriceOf });
+    return { plan, repriced: repricedMixedGroups(plan, desired, railPriceOf) };
+  }
+  const priceWrites = (plan) => [
+    ...plan.updates.filter((u) => u.body.priceMinor !== undefined).map((u) => [u.variantId, u.body.priceMinor]),
+    ...plan.creates.map((c) => [c.sku, c.body.priceMinor]),
+  ];
+
+  it('the form shows one price for the group (the first size\'s); Vit is inherited', () => {
+    assert.deepEqual(product.variantGroups.map((g) => [g.label, g.price]), [['Svart', 429], ['Vit', null]]);
+  });
+
+  it('a save that changes anything else (the description) writes NO price: every size keeps its own', () => {
+    const { plan, repriced } = save(formGroups());
+    assert.deepEqual(plan, { deletes: [], updates: [], creates: [] });
+    assert.deepEqual(repriced, []);
+  });
+
+  it('a new product price moves the inherited group only; the sizes of Svart keep theirs', () => {
+    const { plan, repriced } = save(formGroups(), { price: 449 });
+    assert.deepEqual(priceWrites(plan), [['v-vit', 44900]]);
+    assert.deepEqual(repriced, []);
+  });
+
+  it('a renamed group and a new size: the sizes keep their prices, the new size takes the group\'s', () => {
+    const groups = formGroups();
+    groups[0] = { ...groups[0], label: 'Kol', sizes: [...groups[0].sizes, 'L'] };
+    const { plan } = save(groups);
+    assert.deepEqual(priceWrites(plan), [['hood-svart-l', 42900]]);
+    assert.deepEqual(plan.updates.map((u) => [u.variantId, Object.keys(u.body).sort()]), [
+      ['v-s', ['group', 'label']], ['v-m', ['group', 'label']], ['v-xl', ['group', 'label']], ['v-vit', ['position']],
+    ]);
+  });
+
+  it('the seller changes the group\'s price on purpose: every size of the group gets it, and the save says so', () => {
+    const groups = formGroups();
+    groups[0] = { ...groups[0], price: '459' };
+    const { plan, repriced } = save(groups);
+    assert.deepEqual(priceWrites(plan), [['v-s', 45900], ['v-m', 45900], ['v-xl', 45900]]);
+    assert.deepEqual(repriced, ['Svart']);
+  });
+
+  it('the seller empties the group\'s price on purpose: every size follows the product price', () => {
+    const groups = formGroups();
+    groups[0] = { ...groups[0], price: '' };
+    const { plan, repriced } = save(groups);
+    assert.deepEqual(priceWrites(plan), [['v-s', 39900], ['v-m', 39900], ['v-xl', 39900]]);
+    assert.deepEqual(repriced, ['Svart']);
+  });
+
+  it('a group whose sizes all have one price is unchanged by this rule', () => {
+    const groups = formGroups();
+    groups[1] = { ...groups[1], price: '419' };
+    const { plan, repriced } = save(groups);
+    assert.deepEqual(priceWrites(plan), [['v-vit', 41900]]);
+    assert.deepEqual(repriced, [], 'Vit had one price: nothing to announce');
   });
 });
 

@@ -13,9 +13,12 @@
 //                `…ObjectId` keys take their place. An image the page removed
 //                clears its key in the same save, and so does a stored id whose
 //                object is gone (it would make the PUT refuse the identity).
+//                An image whose read FAILED is not gone: the page cannot show
+//                it, the seller is told, and its id is kept unless replaced.
 //                Template, theme, accent, the featured block and the texts are
 //                plain identity keys.
 
+import toast from 'react-hot-toast';
 import { AdminApiError } from '../../api/admin/client.js';
 import { listAllProducts } from '../../api/admin/products.js';
 import { uploadObject } from '../../api/admin/uploads.js';
@@ -34,10 +37,16 @@ export async function loadShopCategories(shopId) {
   return categoriesOf(items.filter((p) => p.status !== 'archived'));
 }
 
+/** What the seller is told when an image's preview could not be read (it is kept, not removed). */
+export const UNREAD_IMAGES_NOTICE = 'Några bilder kunde inte hämtas just nu och visas inte. De finns kvar och ändras inte när du sparar.';
+
 export async function loadBranding(shopId) {
   const saved = await loadShopConfig(shopId);
   const seen = await readImages(saved, shopId);
   rememberImages(shopId, saved, seen);
+  const unread = Object.values(seen.loaded).some((entry) => entry.unread) ||
+    Object.keys(seen.addresses).some((key) => key.startsWith('unread:'));
+  if (unread) toast(UNREAD_IMAGES_NOTICE, { icon: 'ℹ️', duration: 8000 });
   return brandingFromIdentity(saved, seen.addresses);
 }
 

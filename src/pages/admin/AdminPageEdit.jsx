@@ -9,6 +9,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { loadPage, savePage, ATTACHMENTS_ENABLED } from './adminPageEditData';
+import { useStorefrontLinks } from './storefrontLinks';
 import PageAttachments from './PageAttachments';
 import {
   isLegalSlug,
@@ -52,6 +53,7 @@ const AdminPageEdit = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const shopId = useShopId();
+  const storefrontLinks = useStorefrontLinks();
   const { getContentValue, setContentValue } = useContentTranslation();
 
 
@@ -220,7 +222,7 @@ const AdminPageEdit = () => {
   const headerActions = (
     <>
       {!isNewPage && formData.status === 'published' && (
-        <Button as="a" href={`/${formData.slug}`} target="_blank" rel="noopener noreferrer" variant="secondary">
+        <Button as="a" {...storefrontLinks.page(formData.slug)} target="_blank" rel="noopener noreferrer" variant="secondary">
           <EyeIcon className="h-4 w-4" />
           Visa sida
         </Button>

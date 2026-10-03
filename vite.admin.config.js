@@ -133,6 +133,8 @@ const ADMIN_ALIASES = [
     'AdminPageEdit: no attachments (D94): FileUpload, FileManager and the Firebase upload code stay out of this build'],
   ['src/pages/admin/adminStorefrontData.js', 'src/admin-app/replacements/adminStorefrontData.js',
     'AdminStorefront: logo, hero and favicon as shop_branding objects named by id in the identity; the identity saved through saveShopConfig; categories from the product list'],
+  ['src/pages/admin/storefrontLinks.js', 'src/admin-app/replacements/storefrontLinks.js',
+    'the storefront links of AdminStorefront, AdminPages, AdminPageEdit and AdminCollectionEdit: the storefront\'s origin + the shop, not a path of the admin\'s origin; an unpublished shop opens its preview (POST /v1/admin/preview) (CP5-FX)'],
   ['src/utils/shopPayout.js', 'src/admin-app/replacements/shopPayout.js',
     'the payout is the server\'s (the seller sees ONE number); a browser computation fails loudly'],
   // Unit FH: the shop's own admins.

@@ -680,7 +680,7 @@ async function ensureArtwork() {
     info("original object", objectId);
     const created = expectStatus(
       await api("POST", "/v1/admin/pod/artwork", {
-        json: { objectId, profileId: PROFILE.profileId },
+        json: { objectId, profileId: PROFILE.profileId, rightsConfirmed: true },
         session: true,
         shop: true,
       }),

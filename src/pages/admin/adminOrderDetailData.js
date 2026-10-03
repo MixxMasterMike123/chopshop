@@ -27,8 +27,11 @@ export async function fetchOrderUser(userId) {
 /**
  * Refunds the whole order. Server is Connect-aware: a destination-charge order
  * is refunded with transfer reversal + fee refund; a legacy order takes a
- * plain refund.
+ * plain refund. Resolves the outcome the page announces: the callable answers
+ * only when the refund is done, so it is never pending here (the admin
+ * build's module can answer `{ pending: true, message }`).
  */
 export async function refundWholeOrder(orderId, _order) {
   await httpsCallable(functions, 'refundOrder')({ orderId });
+  return { pending: false };
 }

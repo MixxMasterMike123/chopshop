@@ -284,13 +284,18 @@ export const isObjectId = (value) => typeof value === 'string' && OBJECT_ID.test
 /**
  * The patch to hand saveShopConfig, from the page's branding patch.
  *   `urls`    the table address → object id of this page (loads and uploads)
- *   `loaded`  { key: { id, resolved } } for each identity image key as read:
- *             `resolved` false = the object no longer answers (removed, D93),
- *             and the PUT would refuse the stored id
+ *   `loaded`  { key: { id, resolved, unread } } for each identity image key as
+ *             read: `resolved` false = the object no longer answers (removed,
+ *             D93), and the PUT would refuse the stored id; `unread` true =
+ *             the read failed (a network error, a 500): the page had no
+ *             address to show, which is not the seller removing the image
  * The page's addresses leave; an object id goes where the page's address names
- * a known object; an address the page cleared clears the key; an id whose
+ * a known object (an upload replaces even an unread image); an address the
+ * page cleared clears the key, unless the image was unread (the page never
+ * showed it, so it cannot have removed it: the stored id stays); an id whose
  * object is gone is cleared as well; a key nobody touched is left out (so the
- * stored value stays). Gallery entries carry `imageObjectId`.
+ * stored value stays). Gallery entries carry `imageObjectId`; one whose image
+ * was unread keeps the id brandingFromIdentity left on it.
  */
 export function brandingPatch(patch, { urls, loaded }) {
   const out = { ...patch };
@@ -300,6 +305,7 @@ export function brandingPatch(patch, { urls, loaded }) {
     const url = patch[urlKey];
     const was = loaded[idKey];
     if (typeof url === 'string' && url !== '' && urls.has(url)) out[idKey] = urls.get(url);
+    else if (was?.unread === true) continue; // preview unavailable: the stored id stays
     else if (url === '' && was?.id) out[idKey] = null; // removed on the page
     else if (was && was.resolved === false) out[idKey] = null;
   }
@@ -308,15 +314,23 @@ export function brandingPatch(patch, { urls, loaded }) {
 
   if (Array.isArray(patch.gallery)) {
     out.gallery = patch.gallery.map((item) => {
-      const { imageUrl, ...rest } = item || {};
+      const { imageUrl, imageObjectId: unreadId, ...rest } = item || {};
       const id = typeof imageUrl === 'string' ? urls.get(imageUrl) : undefined;
-      return isObjectId(id) ? { ...rest, imageObjectId: id } : rest;
+      if (isObjectId(id)) return { ...rest, imageObjectId: id };
+      // An image whose preview could not be read, not replaced on the page.
+      if (isObjectId(unreadId) && !imageUrl) return { ...rest, imageObjectId: unreadId };
+      return rest;
     });
   }
   return out;
 }
 
-/** The page's branding source from the stored identity and the addresses of its objects. */
+/**
+ * The page's branding source from the stored identity and the addresses of its
+ * objects. A gallery entry whose image could not be read (`unread:<id>`) keeps
+ * its `imageObjectId` (the page carries an entry's other keys along), so the
+ * save keeps it; every other entry trades the id for its address.
+ */
 export function brandingFromIdentity(identity, addresses) {
   const saved = { ...(isObject(identity) ? identity : {}) };
   for (const [urlKey, idKey] of Object.entries(IMAGE_URL_KEYS)) {
@@ -328,7 +342,9 @@ export function brandingFromIdentity(identity, addresses) {
       if (!isObject(item)) return item;
       const { imageObjectId, ...rest } = item;
       const url = typeof imageObjectId === 'string' ? addresses[`gallery:${imageObjectId}`] : undefined;
-      return url ? { ...rest, imageUrl: url } : rest;
+      if (url) return { ...rest, imageUrl: url };
+      if (typeof imageObjectId === 'string' && addresses[`unread:${imageObjectId}`]) return { ...rest, imageObjectId };
+      return rest;
     });
   }
   return saved;

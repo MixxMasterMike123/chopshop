@@ -15,6 +15,9 @@ import { APP_URLS } from '../../config/urls';
 /** The per-shop counts (products, orders, customers) have a read here. */
 export const SHOW_COUNTS = true;
 
+/** The publication column's words: here unpublishing only hides the shop from search engines. */
+export { SHOP_LIST_PUBLISH_COPY as PUBLISH_COPY } from './publishCopy.js';
+
 /** Every shop with its counts, sorted by name. */
 export async function loadShops() {
   const snap = await getDocs(collection(db, 'shops'));

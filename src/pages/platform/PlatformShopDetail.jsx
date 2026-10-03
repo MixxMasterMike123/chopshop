@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   MIGRATORS,
+  PUBLISH_COPY,
   SHOW_COUNTS,
   loadShop,
   openStorefront,
@@ -92,7 +93,8 @@ const PlatformShopDetail = () => {
   // Searchability derivation — IDENTICAL to the storefront gate (ShopGate): only
   // an explicit published===false hides the shop from search engines. undefined/
   // true = searchable/indexable. The STORE is open + shoppable either way; this
-  // only controls whether Google/Bing may index it.
+  // only controls whether Google/Bing may index it. (The admin build: unpublished
+  // = closed, D57; the words come from the data module's PUBLISH_COPY.)
   const isSearchable = shop ? shop.published !== false : false;
   const disabled = shop?.status === 'disabled';
 
@@ -108,18 +110,18 @@ const PlatformShopDetail = () => {
       if (!legalReadinessOf(shop).ready) gaps.push('juridiska sidor ej klara');
       if (!shop.payments?.chargesEnabled) gaps.push('kan inte ta betalt än');
       const warn = gaps.length ? `\n\nOBS: ${gaps.join(', ')}.` : '';
-      if (!window.confirm(`Vill du göra "${shop.name || shop.id}" sökbar (GO LIVE)?${warn}`)) return;
-    } else if (!window.confirm(`Vill du dölja "${shop.name || shop.id}" från sökmotorer? Butiken förblir öppen via länk.`)) {
+      if (!window.confirm(PUBLISH_COPY.confirmPublish(shop.name || shop.id, warn))) return;
+    } else if (!window.confirm(PUBLISH_COPY.confirmUnpublish(shop.name || shop.id))) {
       return;
     }
     try {
       setBusy('published');
       await setShopPublished(shop, next);
       setShop((prev) => ({ ...prev, published: next }));
-      toast.success(next ? 'Butiken är nu sökbar (indexeras)' : 'Butiken är nu dold för sökmotorer');
+      toast.success(next ? PUBLISH_COPY.publishedToast : PUBLISH_COPY.unpublishedToast);
     } catch (e) {
       console.error('Error toggling published:', e);
-      toast.error('Kunde inte ändra sökbarhet');
+      toast.error(PUBLISH_COPY.failedToast);
     } finally {
       setBusy(null);
     }
@@ -220,7 +222,7 @@ const PlatformShopDetail = () => {
                 (isSearchable ? 'bg-green-500/15 text-green-300' : 'bg-amber-500/15 text-amber-300')
               }
             >
-              {isSearchable ? 'Sökbar' : 'Dold för sök'}
+              {isSearchable ? PUBLISH_COPY.badgeOn : PUBLISH_COPY.badgeOff}
             </span>
             <span
               className={
@@ -242,16 +244,14 @@ const PlatformShopDetail = () => {
               <div className="max-w-xl">
                 <h2 className="flex items-center gap-2 text-base font-semibold text-white">
                   <RocketLaunchIcon className="h-5 w-5 text-indigo-300" />
-                  Sökbarhet
+                  {PUBLISH_COPY.heading}
                 </h2>
                 <p className="mt-2 text-sm text-gray-400">
                   {isSearchable ? (
-                    <>Butiken är <span className="text-green-300 font-medium">sökbar</span> — Google och Bing får indexera{' '}
+                    <>{PUBLISH_COPY.onLead}<span className="text-green-300 font-medium">{PUBLISH_COPY.onWord}</span>{PUBLISH_COPY.onTail}{' '}
                       <a href={storefrontUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-300 hover:underline">{storefrontUrl}</a>.</>
                   ) : (
-                    <>Butiken är <span className="text-amber-300 font-medium">dold för sökmotorer</span> (noindex).
-                      Den är fortfarande <span className="text-gray-300 font-medium">öppen och köpbar</span> via länk —
-                      bara osynlig i Google/Bing tills du klickar GO LIVE.</>
+                    <>{PUBLISH_COPY.offLead}<span className="text-amber-300 font-medium">{PUBLISH_COPY.offWord}</span>{PUBLISH_COPY.offMiddle}<span className="text-gray-300 font-medium">{PUBLISH_COPY.offWord2}</span>{PUBLISH_COPY.offTail}</>
                   )}
                 </p>
                 <p className="mt-2 text-xs text-gray-600">
@@ -269,7 +269,7 @@ const PlatformShopDetail = () => {
                 }
               >
                 <RocketLaunchIcon className="h-4 w-4" />
-                {busy === 'published' ? '…' : isSearchable ? 'TA UR SÖK' : 'GO LIVE'}
+                {busy === 'published' ? '…' : isSearchable ? PUBLISH_COPY.unpublishButton : 'GO LIVE'}
               </button>
             </div>
           </div>

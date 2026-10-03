@@ -16,15 +16,23 @@
 // Not ported (null: the page leaves the tile and its link out): the customer
 // count (no customer accounts, D81), the affiliate revenue and the active
 // affiliates (PORT-LATER).
+//
+// Read for the page's `shopId` only (readForShop): with no shop chosen nothing
+// is asked, and numbers that arrive after the tab moved to another shop are
+// dropped, never shown under it (CP5-FX, finding 1).
 
 import { listAllOrders } from '../../api/admin/orders.js';
 import { orderFromListRow } from '../adapters/order.js';
 import { minorToKronor } from '../adapters/money.js';
+import { readForShop } from '../providers/ordersForShop.js';
 
 const DONE = new Set(['shipped', 'delivered', 'completed']);
 
-export async function loadDashboardStats(_shopId) {
-  const { orders, count, totalMinor } = await listAllOrders();
+export function loadDashboardStats(shopId) {
+  return readForShop(shopId, async (id) => statsOf(await listAllOrders({}, { shopId: id })));
+}
+
+function statsOf({ orders, count, totalMinor }) {
   const rows = orders.map(orderFromListRow);
   let pendingOrders = 0;
   let processingOrders = 0;

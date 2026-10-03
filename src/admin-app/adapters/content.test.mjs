@@ -107,6 +107,40 @@ describe('the identity\'s images', () => {
     assert.deepEqual(out.gallery, [{ label: 'A', linkSku: '', imageObjectId: 'obj-logo' }, { label: 'B' }]);
   });
 
+  it('an image whose read failed is kept, not removed; an upload still replaces it (CP5-FX, finding 7)', () => {
+    const loaded = {
+      heroObjectId: { id: 'obj-hero', resolved: true, unread: true },
+      faviconObjectId: { id: 'obj-fav', resolved: true, unread: true },
+      logoObjectId: { id: 'obj-old-logo', resolved: true, unread: true },
+    };
+    // The page had no address for them: the hero and the favicon read '' and
+    // the logo the default; the seller saved another field.
+    const kept = brandingPatch({ accent: '#123', heroImageUrl: '', faviconUrl: '', logoUrl: '' }, { urls, loaded });
+    assert.deepEqual(kept, { accent: '#123' }, 'no stored id is touched');
+    const replaced = brandingPatch({ logoUrl: 'https://img.example/logo.png', heroImageUrl: '' }, { urls, loaded });
+    assert.deepEqual(replaced, { logoObjectId: 'obj-logo' });
+    // A preview that WAS read and then removed on the page still clears it.
+    const removed = brandingPatch({ heroImageUrl: '' }, { urls, loaded: { heroObjectId: { id: 'obj-hero', resolved: true, unread: false } } });
+    assert.deepEqual(removed, { heroObjectId: null });
+  });
+
+  it('a gallery image whose read failed keeps its id through the page and the save', () => {
+    const saved = brandingFromIdentity(
+      { gallery: [{ imageObjectId: 'g1', label: 'A' }, { imageObjectId: 'g2', label: 'B' }, { imageObjectId: 'g3', label: 'C' }] },
+      { 'gallery:g1': '', 'unread:g1': 'unread', 'gallery:g2': 'https://img.example/g2.png', 'gallery:g3': '', 'gone:g3': 'gone' },
+    );
+    assert.deepEqual(saved.gallery, [{ label: 'A', imageObjectId: 'g1' }, { label: 'B', imageUrl: 'https://img.example/g2.png' }, { label: 'C' }]);
+    const out = brandingPatch({ gallery: [...saved.gallery, { imageUrl: 'https://img.example/logo.png', imageObjectId: 'g9', label: 'D' }] }, {
+      urls: new Map([...urls, ['https://img.example/g2.png', 'g2']]), loaded: {},
+    });
+    assert.deepEqual(out.gallery, [
+      { label: 'A', imageObjectId: 'g1' },
+      { label: 'B', imageObjectId: 'g2' },
+      { label: 'C' },
+      { label: 'D', imageObjectId: 'obj-logo' }, // replaced on the page: the upload wins
+    ]);
+  });
+
   it('the identity reads back as addresses', () => {
     const saved = brandingFromIdentity({ logoObjectId: 'obj-logo', gallery: [{ imageObjectId: 'g1', label: 'A' }, { imageObjectId: 'g2' }] }, { logoObjectId: 'https://img.example/logo.png', 'gallery:g1': 'https://img.example/g1.png', 'gallery:g2': '' });
     assert.equal(saved.logoUrl, 'https://img.example/logo.png');

@@ -136,8 +136,8 @@ function groupSkuOf(rows, skuFromName) {
  * `skuFromName` is utils/productUrls.js's (injected: this module stays pure).
  *
  * Hidden fields the save reads (the form copies none of them into its state):
- *   `_server`  { variants (all, inactive too), imageRows, published, isPod,
- *               currency, status, screeningStatus, priceMinor }
+ *   `_server`  { variants (all, inactive too), railPriceOf, imageRows,
+ *               published, isPod, currency, status, screeningStatus, priceMinor }
  *   `_objectIdByUrl`  the object behind each image address
  */
 export function productFromDetail(detail, { listItem = null, skuFromName } = {}) {
@@ -177,14 +177,22 @@ export function productFromDetail(detail, { listItem = null, skuFromName } = {})
     ...new Set(imageRows.filter((row) => row.variantId != null && keyOfVariant.get(row.variantId) === key).map(urlOf).filter(Boolean)),
   ];
 
+  // The rail holds ONE price per group; the server's sizes may each have their
+  // own (an import, the API). `railPriceOf` remembers, per variant, the price
+  // the form shows for its group and whether the group's sizes differ, so the
+  // save writes a size's price only when the seller changed the group's
+  // (planVariantSync). The form keeps no hidden field of its own.
+  const railPriceOf = {};
   const variantGroups = groups.map((g) => {
     const prices = [...new Set(g.rows.map((r) => r.priceMinor))];
     const images = imagesOfGroup(g.key);
+    // One price for the group and it is the product's → inherited (empty field).
+    const price = prices.length === 1 && prices[0] === p.priceMinor ? null : kr(g.rows[0].priceMinor);
+    for (const row of g.rows) railPriceOf[row.variantId] = { shown: price, mixed: prices.length > 1 };
     return {
       label: g.label,
       sku: groupSkuOf(g.rows, skuFromName),
-      // One price for the group and it is the product's → inherited (empty field).
-      price: prices.length === 1 && prices[0] === p.priceMinor ? null : kr(g.rows[0].priceMinor),
+      price,
       image: images[0] || '',
       images,
       sizes: g.rows.map((r) => r.size).filter((s) => typeof s === 'string' && s.trim() !== ''),
@@ -238,6 +246,7 @@ export function productFromDetail(detail, { listItem = null, skuFromName } = {})
     _objectIdByUrl: objectIdByUrl,
     _server: {
       variants: variants.map((v) => ({ ...v })),
+      railPriceOf,
       imageRows: imageRows.map((row) => ({ objectId: row.objectId, variantId: row.variantId ?? null, alt: row.alt ?? null })),
       published: detail.publication?.published === true,
       isPod: p.isPod === true,
@@ -353,17 +362,25 @@ export function productBodyProblem(body) {
 
 /**
  * The rows the derivation gave (cleanVariants of utils/variantDerivation.js)
- * → the variant bodies, in rail order (position = index).
+ * → the variant bodies, in rail order (position = index). With the
+ * derivation's `cleanGroups`, each row also carries `groupPrice`: its group's
+ * price field as the seller left it (kr, or null when it follows the product
+ * price), which planVariantSync compares with what the form showed.
  */
-export function desiredVariants(cleanVariants) {
-  return cleanVariants.map((row, position) => ({
-    sku: row.sku,
-    label: row.label,
-    group: row.group,
-    size: row.size ?? null,
-    priceMinor: ore(row.price) ?? 0,
-    position,
-  }));
+export function desiredVariants(cleanVariants, cleanGroups = null) {
+  const groupPriceOf = Array.isArray(cleanGroups) ? new Map(cleanGroups.map((g) => [g.label, g.price ?? null])) : null;
+  return cleanVariants.map((row, position) => {
+    const want = {
+      sku: row.sku,
+      label: row.label,
+      group: row.group,
+      size: row.size ?? null,
+      priceMinor: ore(row.price) ?? 0,
+      position,
+    };
+    if (groupPriceOf) want.groupPrice = groupPriceOf.get(row.group) ?? null;
+    return want;
+  });
 }
 
 /** The first problem of the desired variants, said at the variant, or null. */
@@ -385,6 +402,20 @@ export function variantProblem(desired) {
 const lower = (s) => String(s ?? '').toLowerCase();
 const sizeKey = (s) => lower(s ?? '').trim();
 
+/** A group price as the derivation reads the field: öre when it is set (> 0), else null (inherited). */
+const explicitMinor = (value) => (parseFloat(value) > 0 ? ore(value) : null);
+
+/**
+ * True when the seller left the price of a size's group as the form showed it
+ * while the group's sizes have prices of their own: the size keeps ITS price.
+ * `rail`: railPriceOf[variantId] of productFromDetail; `want.groupPrice`: of
+ * desiredVariants(cleanVariants, cleanGroups).
+ */
+function keepsOwnPrice(rail, want) {
+  if (!rail || rail.mixed !== true || !('groupPrice' in want)) return false;
+  return explicitMinor(want.groupPrice) === explicitMinor(rail.shown);
+}
+
 /**
  * The variant writes that make the server's variants the desired ones.
  * Matched by sku first (a renamed variant keeps its row, its orders and its
@@ -393,9 +424,17 @@ const sizeKey = (s) => lower(s ?? '').trim();
  * deactivates it instead when an order or a mapping names it). An inactive
  * variant whose sku comes back is reactivated rather than created twice.
  *
+ * PRICES (a selling price never changes unless the seller changed it): the
+ * rail has one price per group, and a group whose sizes have different prices
+ * on the server shows the first size's. A size of such a group keeps its own
+ * price while the seller leaves the group's price as shown (`railPriceOf`, of
+ * productFromDetail); when the seller changes the group's price, every size of
+ * the group gets the new price (the rail's rule, as in the older build), and
+ * repricedMixedGroups names the groups for the seller.
+ *
  * → { deletes: [variantId], updates: [{ variantId, body, sku }], creates: [{ body, sku }] }
  */
-export function planVariantSync(existing, desired) {
+export function planVariantSync(existing, desired, { railPriceOf = null } = {}) {
   const pool = [...existing];
   const take = (predicate) => {
     const index = pool.findIndex(predicate);
@@ -421,13 +460,29 @@ export function planVariantSync(existing, desired) {
     if (have.label !== w.label) body.label = w.label;
     if ((have.group ?? null) !== w.group) body.group = w.group;
     if ((have.size ?? null) !== w.size) body.size = w.size;
-    if (have.priceMinor !== w.priceMinor) body.priceMinor = w.priceMinor;
+    const priceMinor = keepsOwnPrice(railPriceOf?.[have.variantId], w) ? have.priceMinor : w.priceMinor;
+    if (have.priceMinor !== priceMinor) body.priceMinor = priceMinor;
     if (have.position !== w.position) body.position = w.position;
     if (have.active !== true) body.active = true;
     if (Object.keys(body).length > 0) updates.push({ variantId: have.variantId, sku: w.sku, body });
   }
   const deletes = pool.filter((v) => v.active === true).map((v) => v.variantId);
   return { deletes, updates, creates };
+}
+
+/**
+ * The groups whose sizes had different prices and now get the one price the
+ * seller set for the group (the plan writes a price to one of their sizes):
+ * the save says so, so no size's price changes unannounced.
+ */
+export function repricedMixedGroups(plan, desired, railPriceOf) {
+  const labels = new Set();
+  for (const update of plan.updates) {
+    if (update.body.priceMinor === undefined || railPriceOf?.[update.variantId]?.mixed !== true) continue;
+    const group = desired.find((want) => want.sku === update.sku)?.group;
+    if (group) labels.add(group);
+  }
+  return [...labels];
 }
 
 // ── the images ──────────────────────────────────────────────────────────────

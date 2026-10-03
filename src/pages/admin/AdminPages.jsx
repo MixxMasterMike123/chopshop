@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { TrashIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
 import { subscribeToPages, deleteShopPage } from './adminPagesData';
+import { useStorefrontLinks } from './storefrontLinks';
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
@@ -21,6 +22,7 @@ const AdminPages = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const shopId = useShopId();
+  const storefrontLinks = useStorefrontLinks();
   const { getContentValue } = useContentTranslation();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -207,7 +209,7 @@ const AdminPages = () => {
         <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           {page.status === 'published' && (
             <a
-              href={`/${page.slug}`}
+              {...storefrontLinks.page(page.slug)}
               target="_blank"
               rel="noopener noreferrer"
               title="Visa sida"

@@ -10,7 +10,7 @@
 // open acting-as grant the admin addresses send them to the platform console.
 // POD is a static route (no wagon discovery), gated by `features.pod`.
 
-import React, { useEffect } from 'react';
+import React, { Fragment, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import ScrollToTop from '../components/ScrollToTop';
@@ -55,7 +55,12 @@ function RootRedirect() {
   return <Navigate to={currentUser ? '/admin' : '/login'} replace />;
 }
 
-/** A platform user with no shop to act as belongs in the platform console. */
+/**
+ * A platform user with no shop to act as belongs in the platform console.
+ * A page belongs to ONE shop: when the tab's shop changes (the picker, "Byt
+ * butik") the page is mounted afresh, so no list, form, error or pending
+ * answer of the previous shop survives under the new one (CP5-FX, finding 1).
+ */
 function ShopRequired({ children }) {
   const { isPlatform } = useAuth();
   const shopId = useShopId();
@@ -63,7 +68,7 @@ function ShopRequired({ children }) {
   useEffect(() => {
     if (leave) window.location.replace('/platform/');
   }, [leave]);
-  return leave ? null : children;
+  return leave ? null : <Fragment key={shopId}>{children}</Fragment>;
 }
 
 function routeElement({ page, guard, feature }) {

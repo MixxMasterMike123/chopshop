@@ -18,6 +18,9 @@ export const SHOW_COUNTS = true;
 /** The Shopify and WooCommerce migrators exist in this build. */
 export const MIGRATORS = true;
 
+/** The publication card's words: here unpublishing only hides the shop from search engines. */
+export { SHOP_DETAIL_PUBLISH_COPY as PUBLISH_COPY } from './publishCopy.js';
+
 /** The shop and its counts, or null when the shop does not exist. */
 export async function loadShop(shopId) {
   const snap = await getDoc(doc(db, 'shops', shopId));

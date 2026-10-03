@@ -4,7 +4,7 @@
 // audited-impersonation slice P4.3). Platform-only. (docs/PLATFORM_ARCHITECTURE.md)
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { SHOW_COUNTS, loadShops as readShops, openStorefront, setShopStatus } from './platformShopsData';
+import { PUBLISH_COPY, SHOW_COUNTS, loadShops as readShops, openStorefront, setShopStatus } from './platformShopsData';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import ProvisionShopModal from '../../components/platform/ProvisionShopModal';
 import ImpersonateShopModal from '../../components/platform/ImpersonateShopModal';
@@ -88,7 +88,7 @@ const PlatformShops = () => {
               <thead>
                 <tr className="text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
                   <th className="px-4 py-3">Butik</th>
-                  <th className="px-4 py-3">Sök</th>
+                  <th className="px-4 py-3">{PUBLISH_COPY.column}</th>
                   <th className="px-4 py-3">Status</th>
                   {SHOW_COUNTS && <th className="px-3 py-3 text-right">Produkter</th>}
                   {SHOW_COUNTS && <th className="px-3 py-3 text-right">Ordrar</th>}
@@ -111,13 +111,13 @@ const PlatformShops = () => {
                       </td>
                       <td className="px-4 py-3">
                         <span
-                          title={isSearchable ? 'Indexeras av Google/Bing' : 'Dold för sökmotorer (noindex) — butiken är ändå öppen via länk'}
+                          title={isSearchable ? PUBLISH_COPY.titleOn : PUBLISH_COPY.titleOff}
                           className={
                             'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ' +
                             (isSearchable ? 'bg-green-500/15 text-green-300' : 'bg-amber-500/15 text-amber-300')
                           }
                         >
-                          {isSearchable ? 'Sökbar' : 'Dold'}
+                          {isSearchable ? PUBLISH_COPY.badgeOn : PUBLISH_COPY.badgeOff}
                         </span>
                       </td>
                       <td className="px-4 py-3">

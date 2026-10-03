@@ -306,8 +306,10 @@ const AdminOrderDetail = () => {
     if (!window.confirm('Återbetala hela ordern? Detta kan inte ångras.')) return;
     setRefundLoading(true);
     try {
-      await refundWholeOrder(orderId, order);
-      toast.success('Ordern återbetalad');
+      // A refund the payment provider has not confirmed yet is said as such.
+      const outcome = await refundWholeOrder(orderId, order);
+      if (outcome?.pending) toast(outcome.message, { duration: 10000 });
+      else toast.success('Ordern återbetalad');
       setFetchAttempted(false);
       await fetchOrder();
     } catch (err) {

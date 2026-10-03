@@ -5,8 +5,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useShopId } from '../../contexts/ShopContext';
-import { slugify, getCollectionUrl } from '../../utils/productUrls';
+import { slugify } from '../../utils/productUrls';
 import { loadPickerProducts, loadCollection, handleIsTaken, uploadCollectionCover, saveCollection, deleteCollection } from './adminCollectionEditData';
+import { useStorefrontLinks } from './storefrontLinks';
 import AppLayout from '../../components/layout/AppLayout';
 import { Page, Card, CardSection, RightRail, Button, StatusPill, Field, Input, Textarea } from '../../components/admin/ui';
 import { EyeIcon, TrashIcon, MagnifyingGlassIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline';
@@ -36,6 +37,7 @@ const AdminCollectionEdit = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const shopId = useShopId();
+  const storefrontLinks = useStorefrontLinks();
   const isNew = id === 'new';
 
   const [form, setForm] = useState(emptyForm);
@@ -213,7 +215,7 @@ const AdminCollectionEdit = () => {
   const headerActions = (
     <>
       {!isNew && form.published && (
-        <Button as="a" href={getCollectionUrl(form.handle)} target="_blank" rel="noopener noreferrer" variant="secondary">
+        <Button as="a" {...storefrontLinks.collection(form.handle)} target="_blank" rel="noopener noreferrer" variant="secondary">
           <EyeIcon className="h-4 w-4" /> Visa
         </Button>
       )}

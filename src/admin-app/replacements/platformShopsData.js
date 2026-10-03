@@ -17,6 +17,9 @@ import { openStorefrontOf } from './platformStorefront.js';
 
 export const SHOW_COUNTS = false;
 
+/** The publication column's words: here an unpublished shop is closed (D57). */
+export { SHOP_LIST_PUBLISH_COPY as PUBLISH_COPY } from './publishCopy.js';
+
 export async function loadShops() {
   return toListShops(await readAllTenants());
 }

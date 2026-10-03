@@ -7,7 +7,7 @@
 // subdomain), so it's validated url-safe: lowercase, a-z 0-9 and hyphens,
 // 3-30 chars, must be unique.
 import React, { useState } from 'react';
-import { ACCENT_FIELD, provisionShop } from './provisionShopData';
+import { ACCENT_FIELD, NEW_SHOP_NOTE, provisionShop } from './provisionShopData';
 import toast from 'react-hot-toast';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { NON_SHOP_FIRST_SEGMENTS } from '../../config/tenancy';
@@ -216,8 +216,7 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
         </form>
 
         <p className="mt-4 text-xs text-gray-600">
-          Butiken skapas <span className="text-gray-500">dold för sökmotorer</span> (öppen via länk) — gör den sökbar
-          via GO LIVE på butikens detaljsida när den är klar. Ägare/användare läggs till i ett senare steg. Branding och funktioner kan justeras efteråt.
+          {NEW_SHOP_NOTE.lead}<span className="text-gray-500">{NEW_SHOP_NOTE.word}</span>{NEW_SHOP_NOTE.tail}
         </p>
       </div>
     </div>

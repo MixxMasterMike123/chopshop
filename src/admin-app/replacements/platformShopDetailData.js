@@ -8,7 +8,8 @@
 //
 //   the shop      GET /v1/platform/tenants/:id + GET …/connect (the opt-in flag
 //                 is only in the Connect view), adapted by toDetailShop()
-//   GO LIVE       POST …/publish | …/unpublish
+//   GO LIVE       POST …/publish | …/unpublish — unpublishing closes the
+//                 storefront (D57); PUBLISH_COPY says so (publishCopy.js)
 //   the status    POST …/activate | …/suspend
 //   Connect       POST …/connect/enable | …/connect/disable
 //   storefront    as the list (platformStorefront.js): the preview of an
@@ -31,6 +32,9 @@ import { APP_URLS } from './urls.js';
 
 export const SHOW_COUNTS = false;
 export const MIGRATORS = false;
+
+/** The publication card's words: here unpublishing CLOSES the storefront (D57). */
+export { SHOP_DETAIL_PUBLISH_COPY as PUBLISH_COPY } from './publishCopy.js';
 
 /** { shop, counts: null }, or null when the API answers the opaque 404. */
 export async function loadShop(shopId) {

@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { STORE } from '../../config/store';
 import { useShopId } from '../../contexts/ShopContext';
 import { loadShopCategories, loadBranding, saveBranding, uploadBrandImage } from './adminStorefrontData';
+import { useStorefrontLinks } from './storefrontLinks';
 import { evaluateAccentContrast } from '../../utils/colorContrast';
 import { TEMPLATES } from '../../config/templates';
 import { Page, Card, CardSection, RightRail, Button } from '../../components/admin/ui';
@@ -70,6 +71,7 @@ const AdminStorefront = () => {
   const [galleryUploading, setGalleryUploading] = useState(-1);
   const [form, setForm] = useState(pickBranding(STORE));
   const shopId = useShopId();
+  const storefrontLinks = useStorefrontLinks();
   // Existing category names for THIS shop — same derivation AdminProducts +
   // the storefront use (products' category/group fields). Drives the frontpage
   // showcase-category picker.
@@ -235,7 +237,7 @@ const AdminStorefront = () => {
     <>
       <Button
         as="a"
-        href="/"
+        {...storefrontLinks.home()}
         target="_blank"
         rel="noopener noreferrer"
         variant="secondary"

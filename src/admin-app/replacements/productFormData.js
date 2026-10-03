@@ -16,7 +16,8 @@
 //      — a floor refusal or an HTML refusal of "Mer information" stops here,
 //        with nothing written
 //   4. the variants: DELETE / PATCH / POST until the server's rows are the
-//      rail's rows (adapters/product.js planVariantSync)
+//      rail's rows (adapters/product.js planVariantSync); a size keeps its own
+//      price unless the seller changed its group's price
 //   5. the new images uploaded (src/api/admin/uploads.js), then the whole
 //      list PUT (the first is the main image; a group's images name its first
 //      variant)
@@ -54,6 +55,7 @@ import {
   productBodyProblem,
   productWriteBody,
   refusalMessage,
+  repricedMixedGroups,
   sameImageList,
   screeningNoticeFor,
   strictestFigures,
@@ -184,7 +186,9 @@ async function saveProduct(args) {
     editedGroups.map((g) => ({ ...g, images: [] })),
     { productSku: resolvedSku, productPrice: price, skuFromName },
   );
-  const desired = desiredVariants(cleanVariants);
+  // Each row knows its group's price field, so a size whose own price differs
+  // from the group's keeps it unless the seller changed the group's price.
+  const desired = desiredVariants(cleanVariants, cleanGroups);
   const body = productWriteBody({ formData, sku: resolvedSku, price, compareAtPrice, create: !product, currency });
   const problem = productBodyProblem(body) ?? variantProblem(desired);
   if (problem) {
@@ -214,7 +218,9 @@ async function saveProduct(args) {
   // 4–7 run on a product that exists: a failure sends the seller back to the list.
   try {
     // 4. The variants.
-    const plan = planVariantSync(server?.variants ?? [], desired);
+    const railPriceOf = server?.railPriceOf ?? null;
+    const plan = planVariantSync(server?.variants ?? [], desired, { railPriceOf });
+    const repriced = repricedMixedGroups(plan, desired, railPriceOf);
     const variantIdBySku = new Map((server?.variants ?? []).map((v) => [lower(v.sku), v.variantId]));
     const labelOf = new Map((server?.variants ?? []).map((v) => [v.variantId, v.label]));
     const kept = [];
@@ -245,6 +251,9 @@ async function saveProduct(args) {
     }
     if (kept.length > 0) {
       toast(`${kept.map((l) => `"${l}"`).join(', ')} finns på en order eller har en tryckkoppling och inaktiverades i stället för att tas bort.`, { icon: 'ℹ️', duration: 8000 });
+    }
+    if (repriced.length > 0) {
+      toast(`Storlekarna i ${repriced.map((l) => `"${l}"`).join(', ')} hade olika priser och har nu alla variantens pris.`, { icon: 'ℹ️', duration: 8000 });
     }
 
     // 5. The images: the new files uploaded, then the whole list.
