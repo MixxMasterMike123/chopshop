@@ -221,7 +221,11 @@ describe("requesting a reset", () => {
     expect(job.locale).toBe("sv");
     expect(job.recipient).toBe(EMAIL);
     expect(job.tenantId).toBeUndefined();
-    expect(job.expiresAt - job.createdAt).toBe(60 * 60 * 1_000);
+    // Two clock reads (the expiry, then the job's creation): the hour, less
+    // whatever passed between them.
+    const lifetime = job.expiresAt - job.createdAt;
+    expect(lifetime).toBeLessThanOrEqual(60 * 60 * 1_000);
+    expect(lifetime).toBeGreaterThan(60 * 60 * 1_000 - 1_000);
 
     const link = new URL(job.actionUrl);
     expect(link.origin).toBe(AUTH_ORIGIN);

@@ -313,7 +313,9 @@ export function platformShopRoutes({ connectOf, rest = [] }) {
       const { accountType, email, password } = body;
       if (!['tenant_admin', 'print_operator'].includes(accountType)) return invalid();
       if (typeof email !== 'string' || !/^[^@\s]+@[^@\s]+$/.test(email) || email.length > 254) return invalid();
-      if (typeof password !== 'string' || password.length < 8 || password.length > 128) return invalid();
+      // As the Worker (CP5-WJ4): no password = created password-less, for an invitable kind only.
+      if (!('password' in body) ? accountType !== 'tenant_admin'
+        : typeof password !== 'string' || password.length < 8 || password.length > 128) return invalid();
       const lower = email.toLowerCase();
       const fi = held(state);
       const taken = state.fixtures.users.some((u) => u.user.email === lower)

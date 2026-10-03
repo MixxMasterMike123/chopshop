@@ -625,7 +625,9 @@ describe("platform user provisioning validation", () => {
       "overlong email",
       { email: `${"e".repeat(250)}@userprovision.test` },
     ],
-    ["password missing", { password: undefined }],
+    // Absent is an identity created without a password (CP5-WJ4, below);
+    // present, it must be a usable string — null is not "absent".
+    ["password null", { password: null }],
     ["password non-string", { password: 12_345_678 }],
     ["password empty", { password: "" }],
   ])("returns 400 for %s", async (_label, patch) => {
@@ -1094,5 +1096,141 @@ describe("platform user provisioning audit trail", () => {
          WHERE action = 'platform.user_provision'`,
       ).first<{ total: number }>(),
     ).resolves.toEqual(before);
+  });
+});
+
+describe("platform user provisioning without a password (CP5-WJ4)", () => {
+  async function accountRows(userId: string) {
+    return (
+      await env.DB.prepare(
+        `SELECT "providerId" AS provider, ("password" IS NULL) AS no_password
+         FROM "account" WHERE "userId" = ?`,
+      )
+        .bind(userId)
+        .all<{ no_password: number; provider: string }>()
+    ).results;
+  }
+
+  async function rowsFor(email: string) {
+    return env.DB.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM "user" WHERE "email" = ?) AS users,
+         (SELECT COUNT(*) FROM "account" AS c JOIN "user" AS u ON u."id" = c."userId"
+          WHERE u."email" = ?) AS accounts,
+         (SELECT COUNT(*) FROM identity_access AS a JOIN "user" AS u ON u."id" = a.user_id
+          WHERE u."email" = ?) AS access`,
+    )
+      .bind(email, email, email)
+      .first<{ access: number; accounts: number; users: number }>();
+  }
+
+  it("creates a tenant admin with a credential account and NO password, audited, with no session", async () => {
+    const email = "no-password@userprovision.test";
+    const response = await createUser({ accountType: "tenant_admin", email });
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    const body = await response.json<UserBody>();
+    expect(body).toEqual({
+      user: { accountType: "tenant_admin", email, userId: expect.stringMatching(/^[A-Za-z0-9]{32}$/) },
+    });
+    const { userId } = body.user;
+
+    await expect(accountRows(userId)).resolves.toEqual([{ no_password: 1, provider: "credential" }]);
+    await expect(accessRow(userId)).resolves.toEqual({ account_type: "tenant_admin", status: "active" });
+    await expect(
+      env.DB.prepare(`SELECT "name", "emailVerified" AS verified FROM "user" WHERE "id" = ?`).bind(userId).first(),
+    ).resolves.toEqual({ name: "no-password", verified: 0 });
+    await expect(countSessions(userId)).resolves.toBe(0);
+
+    const audit = await env.DB.prepare(
+      `SELECT actor_user_id, metadata_json FROM audit_events
+       WHERE action = 'platform.user_provision' AND resource_id = ?`,
+    )
+      .bind(userId)
+      .all<{ actor_user_id: string; metadata_json: string }>();
+    expect(audit.results).toEqual([
+      { actor_user_id: platformAdmin.userId, metadata_json: JSON.stringify({ accountType: "tenant_admin" }) },
+    ]);
+  });
+
+  it("refuses a print operator without a password (nothing could ever give it one), writing nothing", async () => {
+    const email = "printer-no-password@userprovision.test";
+    const response = await createUser({ accountType: "print_operator", email });
+    expect(response.status).toBe(400);
+    await expect(rowsFor(email)).resolves.toEqual({ access: 0, accounts: 0, users: 0 });
+  });
+
+  it("answers a taken address with the bare 409, whichever way either was created", async () => {
+    const created = "no-password-dup@userprovision.test";
+    expect((await createUser({ accountType: "tenant_admin", email: created })).status).toBe(201);
+    for (const body of [
+      { accountType: "tenant_admin", email: created },
+      { accountType: "tenant_admin", email: created.toUpperCase() },
+      { accountType: "tenant_admin", email: created, password: PASSWORD },
+      { accountType: "tenant_admin", email: "tenant-admin@userprovision.test" },
+    ]) {
+      const response = await createUser(body);
+      expect(response.status, JSON.stringify(body)).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "conflict", message: "Request conflicts with an existing identity" },
+      });
+    }
+    await expect(rowsFor(created)).resolves.toEqual({ access: 1, accounts: 1, users: 1 });
+  });
+
+  it("is ONE batch: a duplicate that lands between the address check and the write leaves nothing half-built", async () => {
+    const { createInvitedUser } = await import("../src/platform/provision-users");
+    const email = "no-password-race@userprovision.test";
+    const iso = new Date(NOW).toISOString();
+    let interleaved = false;
+    const racingDb = new Proxy(env.DB, {
+      get(target, property) {
+        if (property === "batch" && !interleaved) {
+          return async (statements: D1PreparedStatement[]) => {
+            interleaved = true;
+            // A concurrent creation of the same address commits first.
+            await target
+              .prepare(
+                `INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt")
+                 VALUES ('race-winner-id', 'Test Winner', ?, 0, ?, ?)`,
+              )
+              .bind(email, iso, iso)
+              .run();
+            return target.batch(statements);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const auditsBefore = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM audit_events WHERE action = 'platform.user_provision'",
+    ).first<{ n: number }>();
+
+    const result = await createInvitedUser(
+      { ...env, DB: racingDb } as unknown as Env,
+      { accountType: "platform_admin", userId: platformAdmin.userId },
+      { accountType: "tenant_admin", email, name: "Test Loser" },
+      Date.now(),
+    );
+
+    expect(interleaved).toBe(true);
+    expect(result).toEqual({ status: "conflict" });
+    // Only the winner's user row: no account, no access row, no audit of the loser.
+    await expect(rowsFor(email)).resolves.toEqual({ access: 0, accounts: 0, users: 1 });
+    await expect(
+      env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM audit_events WHERE action = 'platform.user_provision'",
+      ).first<{ n: number }>(),
+    ).resolves.toEqual(auditsBefore);
+  });
+
+  it("keeps the password path for callers that choose one (the staging scripts)", async () => {
+    const email = "chosen-password@userprovision.test";
+    const response = await createUser({ accountType: "tenant_admin", email, password: PASSWORD });
+    expect(response.status).toBe(201);
+    const { userId } = (await response.json<UserBody>()).user;
+    await expect(accountRows(userId)).resolves.toEqual([{ no_password: 0, provider: "credential" }]);
   });
 });

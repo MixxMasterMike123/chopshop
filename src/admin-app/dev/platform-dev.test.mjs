@@ -104,7 +104,10 @@ describe('provisioning', () => {
     const h = (body) => ({ headers: { cookie }, body });
     assert.equal(call(state, 'POST', '/_api/v1/platform/users', h({ accountType: 'platform_admin', email: 'x@example.com', password: 'p'.repeat(20) })).status, 400);
     assert.equal(call(state, 'POST', '/_api/v1/platform/users', h({ accountType: 'tenant_admin', email: 'admin@example.com', password: 'p'.repeat(20) })).status, 409);
-    const user = call(state, 'POST', '/_api/v1/platform/users', h({ accountType: 'tenant_admin', email: 'ny@example.com', password: 'p'.repeat(20) }));
+    // Without a password, as the console sends it (CP5-WJ4); a print operator needs one.
+    assert.equal(call(state, 'POST', '/_api/v1/platform/users', h({ accountType: 'print_operator', email: 'p@example.com' })).status, 400);
+    assert.equal(call(state, 'POST', '/_api/v1/platform/users', h({ accountType: 'tenant_admin', email: 'np@example.com', password: null })).status, 400);
+    const user = call(state, 'POST', '/_api/v1/platform/users', h({ accountType: 'tenant_admin', email: 'ny@example.com' }));
     assert.equal(user.status, 201);
     const { userId } = user.body.user;
     assert.equal(call(state, 'POST', '/_api/v1/platform/tenants/test-shop-a/admins', h({ userId })).status, 201);

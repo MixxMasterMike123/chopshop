@@ -138,7 +138,7 @@ interface DirectoryUserBody {
   createdAt: string;
   email: string;
   hasPassword: boolean;
-  invite: { createdAt: string; expired?: true; expiresAt: string; status: string } | null;
+  invite: { createdAt: string; expired?: true; expiresAt: string; pending: boolean; status: string } | null;
   memberships: { role: string; status: string; tenantId: string }[];
   name: string;
   printMemberships: { status: string; tenantId: string }[];
@@ -606,6 +606,7 @@ describe("the directory's password and invite facts (review round 1)", () => {
     expect(first).toEqual({
       createdAt: expect.stringMatching(ISO),
       expiresAt: expect.stringMatching(ISO),
+      pending: true,
       status: "issued",
     });
     expect(Date.parse(first?.expiresAt as string) - Date.parse(first?.createdAt as string)).toBe(
@@ -655,6 +656,7 @@ describe("the directory's password and invite facts (review round 1)", () => {
       createdAt: expect.stringMatching(ISO),
       expired: true,
       expiresAt: expect.stringMatching(ISO),
+      pending: true,
       status: "issued",
     });
   });
@@ -666,6 +668,7 @@ describe("the directory's password and invite facts (review round 1)", () => {
     expect(user.invite).toEqual({
       createdAt: expect.stringMatching(ISO),
       expiresAt: expect.stringMatching(ISO),
+      pending: true,
       status: "revoked",
     });
   });
@@ -684,7 +687,215 @@ describe("the directory's password and invite facts (review round 1)", () => {
 
     await expect(read(IMPORTED_ID)).resolves.toMatchObject({
       hasPassword: true,
-      invite: { status: "issued" },
+      invite: { pending: false, status: "issued" },
+    });
+  });
+});
+
+describe("an identity created without a password, and an invite not taken up (CP5-WJ4)", () => {
+  const HOUR_MS = 60 * 60 * 1_000;
+  const CHOSEN = "chosen-by-the-invitee-long-enough";
+  const tokens: string[] = [];
+
+  function capturingEnv(): Env {
+    return {
+      ...env,
+      EMAIL_QUEUE: {
+        async send(body: unknown) {
+          const job = parseAuthEmailJob(body, env.AUTH_BASE_URL);
+          tokens.push(new URL(job.actionUrl).pathname.split("/").at(-1) as string);
+        },
+      },
+    } as unknown as Env;
+  }
+
+  async function read(userId: string): Promise<DirectoryUserBody> {
+    const response = await call("GET", `/v1/platform/users/${userId}`);
+    expect(response.status).toBe(200);
+    return (await response.json<{ user: DirectoryUserBody }>()).user;
+  }
+
+  async function listed(userId: string): Promise<DirectoryUserBody | undefined> {
+    const response = await call("GET", "/v1/platform/users?accountType=tenant_admin&limit=100");
+    expect(response.status).toBe(200);
+    return (await response.json<DirectoryBody>()).users.find((user) => user.userId === userId);
+  }
+
+  function invite(userId: string): Promise<Response> {
+    return worker.fetch(
+      new Request(`${PLATFORM_HOST}/v1/platform/users/${userId}/invite`, {
+        headers: { cookie: operator.cookie, origin: PLATFORM_HOST },
+        method: "POST",
+      }),
+      capturingEnv(),
+    );
+  }
+
+  async function signInAttempt(email: string, password: string): Promise<Response> {
+    await drainAuthLimiter();
+    return worker.fetch(
+      new Request(`${AUTH_ORIGIN}/api/auth/sign-in/email`, {
+        body: JSON.stringify({ email, password }),
+        headers: { "content-type": "application/json", origin: AUTH_ORIGIN },
+        method: "POST",
+      }),
+      env,
+    );
+  }
+
+  function usePasswordLink(token: string): Promise<Response> {
+    return worker.fetch(
+      new Request(`${AUTH_ORIGIN}/api/auth/reset-password`, {
+        body: JSON.stringify({ newPassword: CHOSEN, token }),
+        headers: { "content-type": "application/json", origin: "https://web.test.invalid" },
+        method: "POST",
+      }),
+      env,
+    );
+  }
+
+  async function sessions(userId: string): Promise<number> {
+    const row = await env.DB.prepare('SELECT COUNT(*) AS n FROM "session" WHERE "userId" = ?')
+      .bind(userId)
+      .first<{ n: number }>();
+    return row?.n ?? 0;
+  }
+
+  async function create(body: Record<string, unknown>): Promise<string> {
+    const response = await call("POST", "/v1/platform/users", { body });
+    expect(response.status).toBe(201);
+    const { user } = await response.json<{ user: { accountType: string; email: string; userId: string } }>();
+    expect(user).toEqual({ accountType: body.accountType, email: body.email, userId: expect.any(String) });
+    return user.userId;
+  }
+
+  it("is created password-less in one step: hasPassword false, and no password signs it in", async () => {
+    const email = "credential-less@example.com";
+    const userId = await create({ accountType: "tenant_admin", email });
+
+    // One credential account, with no password; the identity complete.
+    const accounts = await env.DB.prepare(
+      `SELECT "providerId" AS provider, "accountId" AS account, ("password" IS NULL) AS no_password
+       FROM "account" WHERE "userId" = ?`,
+    )
+      .bind(userId)
+      .all<{ account: string; no_password: number; provider: string }>();
+    expect(accounts.results).toEqual([{ account: userId, no_password: 1, provider: "credential" }]);
+    await expect(
+      env.DB.prepare("SELECT account_type, status FROM identity_access WHERE user_id = ?").bind(userId).first(),
+    ).resolves.toEqual({ account_type: "tenant_admin", status: "active" });
+
+    await expect(read(userId)).resolves.toMatchObject({
+      email,
+      hasPassword: false,
+      invite: null,
+      name: "credential-less",
+      status: "active",
+    });
+    expect((await listed(userId))?.hasPassword).toBe(false);
+
+    for (const password of [PASSWORD, "x".repeat(64), "null", "undefined", "00000000"]) {
+      expect((await signInAttempt(email, password)).status, password).toBe(401);
+    }
+    expect((await signInAttempt(email, "")).status).not.toBe(200);
+    expect(await sessions(userId)).toBe(0);
+  });
+
+  it("writes the rows a sign-up writes, with the same storage types, minus the password", async () => {
+    const userId = await create({ accountType: "tenant_admin", email: "shape-check@example.com" });
+    const shape = (id: string) =>
+      env.DB.prepare(
+        `SELECT typeof(u."emailVerified") AS verified, u."emailVerified" AS verified_value,
+           typeof(u."createdAt") AS user_created, typeof(u."updatedAt") AS user_updated,
+           typeof(c."createdAt") AS account_created, typeof(c."updatedAt") AS account_updated,
+           (c."updatedAt" IS strftime('%Y-%m-%dT%H:%M:%fZ', c."updatedAt")) AS account_updated_iso,
+           (u."createdAt" IS strftime('%Y-%m-%dT%H:%M:%fZ', u."createdAt")) AS user_created_iso,
+           length(u."id") AS id_length, length(c."id") AS account_id_length
+         FROM "user" AS u JOIN "account" AS c ON c."userId" = u."id" AND c."providerId" = 'credential'
+         WHERE u."id" = ?`,
+      )
+        .bind(id)
+        .first();
+    expect(await shape(userId)).toEqual(await shape(shopAdmin.userId));
+  });
+
+  it("gets its password from the invite's link; then it signs in, and the invite reads taken up", async () => {
+    const email = "credential-less-accepts@example.com";
+    const userId = await create({ accountType: "tenant_admin", email });
+
+    expect((await invite(userId)).status).toBe(202);
+    await expect(read(userId)).resolves.toMatchObject({
+      hasPassword: false,
+      invite: { pending: true, status: "issued" },
+    });
+
+    expect((await usePasswordLink(tokens.at(-1) as string)).status).toBe(200);
+    expect((await signInAttempt(email, CHOSEN)).status).toBe(200);
+    expect((await signInAttempt(email, PASSWORD)).status).toBe(401);
+    await expect(read(userId)).resolves.toMatchObject({
+      hasPassword: true,
+      invite: { pending: false, status: "issued" },
+    });
+    expect((await listed(userId))?.invite?.pending).toBe(false);
+  });
+
+  it("reads a password written BEFORE the latest invite (the earlier console's throwaway) as not chosen: the invite stays pending, expired or not, until a link is used", async () => {
+    // The earlier console flow: created WITH a password nobody knew, invited
+    // after; the invite expired unused.
+    const email = "throwaway-era@example.com";
+    const userId = await create({ accountType: "tenant_admin", email, password: "x".repeat(96) });
+    const principal = await authorizePlatformAdmin(env.DB, operator.userId);
+    if (principal === null) {
+      throw new Error("operator is not a platform admin");
+    }
+    const invitedAt = Date.now() - 73 * HOUR_MS;
+    expect((await issueInvite(capturingEnv(), principal, userId, invitedAt)).status).toBe("ok");
+    await env.DB.prepare(`UPDATE "account" SET "updatedAt" = ?, "createdAt" = ? WHERE "userId" = ?`)
+      .bind(new Date(invitedAt - 60_000).toISOString(), new Date(invitedAt - 60_000).toISOString(), userId)
+      .run();
+
+    await expect(read(userId)).resolves.toMatchObject({
+      hasPassword: true,
+      invite: { expired: true, pending: true, status: "issued" },
+    });
+    expect((await listed(userId))?.invite).toMatchObject({ expired: true, pending: true });
+
+    // The operator re-invites (the server allows any active admin); the new
+    // invite is live and still pending.
+    expect((await invite(userId)).status).toBe(202);
+    const live = (await read(userId)).invite;
+    expect(live).toMatchObject({ pending: true, status: "issued" });
+    expect(live?.expired).toBeUndefined();
+
+    // Used: the password is the person's own.
+    expect((await usePasswordLink(tokens.at(-1) as string)).status).toBe(200);
+    expect((await signInAttempt(email, CHOSEN)).status).toBe(200);
+    await expect(read(userId)).resolves.toMatchObject({
+      hasPassword: true,
+      invite: { pending: false },
+    });
+  });
+
+  it("keeps a password set by its owner AFTER an invite as the owner's", async () => {
+    // A signed-up user (a password of their own) who later received an invite
+    // and then used it: pending false. One who has NOT used it: pending true —
+    // offering the link again is harmless.
+    const owner = await signUp("owns-a-password@example.com", "Test Owner");
+    await seedAccess(owner.userId, "tenant_admin");
+    await expect(read(owner.userId)).resolves.toMatchObject({ hasPassword: true, invite: null });
+    const principal = await authorizePlatformAdmin(env.DB, operator.userId);
+    if (principal === null) {
+      throw new Error("operator is not a platform admin");
+    }
+    expect((await issueInvite(capturingEnv(), principal, owner.userId, Date.now())).status).toBe("ok");
+    await expect(read(owner.userId)).resolves.toMatchObject({
+      hasPassword: true,
+      invite: { pending: true },
+    });
+    expect((await usePasswordLink(tokens.at(-1) as string)).status).toBe(200);
+    await expect(read(owner.userId)).resolves.toMatchObject({
+      hasPassword: true,
+      invite: { pending: false },
     });
   });
 });

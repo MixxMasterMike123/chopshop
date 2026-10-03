@@ -162,7 +162,8 @@ export async function decideScreening(productId, decision) {
 //   GET    /v1/platform/tenants/:id/connect          { connect: { enabled, chargesEnabled, accountId, … }, operations }
 //   POST   /v1/platform/tenants/:id/connect/enable|disable   { connect }
 //   POST   /v1/platform/tenants                      { tenantId, shopName, hostname } 201 { tenant } · 409 conflict
-//   POST   /v1/platform/users                        { accountType, email, password } 201 { user } · 409 conflict
+//   POST   /v1/platform/users                        { accountType, email } 201 { user } · 409 conflict
+//                                                    (no password: created password-less, CP5-WJ4)
 //   POST   /v1/platform/tenants/:id/admins           { userId } 201 { membership } · 409 conflict
 //   POST   /v1/admin/preview   (X-Shop-Id; membership or an open acting-as grant)   { preview: { grant, expiresAt } }
 
@@ -233,20 +234,14 @@ export function provisionHostnameFor(tenantId) {
 }
 
 /**
- * The create route still takes an initial password (provision-users.ts, the
- * interim model). The console never chooses one: it sends this, shown to no
- * one and kept nowhere, and the invite (a password-set link) follows at once.
+ * A new shop admin identity, invited by the caller. → { userId, email, accountType }. 409: the address is taken.
+ * No password is sent: the API creates the identity password-less in one step
+ * (provision-users.ts createInvitedUser, CP5-WJ4), and the person sets their
+ * own from the invite's link. Until then the directory reads `hasPassword: false`.
  */
-export function unusablePassword() {
-  const bytes = new Uint8Array(48);
-  globalThis.crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-/** A new shop admin identity, invited by the caller. → { userId, email, accountType }. 409: the address is taken. */
 export async function createTenantAdminUser(email) {
   const { data } = await platformRequest('POST', '/v1/platform/users', {
-    json: { accountType: 'tenant_admin', email, password: unusablePassword() },
+    json: { accountType: 'tenant_admin', email },
   });
   return data?.user ?? null;
 }

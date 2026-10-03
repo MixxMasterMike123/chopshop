@@ -1,9 +1,8 @@
-import { generateRandomString } from "better-auth/crypto";
-
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
 import { issueInvite } from "./invites";
-import { createPlatformUser, parseEmail } from "./provision-users";
+import { createInvitedUser, parseEmail } from "./provision-users";
+import { ownPasswordSql } from "./user-directory";
 
 /**
  * A shop's own admins (CP5-WC, decision D100): the list, the invite and the
@@ -12,9 +11,9 @@ import { createPlatformUser, parseEmail } from "./provision-users";
  * ── WHAT IS REUSED, AND WHAT IS NOT ─────────────────────────────────────────
  * Reused unchanged from the platform's identity surface (CP3-B):
  *   - the address rule: provision-users.ts `parseEmail`;
- *   - the identity creation: provision-users.ts `createPlatformUser` (Better
- *     Auth's server sign-up + the `identity_access` row + its
- *     `platform.user_provision` audit row), as a `tenant_admin`;
+ *   - the identity creation: provision-users.ts `createInvitedUser` (the user,
+ *     its password-less credential account, the `identity_access` row and its
+ *     `platform.user_provision` audit row, in one batch), as a `tenant_admin`;
  *   - the invite: invites.ts `issueInvite` (the 72-hour password-set link on
  *     the reset mechanism, its ledger row, its `platform.user_invite` audit
  *     row, the queued job), whose link lands on the ADMIN origin because the
@@ -35,18 +34,23 @@ import { createPlatformUser, parseEmail } from "./provision-users";
  * which the platform functions cannot write.
  *
  * ── THE NEW IDENTITY HAS NO PASSWORD ────────────────────────────────────────
- * createPlatformUser needs an initial password (its interim model: the
- * operator chooses one). Here a random one nobody ever sees is passed, and the
- * grant batch sets the credential's password to NULL, so the identity is
- * exactly what the importer creates (MIGRATION_MANIFEST §a): it cannot sign in
- * until the invite's link sets a password, and the directory's `hasPassword`
- * stays false until then. `invited` in the list is that fact.
+ * createInvitedUser writes the identity password-less from its first visible
+ * moment — exactly what the importer creates (MIGRATION_MANIFEST §a): it
+ * cannot sign in until the invite's link sets a password. (Until CP5-WJ4 a
+ * random password was written first and cleared by the grant batch; a
+ * concurrent invite of the same address could read that throwaway as a
+ * password the person had set, win the grant and send no invite.)
+ *
+ * "Has set a password of their own" is user-directory.ts `ownPasswordSql`: a
+ * password that no invite came after. `invited` in the list is its negation,
+ * and an invite is sent exactly when it is false — so someone left with a
+ * password nobody chose by the earlier flow still gets a link.
  *
  * ── WHAT THE ANSWER TO AN INVITE DOES NOT SAY ───────────────────────────────
  * An address that already administers ANOTHER shop gains a membership here
  * (one person, several shops). The 201 is built from the request and the
  * clock only — never from the stored name, the stored creation time or
- * whether the person already has a password — so it is byte-shaped the same
+ * whether the person has set a password — so it is byte-shaped the same
  * whether the address was known or not. An address held by any other kind of
  * account (a platform admin, a print operator, a customer, a suspended
  * identity, a user without an identity) is one refusal, `not_addable`, which
@@ -62,12 +66,10 @@ export const MEMBER_LIST_LIMIT = 100;
 const NAME_MAX_LENGTH = 100;
 const NAME_FORBIDDEN_PATTERN = /[\u0000-\u001f\u007f-\u009f]/;
 const INVITE_KEYS = ["email", "name"] as const;
-/** Longer than any policy minimum, inside Better Auth's maximum of 128. */
-const THROWAWAY_PASSWORD_LENGTH = 64;
 
 export interface TenantMember {
   email: string;
-  /** The person has never set a password: the invite's link is still owed. */
+  /** The person has not set a password of their own: the invite's link is still owed. */
   invited: boolean;
   joinedAt: string;
   name: string;
@@ -92,7 +94,7 @@ export type MemberRefusal =
 export type InviteMemberResult =
   | { member: TenantMember; status: "ok" }
   | { reason: MemberRefusal; status: "refused" }
-  | { status: "email_unavailable" | "invalid" };
+  | { status: "email_unavailable" };
 
 export type RevokeMemberResult =
   | { status: "not_found" | "ok" }
@@ -149,17 +151,18 @@ function isoOf(ms: number): string {
 interface MemberRow {
   created_at: number;
   email: string;
-  has_password: number;
   identity_status: string;
   name: string;
+  own_password: number;
   user_id: string;
 }
 
 /**
  * The shop's active admin memberships, oldest first. Named columns; the one
- * fact derived from `account` is computed inside SQL (the password's value
- * never leaves the database), as the platform directory derives `hasPassword`.
- * Nothing about any other shop is selected.
+ * fact derived from `account` is computed inside SQL (no column of it leaves
+ * the database), the same fact the platform directory's `invite.pending`
+ * negates (user-directory.ts ownPasswordSql). Nothing about any other shop is
+ * selected.
  */
 export async function listTenantMembers(
   db: D1Database,
@@ -169,12 +172,7 @@ export async function listTenantMembers(
     .prepare(
       `SELECT m.user_id AS user_id, m.created_at AS created_at,
          u."email" AS email, u."name" AS name, a.status AS identity_status,
-         EXISTS (
-           SELECT 1 FROM "account" AS credential
-           WHERE credential."userId" = m.user_id
-             AND credential."providerId" = 'credential'
-             AND credential."password" IS NOT NULL
-         ) AS has_password
+         ${ownPasswordSql("m.user_id")} AS own_password
        FROM tenant_memberships AS m
        INNER JOIN "user" AS u ON u."id" = m.user_id
        INNER JOIN identity_access AS a ON a.user_id = m.user_id
@@ -190,7 +188,7 @@ export async function listTenantMembers(
 
   return rows.results.map((row) => ({
     email: row.email,
-    invited: row.has_password !== 1,
+    invited: row.own_password !== 1,
     joinedAt: isoOf(row.created_at),
     name: row.name,
     self: row.user_id === principal.userId,
@@ -201,9 +199,9 @@ export async function listTenantMembers(
 
 interface KnownAddressRow {
   account_type: string | null;
-  has_password: number;
   identity_status: string | null;
   membership_status: string | null;
+  own_password: number;
   user_id: string;
 }
 
@@ -219,12 +217,7 @@ async function readKnownAddress(
          (SELECT m.status FROM tenant_memberships AS m
           WHERE m.tenant_id = ? AND m.user_id = u."id" AND m.role = 'admin'
           LIMIT 1) AS membership_status,
-         EXISTS (
-           SELECT 1 FROM "account" AS credential
-           WHERE credential."userId" = u."id"
-             AND credential."providerId" = 'credential'
-             AND credential."password" IS NOT NULL
-         ) AS has_password
+         ${ownPasswordSql('u."id"')} AS own_password
        FROM "user" AS u
        LEFT JOIN identity_access AS a ON a.user_id = u."id"
        WHERE u."email" = ?
@@ -261,16 +254,16 @@ async function countingAdmins(db: D1Database, tenantId: string): Promise<number>
  * (tenant, user, role) key is unique — otherwise one is inserted. The audit
  * row is keyed on the decision's stamp, so a refused grant records nothing.
  *
- * `fresh`: the identity was created by this request. Its throwaway password is
- * cleared and its name set from the request in the same batch, whatever the
- * decision (a fresh identity that ends up with no membership is then exactly
- * an imported one: password-less, inert, addable later).
+ * `newIdentity`: the identity was created by this request (the audit says
+ * so). It was created password-less and named from the request, so a fresh
+ * identity that ends up with no membership is exactly an imported one:
+ * password-less, inert, addable later.
  */
 async function grantMembership(
   db: D1Database,
   principal: TenantAdminPrincipal,
   userId: string,
-  fresh: { name: string } | null,
+  newIdentity: boolean,
   now: number,
 ): Promise<"ok" | MemberRefusal> {
   const changeId = crypto.randomUUID();
@@ -353,7 +346,7 @@ async function grantMembership(
         crypto.randomUUID(),
         auditMetadataJson(principal, {
           changeId,
-          newIdentity: fresh !== null,
+          newIdentity,
           ...(existing === null ? {} : { previousStatus: existing.status }),
           surface: "admin",
           userId,
@@ -364,20 +357,6 @@ async function grantMembership(
         changeId,
       ),
   ];
-
-  if (fresh !== null) {
-    statements.push(
-      db
-        .prepare(
-          `UPDATE "account" SET "password" = NULL, "updatedAt" = ?
-           WHERE "userId" = ? AND "providerId" = 'credential'`,
-        )
-        .bind(isoOf(now), userId),
-      db
-        .prepare(`UPDATE "user" SET "name" = ?, "updatedAt" = ? WHERE "id" = ?`)
-        .bind(fresh.name, isoOf(now), userId),
-    );
-  }
 
   const [decided] = await db.batch(statements);
   // "Matched" is changes > 0: D1 counts rows a trigger writes as well.
@@ -433,50 +412,45 @@ export async function inviteTenantMember(
   }
 
   let userId: string;
-  let fresh: { name: string } | null = null;
-  let hasPassword: boolean;
+  let newIdentity = false;
+  let ownPassword: boolean;
 
   if (known === null) {
-    const created = await createPlatformUser(
+    const created = await createInvitedUser(
       env,
       principal,
-      {
-        accountType: "tenant_admin",
-        email: input.email,
-        password: generateRandomString(THROWAWAY_PASSWORD_LENGTH, "a-z", "A-Z", "0-9"),
-      },
+      { accountType: "tenant_admin", email: input.email, name: input.name },
       now,
     );
-    if (created.status === "invalid") {
-      return { status: "invalid" };
-    }
     if (created.status === "ok") {
       userId = created.user.userId;
-      fresh = { name: input.name };
-      hasPassword = false;
+      newIdentity = true;
+      ownPassword = false;
     } else {
       // A concurrent request created the address first: take what it is now.
+      // It is complete (created in one batch) and, if just created, has no
+      // password — so whichever request wins the grant below sends the link.
       known = await readKnownAddress(env.DB, principal.tenantId, input.email);
       const refusal = known === null ? "not_addable" : refusalFor(known);
       if (known === null || refusal !== null) {
         return { reason: refusal ?? "not_addable", status: "refused" };
       }
       userId = known.user_id;
-      hasPassword = known.has_password === 1;
+      ownPassword = known.own_password === 1;
     }
   } else {
     userId = known.user_id;
-    hasPassword = known.has_password === 1;
+    ownPassword = known.own_password === 1;
   }
 
-  const granted = await grantMembership(env.DB, principal, userId, fresh, now);
+  const granted = await grantMembership(env.DB, principal, userId, newIdentity, now);
   if (granted !== "ok") {
     return { reason: granted, status: "refused" };
   }
 
-  // Someone who has never set a password gets the link (re-issuing kills any
-  // earlier unused one). Someone who has one already signs in as before.
-  if (!hasPassword) {
+  // Someone who has not set a password of their own gets the link (re-issuing
+  // kills any earlier unused one). Someone who has one signs in as before.
+  if (!ownPassword) {
     const invite = await issueInvite(env, principal, userId, now);
     if (invite.status === "email_unavailable") {
       return { status: "email_unavailable" };

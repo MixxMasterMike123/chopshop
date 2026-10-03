@@ -8,6 +8,7 @@ import { parseAuthEmailJob } from "../src/email/auth-email-job";
 import type { AuthEmailJob } from "../src/email/auth-email-job";
 import { parseCanonicalOrigins } from "../src/lib/origins";
 import { ACTING_AS_TTL_MS } from "../src/platform/acting-as";
+import { issueInvite } from "../src/platform/invites";
 import { TENANT_ADMIN_CAP } from "../src/platform/tenant-members";
 import {
   MEMBER_INVITE_EMAIL_LIMIT,
@@ -923,6 +924,202 @@ describe("the revoke", () => {
     expect(JSON.parse(audit?.metadata_json as string)).toMatchObject({
       actingAsGrantId: operatorGrantId,
       userId: colleague.userId,
+    });
+  });
+});
+
+describe("two invites of one new address at once (CP5-WJ4, Codex e3a49bb5)", () => {
+  /**
+   * A D1 handle that runs `interleave` right before the first batch that
+   * follows a statement prepared from SQL containing `marker` — here, the
+   * grant's INSERT INTO tenant_memberships. So the interleaved request runs
+   * between this request's creation of the identity and its grant.
+   */
+  function interleavingDb(marker: string, interleave: () => Promise<void>): D1Database {
+    let armed = false;
+    let fired = false;
+    return new Proxy(env.DB, {
+      get(target, property) {
+        if (property === "prepare") {
+          return (sql: string) => {
+            if (!fired && sql.includes(marker)) {
+              armed = true;
+            }
+            return target.prepare(sql);
+          };
+        }
+        if (property === "batch") {
+          return async (statements: D1PreparedStatement[]) => {
+            if (armed && !fired) {
+              fired = true;
+              await interleave();
+            }
+            return target.batch(statements);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+  }
+
+  const GRANT = "INSERT INTO tenant_memberships";
+
+  async function userIdOf(email: string): Promise<string> {
+    const row = await env.DB.prepare(`SELECT "id" FROM "user" WHERE "email" = ?`).bind(email).first<{ id: string }>();
+    if (row === null) {
+      throw new Error(`no user ${email}`);
+    }
+    return row.id;
+  }
+
+  async function issuedInvites(userId: string): Promise<number> {
+    return countRows(
+      `SELECT COUNT(*) AS n FROM identity_invites WHERE user_id = ? AND status = 'issued'`,
+      userId,
+    );
+  }
+
+  /** The member has a live invitation: its link sets a password and signs them in. */
+  async function expectWorkingInvitation(captured: CapturedQueue, email: string): Promise<void> {
+    const jobs = captured.sent.map((body) => parseAuthEmailJob(body, env.AUTH_BASE_URL));
+    expect(jobs.every((job) => job.recipient === email)).toBe(true);
+    const userId = await userIdOf(email);
+    expect(await issuedInvites(userId)).toBe(1);
+    expect((await setPassword(tokenOf(jobs.at(-1) as AuthEmailJob))).status).toBe(200);
+    expect((await signInResponse(email, NEW_PASSWORD)).status).toBe(200);
+  }
+
+  it("the second request runs between the first's creation and its grant and WINS the grant: its 201 sends the invitation", async () => {
+    const captured = captureQueue();
+    const email = "race-same-new@example.com";
+    let second: Response | null = null;
+    let seenBySecond: { no_password: number } | null = null;
+    const firstDb = interleavingDb(GRANT, async () => {
+      // What the second request sees: the identity, complete and password-less.
+      seenBySecond = await env.DB.prepare(
+        `SELECT (c."password" IS NULL) AS no_password FROM "account" AS c
+         JOIN "user" AS u ON u."id" = c."userId" WHERE u."email" = ?`,
+      )
+        .bind(email)
+        .first<{ no_password: number }>();
+      second = await add({ email, name: "Test Second" }, { env: envWith({ EMAIL_QUEUE: captured.queue }) });
+    });
+
+    const first = await add(
+      { email, name: "Test First" },
+      { env: envWith({ DB: firstDb, EMAIL_QUEUE: captured.queue }) },
+    );
+
+    expect((second as Response | null)?.status).toBe(201);
+    await expectRefusal(first, "already_member");
+    // Exactly one invitation, sent by the request that answered 201 (before
+    // CP5-WJ4: none — the second read the throwaway as a set password).
+    expect(captured.sent).toHaveLength(1);
+    expect(seenBySecond).toEqual({ no_password: 1 });
+    const userId = await userIdOf(email);
+    expect(await membershipStatus(userId, SHOP)).toBe("active");
+    expect((await members()).find((member) => member.userId === userId)).toMatchObject({
+      invited: true,
+      name: "Test First",
+    });
+    await expectWorkingInvitation(captured, email);
+  });
+
+  it("the second request reads the new identity, then the FIRST wins the grant: the first's 201 sends the invitation", async () => {
+    const captured = captureQueue();
+    const email = "race-same-first-wins@example.com";
+    let secondAtGrant!: () => void;
+    const secondReachedGrant = new Promise<void>((resolve) => {
+      secondAtGrant = resolve;
+    });
+    let releaseSecond!: () => void;
+    const secondReleased = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const secondDb = interleavingDb(GRANT, async () => {
+      secondAtGrant();
+      await secondReleased;
+    });
+    let second: Promise<Response> | null = null;
+    const firstDb = interleavingDb(GRANT, async () => {
+      second = add(
+        { email, name: "Test Second" },
+        { env: envWith({ DB: secondDb, EMAIL_QUEUE: captured.queue }) },
+      );
+      await secondReachedGrant;
+    });
+
+    const first = await add(
+      { email, name: "Test First" },
+      { env: envWith({ DB: firstDb, EMAIL_QUEUE: captured.queue }) },
+    );
+    expect(first.status).toBe(201);
+    releaseSecond();
+    await expectRefusal(await (second as unknown as Promise<Response>), "already_member");
+
+    expect(captured.sent).toHaveLength(1);
+    await expectWorkingInvitation(captured, email);
+  });
+
+  it("one new address invited by two shops at once: both answer 201 and the person holds one live invitation", async () => {
+    const captured = captureQueue();
+    const email = "race-two-shops@example.com";
+    let second: Response | null = null;
+    const firstDb = interleavingDb(GRANT, async () => {
+      second = await add(
+        { email, name: "Test Other Shop" },
+        { env: envWith({ EMAIL_QUEUE: captured.queue }), shop: OTHER },
+      );
+    });
+
+    const first = await add(
+      { email, name: "Test This Shop" },
+      { env: envWith({ DB: firstDb, EMAIL_QUEUE: captured.queue }) },
+    );
+
+    expect(first.status).toBe(201);
+    expect((second as Response | null)?.status).toBe(201);
+    const userId = await userIdOf(email);
+    expect(await membershipStatus(userId, SHOP)).toBe("active");
+    expect(await membershipStatus(userId, OTHER)).toBe("active");
+    // Each grant sent the link; the later one superseded the earlier.
+    expect(captured.sent).toHaveLength(2);
+    await expectWorkingInvitation(captured, email);
+  });
+
+  it("sends the link to an existing admin left with a password nobody chose (written before their invite)", async () => {
+    // The earlier console flow: created with a random password, then invited;
+    // the invite expired unused. Now a shop adds them.
+    const email = "throwaway-era-member@example.com";
+    const person = await signUp(email, "Test Throwaway Era");
+    await seedAccess(person.userId, "tenant_admin");
+    await seedMembership(person.userId, OTHER);
+    const invitedAt = Date.now() - 73 * 60 * 60 * 1_000;
+    const issued = await issueInvite(
+      envWith({ EMAIL_QUEUE: captureQueue().queue }),
+      { accountType: "platform_admin", userId: operator.userId },
+      person.userId,
+      invitedAt,
+    );
+    expect(issued.status).toBe("ok");
+    await env.DB.prepare(`UPDATE "account" SET "updatedAt" = ? WHERE "userId" = ?`)
+      .bind(new Date(invitedAt - 60_000).toISOString(), person.userId)
+      .run();
+
+    const captured = captureQueue();
+    const response = await add(
+      { email, name: "Test Throwaway Era" },
+      { env: envWith({ EMAIL_QUEUE: captured.queue }) },
+    );
+    expect(response.status).toBe(201);
+    expect(captured.sent).toHaveLength(1);
+    expect((await members()).find((member) => member.userId === person.userId)).toMatchObject({
+      invited: true,
+    });
+    await expectWorkingInvitation(captured, email);
+    expect((await members()).find((member) => member.userId === person.userId)).toMatchObject({
+      invited: false,
     });
   });
 });

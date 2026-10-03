@@ -1,5 +1,8 @@
+import { generateRandomString } from "better-auth/crypto";
+
 import type { PlatformPrincipal, TenantAdminPrincipal } from "../auth/live-authorization";
 import { createAuth } from "../auth/create-auth";
+import { inviteSurfaceFor } from "./invites";
 
 /**
  * Platform-operator user provisioning.
@@ -14,15 +17,26 @@ import { createAuth } from "../auth/create-auth";
  * no HTTP path to create any further user at all, so a tenant admin could not be
  * brought into being in a live environment. This route is that missing surface.
  *
- * INTERIM CREDENTIAL MODEL
- * ------------------------
- * This mirrors production's superadmin create-user flow minus the credentials
- * email: the operator chooses the initial password and communicates it to the
- * new user out of band. That is deliberate for the interim and deliberately
- * temporary — when the Email Service checkpoint lands, an invitation flow
- * (operator creates the identity, the user sets their own secret from a mailed
- * capability) supersedes the `password` field here. Password reset and password
- * change are separate later checkpoints and are NOT part of this surface.
+ * CREDENTIAL MODEL: AN INVITED IDENTITY HAS NO PASSWORD
+ * ----------------------------------------------------
+ * Without `password` (the console's way, and the shop's own invite in
+ * tenant-members.ts) the identity is created WITHOUT a password and the person
+ * sets their own from the invite's link (invites.ts). It is written in ONE
+ * batch — the user, its credential account with a NULL password, the
+ * identity_access row and the audit row — so from the first moment any reader
+ * can see the user, it is complete and password-less: no reader can ever take
+ * a password nobody chose for one the person set (the directory's
+ * `hasPassword`, the shop's `invited`, the invite decision of
+ * tenant-members.ts). This is exactly the shape the importer writes for a
+ * carried admin (MIGRATION_MANIFEST §a). Better Auth refuses a sign-in to it
+ * whatever the password, and its reset endpoint sets the password on that
+ * account when the invite's link is used.
+ *
+ * With `password` (the interim model, kept for the staging scripts that sign
+ * in as the identity they create) the operator chooses the initial password
+ * and communicates it out of band; Better Auth's sign-up writes it. Password
+ * reset and password change are separate checkpoints and are NOT part of this
+ * surface.
  *
  * THE PLATFORM_ADMIN FLOOR
  * ------------------------
@@ -58,7 +72,14 @@ export type ProvisionableAccountType = "print_operator" | "tenant_admin";
 export interface CreateUserInput {
   accountType: ProvisionableAccountType;
   email: string;
-  password: string;
+  /** null: created without a password (see "CREDENTIAL MODEL" above). */
+  password: string | null;
+}
+
+export interface CreateInvitedUserInput {
+  accountType: ProvisionableAccountType;
+  email: string;
+  name: string;
 }
 
 export interface ProvisionedUser {
@@ -145,6 +166,14 @@ function parsePassword(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * `{ accountType, email }` creates an identity without a password;
+ * `{ accountType, email, password }` one with that password. A `password` key
+ * that is present must be a non-empty string: `null` or `""` is refused, never
+ * read as "no password". Only an invitable kind (invites.ts inviteSurfaceFor:
+ * of the creatable ones, `tenant_admin`) may be created without a password —
+ * nothing could ever give a password-less print operator one.
+ */
 export function parseCreateUserInput(body: unknown): CreateUserInput | null {
   if (!isPlainObject(body) || !hasOnlyKeys(body, CREATE_USER_KEYS)) {
     return null;
@@ -152,11 +181,15 @@ export function parseCreateUserInput(body: unknown): CreateUserInput | null {
 
   const accountType = parseAccountType(body.accountType);
   const email = parseEmail(body.email);
-  const password = parsePassword(body.password);
+  const password = "password" in body ? parsePassword(body.password) : null;
+  if (accountType === null || email === null) {
+    return null;
+  }
+  if ("password" in body ? password === null : inviteSurfaceFor(accountType) === null) {
+    return null;
+  }
 
-  return accountType === null || email === null || password === null
-    ? null
-    : { accountType, email, password };
+  return { accountType, email, password };
 }
 
 /**
@@ -222,6 +255,9 @@ const INPUT_REJECTION_CODES: ReadonlySet<string> = new Set([
  *
  * No session is created or returned. The new user signs in through the normal
  * mounted sign-in route.
+ *
+ * Without a password the call is createInvitedUser's, the name being the
+ * address's local part as on the password path.
  */
 export async function createPlatformUser(
   env: Env,
@@ -229,6 +265,19 @@ export async function createPlatformUser(
   input: CreateUserInput,
   now: number,
 ): Promise<CreateUserResult> {
+  if (input.password === null) {
+    return createInvitedUser(
+      env,
+      principal,
+      {
+        accountType: input.accountType,
+        email: input.email,
+        name: localPartOf(input.email),
+      },
+      now,
+    );
+  }
+
   let userId: string;
 
   // Better Auth does NOT reliably refuse a duplicate here, so the address is
@@ -259,11 +308,7 @@ export async function createPlatformUser(
     const signedUp = await createAuth(env).api.signUpEmail({
       body: {
         email: input.email,
-        // The local part, never a caller-supplied display name: this surface
-        // provisions a credential, and a name is profile data the user owns.
-        // parseEmail has already established exactly one '@' with a non-empty
-        // side on each end, so the split always yields a local part.
-        name: input.email.split("@")[0] as string,
+        name: localPartOf(input.email),
         password: input.password,
       },
     });
@@ -302,46 +347,11 @@ export async function createPlatformUser(
   }
 
   try {
-    await env.DB.batch([
-      // Plain INSERT, never an upsert: user_id is the primary key, so a racing
-      // provision fails loudly here instead of overwriting an account kind that
-      // was decided somewhere else. This is also what enforces the one-kind
-      // boundary against a second create for an identity that already holds a
-      // different kind.
-      env.DB
-        .prepare(
-          `INSERT INTO identity_access (
-            user_id, account_type, status, created_at, updated_at
-          ) VALUES (?, ?, 'active', ?, ?)`,
-        )
-        .bind(userId, input.accountType, now, now),
-      // tenant_id stays NULL: this route creates an identity, not a membership.
-      // A tenant admin is bound to its tenant by the separate admins-grant
-      // route, and a print operator by its own assignment.
-      //
-      // metadata_json carries the account type and NOTHING else — never the
-      // email. The audit trail records what kind of privilege was manufactured,
-      // which is the security-relevant fact; the address is a personal
-      // identifier the "user" row already binds to this resource id.
-      env.DB
-        .prepare(
-          `INSERT INTO audit_events (
-            event_id, tenant_id, actor_user_id, action, resource_type,
-            resource_id, request_id, metadata_json, created_at
-          ) VALUES (?, NULL, ?, 'platform.user_provision', 'identity_access', ?, ?, ?, ?)`,
-        )
-        .bind(
-          crypto.randomUUID(),
-          principal.userId,
-          userId,
-          crypto.randomUUID(),
-          JSON.stringify({ accountType: input.accountType }),
-          now,
-        ),
-    ]);
+    await env.DB.batch(
+      accessStatements(env.DB, principal, userId, input.accountType, now),
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("UNIQUE constraint failed")) {
+    if (isUniqueViolation(error)) {
       return { status: "conflict" };
     }
     throw error;
@@ -354,5 +364,140 @@ export async function createPlatformUser(
       email: input.email,
       userId,
     },
+  };
+}
+
+/**
+ * The local part, never a caller-supplied display name on the HTTP surface:
+ * it provisions a credential, and a name is profile data the user owns.
+ * parseEmail has already established exactly one '@' with a non-empty side on
+ * each end, so the split always yields a local part.
+ */
+function localPartOf(email: string): string {
+  return email.split("@")[0] as string;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("UNIQUE constraint failed");
+}
+
+/** Better Auth's default id: 32 characters of [a-zA-Z0-9] (@better-auth/core generateId). */
+function newAuthId(): string {
+  return generateRandomString(32, "a-z", "A-Z", "0-9");
+}
+
+/** The identity_access row and its audit row, for both creation paths. */
+function accessStatements(
+  db: D1Database,
+  principal: PlatformPrincipal | TenantAdminPrincipal,
+  userId: string,
+  accountType: ProvisionableAccountType,
+  now: number,
+): D1PreparedStatement[] {
+  return [
+    // Plain INSERT, never an upsert: user_id is the primary key, so a racing
+    // provision fails loudly here instead of overwriting an account kind that
+    // was decided somewhere else. This is also what enforces the one-kind
+    // boundary against a second create for an identity that already holds a
+    // different kind.
+    db
+      .prepare(
+        `INSERT INTO identity_access (
+          user_id, account_type, status, created_at, updated_at
+        ) VALUES (?, ?, 'active', ?, ?)`,
+      )
+      .bind(userId, accountType, now, now),
+    // tenant_id stays NULL: this route creates an identity, not a membership.
+    // A tenant admin is bound to its tenant by the separate admins-grant
+    // route, and a print operator by its own assignment.
+    //
+    // metadata_json carries the account type and NOTHING else — never the
+    // email. The audit trail records what kind of privilege was manufactured,
+    // which is the security-relevant fact; the address is a personal
+    // identifier the "user" row already binds to this resource id.
+    db
+      .prepare(
+        `INSERT INTO audit_events (
+          event_id, tenant_id, actor_user_id, action, resource_type,
+          resource_id, request_id, metadata_json, created_at
+        ) VALUES (?, NULL, ?, 'platform.user_provision', 'identity_access', ?, ?, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        principal.userId,
+        userId,
+        crypto.randomUUID(),
+        JSON.stringify({ accountType }),
+        now,
+      ),
+  ];
+}
+
+/**
+ * Creates an identity WITHOUT a password, in ONE batch (a D1 batch is one
+ * transaction): the Better Auth user, its credential account with a NULL
+ * password, the identity_access row and the `platform.user_provision` audit
+ * row. Nothing of it is visible before all of it is, so no concurrent reader
+ * ever sees the user without its kind, nor any password on it. The person sets
+ * a password through the invite's link (Better Auth's reset endpoint fills the
+ * NULL); until then every sign-in is refused.
+ *
+ * The rows are the ones Better Auth's sign-up writes for this application
+ * (the same columns, ISO-8601 times, `emailVerified` 0, `accountId` = the user
+ * id), minus the password — exactly the importer's shape for a carried admin.
+ * Written here rather than through Better Auth's adapter, because the adapter
+ * writes the user and the account as separate statements, and the access row
+ * must be in the same transaction as both.
+ *
+ * Duplicates: the address is checked first (the common case, a clean
+ * conflict); a racing duplicate fails the batch on "user"."email" UNIQUE and
+ * is the same conflict, leaving nothing behind.
+ */
+export async function createInvitedUser(
+  env: Env,
+  principal: PlatformPrincipal | TenantAdminPrincipal,
+  input: CreateInvitedUserInput,
+  now: number,
+): Promise<{ status: "conflict" } | { status: "ok"; user: ProvisionedUser }> {
+  const existing = await env.DB
+    .prepare('SELECT "id" FROM "user" WHERE "email" = ? LIMIT 1')
+    .bind(input.email)
+    .first<{ id: string }>();
+  if (existing !== null) {
+    return { status: "conflict" };
+  }
+
+  const userId = newAuthId();
+  const iso = new Date(now).toISOString();
+
+  try {
+    await env.DB.batch([
+      env.DB
+        .prepare(
+          `INSERT INTO "user" (
+            "id", "name", "email", "emailVerified", "image", "createdAt", "updatedAt"
+          ) VALUES (?, ?, ?, 0, NULL, ?, ?)`,
+        )
+        .bind(userId, input.name, input.email, iso, iso),
+      env.DB
+        .prepare(
+          `INSERT INTO "account" (
+            "id", "accountId", "providerId", "userId", "password", "createdAt", "updatedAt"
+          ) VALUES (?, ?, 'credential', ?, NULL, ?, ?)`,
+        )
+        .bind(newAuthId(), userId, userId, iso, iso),
+      ...accessStatements(env.DB, principal, userId, input.accountType, now),
+    ]);
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return { status: "conflict" };
+    }
+    throw error;
+  }
+
+  return {
+    status: "ok",
+    user: { accountType: input.accountType, email: input.email, userId },
   };
 }

@@ -8,9 +8,10 @@ import { parseTenantIdPathSegment } from "./provision-tenants";
  * PLATFORM-ONLY, and deliberately narrow. Every column is named in the SELECT
  * list. Nothing is read from Better Auth's `verification` (reset tokens) or
  * `session` tables. From `account` (password hashes, provider tokens) exactly
- * ONE fact is derived, inside SQL: whether a credential account with a non-null
- * password exists (`hasPassword`). The password column's value is never
- * selected into the Worker — the query returns 0 or 1.
+ * TWO facts are derived, inside SQL: whether a credential account with a
+ * non-null password exists (`hasPassword`), and whether one was set since the
+ * latest invite (`invite.pending`, see ownPasswordSql). No column of `account`
+ * is selected into the Worker — each query returns 0 or 1.
  *
  * The view is the identity's public facts: id, email, name, kind, status,
  * creation time, its memberships, whether it can sign in with a password, and
@@ -46,15 +47,53 @@ export interface DirectoryPrintMembership {
 /**
  * The user's latest `identity_invites` row. `status` is the row's own:
  * `issued` means not superseded and not revoked — it does NOT say whether the
- * link was used (Better Auth consumes the token without telling this table);
- * `hasPassword` answers that. `expired: true` is present only on an `issued`
- * invite whose 72 hours have passed.
+ * link was used (Better Auth consumes the token without telling this table).
+ * `pending` answers that: true while no password has been set since this
+ * invite was issued (OWN_PASSWORD_SQL below) — the person has not taken it up,
+ * whether the link is live, expired, or was revoked because its mail could not
+ * be queued. `expired: true` is present only on an `issued` invite whose 72
+ * hours have passed.
  */
 export interface DirectoryInvite {
   createdAt: string;
   expired?: true;
   expiresAt: string;
+  pending: boolean;
   status: "issued" | "revoked" | "superseded";
+}
+
+/**
+ * SQL, true when the person has set a password of their own: a credential
+ * account with a non-null password exists, and no invite was issued at or
+ * after the password's last change (Better Auth stamps the account's
+ * `updatedAt` when its reset endpoint sets the password). `:user` is the SQL
+ * expression of the user id. Evaluated inside SQLite: only 0 or 1 leaves it.
+ *
+ * Why not "a non-null password exists" alone (`hasPassword`): until CP5-WJ4
+ * the console and the shop's invite created every new admin with a random
+ * password nobody knew (cleared later, or never), so a password could exist
+ * that the person never chose. An identity invited after its password was
+ * written has not chosen one until it uses an invite. Identities created now
+ * have no password at all until then (provision-users.ts createInvitedUser),
+ * so for them the two facts agree.
+ *
+ * Both times are ISO-8601 text on every writer (Better Auth's D1 adapter, the
+ * importer, createInvitedUser; identity_invites' CHECK). Were a password's
+ * time ever not text, SQLite orders text above it: the fact reads false and
+ * the person is offered an invite — never the other way round.
+ */
+export function ownPasswordSql(user: string): string {
+  return `EXISTS (
+    SELECT 1 FROM "account" AS own_credential
+    WHERE own_credential."userId" = ${user}
+      AND own_credential."providerId" = 'credential'
+      AND own_credential."password" IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM identity_invites AS own_invite
+        WHERE own_invite.user_id = own_credential."userId"
+          AND own_invite.created_at >= own_credential."updatedAt"
+      )
+  )`;
 }
 
 export interface DirectoryUser {
@@ -162,15 +201,16 @@ interface UserRow {
   email: string;
   has_password: number;
   name: string;
+  own_password: number;
   status: IdentityStatus | null;
   user_id: string;
 }
 
 // The one SELECT list every directory read uses. Better Auth's "user" table
 // holds no secret (credentials live in "account"), and even so every column is
-// named rather than taken with *. `has_password` is the ONLY thing derived
-// from "account": an EXISTS evaluated inside SQLite, so the password column's
-// value never leaves the database — the Worker receives 0 or 1.
+// named rather than taken with *. `has_password` and `own_password` are the
+// ONLY things derived from "account": EXISTS evaluated inside SQLite, so no
+// column of it leaves the database — the Worker receives 0 or 1.
 const USER_COLUMNS = `u."id" AS user_id, u."email" AS email, u."name" AS name,
   u."createdAt" AS created_at, a.account_type AS account_type, a.status AS status,
   EXISTS (
@@ -178,7 +218,8 @@ const USER_COLUMNS = `u."id" AS user_id, u."email" AS email, u."name" AS name,
     WHERE credential."userId" = u."id"
       AND credential."providerId" = 'credential'
       AND credential."password" IS NOT NULL
-  ) AS has_password`;
+  ) AS has_password,
+  ${ownPasswordSql('u."id"')} AS own_password`;
 
 /**
  * Better Auth stores dates through its SQLite adapter as ISO strings; a row
@@ -203,7 +244,7 @@ async function attachDetails(
 ): Promise<DirectoryUser[]> {
   const memberships = new Map<string, DirectoryMembership[]>();
   const printMemberships = new Map<string, DirectoryPrintMembership[]>();
-  const invites = new Map<string, DirectoryInvite>();
+  const invites = new Map<string, Omit<DirectoryInvite, "pending">>();
 
   for (let start = 0; start < rows.length; start += IN_CHUNK) {
     const ids = rows.slice(start, start + IN_CHUNK).map((row) => row.user_id);
@@ -270,18 +311,23 @@ async function attachDetails(
     }
   }
 
-  return rows.map((row) => ({
-    accountType: row.account_type,
-    createdAt: isoTime(row.created_at),
-    email: row.email,
-    hasPassword: row.has_password === 1,
-    invite: invites.get(row.user_id) ?? null,
-    memberships: memberships.get(row.user_id) ?? [],
-    name: row.name,
-    printMemberships: printMemberships.get(row.user_id) ?? [],
-    status: row.status,
-    userId: row.user_id,
-  }));
+  return rows.map((row) => {
+    const invite = invites.get(row.user_id);
+    return {
+      accountType: row.account_type,
+      createdAt: isoTime(row.created_at),
+      email: row.email,
+      hasPassword: row.has_password === 1,
+      // The latest invite has the latest created_at, so "no password set
+      // since ANY invite" (own_password false) is "none since this one".
+      invite: invite === undefined ? null : { ...invite, pending: row.own_password !== 1 },
+      memberships: memberships.get(row.user_id) ?? [],
+      name: row.name,
+      printMemberships: printMemberships.get(row.user_id) ?? [],
+      status: row.status,
+      userId: row.user_id,
+    };
+  });
 }
 
 /**

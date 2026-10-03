@@ -63,8 +63,13 @@ export function userRowOf(user) {
     shopId: shops.length > 0 ? shops.join(', ') : null,
     platform: user.accountType === 'platform_admin',
     suspended: user.status === 'suspended',
-    // Whether the account can sign in with a password yet: an invitation is for those that cannot.
-    hasPassword: user.hasPassword === true,
+    // Whether the person has set a password of their own — the page offers
+    // "Skicka inbjudan" to those who have not. Not the directory's bare
+    // `hasPassword`: a password set before the latest invite was written by
+    // someone else (until CP5-WJ4 the console created every shop admin with a
+    // random one), so while that invite is `pending` — live, expired or never
+    // delivered — the invitation can be sent again.
+    hasPassword: user.hasPassword === true && user.invite?.pending !== true,
   };
 }
 

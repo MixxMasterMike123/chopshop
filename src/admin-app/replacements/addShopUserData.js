@@ -4,10 +4,9 @@
 // Firebase); both export the same names with the same meaning.
 //
 // A shop admin is INVITED, never given a password:
-//   1. POST /v1/platform/users { accountType: 'tenant_admin', email, password }
-//      The route still requires an initial password (provision-users.ts, the
-//      interim model); the console sends an unusable random one that no one
-//      sees (platform.js unusablePassword). 409 → the address is taken.
+//   1. POST /v1/platform/users { accountType: 'tenant_admin', email }
+//      No password: the identity is created password-less in one step
+//      (provision-users.ts createInvitedUser, CP5-WJ4). 409 → the address is taken.
 //   2. POST /v1/platform/tenants/:id/admins { userId }
 //   3. POST /v1/platform/users/:id/invite → the password-set link (72 h) by
 //      e-mail; a failure here is the modal's "e-post misslyckades" branch.

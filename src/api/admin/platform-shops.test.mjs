@@ -18,7 +18,6 @@ import {
   setTenantConnectEnabled,
   setTenantPublished,
   setTenantStatus,
-  unusablePassword,
 } from './platform.js';
 
 const realFetch = globalThis.fetch;
@@ -94,20 +93,11 @@ describe('bodies', () => {
     await createTenant({ tenantId: 'x', shopName: 'X', hostname: provisionHostnameFor('x') });
     assert.deepEqual(body(calls[0]), { tenantId: 'x', shopName: 'X', hostname: 'x.provisioned.invalid' });
   });
-  it('a new admin is a tenant admin with an unusable password nobody chose', async () => {
+  it('a new admin is a tenant admin created with NO password (the invite sets one; CP5-WJ4)', async () => {
     stubFetch(() => answer(201, { user: { userId: 'u', email: 'a@example.com', accountType: 'tenant_admin' } }));
     const user = await createTenantAdminUser('a@example.com');
-    const sent = body(calls[0]);
-    assert.deepEqual(Object.keys(sent).sort(), ['accountType', 'email', 'password']);
-    assert.equal(sent.accountType, 'tenant_admin');
-    assert.equal(sent.password.length, 96);
+    assert.deepEqual(body(calls[0]), { accountType: 'tenant_admin', email: 'a@example.com' });
     assert.equal(user.userId, 'u');
-  });
-  it('the password is random each time and within the policy (8–128)', () => {
-    const a = unusablePassword();
-    const b = unusablePassword();
-    assert.notEqual(a, b);
-    assert.ok(a.length >= 8 && a.length <= 128);
   });
   it('grant sends the user id', async () => {
     stubFetch(() => answer(201, { membership: { userId: 'u' } }));

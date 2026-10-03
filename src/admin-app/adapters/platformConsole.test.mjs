@@ -62,6 +62,26 @@ describe('users', () => {
     assert.equal(row.suspended, true);
     assert.equal(row.contactPerson, '');
   });
+  it('"Skicka inbjudan" (hasPassword false) for anyone who has not set a password of their own (CP5-WJ4)', () => {
+    const issued = { createdAt: '2026-10-01T08:00:00.000Z', expiresAt: '2026-10-04T08:00:00.000Z', status: 'issued' };
+    // Created password-less, never invited, or invited and not yet accepted.
+    assert.equal(userRowOf({ ...base, hasPassword: false, invite: null }).hasPassword, false);
+    assert.equal(userRowOf({ ...base, hasPassword: false, invite: { ...issued, pending: true } }).hasPassword, false);
+    // Provisioned before CP5-WJ4 with a random password: the invite expired,
+    // was revoked (mail not queued) or is still live, and was never used.
+    for (const invite of [
+      { ...issued, expired: true, pending: true },
+      { ...issued, status: 'revoked', pending: true },
+      { ...issued, pending: true },
+    ]) {
+      assert.equal(userRowOf({ ...base, hasPassword: true, invite }).hasPassword, false, JSON.stringify(invite));
+    }
+    // Their own password: set through the invite, or never invited at all.
+    assert.equal(userRowOf({ ...base, hasPassword: true, invite: { ...issued, pending: false } }).hasPassword, true);
+    assert.equal(userRowOf({ ...base, hasPassword: true, invite: null }).hasPassword, true);
+    // A directory without the field (an older API) reads as before.
+    assert.equal(userRowOf({ ...base, hasPassword: true, invite: issued }).hasPassword, true);
+  });
   it('platform admins first, then by e-mail', () => {
     const rows = [{ platform: false, email: 'a' }, { platform: true, email: 'z' }, { platform: false, email: 'b' }, { platform: true, email: 'c' }];
     assert.deepEqual(sortUsers(rows).map((r) => r.email), ['c', 'z', 'a', 'b']);
