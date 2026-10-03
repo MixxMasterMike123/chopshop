@@ -1,0 +1,99 @@
+{
+  "_note": "INVENTED data for the admin dev API (src/admin-app/dev/dev-api.mjs). No real shop, person or address. Passwords are dev-only.",
+  "shops": {
+    "test-shop-a": {
+      "shop": {
+        "tenantId": "test-shop-a",
+        "shopName": "Test Shop A",
+        "supportEmail": "support@shop-a.example.com",
+        "status": "active",
+        "published": true,
+        "defaultLocale": "sv-SE",
+        "currency": "SEK",
+        "vatRateBp": 2500,
+        "features": {
+          "pod": true,
+          "pickup": true,
+          "affiliate": false,
+          "discountCodes": false,
+          "productReviews": false,
+          "abandonedCheckout": false,
+          "contentStudio": false,
+          "marketingMaterials": false,
+          "b2b": false,
+          "dining": false,
+          "ambassador": false,
+          "campaigns": false,
+          "writers": false
+        }
+      },
+      "settings": {
+        "storeIdentity": { "tagline": "Invented goods for testing.", "accent": "#0E5E63" },
+        "returnAddress": "Test Shop A\nExample Street 1\n111 11 Exampletown",
+        "vatRegistered": true,
+        "vatNumber": "SE000000000001",
+        "sellerType": "company",
+        "updatedAt": "2026-10-01T09:00:00.000Z"
+      }
+    },
+    "test-shop-b": {
+      "shop": {
+        "tenantId": "test-shop-b",
+        "shopName": "Test Shop B",
+        "supportEmail": "support@shop-b.example.com",
+        "status": "suspended",
+        "published": false,
+        "defaultLocale": "sv-SE",
+        "currency": "SEK",
+        "vatRateBp": 2500,
+        "features": {
+          "pod": false,
+          "pickup": true,
+          "affiliate": false,
+          "discountCodes": false,
+          "productReviews": false,
+          "abandonedCheckout": false,
+          "contentStudio": false,
+          "marketingMaterials": false,
+          "b2b": false,
+          "dining": false,
+          "ambassador": false,
+          "campaigns": false,
+          "writers": false
+        }
+      },
+      "settings": {
+        "storeIdentity": {},
+        "returnAddress": null,
+        "vatRegistered": null,
+        "vatNumber": null,
+        "sellerType": null,
+        "updatedAt": null
+      }
+    }
+  },
+  "users": [
+    {
+      "user": { "id": "user-tenant-admin", "email": "admin@example.com", "name": "Test Admin" },
+      "password": "dev-password-1",
+      "accountType": "tenant_admin",
+      "platform": false,
+      "memberships": [
+        { "tenantId": "test-shop-a", "role": "admin" },
+        { "tenantId": "test-shop-b", "role": "admin" }
+      ],
+      "actingAs": []
+    },
+    {
+      "user": { "id": "user-platform", "email": "platform@example.com", "name": "Test Operator" },
+      "password": "dev-password-2",
+      "accountType": "platform_admin",
+      "platform": true,
+      "memberships": [],
+      "actingAs": []
+    }
+  ],
+  "resetTokens": {
+    "devresettoken0000000001": "user-tenant-admin"
+  }
+}
