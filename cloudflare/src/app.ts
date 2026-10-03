@@ -411,6 +411,21 @@ import {
 } from "./routes/pod-admin";
 // CP5-IMPORTS-G — end
 // CP5-IMPORTS-H — begin
+import {
+  ADMIN_POD_3D_MODELS_PATH,
+  ADMIN_POD_MOCKUP_TEMPLATES_PATH,
+  handleAdminStudioAssetsRoute,
+  handlePlatformMockupTemplateRoute,
+  handlePlatformMockupTemplatesRoute,
+  handlePlatformModelRoute,
+  handlePlatformModelsRoute,
+  handlePlatformStudioFileRoute,
+  PLATFORM_POD_3D_MODEL_ROUTE,
+  PLATFORM_POD_3D_MODELS_PATH,
+  PLATFORM_POD_MOCKUP_TEMPLATE_ROUTE,
+  PLATFORM_POD_MOCKUP_TEMPLATES_PATH,
+  PLATFORM_POD_STUDIO_FILES_PATH,
+} from "./routes/pod-studio-assets";
 // CP5-IMPORTS-H — end
 // CP5-IMPORTS-I — begin
 import { ADMIN_TAG_LIST_PATH, handleAdminTagListRoute } from "./routes/admin-products";
@@ -444,7 +459,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0048_pod_artwork_meta.sql";
+const REQUIRED_MIGRATION = "0049_pod_studio_assets.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -2388,6 +2403,38 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   );
   // CP5-ROUTES-G — end
   // CP5-ROUTES-H — begin
+  // The studio's platform-owned assets (src/routes/pod-studio-assets.ts, D101):
+  // exact paths and two one-segment patterns no earlier route claims. The
+  // seller reads are GET only; every other method falls through to the
+  // opaque 404.
+  app.all(
+    ADMIN_POD_MOCKUP_TEMPLATES_PATH,
+    onMethods(["GET"], (c) => handleAdminStudioAssetsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_POD_3D_MODELS_PATH,
+    onMethods(["GET"], (c) => handleAdminStudioAssetsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_POD_STUDIO_FILES_PATH,
+    onMethods(["POST"], (c) => handlePlatformStudioFileRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_POD_MOCKUP_TEMPLATES_PATH,
+    onMethods(["GET"], (c) => handlePlatformMockupTemplatesRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_POD_MOCKUP_TEMPLATE_ROUTE,
+    onMethods(["PUT", "PATCH"], (c) => handlePlatformMockupTemplateRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_POD_3D_MODELS_PATH,
+    onMethods(["GET"], (c) => handlePlatformModelsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_POD_3D_MODEL_ROUTE,
+    onMethods(["PUT", "PATCH"], (c) => handlePlatformModelRoute(c.env, c.req.raw)),
+  );
   // CP5-ROUTES-H — end
   // CP5-ROUTES-I — begin
   // The shop's distinct tags (src/routes/admin-products.ts, CP5-WJ): an exact
