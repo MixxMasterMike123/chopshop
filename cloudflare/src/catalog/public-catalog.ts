@@ -24,10 +24,8 @@ import {
   resolveProductImages,
   visibleImages,
 } from "./admin-product-reads";
-import {
-  ELIGIBLE_PRODUCTS_FROM,
-  PUBLIC_ELIGIBILITY_PREDICATE,
-} from "./eligibility";
+import { eligibilityPredicate, type StorefrontTenant } from "../storefront/preview";
+import { ELIGIBLE_PRODUCTS_FROM } from "./eligibility";
 
 export type { PublicProductImage } from "./admin-product-reads";
 
@@ -39,6 +37,11 @@ export type { PublicProductImage } from "./admin-product-reads";
  * predicate's row (tags, variants, images) is read for the product ids that
  * row set admitted, again by tenant, so nothing of a draft, a hidden product
  * or another shop can reach a public shape through them.
+ *
+ * A PREVIEW (D57): a tenant marked `preview` (src/storefront/preview.ts, set
+ * only by a valid grant) is read with THE predicate minus its
+ * `tenant.published = 1` term, `eligibilityPredicate(tenant)`; every other
+ * term stays. A plain TenantContext is never marked.
  */
 
 /** One card's variant hint: a distinct group (or label) and its first image. */
@@ -156,8 +159,10 @@ export const PUBLIC_PRODUCT_LIMIT = 100;
 export const MAX_PUBLIC_PRODUCTS_BY_IDS = 100;
 
 // THE predicate (src/catalog/eligibility.ts) — the same fragment checkout and
-// the preview route use, so the three can never disagree about what is public.
-const PUBLIC_PRODUCT_COLUMNS = `SELECT
+// the preview route use, so the three can never disagree about what is public
+// (for a preview: the preview's fragment, preview.ts).
+function publicProductColumns(tenant: StorefrontTenant): string {
+  return `SELECT
      publication.product_id AS product_id,
      publication.public_name AS public_name,
      publication.public_description AS public_description,
@@ -183,7 +188,8 @@ const PUBLIC_PRODUCT_COLUMNS = `SELECT
    ${ELIGIBLE_PRODUCTS_FROM}
    WHERE publication.tenant_id = ?
      AND product.tenant_id = ?
-     AND ${PUBLIC_ELIGIBILITY_PREDICATE}`;
+     AND ${eligibilityPredicate(tenant)}`;
+}
 
 /** The public list order: the shape's own name, the publication's. */
 const PUBLIC_ORDER_COLUMNS: DisplayOrderColumns = {
@@ -237,7 +243,7 @@ function listStatement(
   }
   return db
     .prepare(
-      `${PUBLIC_PRODUCT_COLUMNS}
+      `${publicProductColumns(tenant)}
        ${where.map((clause) => `AND ${clause}`).join("\n       ")}
        ORDER BY ${displayOrderBy(PUBLIC_ORDER_COLUMNS)}
        LIMIT ?`,
@@ -268,7 +274,7 @@ function detailStatement(
   // the same way every time.
   return db
     .prepare(
-      `${PUBLIC_PRODUCT_COLUMNS}
+      `${publicProductColumns(tenant)}
          AND (
            publication.product_id = ?
            OR product.handle = ?
@@ -402,7 +408,7 @@ async function stillPublic(
            ${ELIGIBLE_PRODUCTS_FROM}
            WHERE publication.tenant_id = ?
              AND product.tenant_id = ?
-             AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+             AND ${eligibilityPredicate(tenant)}
              AND publication.product_id IN (${placeholders(chunk.length)})
            LIMIT ${chunk.length}`,
         )
@@ -536,7 +542,7 @@ export async function listPublicProductsByIds(
     chunks(ids).map((chunk) =>
       db
         .prepare(
-          `${PUBLIC_PRODUCT_COLUMNS}
+          `${publicProductColumns(tenant)}
              AND publication.product_id IN (${placeholders(chunk.length)})
            LIMIT ${chunk.length}`,
         )
@@ -663,7 +669,7 @@ export async function findPublicPreview(
          AND mapping.artwork_id = ?
          AND mapping.status = 'active'
          AND artwork.status = 'ready'
-         AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+         AND ${eligibilityPredicate(tenant)}
        LIMIT 1`,
     )
     .bind(tenant.tenantId, tenant.tenantId, productId, artworkId)

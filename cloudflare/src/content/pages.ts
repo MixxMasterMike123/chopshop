@@ -991,12 +991,14 @@ export async function readPublicPage(
   tenantId: string,
   slug: string,
   requestedLang: string | null,
+  // A valid preview grant (storefront/preview.ts): the shop gate without `published`.
+  preview = false,
 ): Promise<{ catalogVersion: number; page: PublicPageDetail } | null> {
   if (!PAGE_SLUG_PATTERN.test(slug)) {
     return null;
   }
   const [tenantResult, pageResult] = await db.batch<PublicShopRow | PageRow>([
-    publicShopStatement(db, tenantId),
+    publicShopStatement(db, tenantId, preview),
     db
       .prepare(
         `SELECT ${PAGE_COLUMNS}
@@ -1041,6 +1043,8 @@ export async function listPublicPages(
   db: D1Database,
   tenantId: string,
   query: PageListQuery & { lang: string | null },
+  // A valid preview grant (storefront/preview.ts): the shop gate without `published`.
+  preview = false,
 ): Promise<{ catalogVersion: number; nextCursor: string | null; pages: PublicPageSummary[] } | null> {
   const where = ["tenant_id = ?", "status = 'published'"];
   const binds: unknown[] = [tenantId];
@@ -1053,7 +1057,7 @@ export async function listPublicPages(
     binds.push(query.cursor.at, query.cursor.pageId);
   }
   const [tenantResult, pagesResult] = await db.batch<PublicShopRow | (PublicRow & { page_id: string })>([
-    publicShopStatement(db, tenantId),
+    publicShopStatement(db, tenantId, preview),
     db
       .prepare(
         `SELECT page_id, slug, kind, title_json, summary_json, author, image_object_id, published_at

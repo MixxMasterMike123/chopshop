@@ -6,7 +6,6 @@ import {
   sanitizeStoreIdentity,
 } from "../platform/tenant-config";
 import { resolvePublicImages } from "../storage/public-objects";
-import type { TenantContext } from "../tenancy/resolve-tenant";
 import {
   galleryLinkSkus,
   identityImageIds,
@@ -26,6 +25,7 @@ import {
   resolveMenu,
   storedMenu,
 } from "./identity-projection";
+import { isPreview, type StorefrontTenant } from "./preview";
 import { publicShopStatement, type PublicShopRow } from "./public-shop";
 
 export interface PublicStorefront {
@@ -107,16 +107,20 @@ export function publicFeatures(
  * bumps the version by trigger (0043 on public objects, 0041/0042 on
  * collections and pages, 0025 on products), so at worst the body is NEWER
  * than its label: one extra full response, never a stale 304.
+ *
+ * A tenant marked `preview` (a valid grant, preview.ts) passes the shop gate
+ * while unpublished, and the gallery's product links follow the preview's
+ * fragment; its caller answers without the version (no-store, no ETag).
  */
 export async function getPublicStorefrontVersioned(
   env: Env,
   db: D1Database,
-  tenant: TenantContext,
+  tenant: StorefrontTenant,
 ): Promise<{ catalogVersion: number; value: PublicStorefrontResponse } | null> {
   const [shopResult, settingsResult, featuresResult] = await db.batch<
     PublicShopRow | { store_identity_json: string } | { enabled: number; feature_key: string }
   >([
-    publicShopStatement(db, tenant.tenantId),
+    publicShopStatement(db, tenant.tenantId, isPreview(tenant)),
     db
       .prepare("SELECT store_identity_json FROM tenant_settings WHERE tenant_id = ? LIMIT 1")
       .bind(tenant.tenantId),
@@ -144,7 +148,7 @@ export async function getPublicStorefrontVersioned(
   const [images, menuResolutions, productPathsBySku] = await Promise.all([
     resolvePublicImages(env, db, tenant.tenantId, identityImageIds(identity), ["shop_branding"]),
     readMenuResolutions(db, tenant.tenantId, menuEntries),
-    readProductPathsBySku(db, tenant.tenantId, galleryLinkSkus(identity)),
+    readProductPathsBySku(db, tenant, galleryLinkSkus(identity)),
   ]);
 
   return {

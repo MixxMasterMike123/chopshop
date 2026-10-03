@@ -3,6 +3,7 @@ import { readWebConfig } from "./env";
 import {
   apiResponseForBrowser,
   forwardedApiRequest,
+  isPreviewRead,
   workerApiRequest,
 } from "./forward";
 import { withSecurityHeaders } from "./headers";
@@ -87,6 +88,11 @@ async function readJson(env: WebEnv, site: Site, request: Request): Promise<{ bo
   return { body: await response.json<unknown>(), status: 200 };
 }
 
+/**
+ * The SEO answer; "none" when the API answered 404 (no public page at this
+ * address — every address of an unpublished shop), null when there is no
+ * answer to go by (slow, failing, malformed).
+ */
 async function seoAnswer(
   env: WebEnv,
   site: Site,
@@ -94,10 +100,10 @@ async function seoAnswer(
   relativePath: string,
   visitor: string | null,
   deadlineMs: number,
-): Promise<SeoAnswer | null> {
+): Promise<SeoAnswer | "none" | null> {
   const target = `${origin}/v1/seo?path=${encodeURIComponent(relativePath)}`;
   const call = readJson(env, site, workerApiRequest(target, visitor)).then((result) =>
-    result.status === 200 ? parseSeoAnswer(result.body) : null,
+    result.status === 200 ? parseSeoAnswer(result.body) : result.status === 404 ? ("none" as const) : null,
   );
   // A slow, failing or malformed answer is no answer: the page still opens.
   const answer = await withDeadline(call, deadlineMs).catch(() => null);
@@ -138,11 +144,14 @@ async function renderedPage(
   };
 }
 
-function htmlResponse(response: Response, status: number): Response {
+function htmlResponse(response: Response, status: number, noindex = false): Response {
   const headers = new Headers({
     "Cache-Control": "no-cache",
     "Content-Type": "text/html; charset=utf-8",
   });
+  if (noindex) {
+    headers.set("X-Robots-Tag", "noindex");
+  }
   return new Response(response.body, { headers, status });
 }
 
@@ -167,7 +176,7 @@ async function servePage(
     options.seoDeadlineMs ?? SEO_DEADLINE_MS,
   );
 
-  if (answer?.kind === "redirect") {
+  if (answer !== "none" && answer?.kind === "redirect") {
     const location = redirectLocation(origin, site, answer.to);
     if (location !== null) {
       void shell.then((unused) => unused?.body?.cancel());
@@ -184,8 +193,15 @@ async function servePage(
   }
 
   const page =
-    answer?.kind === "page" ? await renderedPage(answer.page, config, origin, site) : null;
-  return htmlResponse(renderShell(shellResponse, site.root, page), 200);
+    answer !== "none" && answer?.kind === "page"
+      ? await renderedPage(answer.page, config, origin, site)
+      : null;
+  // The API said there is no public page here: an address of an unpublished
+  // shop (D57: its preview is opened at such an address, with the grant in the
+  // fragment, which this Worker never sees), a cart, an unknown path. Such a
+  // shell is never one to index. A slow or failing answer says nothing, and
+  // the shell keeps the default.
+  return htmlResponse(renderShell(shellResponse, site.root, page), 200, answer === "none");
 }
 
 async function serveSitemap(
@@ -257,7 +273,10 @@ async function serveApi(
     return jsonError("not_found", "Route not found", 404);
   }
   try {
-    return apiResponseForBrowser(await callApi(env, site, forwardedApiRequest(request, target)));
+    return apiResponseForBrowser(
+      await callApi(env, site, forwardedApiRequest(request, target)),
+      isPreviewRead(request),
+    );
   } catch {
     return jsonError("unavailable", "The shop could not be reached", 502);
   }

@@ -12,6 +12,7 @@ import { Toaster } from 'react-hot-toast';
 import ScrollToTop from '../components/ScrollToTop';
 import { storefrontRoot } from '../api/client.js';
 import Providers from './Providers.jsx';
+import PreviewBanner from './PreviewBanner.jsx';
 import * as Pages from './pages.jsx';
 
 /** The grammar, relative to `<root>`. Order matters only for the last row. */
@@ -70,6 +71,7 @@ export default function StorefrontApp() {
             })}
             <Route path="*" element={<Pages.NotFound />} />
           </Routes>
+          <PreviewBanner />
         </div>
       </Providers>
     </BrowserRouter>

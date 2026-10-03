@@ -15,6 +15,15 @@
 // none). Reads use the browser's HTTP cache: the API answers with an ETag and
 // `Cache-Control: no-cache`, so the browser revalidates and a 304 comes back
 // to this code as the cached 200. Errors arrive as one typed error.
+//
+// The preview of an unpublished shop (D57). The shop's admin opens the
+// storefront at `<root>/#preview=<grant>`: the grant rides in the address's
+// FRAGMENT, which the browser never sends to a server nor puts in a Referer.
+// The client takes it out of the address bar, keeps it for this tab
+// (sessionStorage; in memory when storage is refused) together with the root
+// it was opened under, and sends it as `X-Storefront-Preview` on every READ
+// of that shop, bypassing the HTTP cache (`cache: 'no-store'`), until it
+// expires. Writes never carry it: a preview never sells.
 
 import { NON_SHOP_FIRST_SEGMENTS } from '../config/tenancy.js';
 
@@ -117,6 +126,87 @@ export function apiUrl(path) {
   return `${apiBase()}${path}`;
 }
 
+// ── the preview grant ───────────────────────────────────────────────────────
+
+/** The header the API reads the grant from (cloudflare/src/storefront/preview.ts). */
+export const PREVIEW_HEADER = 'X-Storefront-Preview';
+const PREVIEW_STORAGE_KEY = 'storefront-preview';
+// v1.<expiry, 13-digit milliseconds>.<signature, 43 base64url characters>
+const PREVIEW_GRANT = /^v1\.([1-9][0-9]{12})\.[A-Za-z0-9_-]{43}$/;
+const READ_METHODS = new Set(['GET', 'HEAD']);
+
+let previewMemory = null; // when sessionStorage throws (private mode, blocked storage)
+
+function storePreview(value) {
+  previewMemory = value;
+  try {
+    if (value === null) globalThis.sessionStorage?.removeItem(PREVIEW_STORAGE_KEY);
+    else globalThis.sessionStorage?.setItem(PREVIEW_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // The memory copy stands in for this page's life.
+  }
+}
+
+function storedPreview() {
+  try {
+    const text = globalThis.sessionStorage?.getItem(PREVIEW_STORAGE_KEY);
+    if (typeof text === 'string') return JSON.parse(text);
+  } catch {
+    // Unreadable or malformed: the memory copy, if any.
+  }
+  return previewMemory;
+}
+
+/**
+ * Takes `#preview=<grant>` out of the address, if it is there, and keeps it
+ * for this tab under the current root. Other fragment parameters stay. A
+ * malformed value is dropped from the address and not kept.
+ */
+export function capturePreviewGrant() {
+  const location = globalThis.location;
+  const hash = typeof location?.hash === 'string' ? location.hash : '';
+  if (!hash.startsWith('#')) return;
+  const params = new URLSearchParams(hash.slice(1));
+  if (!params.has('preview')) return;
+  const grant = params.get('preview');
+  params.delete('preview');
+  const rest = params.toString();
+  try {
+    globalThis.history?.replaceState(
+      globalThis.history.state,
+      '',
+      `${location.pathname}${location.search ?? ''}${rest ? `#${rest}` : ''}`,
+    );
+  } catch {
+    // An address that cannot be rewritten keeps its fragment; the grant still works.
+  }
+  const root = storefrontRoot();
+  if (root !== null && typeof grant === 'string' && PREVIEW_GRANT.test(grant)) {
+    storePreview({ grant, root });
+  }
+}
+
+/**
+ * The grant this tab holds for the current shop, or null: none, another
+ * shop's, or expired (an expired one is forgotten).
+ */
+export function previewGrant(now = Date.now()) {
+  capturePreviewGrant();
+  const held = storedPreview();
+  if (!held || typeof held.grant !== 'string') return null;
+  const match = PREVIEW_GRANT.exec(held.grant);
+  if (!match || Number(match[1]) <= now) {
+    storePreview(null);
+    return null;
+  }
+  return held.root === storefrontRoot() ? held.grant : null;
+}
+
+/** Ends the preview in this tab. */
+export function clearPreviewGrant() {
+  storePreview(null);
+}
+
 function retryAfter(value) {
   const seconds = Number(value);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
@@ -137,6 +227,12 @@ export async function request(path, { method = 'GET', body, headers = {}, signal
     headers: { accept: 'application/json', ...headers },
     signal,
   };
+  const grant = READ_METHODS.has(method) ? previewGrant() : null;
+  if (grant !== null) {
+    init.headers[PREVIEW_HEADER] = grant;
+    // A preview's answer is never cached, and never answered from the cache.
+    init.cache = 'no-store';
+  }
   if (body !== undefined) {
     init.body = JSON.stringify(body);
     init.headers['content-type'] = 'application/json';

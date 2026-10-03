@@ -367,6 +367,9 @@ import {
   STOREFRONT_WITHDRAWALS_PATH,
 } from "./routes/storefront-withdrawals";
 // CP4-IMPORTS-G — end
+// CP4-D2 (imports) — begin
+import { ADMIN_PREVIEW_PATH, handleAdminPreviewRoute } from "./routes/admin-preview";
+// CP4-D2 (imports) — end
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -2255,6 +2258,16 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     onMethods(["POST"], storefront((c) => handleStorefrontWithdrawalRoute(c.env, c.req.raw))),
   );
   // CP4-ROUTES-G — end
+  // CP4-D2 — begin
+  // The preview grant of an unpublished shop (D57): the shop's admin
+  // (acting-as admitted), POST only, same origin; the handler answers the
+  // opaque 404 to anyone else. The public reads that honour the grant are
+  // mounted above as they were; the grant is read inside their handlers.
+  app.all(
+    ADMIN_PREVIEW_PATH,
+    onMethods(["POST"], (c) => handleAdminPreviewRoute(c.env, c.req.raw)),
+  );
+  // CP4-D2 — end
 
   // Public reads answer through the ETag/304 handlers (src/storefront/public-routes.ts):
   // bodies are byte-identical to the plain handlers, plus `ETag: "<catalog_version>"` and

@@ -1,7 +1,4 @@
-import {
-  ELIGIBLE_PRODUCTS_FROM,
-  PUBLIC_ELIGIBILITY_PREDICATE,
-} from "../catalog/eligibility";
+import { ELIGIBLE_PRODUCTS_FROM } from "../catalog/eligibility";
 import {
   GALLERY_IMAGE_KEY,
   isPlainObject,
@@ -19,6 +16,7 @@ import {
   productPath,
   tagPath,
 } from "./addresses";
+import { eligibilityPredicate, type StorefrontTenant } from "./preview";
 
 /**
  * CP4-D — what of a shop's store identity (`tenant_settings.store_identity_json`)
@@ -702,14 +700,16 @@ export async function readMenuResolutions(
 }
 
 /**
- * The paths of the PUBLIC products (THE predicate) among `skus`. A product
- * that is not public gives no path: its tile shows, unlinked.
+ * The paths of the PUBLIC products (THE predicate; for a preview the
+ * preview's fragment, preview.ts) among `skus`. A product that is not public
+ * gives no path: its tile shows, unlinked.
  */
 export async function readProductPathsBySku(
   db: D1Database,
-  tenantId: string,
+  tenant: StorefrontTenant,
   skus: readonly string[],
 ): Promise<Map<string, string>> {
+  const tenantId = tenant.tenantId;
   const paths = new Map<string, string>();
   const groups = chunked(skus);
   if (groups.length === 0) {
@@ -724,7 +724,7 @@ export async function readProductPathsBySku(
            WHERE publication.tenant_id = ?
              AND product.tenant_id = ?
              AND product.sku IN (${placeholders(group.length)})
-             AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+             AND ${eligibilityPredicate(tenant)}
            LIMIT ${IN_CHUNK}`,
         )
         .bind(tenantId, tenantId, ...group),

@@ -1,13 +1,9 @@
-import {
-  ELIGIBLE_PRODUCTS_FROM,
-  PUBLIC_ELIGIBILITY_PREDICATE,
-} from "../catalog/eligibility";
+import { ELIGIBLE_PRODUCTS_FROM } from "../catalog/eligibility";
 import { getPublicProductByRef } from "../catalog/public-catalog";
 import { isPlainObject } from "../platform/tenant-config";
 import { PUBLIC_LEGAL_PAGES, type PublicLegalKey } from "../routes/public-legal";
 import type { PublicImage } from "../storage/public-objects";
 import { resolvePublicImages } from "../storage/public-objects";
-import type { TenantContext } from "../tenancy/resolve-tenant";
 import {
   ALL_PRODUCTS_PATH,
   categoryPath,
@@ -22,6 +18,7 @@ import {
   getPublicStorefrontVersioned,
   type PublicStorefrontResponse,
 } from "./public-storefront";
+import { eligibilityPredicate, isPreview, type StorefrontTenant } from "./preview";
 import { findRedirect, normalizeStorefrontPath } from "./redirects";
 
 /**
@@ -416,13 +413,14 @@ async function productLinks(
 const PRODUCT_LINK_COLUMNS = `SELECT publication.public_name AS name, product.handle AS handle
    ${ELIGIBLE_PRODUCTS_FROM}`;
 
-function listAllProductLinks(db: D1Database, tenantId: string): Promise<ProductLink[]> {
+function listAllProductLinks(db: D1Database, tenant: StorefrontTenant): Promise<ProductLink[]> {
+  const tenantId = tenant.tenantId;
   return productLinks(
     db
       .prepare(
         `${PRODUCT_LINK_COLUMNS}
          WHERE publication.tenant_id = ? AND product.tenant_id = ?
-           AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+           AND ${eligibilityPredicate(tenant)}
          ORDER BY ${PRODUCT_ORDER}
          LIMIT ${LIST_MAX}`,
       )
@@ -439,16 +437,17 @@ const NAMES_MAX = 90;
 
 function listCategoryProductLinks(
   db: D1Database,
-  tenantId: string,
+  tenant: StorefrontTenant,
   key: string,
 ): Promise<ProductLink[]> {
+  const tenantId = tenant.tenantId;
   return productLinks(
     db
       .prepare(
         `${PRODUCT_LINK_COLUMNS}
          WHERE publication.tenant_id = ? AND product.tenant_id = ?
            AND product.category_key = ?
-           AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+           AND ${eligibilityPredicate(tenant)}
          ORDER BY ${PRODUCT_ORDER}
          LIMIT ${LIST_MAX}`,
       )
@@ -458,9 +457,10 @@ function listCategoryProductLinks(
 
 function listTagProductLinks(
   db: D1Database,
-  tenantId: string,
+  tenant: StorefrontTenant,
   key: string,
 ): Promise<ProductLink[]> {
+  const tenantId = tenant.tenantId;
   return productLinks(
     db
       .prepare(
@@ -472,7 +472,7 @@ function listTagProductLinks(
                AND tagged.product_id = product.product_id
                AND tagged.tag_key = ?
            )
-           AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+           AND ${eligibilityPredicate(tenant)}
          ORDER BY ${PRODUCT_ORDER}
          LIMIT ${LIST_MAX}`,
       )
@@ -482,9 +482,10 @@ function listTagProductLinks(
 
 function listCollectionMemberLinks(
   db: D1Database,
-  tenantId: string,
+  tenant: StorefrontTenant,
   collectionId: string,
 ): Promise<ProductLink[]> {
+  const tenantId = tenant.tenantId;
   return productLinks(
     db
       .prepare(
@@ -494,7 +495,7 @@ function listCollectionMemberLinks(
           AND member.tenant_id = product.tenant_id
          WHERE publication.tenant_id = ? AND product.tenant_id = ?
            AND member.collection_id = ?
-           AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+           AND ${eligibilityPredicate(tenant)}
          ORDER BY member.position, product.product_id
          LIMIT ${LIST_MAX}`,
       )
@@ -505,9 +506,10 @@ function listCollectionMemberLinks(
 /** The names of the shop's PUBLIC products' categories that share `key`. */
 export async function publicCategoryNames(
   db: D1Database,
-  tenantId: string,
+  tenant: StorefrontTenant,
   key: string,
 ): Promise<string[]> {
+  const tenantId = tenant.tenantId;
   const rows = await db
     .prepare(
       `SELECT DISTINCT product.category AS value
@@ -515,7 +517,7 @@ export async function publicCategoryNames(
        WHERE publication.tenant_id = ? AND product.tenant_id = ?
          AND product.category_key = ?
          AND product.category IS NOT NULL
-         AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+         AND ${eligibilityPredicate(tenant)}
        ORDER BY value
        LIMIT ${NAMES_MAX}`,
     )
@@ -527,9 +529,10 @@ export async function publicCategoryNames(
 /** The names of the shop's PUBLIC products' tags that share `key`. */
 export async function publicTagNames(
   db: D1Database,
-  tenantId: string,
+  tenant: StorefrontTenant,
   key: string,
 ): Promise<string[]> {
+  const tenantId = tenant.tenantId;
   const rows = await db
     .prepare(
       `SELECT DISTINCT tagged.tag AS value
@@ -539,7 +542,7 @@ export async function publicTagNames(
         AND tagged.tenant_id = product.tenant_id
        WHERE publication.tenant_id = ? AND product.tenant_id = ?
          AND tagged.tag_key = ?
-         AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+         AND ${eligibilityPredicate(tenant)}
        ORDER BY value
        LIMIT ${NAMES_MAX}`,
     )
@@ -782,7 +785,7 @@ function listingPage(
 async function productPage(
   env: Env,
   db: D1Database,
-  tenant: TenantContext,
+  tenant: StorefrontTenant,
   shop: Shop,
   handle: string,
 ): Promise<SeoPage | null> {
@@ -867,10 +870,11 @@ async function productPage(
 async function collectionPage(
   env: Env,
   db: D1Database,
-  tenantId: string,
+  tenant: StorefrontTenant,
   shop: Shop,
   handle: string,
 ): Promise<SeoPage | null> {
+  const tenantId = tenant.tenantId;
   const collection = await db
     .prepare(
       `SELECT collection_id, handle, title, description, image_object_id, type, rule_tag
@@ -887,9 +891,9 @@ async function collectionPage(
   if (collection.type === "smart") {
     // A tag rule matches the tag by its address form, as the tag page does.
     const key = collection.rule_tag === null ? "" : slugify(collection.rule_tag);
-    links = key === "" ? [] : await listTagProductLinks(db, tenantId, key);
+    links = key === "" ? [] : await listTagProductLinks(db, tenant, key);
   } else {
-    links = await listCollectionMemberLinks(db, tenantId, collection.collection_id);
+    links = await listCollectionMemberLinks(db, tenant, collection.collection_id);
   }
   const images =
     collection.image_object_id === null
@@ -1036,11 +1040,15 @@ async function legalPage(
  * THE answer of GET /v1/seo for `rawPath` (the path under the shop's root as
  * the visitor asked for it, percent-encoded or not). null = 404: the shop is
  * not public, the path is not a path, or it names no public page.
+ *
+ * A tenant marked `preview` (a valid grant, preview.ts) is read through the
+ * preview's fragment and shop gate, and its page always says
+ * `robots: "noindex"`: a page of a preview is never one to index.
  */
 export async function resolveSeoAnswer(
   env: Env,
   db: D1Database,
-  tenant: TenantContext,
+  tenant: StorefrontTenant,
   rawPath: string,
   now: number,
 ): Promise<SeoAnswer | null> {
@@ -1075,7 +1083,7 @@ export async function resolveSeoAnswer(
         shop,
         "Alla produkter",
         ALL_PRODUCTS_PATH,
-        await listAllProductLinks(db, tenantId),
+        await listAllProductLinks(db, tenant),
         shop.storefront.identity.productsSubtitle ?? null,
         null,
       );
@@ -1084,25 +1092,25 @@ export async function resolveSeoAnswer(
       page = await productPage(env, db, tenant, shop, route.handle);
       break;
     case "category": {
-      const [name] = await publicCategoryNames(db, tenantId, route.slug);
+      const [name] = await publicCategoryNames(db, tenant, route.slug);
       const path = name === undefined ? null : categoryPath(name);
       page =
         name === undefined || path === null
           ? null
-          : listingPage(shop, name, path, await listCategoryProductLinks(db, tenantId, route.slug), null, null);
+          : listingPage(shop, name, path, await listCategoryProductLinks(db, tenant, route.slug), null, null);
       break;
     }
     case "tag": {
-      const [name] = await publicTagNames(db, tenantId, route.slug);
+      const [name] = await publicTagNames(db, tenant, route.slug);
       const path = name === undefined ? null : tagPath(name);
       page =
         name === undefined || path === null
           ? null
-          : listingPage(shop, name, path, await listTagProductLinks(db, tenantId, route.slug), null, null);
+          : listingPage(shop, name, path, await listTagProductLinks(db, tenant, route.slug), null, null);
       break;
     }
     case "collection":
-      page = await collectionPage(env, db, tenantId, shop, route.handle);
+      page = await collectionPage(env, db, tenant, shop, route.handle);
       break;
     case "page":
       page = await contentPage(env, db, tenantId, shop, route.slug);
@@ -1111,5 +1119,8 @@ export async function resolveSeoAnswer(
       page = await legalPage(db, tenantId, shop, route.key, now);
       break;
   }
-  return page === null ? null : { page };
+  if (page === null) {
+    return null;
+  }
+  return { page: isPreview(tenant) ? { ...page, robots: "noindex" } : page };
 }

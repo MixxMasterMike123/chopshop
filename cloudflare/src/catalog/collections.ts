@@ -3,8 +3,8 @@ import { auditMetadataJson } from "../auth/live-authorization";
 import type { PublicImage } from "../storage/public-objects";
 import { getReferencablePublicImage, resolvePublicImages } from "../storage/public-objects";
 import { collectionPath, slugify } from "../storefront/addresses";
+import { isPreview, type StorefrontTenant } from "../storefront/preview";
 import { publicShopStatement } from "../storefront/public-shop";
-import type { TenantContext } from "../tenancy/resolve-tenant";
 import type { DisplayCursor, DisplayOrderColumns } from "./admin-product-reads";
 import {
   decodeDisplayCursor,
@@ -1098,9 +1098,11 @@ export async function listPublicCollections(
   db: D1Database,
   tenantId: string,
   query: CollectionListQuery,
+  // A valid preview grant (storefront/preview.ts): the shop gate without `published`.
+  preview = false,
 ): Promise<VersionedValue<PublicCollectionPage> | null> {
   const [tenantResult, listResult] = await db.batch<{ catalog_version: number } | CollectionRow>([
-    publicShopStatement(db, tenantId),
+    publicShopStatement(db, tenantId, preview),
     listStatement(db, tenantId, query, { publishedOnly: true, withCount: false }),
   ]);
   const tenant = tenantResult?.results[0] as { catalog_version: number } | undefined;
@@ -1186,7 +1188,7 @@ function publicCollectionByRefStatement(db: D1Database, tenantId: string, ref: s
 async function manualProductPage(
   env: Env,
   db: D1Database,
-  tenant: TenantContext,
+  tenant: StorefrontTenant,
   collectionId: string,
   after: number | null,
   limit: number,
@@ -1237,7 +1239,7 @@ export type PublicCollectionRead =
 export async function readPublicCollection(
   env: Env,
   db: D1Database,
-  tenant: TenantContext,
+  tenant: StorefrontTenant,
   ref: string,
   query: PublicCollectionQuery,
 ): Promise<PublicCollectionRead> {
@@ -1245,7 +1247,9 @@ export async function readPublicCollection(
     return { status: "not_found" };
   }
   const [tenantResult, collectionResult] = await db.batch<{ catalog_version: number } | CollectionRow>([
-    publicShopStatement(db, tenant.tenantId),
+    // A tenant marked `preview` (storefront/preview.ts) passes the gate while
+    // unpublished and carries the mark into A's product reads below.
+    publicShopStatement(db, tenant.tenantId, isPreview(tenant)),
     publicCollectionByRefStatement(db, tenant.tenantId, ref),
   ]);
   const shop = tenantResult?.results[0] as { catalog_version: number } | undefined;

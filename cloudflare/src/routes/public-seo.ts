@@ -7,6 +7,7 @@ import {
   decodeSitemapCursor,
   SITEMAP_PAGE_MAX,
 } from "../storefront/sitemap";
+import { previewJsonResponse, resolveStorefrontTenant } from "../storefront/preview";
 import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 /**
@@ -35,6 +36,13 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  * from more than the catalogue (forwards, adopted legal texts, the platform's
  * terms), and the web Worker, their only caller, never revalidates. It caches
  * the sitemap's XML itself for an hour.
+ *
+ * PREVIEW (D57). `GET /v1/seo` honours a valid grant (src/storefront/preview.ts):
+ * an unpublished shop's page answers with `robots: "noindex"` and the header
+ * `X-Robots-Tag: noindex`. The web Worker cannot hold a grant (it lives in the
+ * browser's address fragment), so today no caller sends one; the route is
+ * ready for one that does. The sitemap never honours a grant: it is for
+ * search engines, and an unpublished shop has no sitemap.
  */
 
 export const SEO_PATH = "/v1/seo";
@@ -62,10 +70,13 @@ export async function handlePublicSeoRequest(env: Env, request: Request): Promis
     return invalidRequestResponse();
   }
 
-  const tenant = await resolveRequestTenant(env.DB, request);
+  const tenant = await resolveStorefrontTenant(env, request);
   const answer =
     tenant === null ? null : await resolveSeoAnswer(env, env.DB, tenant, path, Date.now());
-  return answer === null ? notFoundResponse("Page not found") : jsonResponse(answer);
+  if (answer === null) {
+    return notFoundResponse("Page not found");
+  }
+  return tenant?.preview === true ? previewJsonResponse(answer) : jsonResponse(answer);
 }
 
 export async function handlePublicSitemapRequest(env: Env, request: Request): Promise<Response> {

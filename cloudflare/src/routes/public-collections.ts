@@ -12,8 +12,8 @@ import {
   rateLimitedResponse,
   routeNotFoundResponse,
 } from "../lib/responses";
+import { resolveStorefrontTenant } from "../storefront/preview";
 import { versionedJsonResponse } from "../storefront/public-routes";
-import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 /**
  * CP4-B — the public collection reads, for the storefront AND for a shop's own
@@ -43,7 +43,9 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  *   429 rate_limited      over the limit per caller (below)
  *
  * Every 200 carries `ETag: "<catalog_version>"` and answers `If-None-Match`
- * with a bodiless 304 (src/storefront/public-routes.ts versionedJsonResponse).
+ * with a bodiless 304 (src/storefront/public-routes.ts versionedJsonResponse),
+ * except a preview's: a valid grant (src/storefront/preview.ts) reads an
+ * unpublished shop and answers no-store, no ETag, noindex.
  *
  * ── CROSS-ORIGIN (D87) ──────────────────────────────────────────────────────
  * Every answer of these two routes — 200, 304, 400, 404, 429 — carries
@@ -142,10 +144,14 @@ export async function handlePublicCollectionsRoute(
   if (query === null) {
     return withCors(invalidRequestResponse());
   }
-  const tenant = await resolveRequestTenant(env.DB, request);
-  const list = tenant === null ? null : await listPublicCollections(env, env.DB, tenant.tenantId, query);
+  const tenant = await resolveStorefrontTenant(env, request);
+  const preview = tenant?.preview === true;
+  const list =
+    tenant === null ? null : await listPublicCollections(env, env.DB, tenant.tenantId, query, preview);
   return withCors(
-    list === null ? collectionNotFound() : versionedJsonResponse(request, list.catalogVersion, list.value),
+    list === null
+      ? collectionNotFound()
+      : versionedJsonResponse(request, list.catalogVersion, list.value, preview),
   );
 }
 
@@ -169,7 +175,7 @@ export async function handlePublicCollectionRoute(
     return withCors(invalidRequestResponse());
   }
   const ref = decodeSegment(new URL(request.url).pathname.split("/")[REF_SEGMENT] ?? "");
-  const tenant = ref === null ? null : await resolveRequestTenant(env.DB, request);
+  const tenant = ref === null ? null : await resolveStorefrontTenant(env, request);
   const read =
     tenant === null || ref === null
       ? ({ status: "not_found" } as const)
@@ -177,11 +183,16 @@ export async function handlePublicCollectionRoute(
   switch (read.status) {
     case "ok":
       return withCors(
-        versionedJsonResponse(request, read.catalogVersion, {
-          collection: read.value.collection,
-          nextCursor: read.value.nextCursor,
-          products: read.value.products,
-        }),
+        versionedJsonResponse(
+          request,
+          read.catalogVersion,
+          {
+            collection: read.value.collection,
+            nextCursor: read.value.nextCursor,
+            products: read.value.products,
+          },
+          tenant?.preview === true,
+        ),
       );
     case "invalid_cursor":
       return withCors(invalidRequestResponse());

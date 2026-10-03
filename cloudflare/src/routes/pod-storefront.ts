@@ -1,6 +1,6 @@
 import { findPublicPreview } from "../catalog/public-catalog";
 import { decodeSegment, notFoundResponse } from "../lib/responses";
-import { resolveRequestTenant } from "../tenancy/resolve-tenant";
+import { PREVIEW_RESPONSE_HEADERS, resolveStorefrontTenant } from "../storefront/preview";
 
 /**
  * GET /v1/storefront/pod-previews/{productId}/{artworkId} — a POD product's
@@ -20,6 +20,10 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  * `ETag: "<preview sha256>"` (the bytes are immutable once 'ready') +
  * `Cache-Control: no-cache`: browsers revalidate each view and get a bodiless
  * 304 while nothing changed — after the eligibility check, never before it.
+ *
+ * PREVIEW (D57). A valid grant (src/storefront/preview.ts) answers the image
+ * of an unpublished shop's product through the preview's fragment, with
+ * `Cache-Control: no-store`, no ETag, `X-Robots-Tag: noindex`, never a 304.
  */
 export const STOREFRONT_POD_PREVIEWS_PREFIX = "/v1/storefront/pod-previews/";
 
@@ -49,13 +53,23 @@ export async function handlePodPreviewRoute(env: Env, request: Request): Promise
     return notFound();
   }
 
-  const tenant = await resolveRequestTenant(env.DB, request);
+  const tenant = await resolveStorefrontTenant(env, request);
   if (tenant === null) {
     return notFound();
   }
   const preview = await findPublicPreview(env.DB, tenant, productId, artworkId);
   if (preview === null) {
     return notFound();
+  }
+
+  if (tenant.preview === true) {
+    const object = await bucket.get(preview.key);
+    return object === null
+      ? notFound()
+      : new Response(object.body, {
+          headers: { ...PREVIEW_RESPONSE_HEADERS, "Content-Type": "image/webp" },
+          status: 200,
+        });
   }
 
   const etag = `"${preview.sha256}"`;

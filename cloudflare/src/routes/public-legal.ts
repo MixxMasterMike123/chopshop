@@ -1,8 +1,8 @@
 import { LEGAL_PAGE_KEYS } from "../legal/legal-pages";
 import { readTermsStatus, readTermsText } from "../legal/platform-terms";
 import { decodeSegment, notFoundResponse } from "../lib/responses";
+import { previewJsonResponse, resolveStorefrontTenant } from "../storefront/preview";
 import { publicShopStatement } from "../storefront/public-shop";
-import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 /**
  * CP4-C — the legal pages a visitor reads (D79): exactly the text the seller
@@ -42,6 +42,9 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  * `"<catalog_version>.<version>"`, and for the list `.none` when no current
  * version has its text. The comparison is made before the archived text is
  * read, so a 304 costs no bucket read.
+ *
+ * PREVIEW. A valid grant (src/storefront/preview.ts) reads an unpublished
+ * shop's pages; the answer is no-store, no ETag, noindex, never a 304.
  */
 
 export const PUBLIC_LEGAL_PATH = "/v1/legal";
@@ -101,8 +104,12 @@ function snapshotPath(key: ShopLegalKey): string {
 
 const LATEST_ADOPTION_ORDER = "ORDER BY accepted_at DESC, acceptance_id DESC LIMIT 1";
 
-async function publicCatalogVersion(db: D1Database, tenantId: string): Promise<number | null> {
-  const row = await publicShopStatement(db, tenantId).first<{ catalog_version: number }>();
+async function publicCatalogVersion(
+  db: D1Database,
+  tenantId: string,
+  preview: boolean,
+): Promise<number | null> {
+  const row = await publicShopStatement(db, tenantId, preview).first<{ catalog_version: number }>();
   return row?.catalog_version ?? null;
 }
 
@@ -142,13 +149,19 @@ function matchesIfNoneMatch(request: Request, etag: string): boolean {
 
 /**
  * 304 when the client holds `etag`; otherwise the body `build` makes (built
- * only then) or, when it makes none, the 404.
+ * only then) or, when it makes none, the 404. A preview never gets the 304
+ * and its body goes out as a preview's (no-store, no ETag, noindex).
  */
 async function etagResponse(
   request: Request,
   etag: string,
   build: () => Promise<unknown>,
+  preview: boolean,
 ): Promise<Response> {
+  if (preview) {
+    const body = await build();
+    return body === null ? legalNotFound() : previewJsonResponse(body);
+  }
   const headers = {
     "Cache-Control": "no-cache",
     ETag: etag,
@@ -183,11 +196,13 @@ export async function readPublicShopLegalPage(
   db: D1Database,
   tenantId: string,
   key: ShopLegalKey,
+  // A valid preview grant (storefront/preview.ts): the shop gate without `published`.
+  preview = false,
 ): Promise<{ catalogVersion: number; page: PublicShopLegalPage } | null> {
   const [tenantResult, adoptionResult] = await db.batch<
     { catalog_version: number } | { accepted_at: string; html: unknown; html_type: string | null }
   >([
-    publicShopStatement(db, tenantId),
+    publicShopStatement(db, tenantId, preview),
     db
       .prepare(
         `SELECT accepted_at, json_extract(texts_json, ?1) AS html, json_type(texts_json, ?1) AS html_type
@@ -225,6 +240,8 @@ export async function listPublicLegalPages(
   db: D1Database,
   tenantId: string,
   now: number,
+  // A valid preview grant (storefront/preview.ts): the shop gate without `published`.
+  preview = false,
 ): Promise<{ etag: string; pages: Array<{ key: PublicLegalKey; path: string; title: string }> } | null> {
   const columns = LEGAL_PAGE_KEYS.map(
     (key, index) =>
@@ -232,7 +249,7 @@ export async function listPublicLegalPages(
         AND length(json_extract(texts_json, ?${index + 2})) > 0) AS has_${index}`,
   ).join(", ");
   const [tenantResult, adoptionResult] = await db.batch<{ catalog_version: number } | Record<string, number>>([
-    publicShopStatement(db, tenantId),
+    publicShopStatement(db, tenantId, preview),
     db
       .prepare(
         `SELECT ${columns}
@@ -264,12 +281,13 @@ export async function listPublicLegalPages(
 // ── routes ──────────────────────────────────────────────────────────────────
 
 export async function handlePublicLegalPagesRoute(env: Env, request: Request): Promise<Response> {
-  const tenant = await resolveRequestTenant(env.DB, request);
-  const list = tenant === null ? null : await listPublicLegalPages(env.DB, tenant.tenantId, Date.now());
+  const tenant = await resolveStorefrontTenant(env, request);
+  const preview = tenant?.preview === true;
+  const list = tenant === null ? null : await listPublicLegalPages(env.DB, tenant.tenantId, Date.now(), preview);
   if (list === null) {
     return legalNotFound();
   }
-  return etagResponse(request, list.etag, async () => ({ pages: list.pages }));
+  return etagResponse(request, list.etag, async () => ({ pages: list.pages }), preview);
 }
 
 export async function handlePublicLegalPageRoute(env: Env, request: Request, segment: string): Promise<Response> {
@@ -285,22 +303,23 @@ export async function handlePublicLegalPageRoute(env: Env, request: Request, seg
   if (key === null) {
     return legalNotFound();
   }
-  const tenant = await resolveRequestTenant(env.DB, request);
+  const tenant = await resolveStorefrontTenant(env, request);
   if (tenant === null) {
     return legalNotFound();
   }
+  const preview = tenant.preview === true;
 
   if (isShopLegalKey(key)) {
-    const read = await readPublicShopLegalPage(env.DB, tenant.tenantId, key);
+    const read = await readPublicShopLegalPage(env.DB, tenant.tenantId, key, preview);
     return read === null
       ? legalNotFound()
-      : etagResponse(request, `"${read.catalogVersion}"`, async () => ({ page: read.page }));
+      : etagResponse(request, `"${read.catalogVersion}"`, async () => ({ page: read.page }), preview);
   }
 
   // The platform's own terms: the same text for every shop, served only
   // under the host of a shop that is public.
   const bucket = env.PRIVATE_BUCKET;
-  const catalogVersion = await publicCatalogVersion(env.DB, tenant.tenantId);
+  const catalogVersion = await publicCatalogVersion(env.DB, tenant.tenantId, preview);
   if (catalogVersion === null || bucket === undefined) {
     return legalNotFound();
   }
@@ -323,5 +342,5 @@ export async function handlePublicLegalPageRoute(env: Env, request: Request, seg
       version: read.version,
     };
     return { page };
-  });
+  }, preview);
 }

@@ -5,8 +5,8 @@ import {
   readPublicPage,
 } from "../content/pages";
 import { decodeSegment, invalidRequestResponse, notFoundResponse } from "../lib/responses";
+import { resolveStorefrontTenant } from "../storefront/preview";
 import { versionedJsonResponse } from "../storefront/public-routes";
-import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 /**
  * CP4-C — the storefront's content pages and posts (D84, D88). The tenant is
@@ -35,7 +35,9 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  *   host, a suspended or unpublished shop, a draft, an unknown slug.
  *
  * Every 200 carries `ETag: "<catalog_version>"` and answers `If-None-Match`
- * with a bodiless 304 (src/storefront/public-routes.ts versionedJsonResponse).
+ * with a bodiless 304 (src/storefront/public-routes.ts versionedJsonResponse),
+ * except a preview's: a valid grant (src/storefront/preview.ts) reads an
+ * unpublished shop and answers no-store, no ETag, noindex.
  */
 
 export const PUBLIC_PAGES_PATH = "/v1/pages";
@@ -50,11 +52,17 @@ export async function handlePublicPagesRoute(env: Env, request: Request): Promis
   if (query === null) {
     return invalidRequestResponse();
   }
-  const tenant = await resolveRequestTenant(env.DB, request);
-  const list = tenant === null ? null : await listPublicPages(env, env.DB, tenant.tenantId, query);
+  const tenant = await resolveStorefrontTenant(env, request);
+  const preview = tenant?.preview === true;
+  const list = tenant === null ? null : await listPublicPages(env, env.DB, tenant.tenantId, query, preview);
   return list === null
     ? pageNotFound()
-    : versionedJsonResponse(request, list.catalogVersion, { nextCursor: list.nextCursor, pages: list.pages });
+    : versionedJsonResponse(
+        request,
+        list.catalogVersion,
+        { nextCursor: list.nextCursor, pages: list.pages },
+        preview,
+      );
 }
 
 export async function handlePublicPageRoute(env: Env, request: Request, segment: string): Promise<Response> {
@@ -66,7 +74,11 @@ export async function handlePublicPageRoute(env: Env, request: Request, segment:
   if (slug === null) {
     return pageNotFound();
   }
-  const tenant = await resolveRequestTenant(env.DB, request);
-  const read = tenant === null ? null : await readPublicPage(env, env.DB, tenant.tenantId, slug, query.lang);
-  return read === null ? pageNotFound() : versionedJsonResponse(request, read.catalogVersion, { page: read.page });
+  const tenant = await resolveStorefrontTenant(env, request);
+  const preview = tenant?.preview === true;
+  const read =
+    tenant === null ? null : await readPublicPage(env, env.DB, tenant.tenantId, slug, query.lang, preview);
+  return read === null
+    ? pageNotFound()
+    : versionedJsonResponse(request, read.catalogVersion, { page: read.page }, preview);
 }

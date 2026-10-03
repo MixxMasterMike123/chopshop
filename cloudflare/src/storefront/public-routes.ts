@@ -1,5 +1,5 @@
 import { notFoundResponse } from "../lib/responses";
-import { resolveRequestTenant } from "../tenancy/resolve-tenant";
+import { previewJsonResponse, resolveStorefrontTenant } from "./preview";
 import { getPublicStorefrontVersioned } from "./public-storefront";
 
 /**
@@ -21,6 +21,10 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
  * the next request for the product answers 404, not 304.
  *
  * 404s carry no ETag and are never cacheable.
+ *
+ * A PREVIEW (D57, preview.ts): a read whose tenant a valid grant marked
+ * answers through `versionedJsonResponse(…, true)` — the body with
+ * `Cache-Control: no-store`, no ETag, `X-Robots-Tag: noindex`, and never a 304.
  */
 
 function etagFor(catalogVersion: number): string {
@@ -43,7 +47,11 @@ export function versionedJsonResponse(
   request: Request,
   catalogVersion: number,
   body: unknown,
+  preview = false,
 ): Response {
+  if (preview) {
+    return previewJsonResponse(body);
+  }
   const etag = etagFor(catalogVersion);
   const headers = {
     "Cache-Control": "no-cache",
@@ -63,18 +71,22 @@ export function versionedJsonResponse(
  * `GET /v1/storefront` — the full public response (CP4-D, public-storefront.ts):
  * `{ storefront: { name, locale, currency, identity, branding, menu, features,
  * pickupLocations, templateId, theme, accent } }`. An unknown, suspended or
- * unpublished shop is the 404 below.
+ * unpublished shop is the 404 below; an unpublished one answers to a valid
+ * preview grant (preview.ts).
  */
 export async function handlePublicStorefrontRequest(
   env: Env,
   request: Request,
 ): Promise<Response> {
-  const tenant = await resolveRequestTenant(env.DB, request);
+  const tenant = await resolveStorefrontTenant(env, request);
   const storefront =
     tenant === null ? null : await getPublicStorefrontVersioned(env, env.DB, tenant);
   return storefront === null
     ? notFoundResponse("Storefront not found")
-    : versionedJsonResponse(request, storefront.catalogVersion, {
-        storefront: storefront.value,
-      });
+    : versionedJsonResponse(
+        request,
+        storefront.catalogVersion,
+        { storefront: storefront.value },
+        tenant?.preview === true,
+      );
 }

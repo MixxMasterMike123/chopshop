@@ -7,8 +7,8 @@ import {
   PUBLIC_PRODUCT_LIMIT,
 } from "../catalog/public-catalog";
 import { decodeSegment, invalidRequestResponse, notFoundResponse } from "../lib/responses";
+import { resolveStorefrontTenant } from "../storefront/preview";
 import { versionedJsonResponse } from "../storefront/public-routes";
-import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 /**
  * CP4-A — the two public product reads (tenant by hostname; ETag =
@@ -21,6 +21,9 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  * (public-catalog.ts getPublicProductByRef). The segment is read from the RAW
  * pathname and decoded once (see ACTING_AS_ROUTE); a ref is 1–1200
  * characters with no "/".
+ *
+ * A valid preview grant (src/storefront/preview.ts) reads an unpublished shop
+ * through the preview's fragment and answers no-store, no ETag, noindex.
  */
 
 export const PUBLIC_PRODUCTS_PATH = "/v1/products";
@@ -79,7 +82,7 @@ export function parsePublicProductListQuery(url: URL): PublicProductFilter | nul
 }
 
 export async function handlePublicProductListRoute(env: Env, request: Request): Promise<Response> {
-  const tenant = await resolveRequestTenant(env.DB, request);
+  const tenant = await resolveStorefrontTenant(env, request);
   if (tenant === null) {
     return notFoundResponse("Products not found");
   }
@@ -90,7 +93,7 @@ export async function handlePublicProductListRoute(env: Env, request: Request): 
   const page = await listPublicProductPageVersioned(env, env.DB, tenant, filter);
   return page === null
     ? notFoundResponse("Products not found")
-    : versionedJsonResponse(request, page.catalogVersion, page.value);
+    : versionedJsonResponse(request, page.catalogVersion, page.value, tenant.preview === true);
 }
 
 export async function handlePublicProductRefRoute(env: Env, request: Request): Promise<Response> {
@@ -98,10 +101,15 @@ export async function handlePublicProductRefRoute(env: Env, request: Request): P
   if (ref === null) {
     return notFoundResponse("Product not found");
   }
-  const tenant = await resolveRequestTenant(env.DB, request);
+  const tenant = await resolveStorefrontTenant(env, request);
   const product =
     tenant === null ? null : await getPublicProductByRefVersioned(env, env.DB, tenant, ref);
   return product === null || product.value === null
     ? notFoundResponse("Product not found")
-    : versionedJsonResponse(request, product.catalogVersion, { product: product.value });
+    : versionedJsonResponse(
+        request,
+        product.catalogVersion,
+        { product: product.value },
+        tenant?.preview === true,
+      );
 }

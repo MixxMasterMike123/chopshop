@@ -13,11 +13,24 @@
  *   - a body is sent only when there is one: a POST that declares
  *     `Content-Length: 0` goes on with no body at all, because the payment
  *     route refuses a request that carries a body stream (src/app.ts,
- *     handleCheckoutPaymentRoute).
+ *     handleCheckoutPaymentRoute);
+ *   - the preview grant (`X-Storefront-Preview`, D57) goes on with a READ
+ *     only (GET, HEAD), and such a read goes without `If-None-Match` /
+ *     `If-Modified-Since`, so a preview is never answered from the browser's
+ *     copy of the public answer. Every other method loses the header here:
+ *     the API's writes ignore it anyway (a preview never sells), this is the
+ *     first fence.
  */
 
 const TENANT_HEADER_PATTERN = /^x-tenant-/i;
 const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
+/** The storefront's preview grant header (the API's src/storefront/preview.ts PREVIEW_HEADER). */
+export const PREVIEW_HEADER = "x-storefront-preview";
+
+/** Whether the browser's request carries a preview grant this Worker forwards (a read). */
+export function isPreviewRead(request: Request): boolean {
+  return BODYLESS_METHODS.has(request.method) && request.headers.has(PREVIEW_HEADER);
+}
 // A Response with one of these statuses must be built with a null body.
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
@@ -33,6 +46,13 @@ export function forwardedApiRequest(
   }
 
   headers.delete("cookie");
+
+  if (!BODYLESS_METHODS.has(request.method)) {
+    headers.delete(PREVIEW_HEADER);
+  } else if (headers.has(PREVIEW_HEADER)) {
+    headers.delete("if-none-match");
+    headers.delete("if-modified-since");
+  }
 
   const visitor = request.headers.get("cf-connecting-ip");
   if (visitor === null) {
@@ -74,10 +94,22 @@ export function workerApiRequest(target: string, visitor: string | null): Reques
  * `Cache-Control` and `Retry-After` untouched (the browser revalidates by ETag,
  * PLAN §2.4); `Set-Cookie` removed, because no storefront route sets one and
  * the storefront holds no session.
+ *
+ * The answer to a preview read (`preview`: isPreviewRead of the browser's
+ * request) is never kept: `Cache-Control: no-store`, no `ETag`,
+ * `X-Robots-Tag: noindex`, whatever the API said — also when the API ignored
+ * the grant (an expired one), so the browser never files a public answer
+ * under a preview's request or the reverse.
  */
-export function apiResponseForBrowser(response: Response): Response {
+export function apiResponseForBrowser(response: Response, preview = false): Response {
   const headers = new Headers(response.headers);
   headers.delete("set-cookie");
+  if (preview) {
+    headers.set("cache-control", "no-store");
+    headers.delete("etag");
+    headers.delete("last-modified");
+    headers.set("x-robots-tag", "noindex");
+  }
   return new Response(NULL_BODY_STATUSES.has(response.status) ? null : response.body, {
     headers,
     status: response.status,
