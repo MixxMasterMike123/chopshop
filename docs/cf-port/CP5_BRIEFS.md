@@ -113,7 +113,8 @@ Read first: `vite.storefront.config.js` (the alias mechanism: copy it, do not re
 1. Menu: only launch-scope entries (gap analysis §1a/§1b); POD is a static entry shown when `features.pod`. The wagon registry, presence and mention notifications are not imported in this build.
 2. Acting-as: `POST /v1/platform/tenants/:id/acting-as {reason}` → the admin tree with that shop active; the banner shows the shop and the time left (from `/v1/me` `actingAs`), and "Avsluta" calls `DELETE`. After a reload the banner is restored from `/v1/me`. A grant that ran out sends the platform user back to the platform tree with a notice. What a platform user may NOT do while acting-as (accept terms, adopt legal pages, the Connect login link) shows the control disabled with the reason, never an error after the click.
 3. Terms gate: `GET /v1/admin/legal/status`, `GET /v1/admin/legal/terms`, `POST /v1/admin/legal/accept-terms` (`$CF/src/routes/legal-admin.ts`; `CP3_E_REPORT.md`).
-4. The design gate applies: look at each shell RENDERED (dev API), light and dark, 375/768/1440, against the same page in the older build; list every difference with its cause.
+4. The sign-in pages' leftovers (FA's open questions): the "Skapa ett konto" link of `ForgotPasswordPage` leaves (no accounts are created there); the language switcher's and the dark-mode toggle's storage keys carry the earlier brand's name: this build uses neutral keys (an alias replacement) that read the old key once and write the new one, so nothing of that name ships in the admin bundle (`check-admin-build.mjs` should then be able to refuse it: add the check if the script is not being edited by anyone else, else list it).
+5. The design gate applies: look at each shell RENDERED (dev API), light and dark, 375/768/1440, against the same page in the older build; list every difference with its cause.
 
 ---
 
@@ -131,4 +132,44 @@ Read first: `vite.storefront.config.js` (the alias mechanism: copy it, do not re
 
 ---
 
-Units WC–WI and FC–FN: their rows in `CP5_GAP_ANALYSIS.md` §3 and §5 are the scope; each gets its full brief here before it is launched.
+## Frontend page units (FC, FD, FE, FF, …): the common part
+
+Read `CP5_FA_REPORT.md` first: its section "How the next units add a page" is the procedure (the calls in `src/api/admin/<area>.js`, the adapters in `src/admin-app/adapters/`, alias rows in `vite.admin.config.js`, the page's ONE line in `src/admin-app/pages.jsx`, dev-API rows and invented fixtures in `src/admin-app/dev/`). Then your pages' rows in `CP5_GAP_ANALYSIS.md` §2 (each row names the Worker route with file:line: read the route's handler and its builder report for the exact request and response shapes; do not guess a shape).
+
+- **Shared files, edited by several units at once:** `src/admin-app/pages.jsx` (your pages' lines only), `vite.admin.config.js` (add alias rows, never change another's), `src/admin-app/dev/dev-api.mjs` and `fixtures.json` (add your routes and fixtures). Re-read such a file immediately before each edit and change only your own lines. Everything else you touch is in your own list.
+- **Markup stays byte for byte** (rule 17). What leaves a page because its feature is not ported or its route does not exist is listed FIRST in the report, control by control. A control that stays but whose action is refused while acting-as is shown disabled with the reason.
+- **The shell** (`AppLayout`, unit FB) is being swapped at the same time. If it is not in the build when you finish, render your pages bare for the look and say so; do not edit the shell's files.
+- **Look at every page rendered** (`npx vite --config vite.admin.config.js --port <your own port>`, the dev API, `~/.claude/skills/gstack/browse/dist/browse`, screenshots under `/private/tmp/<unit>-shots/`): light and dark, 375 and 1440, the loaded state, the empty state and one error state, and say what you saw. Do not start the older build's dev server (it reaches the network).
+- **Gate:** rule 19's frontend line plus `node guard/guards.test.mjs`; also check your new files yourself for the two forbidden names (the guard reads tracked files only), and do not quote the guard's patterns in your report.
+
+## FC. Products
+
+**Owns:** `src/pages/admin/AdminProducts.jsx`, `src/components/admin/{ProductForm,ProductImages}.jsx`, `src/api/admin/products.js`, `src/admin-app/adapters/product.js` (+ tests), replacements for the shared modules those three reach (list them).
+
+Gap analysis §2b rows AdminProducts and ProductForm; `CP4_A_REPORT.md`, `CP4_P_REPORT.md` (objects), `$CF/src/routes/admin-products.ts`, `$CF/src/catalog/{admin-catalog,admin-product-reads,product-variants,product-images}.ts`, `$CF/src/routes/pod-admin.ts` (the quote). Memory of the product: the images are ONE ordered list and the first is the main image; a variant row carries its own image, sku, price and sizes (the rail).
+
+1. List, featured toggle, reorder (`PUT /v1/admin/products/order`), "delete" = archive (`status: 'archived'`; say so in the confirm text only if the copy already speaks of removal in a way that would now be untrue, and list the change).
+2. The form: load, create, update, publish/unpublish; the variants rail through the variant routes (a variant on a paid order is deactivated, not deleted: show what the API answers); images through `uploads.js` then `PUT …/images` (≤ 30, first = main); tags, category, compare-at, shipping and pickup per product, stock, size guide.
+3. **POD gate: the server's numbers only.** "Inköp" and the price floor come from `GET /v1/admin/pod/quote?productId=`; the client formula (`podPricing.js`) is not used in this build; a product without a mapping shows what the page shows today for one without a cost. The screening notice shows the server's `screeningStatus`; the client blocklist (`settings/contentScreening`) leaves.
+4. A save that the API refuses (floor, screening, variant cap, HTML refusal in `moreInfo`) shows the refusal at the field it concerns, in the page's existing error style.
+
+## FE. Settings and the legal adoption
+
+**Owns:** `src/pages/admin/AdminSettings.jsx`, `src/components/admin/PickupLocationsEditor.jsx`, `src/api/admin/{settings,legal}.js` (if unit FB has created `legal.js`, add to it; re-read first), `src/admin-app/adapters/settings.js`, the replacement for `src/utils/legalAcceptance.js`, and `saveShopConfig` in `src/admin-app/replacements/shopConfig.js`.
+
+Gap analysis §2b row AdminSettings; `CP3_A_REPORT.md` (settings), `CP3_E_REPORT.md` (legal), `$CF/src/routes/{admin-settings,legal-admin}.ts`, `$CF/src/platform/tenant-config.ts` (which identity keys are refused), `scripts/cf-port/staging-legal.mjs` (how the three pages are rendered from the templates and adopted: the admin does the same in the browser).
+
+1. `saveShopConfig` = read-modify-write: `GET /v1/admin/settings`, merge the changed top-level identity keys, `PUT` the whole identity (the PUT replaces it). State the lost-update window in the report; a later Worker unit adds a guarded PATCH.
+2. Shop name, support address and VAT rate are shown read-only with one line saying the platform sets them (D99). Cart-recovery and review settings leave (D81).
+3. Return address, VAT answer, seller type, pickup places: the same PUT's top-level fields.
+4. Legal pages: render from the templates with the shop's identity, show them, adopt with `POST /v1/admin/legal/accept-pages`; the readiness (`GET /v1/admin/legal/status`) drives the page's existing status display. A custom text ("take over") is kept in `storeIdentity.legal.custom` and sent as `texts` with `custom: true` (D79: legal pages are not content pages; the old write to `pages` leaves). The HTML the Worker refuses is shown as a refusal at that text. While acting-as, the adopt button is disabled with the reason (only the seller signs).
+
+## FF. Payments
+
+**Owns:** `src/pages/admin/AdminPayments.jsx`, `src/api/admin/payments.js`, its adapter.
+
+Gap analysis §2b row AdminPayments; `CP3_F_REPORT.md`; `$CF/src/routes/{connect-admin,connect-platform}.ts`. Status on mount, on window focus and on `?return=1` / `?refresh=1` (POST `/refresh` first); account, onboarding link, login link (disabled with the reason while acting-as). The balance block leaves until a route exists (list it). The payout delay control is the platform's: shown only to a platform user, sent through `platformRequest` to `PUT /v1/platform/tenants/:id/connect/payout-delay` with NO shop header. The Connect return address is `<admin origin>/admin/payments`: make sure that route is this page.
+
+---
+
+Units WC–WI, FD and FG–FN: their rows in `CP5_GAP_ANALYSIS.md` §3 and §5 are the scope; each gets its full brief here before it is launched.
