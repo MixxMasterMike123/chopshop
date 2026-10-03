@@ -50,7 +50,7 @@ The new admin build does not import these files, the same way D81 removed storef
 | `components/auth/ImpersonationIntake.jsx`, `config/impersonationAudit.js`, `utils/adminUIDManager.js` | Replaced by the server-minted, audited acting-as grant (`routes/acting-as.ts:16-34`) |
 | `components/PrivateRoute.jsx` | Dead file (INVENTORY §1.12) |
 | `pages/shop/EmailVerificationHandler.jsx` (`/__/auth/action`, `App.jsx:280,440`) | A Firebase Auth action with no Cloudflare equivalent |
-| `AdminUserCreate`, `AdminUserEdit` | **Decision needed (D100 below).** They are B2B-reseller customer editors: document upload `AdminUserCreate.jsx:133-155`, the `marginal` field `AdminUserEdit.jsx:38`, the customer email callable `:488`. They are not a tool for shop admins. Recommended: they leave, and `AdminUsers` becomes a slim member list. |
+| `AdminUserCreate`, `AdminUserEdit` | **Decision needed (D100 below).** They are editors of B2B trade customers: document upload `AdminUserCreate.jsx:133-155`, the `marginal` field `AdminUserEdit.jsx:38`, the customer email callable `:488`. They are not a tool for shop admins. Recommended: they leave, and `AdminUsers` becomes a slim member list. |
 | `pages/LandingPage.jsx`, `PlatformLeads` | **Decision needed (D103).** Leads are in neither §3.1 nor §3.2 (DESIGN_CONTRACT:537). Recommended: they leave; the admin root `/` redirects to `/login`. |
 | `components/admin/{FileUpload,FileManager}.jsx` (page attachments in `AdminPageEdit`) | D94: attachments are not built |
 
