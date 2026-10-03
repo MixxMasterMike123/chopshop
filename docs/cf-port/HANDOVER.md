@@ -48,6 +48,21 @@ Gates at HEAD: 557 tests under Node, 440 script tests, Worker 99 files / 4237, t
 
 **Open for Mikael from FK and WJ:** a printer price edit reaches existing products at once (Firebase froze the cost at publish) and products under the floor are only reported; removing a garment from a printer is refused on the page; the printers page's new texts; an imported legal row whose user was not carried over is shown to the shop by its stored address; should `variantCount` count inactive variants; should a tag's count cover only published products.
 
+**Update 2026-10-04 01:15 — three commits wait for Codex; WH is running.**
+
+| Commit | What | Codex |
+|---|---|---|
+| `fd7755df` | FW (Sonnet, 232k tokens): the pages read WJ's fields (variant counts and tags from the list, the pages list's SEO and languages, order search by name, the signers, the refused page's name, the platform detail's readiness from the checkout's gate). Data layer only | waits |
+| `794dc56a` | FM (Opus, 549k tokens): `/admin/pod` — the artwork library and the product mapping on the API; the studio tab is a "kommer snart" card. The reviewer read the component diffs and looked at the pages rendered; **the data modules (`src/admin-app/replacements/pod*.js`, `adapters/pod.js`, ~1 500 lines) are NOT read line by line** | waits |
+
+The detached Codex job now holds `14976ab0 fd7755df 794dc56a` (`run-wait-0236.sh`; verdicts in `codex-<sha>.log`, one line each in `done.txt`). **Nothing after `97d421c8` is attested or deployed.** `14976ab0` and `fd7755df` go out together (the pages read fields only the new API answers).
+
+**Running (dies with the window; finish from the tree):** WH (Opus) — the studio's platform assets: migration **0049_pod_studio_assets.sql**, seller reads `GET /v1/admin/pod/mockup-templates` and `…/3d-models`, platform writes, `scripts/cf-port/migrate/import-studio-assets.mjs`; `/ready` will require 0049; report `CP5_WH_REPORT.md`. **D101 taken on a default:** platform studio images live in the public bucket under `platform/studio/…`, in their own tables, written only by platform routes.
+
+**To map melodie-mc's six products on staging,** a printer with their articles must be active: staging's only usable printer is `fake-printer` with two sweatshirt articles (`CP5_FM_REPORT.md` has the seller's steps).
+
+**Next:** Codex's three verdicts → fix → attest HEAD → `scripts/cf-deploy.sh staging` (apply 0049 first if WH is in HEAD by then) → smoke `/admin/pod` → review WH → the studio assets imported on staging → FN1, FN2 → WE, WD, FL.
+
 ### (history) 🔁 HANDOVER 2026-10-03 23:10 — every launch-scope page but the printers page is COMMITTED; Codex found 10 things to fix before the next deploy
 
 **Tree clean, HEAD `a5b3cfa1` pushed, no builder running, no job waiting.** Staging is unchanged since 19:10: it serves `63760063` (the sign-in works, stand-ins behind it; the entry below).
