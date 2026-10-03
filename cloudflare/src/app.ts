@@ -401,6 +401,14 @@ import {
 // CP5-IMPORTS-F — begin
 // CP5-IMPORTS-F — end
 // CP5-IMPORTS-G — begin
+import {
+  handleAdminArtworkPatch,
+  missingArtworkResponse,
+} from "./routes/pod-artwork";
+import {
+  ADMIN_POD_DESIGN_QUOTE_PATH,
+  handleAdminPodDesignQuoteRoute,
+} from "./routes/pod-admin";
 // CP5-IMPORTS-G — end
 // CP5-IMPORTS-H — begin
 // CP5-IMPORTS-H — end
@@ -435,7 +443,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0046_order_fulfilment.sql";
+const REQUIRED_MIGRATION = "0048_pod_artwork_meta.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -1695,7 +1703,8 @@ async function handleAdminPodRoute(
   if (request.method === "GET") {
     const artwork = await getArtwork(env.DB, principal, artworkId);
     if (artwork === null) {
-      return adminNotFoundResponse();
+      // CP5-WG (c): a failed render answers `status: "failed"`, else the 404.
+      return missingArtworkResponse(env.DB, principal, artworkId);
     }
 
     // The preview download URL, minted per read.
@@ -1720,6 +1729,11 @@ async function handleAdminPodRoute(
         : await resolveR2Presigner(env).presignGet(previewKey, PREVIEW_URL_TTL_SECONDS);
 
     return jsonResponse({ artwork, previewUrl });
+  }
+
+  // CP5-WG (b): the seller renames a motif.
+  if (request.method === "PATCH") {
+    return handleAdminArtworkPatch(env.DB, request, principal, artworkId, now);
   }
 
   if (request.method !== "DELETE") {
@@ -2362,6 +2376,15 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // CP5-ROUTES-F — begin
   // CP5-ROUTES-F — end
   // CP5-ROUTES-G — begin
+  // The studio's design-time quote (src/routes/pod-admin.ts): Inköp + the
+  // price floor for a printer, SKU and slots chosen before any product exists.
+  // An exact path no earlier route claims. The artwork PATCH and the failed
+  // render's detail answer live inside handleAdminPodRoute (the artwork prefix
+  // is already mounted there).
+  app.all(
+    ADMIN_POD_DESIGN_QUOTE_PATH,
+    onMethods(["GET"], (c) => handleAdminPodDesignQuoteRoute(c.env, c.req.raw)),
+  );
   // CP5-ROUTES-G — end
   // CP5-ROUTES-H — begin
   // CP5-ROUTES-H — end

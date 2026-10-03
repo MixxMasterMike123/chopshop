@@ -792,7 +792,7 @@ describe("the dark surface", () => {
     // never written.
     const authed = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId: "x", profileId: "y" },
+        body: { objectId: "x", profileId: "y", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -800,7 +800,7 @@ describe("the dark surface", () => {
     );
     const anonymous = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId: "x", profileId: "y" },
+        body: { objectId: "x", profileId: "y", rightsConfirmed: true },
         method: "POST",
       }),
       envMissing("RENDER_FARM_TOKEN"),
@@ -822,7 +822,7 @@ describe("the dark surface", () => {
 
     const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -853,7 +853,7 @@ describe("the dark surface", () => {
 
     const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -979,7 +979,7 @@ describe("profiles", () => {
     await seedOriginal(TENANT_A, objectId);
     const dispatch = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1223,7 +1223,7 @@ describe("creation — queued, then polled", () => {
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1279,6 +1279,7 @@ describe("creation — queued, then polled", () => {
     expect(JSON.parse(audit?.metadata_json ?? "{}")).toStrictEqual({
       profileId: "apparel_dtg",
       renderJobId: job?.id,
+      rightsConfirmed: true,
     });
   });
 
@@ -1287,7 +1288,7 @@ describe("creation — queued, then polled", () => {
     await seedOriginal(TENANT_A, objectId);
     const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1321,7 +1322,7 @@ describe("creation — queued, then polled", () => {
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1354,7 +1355,7 @@ describe("render — the happy path", () => {
   async function post(objectId: string): Promise<Response> {
     return worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1490,7 +1491,7 @@ describe("render — verdicts and failures", () => {
   async function post(objectId: string, profileId = "apparel_dtg"): Promise<Response> {
     return worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId },
+        body: { objectId, profileId, rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1672,7 +1673,7 @@ describe("the synchronous fallback (SYNC_RENDER_FALLBACK = true path)", () => {
       createFakeFarm(),
       createFakePresigner(),
       principalA(),
-      { objectId, profileId: "apparel_dtg" },
+      { label: null, objectId, profileId: "apparel_dtg" },
       Date.now(),
     );
 
@@ -1698,7 +1699,7 @@ describe("the synchronous fallback (SYNC_RENDER_FALLBACK = true path)", () => {
       createFakeFarm({ result: "rejected" }),
       createFakePresigner(),
       principalA(),
-      { objectId, profileId: "apparel_dtg" },
+      { label: null, objectId, profileId: "apparel_dtg" },
       Date.now(),
     );
 
@@ -1715,7 +1716,7 @@ describe("the synchronous fallback (SYNC_RENDER_FALLBACK = true path)", () => {
       createFakeFarm({ result: "failed" }),
       createFakePresigner(),
       principalA(),
-      { objectId, profileId: "apparel_dtg" },
+      { label: null, objectId, profileId: "apparel_dtg" },
       Date.now(),
     );
 
@@ -1740,7 +1741,7 @@ describe("creation — ownership and validation", () => {
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1770,7 +1771,7 @@ describe("creation — ownership and validation", () => {
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1800,7 +1801,7 @@ describe("creation — ownership and validation", () => {
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1818,7 +1819,7 @@ describe("creation — ownership and validation", () => {
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "retired_one" },
+        body: { objectId, profileId: "retired_one", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -1830,12 +1831,12 @@ describe("creation — ownership and validation", () => {
   });
 
   const INVALID_BODIES: Array<[string, unknown]> = [
-    ["a missing profileId", { objectId: "x" }],
-    ["a missing objectId", { profileId: "y" }],
-    ["an extra steering key", { maxBytes: 999, objectId: "x", profileId: "y" }],
-    ["a printKey the caller invented", { objectId: "x", printKey: "pod/x", profileId: "y" }],
-    ["a non-string objectId", { objectId: 12, profileId: "y" }],
-    ["an empty objectId", { objectId: "", profileId: "y" }],
+    ["a missing profileId", { objectId: "x", rightsConfirmed: true }],
+    ["a missing objectId", { profileId: "y", rightsConfirmed: true }],
+    ["an extra steering key", { maxBytes: 999, objectId: "x", profileId: "y", rightsConfirmed: true }],
+    ["a printKey the caller invented", { objectId: "x", printKey: "pod/x", profileId: "y", rightsConfirmed: true }],
+    ["a non-string objectId", { objectId: 12, profileId: "y", rightsConfirmed: true }],
+    ["an empty objectId", { objectId: "", profileId: "y", rightsConfirmed: true }],
     ["an array body", []],
   ];
 
@@ -1861,7 +1862,7 @@ describe("creation — ownership and validation", () => {
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         method: "POST",
       }),
       podEnv(),
@@ -1901,7 +1902,7 @@ describe("the rate limiter", () => {
       await seedOriginal(TENANT_A, objectId);
 
       const request = new Request(`${HOST_A}/v1/admin/pod/artwork`, {
-        body: JSON.stringify({ objectId, profileId: "apparel_dtg" }),
+        body: JSON.stringify({ objectId, profileId: "apparel_dtg", rightsConfirmed: true }),
         headers: {
           "cf-connecting-ip": "203.0.113.9",
           "content-type": "application/json",
@@ -1927,7 +1928,7 @@ describe("the rate limiter", () => {
       await seedOriginal(TENANT_A, objectId);
       await worker.fetch(
         new Request(`${HOST_A}/v1/admin/pod/artwork`, {
-          body: JSON.stringify({ objectId, profileId: "apparel_dtg" }),
+          body: JSON.stringify({ objectId, profileId: "apparel_dtg", rightsConfirmed: true }),
           headers: {
             "cf-connecting-ip": "203.0.113.10",
             "content-type": "application/json",
@@ -1991,7 +1992,7 @@ describe("list, detail and delete", () => {
 
     const response = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie,
         host,
         method: "POST",
@@ -2053,7 +2054,7 @@ describe("list, detail and delete", () => {
     await seedOriginal(TENANT_A, objectId);
     const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -2121,7 +2122,7 @@ describe("list, detail and delete", () => {
     await seedOriginal(TENANT_A, objectId);
     const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -2230,7 +2231,7 @@ describe("list, detail and delete", () => {
     await seedOriginal(TENANT_A, objectId);
     await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -2336,7 +2337,7 @@ describe("response hygiene", () => {
 
     const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -2383,7 +2384,7 @@ describe("response hygiene", () => {
     await seedOriginal(TENANT_A, objectId);
     const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -2415,7 +2416,7 @@ describe("response hygiene", () => {
     await seedOriginal(TENANT_A, objectId);
     const created = await worker.fetch(
       podRequest("/v1/admin/pod/artwork", {
-        body: { objectId, profileId: "apparel_dtg" },
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
         cookie: adminA.cookie,
         method: "POST",
       }),
@@ -2530,5 +2531,442 @@ describe("the real presigner (aws4fetch)", () => {
     ]) {
       expect(validateR2Url(url, "url")).toStrictEqual([]);
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CP5-WG — artwork metadata (label, rights confirmation, creator) and a failed
+// render that the poll can tell from a missing artwork.
+describe("CP5-WG — the rights confirmation on creation", () => {
+  beforeEach(async () => {
+    await seedProfile("apparel_dtg");
+  });
+
+  const create = (body: unknown, options: Partial<RequestOptions> = {}) =>
+    worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body,
+        cookie: adminA.cookie,
+        method: "POST",
+        ...options,
+      }),
+      podEnv(),
+    );
+
+  // REFUSALS FIRST. Each body names a real, owned original and a live profile,
+  // so the only defect is the one named.
+  const REFUSED: Array<[string, (objectId: string) => unknown]> = [
+    ["the old body without rightsConfirmed", (objectId) => ({ objectId, profileId: "apparel_dtg" })],
+    ["rightsConfirmed: false", (objectId) => ({ objectId, profileId: "apparel_dtg", rightsConfirmed: false })],
+    ['rightsConfirmed: "true"', (objectId) => ({ objectId, profileId: "apparel_dtg", rightsConfirmed: "true" })],
+    ["rightsConfirmed: 1", (objectId) => ({ objectId, profileId: "apparel_dtg", rightsConfirmed: 1 })],
+    ["rightsConfirmed: null", (objectId) => ({ objectId, profileId: "apparel_dtg", rightsConfirmed: null })],
+    ["a label that is a number", (objectId) => ({ label: 7, objectId, profileId: "apparel_dtg", rightsConfirmed: true })],
+    ["a label of only spaces", (objectId) => ({ label: "   ", objectId, profileId: "apparel_dtg", rightsConfirmed: true })],
+    ["a label of 121 characters", (objectId) => ({ label: "x".repeat(121), objectId, profileId: "apparel_dtg", rightsConfirmed: true })],
+    ["a label with a newline", (objectId) => ({ label: "a\nb", objectId, profileId: "apparel_dtg", rightsConfirmed: true })],
+    ["a client-sent confirmation time", (objectId) => ({ objectId, profileId: "apparel_dtg", rightsConfirmed: true, rightsConfirmedAt: 1 })],
+    ["a client-sent creator", (objectId) => ({ createdBy: "someone", objectId, profileId: "apparel_dtg", rightsConfirmed: true })],
+  ];
+
+  for (const [label, body] of REFUSED) {
+    it(`refuses ${label} with 400 and creates nothing`, async () => {
+      const objectId = crypto.randomUUID();
+      await seedOriginal(TENANT_A, objectId);
+      const response = await create(body(objectId));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toStrictEqual({
+        error: { code: "invalid_request", message: "Request is not valid" },
+      });
+      expect(await renderJobCount()).toBe(0);
+      const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM pod_artwork").first<{ n: number }>();
+      expect(rows?.n).toBe(0);
+    });
+  }
+
+  it("a cross-origin creation is the opaque 404, before the body is read", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const response = await create(
+      { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
+      { origin: "https://evil.example" },
+    );
+    expect(response.status).toBe(404);
+    expect(await renderJobCount()).toBe(0);
+  });
+
+  it("stores the label trimmed, the SERVER's time and the creator; answers them as label, rightsConfirmedAt, createdBySelf", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const before = Date.now();
+    const response = await create({
+      label: "  Logotyp – framsida  ",
+      objectId,
+      profileId: "apparel_dtg",
+      rightsConfirmed: true,
+    });
+    const after = Date.now();
+    expect(response.status).toBe(202);
+    const { artwork } = await response.json<{ artwork: Record<string, unknown> }>();
+    expect(artwork.label).toBe("Logotyp – framsida");
+    expect(artwork.createdBySelf).toBe(true);
+    expect(artwork.rightsConfirmedAt).toBeGreaterThanOrEqual(before);
+    expect(artwork.rightsConfirmedAt).toBeLessThanOrEqual(after);
+    // No person's id in the answer: not the creator's, not under another key.
+    expect(JSON.stringify(artwork)).not.toContain(adminA.userId);
+    expect("createdBy" in artwork).toBe(false);
+
+    const row = await env.DB.prepare(
+      "SELECT label, rights_confirmed_at, created_by, created_at FROM pod_artwork WHERE artwork_id = ?",
+    )
+      .bind(artwork.artworkId as string)
+      .first<Record<string, unknown>>();
+    expect(row).toStrictEqual({
+      created_at: artwork.createdAt,
+      created_by: adminA.userId,
+      label: "Logotyp – framsida",
+      rights_confirmed_at: artwork.rightsConfirmedAt,
+    });
+  });
+
+  it("a label is optional: absent or null stores NULL", async () => {
+    for (const label of [undefined, null]) {
+      const objectId = crypto.randomUUID();
+      await seedOriginal(TENANT_A, objectId);
+      const response = await create({ label, objectId, profileId: "apparel_dtg", rightsConfirmed: true });
+      expect(response.status).toBe(202);
+      const { artwork } = await response.json<{ artwork: { label: unknown; rightsConfirmedAt: unknown } }>();
+      expect(artwork.label).toBeNull();
+      expect(typeof artwork.rightsConfirmedAt).toBe("number");
+    }
+  });
+
+  it("the confirmation and its author cannot be rewritten by an UPDATE (0048 trigger)", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const response = await create({ objectId, profileId: "apparel_dtg", rightsConfirmed: true });
+    const { artwork } = await response.json<{ artwork: { artworkId: string } }>();
+    await expect(
+      env.DB.prepare("UPDATE pod_artwork SET rights_confirmed_at = 1 WHERE artwork_id = ?")
+        .bind(artwork.artworkId)
+        .run(),
+    ).rejects.toThrow(/immutable/);
+    await expect(
+      env.DB.prepare("UPDATE pod_artwork SET created_by = NULL WHERE artwork_id = ?")
+        .bind(artwork.artworkId)
+        .run(),
+    ).rejects.toThrow(/immutable/);
+    // A label above 120 characters or with surrounding spaces is unstorable too.
+    await expect(
+      env.DB.prepare("UPDATE pod_artwork SET label = ' x' WHERE artwork_id = ?")
+        .bind(artwork.artworkId)
+        .run(),
+    ).rejects.toThrow(/CHECK/);
+  });
+});
+
+describe("CP5-WG — list and detail carry the metadata, never another person's id", () => {
+  let adminA2: SignedUpUser;
+
+  beforeAll(async () => {
+    adminA2 = await signUp("pod-admin-a2@example.test");
+    await seedAccess(adminA2.userId, "tenant_admin");
+    await seedMembership(adminA2.userId, TENANT_A);
+  });
+
+  beforeEach(async () => {
+    await seedProfile("apparel_dtg");
+  });
+
+  it("createdBySelf is true for the creator, false for a co-admin and for a row older than 0048", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const created = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { label: "Mine", objectId, profileId: "apparel_dtg", rightsConfirmed: true },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      podEnv(),
+    );
+    const { artwork } = await created.json<{ artwork: { artworkId: string } }>();
+
+    // A row written before 0048: all three columns NULL.
+    const oldObject = crypto.randomUUID();
+    await seedOriginal(TENANT_A, oldObject);
+    await env.DB.prepare(
+      `INSERT INTO pod_artwork (artwork_id, tenant_id, original_object_id, profile_id, status,
+         reasons_json, created_at, updated_at)
+       VALUES ('old-artwork', ?, ?, 'apparel_dtg', 'rejected', '[{"code":"x","message":"x"}]', ?, ?)`,
+    )
+      .bind(TENANT_A, oldObject, SEED_NOW, SEED_NOW)
+      .run();
+
+    const listAs = async (cookie: string) => {
+      const response = await worker.fetch(podRequest("/v1/admin/pod/artwork", { cookie }), podEnv());
+      expect(response.status).toBe(200);
+      const body = await response.json<{ artwork: Array<Record<string, unknown>> }>();
+      expect(JSON.stringify(body)).not.toContain(adminA.userId);
+      expect(JSON.stringify(body)).not.toContain(adminA2.userId);
+      return new Map(body.artwork.map((entry) => [entry.artworkId, entry]));
+    };
+
+    const mine = await listAs(adminA.cookie);
+    expect(mine.get(artwork.artworkId)).toMatchObject({ createdBySelf: true, label: "Mine" });
+    expect(mine.get("old-artwork")).toMatchObject({ createdBySelf: false, label: null, rightsConfirmedAt: null });
+
+    const theirs = await listAs(adminA2.cookie);
+    expect(theirs.get(artwork.artworkId)).toMatchObject({ createdBySelf: false, label: "Mine" });
+
+    const detail = await worker.fetch(
+      podRequest(`/v1/admin/pod/artwork/${artwork.artworkId}`, { cookie: adminA2.cookie }),
+      podEnv(),
+    );
+    const body = await detail.json<{ artwork: Record<string, unknown> }>();
+    expect(body.artwork).toMatchObject({ createdBySelf: false, label: "Mine" });
+    expect(typeof body.artwork.rightsConfirmedAt).toBe("number");
+    expect(JSON.stringify(body)).not.toContain(adminA.userId);
+  });
+});
+
+describe("CP5-WG — PATCH /v1/admin/pod/artwork/:id { label }", () => {
+  beforeEach(async () => {
+    await seedProfile("apparel_dtg");
+  });
+
+  async function createdArtwork(): Promise<string> {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const response = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { label: "Före", objectId, profileId: "apparel_dtg", rightsConfirmed: true },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      podEnv(),
+    );
+    expect(response.status).toBe(202);
+    return (await response.json<{ artwork: { artworkId: string } }>()).artwork.artworkId;
+  }
+
+  const patch = (artworkId: string, body: unknown, options: Partial<RequestOptions> = {}) =>
+    worker.fetch(
+      podRequest(`/v1/admin/pod/artwork/${artworkId}`, {
+        body,
+        cookie: adminA.cookie,
+        method: "PATCH",
+        ...options,
+      }),
+      podEnv(),
+    );
+
+  const labelOf = async (artworkId: string) =>
+    (
+      await env.DB.prepare("SELECT label FROM pod_artwork WHERE artwork_id = ?")
+        .bind(artworkId)
+        .first<{ label: string | null }>()
+    )?.label;
+
+  it("no session, a foreign shop's admin, and a cross-origin request: the opaque 404, nothing renamed", async () => {
+    const artworkId = await createdArtwork();
+    const answers = [
+      await patch(artworkId, { label: "x" }, { cookie: undefined }),
+      await patch(artworkId, { label: "x" }, { cookie: adminB.cookie }),
+      await patch(artworkId, { label: "x" }, { cookie: adminB.cookie, host: HOST_B, shopId: TENANT_A }),
+      await patch(artworkId, { label: "x" }, { origin: "https://evil.example" }),
+      await patch(artworkId, { label: "x" }, { origin: null }),
+      // B's own shop context cannot reach A's artwork either.
+      await patch(artworkId, { label: "x" }, { cookie: adminB.cookie, host: HOST_B }),
+    ];
+    for (const response of answers) {
+      expect(response.status).toBe(404);
+    }
+    expect(await labelOf(artworkId)).toBe("Före");
+  });
+
+  it("malformed ids and sub-paths are the opaque 404; an unknown id is a 404", async () => {
+    for (const path of ["%E0%A4%A", "a/b", "nope"]) {
+      const response = await patch(path, { label: "x" });
+      expect(response.status, path).toBe(404);
+    }
+  });
+
+  it("refuses a malformed body with 400 and renames nothing", async () => {
+    const artworkId = await createdArtwork();
+    for (const body of [
+      {},
+      { label: 3 },
+      { label: "" },
+      { label: "   " },
+      { label: "x".repeat(121) },
+      { label: "a\u0000b" },
+      { label: "x", status: "ready" },
+      ["x"],
+      "x",
+    ]) {
+      const response = await patch(artworkId, body);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+    expect(await labelOf(artworkId)).toBe("Före");
+  });
+
+  it("renames, clears with null, audits in the same batch and changes nothing a visitor sees", async () => {
+    const artworkId = await createdArtwork();
+    const version = await catalogVersionOf(TENANT_A);
+
+    const renamed = await patch(artworkId, { label: "  Efter  " });
+    expect(renamed.status).toBe(200);
+    const body = await renamed.json<{ artwork: Record<string, unknown> }>();
+    expect(body.artwork).toMatchObject({ artworkId, createdBySelf: true, label: "Efter", status: "processing" });
+    expect(Object.keys(body.artwork).sort()).toStrictEqual([
+      "artworkId",
+      "createdAt",
+      "createdBySelf",
+      "effectiveDpi",
+      "heightPx",
+      "label",
+      "originalObjectId",
+      "profileId",
+      "rightsConfirmedAt",
+      "status",
+      "widthPx",
+    ]);
+    expect(await labelOf(artworkId)).toBe("Efter");
+
+    const cleared = await patch(artworkId, { label: null });
+    expect(cleared.status).toBe(200);
+    expect(await labelOf(artworkId)).toBeNull();
+
+    const audits = await env.DB.prepare(
+      "SELECT actor_user_id, metadata_json FROM audit_events WHERE action = 'pod.artwork.rename' AND resource_id = ? ORDER BY created_at",
+    )
+      .bind(artworkId)
+      .all<{ actor_user_id: string; metadata_json: string }>();
+    expect(audits.results.map((row) => JSON.parse(row.metadata_json))).toStrictEqual([
+      { hadLabel: true, hasLabel: true },
+      { hadLabel: true, hasLabel: false },
+    ]);
+    expect(audits.results.every((row) => row.actor_user_id === adminA.userId)).toBe(true);
+    // A label reaches no public answer, so the catalogue's version is untouched.
+    expect(await catalogVersionOf(TENANT_A)).toBe(version);
+  });
+
+  it("other methods on the artwork id stay what they were (PUT and POST are 404s)", async () => {
+    const artworkId = await createdArtwork();
+    for (const method of ["PUT", "POST"]) {
+      const response = await patch(artworkId, { label: "x" }, { method });
+      expect(response.status, method).toBe(404);
+    }
+  });
+});
+
+async function catalogVersionOf(tenantId: string): Promise<number> {
+  const row = await env.DB.prepare("SELECT catalog_version FROM tenants WHERE tenant_id = ?")
+    .bind(tenantId)
+    .first<{ catalog_version: number }>();
+  return row?.catalog_version ?? -1;
+}
+
+describe("CP5-WG (c) — a failed render is not a missing artwork", () => {
+  beforeEach(async () => {
+    await seedProfile("apparel_dtg");
+  });
+
+  async function failedArtwork(): Promise<{ artworkId: string; objectId: string }> {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const created = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      podEnv(),
+    );
+    const { artwork } = await created.json<{ artwork: { artworkId: string } }>();
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await runFarm({ result: "failed" });
+    }
+    const row = await env.DB.prepare("SELECT 1 FROM pod_artwork WHERE artwork_id = ?")
+      .bind(artwork.artworkId)
+      .first();
+    expect(row).toBeNull();
+    return { artworkId: artwork.artworkId, objectId };
+  }
+
+  const detail = (artworkId: string, cookie = adminA.cookie, host = HOST_A) =>
+    worker.fetch(podRequest(`/v1/admin/pod/artwork/${artworkId}`, { cookie, host }), podEnv());
+
+  it("the poll answers status 'failed' with one coarse reason, and nothing of the job", async () => {
+    const { artworkId } = await failedArtwork();
+    const response = await detail(artworkId);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toStrictEqual({
+      artwork: { artworkId, reason: "render_failed", status: "failed" },
+      previewUrl: null,
+    });
+  });
+
+  it("another shop's admin, and no session, still get the opaque 404", async () => {
+    const { artworkId } = await failedArtwork();
+    expect((await detail(artworkId, adminB.cookie, HOST_B)).status).toBe(404);
+    expect(
+      (await worker.fetch(podRequest(`/v1/admin/pod/artwork/${artworkId}`), podEnv())).status,
+    ).toBe(404);
+  });
+
+  it("a failed artwork is not in the list and cannot be renamed or deleted (404); a re-post works", async () => {
+    const { artworkId, objectId } = await failedArtwork();
+    const list = await worker.fetch(podRequest("/v1/admin/pod/artwork", { cookie: adminA.cookie }), podEnv());
+    const body = await list.json<{ artwork: Array<{ artworkId: string }> }>();
+    expect(body.artwork.some((entry) => entry.artworkId === artworkId)).toBe(false);
+    const renamed = await worker.fetch(
+      podRequest(`/v1/admin/pod/artwork/${artworkId}`, { body: { label: "x" }, cookie: adminA.cookie, method: "PATCH" }),
+      podEnv(),
+    );
+    expect(renamed.status).toBe(404);
+    const deleted = await worker.fetch(
+      podRequest(`/v1/admin/pod/artwork/${artworkId}`, { cookie: adminA.cookie, method: "DELETE" }),
+      podEnv(),
+    );
+    expect(deleted.status).toBe(404);
+    // Replay is still the retry.
+    const again = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      podEnv(),
+    );
+    expect(again.status).toBe(202);
+  });
+
+  it("an artwork its admin deleted while processing is gone (404), not failed", async () => {
+    const objectId = crypto.randomUUID();
+    await seedOriginal(TENANT_A, objectId);
+    const created = await worker.fetch(
+      podRequest("/v1/admin/pod/artwork", {
+        body: { objectId, profileId: "apparel_dtg", rightsConfirmed: true },
+        cookie: adminA.cookie,
+        method: "POST",
+      }),
+      podEnv(),
+    );
+    const { artwork } = await created.json<{ artwork: { artworkId: string } }>();
+    const deleted = await worker.fetch(
+      podRequest(`/v1/admin/pod/artwork/${artwork.artworkId}`, { cookie: adminA.cookie, method: "DELETE" }),
+      podEnv(),
+    );
+    expect(deleted.status).toBe(204);
+    const job = await env.DB.prepare("SELECT state, error FROM render_jobs WHERE artwork_id = ?")
+      .bind(artwork.artworkId)
+      .first<{ error: string; state: string }>();
+    expect(job).toStrictEqual({ error: "artwork_deleted", state: "failed" });
+    expect((await detail(artwork.artworkId)).status).toBe(404);
+  });
+
+  it("an id that never existed is the opaque 404", async () => {
+    expect((await detail(crypto.randomUUID())).status).toBe(404);
   });
 });

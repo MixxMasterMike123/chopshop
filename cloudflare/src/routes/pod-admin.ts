@@ -11,8 +11,10 @@ import type { PodMapping } from "../pod/pod-mappings";
 import {
   createMapping,
   deleteMapping,
+  designQuote,
   listMappings,
   parseCreateMappingInput,
+  parseDesignQuoteQuery,
   podRefusalMessage,
   quoteForProduct,
 } from "../pod/pod-mappings";
@@ -26,6 +28,8 @@ import { listTenantPrinters } from "../pod/printers";
  *   POST   /v1/admin/pod/mappings                  → 201|200 { mapping, inkopMinor, priceFloorMinor, currency }
  *   DELETE /v1/admin/pod/mappings/{mappingId}      → 204
  *   GET    /v1/admin/pod/quote?productId=[&variantId=] → { inkopMinor, priceFloorMinor, currency }
+ *   GET    /v1/admin/pod/design-quote?printerId=&sku=&slots=a,b → { inkopMinor, priceFloorMinor, currency }
+ *          (CP5-WG; its own handler below, mounted by src/app.ts CP5-ROUTES-G)
  *
  * Same guard order as every admin surface: the live session + X-Shop-Id
  * membership guard first, then the same-origin check on state changes only
@@ -52,6 +56,7 @@ export const ADMIN_POD_MAPPINGS_PATH = "/v1/admin/pod/mappings";
 export const ADMIN_POD_MAPPING_PATH_PREFIX = "/v1/admin/pod/mappings/";
 export const ADMIN_POD_QUOTE_PATH = "/v1/admin/pod/quote";
 export const ADMIN_POD_PRINTERS_PATH = "/v1/admin/pod/printers";
+export const ADMIN_POD_DESIGN_QUOTE_PATH = "/v1/admin/pod/design-quote";
 
 const ID_MAX_LENGTH = 128;
 
@@ -214,4 +219,55 @@ export async function handleAdminPodProductRoute(
   return deleted.status === "ok"
     ? new Response(null, { status: 204 })
     : routeNotFoundResponse();
+}
+
+/**
+ * GET /v1/admin/pod/design-quote?printerId=&sku=&slots=front,back (CP5-WG)
+ *   → 200 { inkopMinor, priceFloorMinor, currency }
+ *   → 400 invalid_request (a parameter missing, repeated, unknown or malformed)
+ *   → 422 printer_unavailable | sku_unavailable | slot_not_printable
+ *   → 404 the opaque answer (no session, no membership of X-Shop-Id, wrong method)
+ *
+ * A SEPARATE PATH rather than a second mode of /quote: /quote answers "what
+ * does this mapped product cost" and its refusals (404 for an unknown
+ * product, `not_quotable` for one with no producible mapping) mean that; a
+ * choice made before any product exists has the mapping write's refusals
+ * instead (is this printer, SKU and slot set usable by this shop). Two
+ * contracts on one path would make either refusal ambiguous. The NUMBERS are
+ * one formula: pod-mappings.ts designQuote prices through the same function
+ * as the mapping write and the product quote (sellerQuoteForChoice).
+ *
+ * Masked as everywhere on this surface (TENANT_REFUSAL_CODE): `unpriced` reads
+ * `sku_unavailable`, `currency_mismatch` reads `printer_unavailable`, so the
+ * answer never says whether a price row or the printer's currency was what
+ * was missing. Bounded as /quote is: one tenant read, one printer read, one
+ * tier read, whatever the input; the input itself is capped by the parser
+ * (ids ≤ 128, a SKU key, ≤ 5 slots). No rate limit, as /quote has none: both
+ * are reads behind a live admin session (see the report on what a sequence of
+ * quotes can tell a seller).
+ */
+export async function handleAdminPodDesignQuoteRoute(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  const principal = await authorizeTenantAdminRequest(env, request);
+  if (principal === null || request.method !== "GET") {
+    return routeNotFoundResponse();
+  }
+  const input = parseDesignQuoteQuery(new URL(request.url).searchParams);
+  if (input === null) {
+    return invalidRequestResponse();
+  }
+  const result = await designQuote(env.DB, principal, input);
+  if (result.status === "not_found") {
+    return routeNotFoundResponse();
+  }
+  if (result.status === "refused") {
+    return errorResponse(422, tenantRefusalCode(result.code), "This choice cannot be produced");
+  }
+  return jsonResponse({
+    currency: result.quote.currency,
+    inkopMinor: result.quote.inkopMinor,
+    priceFloorMinor: result.quote.priceFloorMinor,
+  });
 }

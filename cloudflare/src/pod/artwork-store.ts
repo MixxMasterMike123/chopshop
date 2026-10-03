@@ -68,13 +68,30 @@ export const SYNC_RENDER_FALLBACK = false;
 
 export type ArtworkStatus = "processing" | "ready" | "rejected";
 
+/** What creation stores beside the two ids (artwork-routes.ts parses it). */
+export interface CreateArtworkInput {
+  label: string | null;
+  objectId: string;
+  profileId: string;
+}
+
 export interface ArtworkSummary {
   artworkId: string;
   createdAt: number;
+  /**
+   * Whether the CALLER created this artwork (CP5-WG). The creator's id itself
+   * is never serialized: a seller learns nothing about another person's
+   * account from the library.
+   */
+  createdBySelf: boolean;
   effectiveDpi: number | null;
   heightPx: number | null;
+  /** The seller's internal name (admin only; no storefront answer carries it). */
+  label: string | null;
   originalObjectId: string;
   profileId: string;
+  /** Server time (ms) of the uploader's rights confirmation; null on rows older than 0048. */
+  rightsConfirmedAt: number | null;
   status: ArtworkStatus;
   widthPx: number | null;
 }
@@ -94,8 +111,10 @@ export interface ArtworkDetail extends ArtworkSummary {
 interface ArtworkRow {
   artwork_id: string;
   created_at: number;
+  created_by: string | null;
   effective_dpi: number | null;
   height_px: number | null;
+  label: string | null;
   max_print_h_mm: number | null;
   max_print_w_mm: number | null;
   notices_json: string | null;
@@ -109,6 +128,7 @@ interface ArtworkRow {
   print_sha256: string | null;
   profile_id: string;
   reasons_json: string | null;
+  rights_confirmed_at: number | null;
   status: ArtworkStatus;
   updated_at: number;
   width_px: number | null;
@@ -134,6 +154,7 @@ const ARTWORK_SELECT = `SELECT
      pipeline_version, notices_json, reasons_json,
      print_object_key, preview_object_key,
      print_sha256, print_bytes, preview_sha256, preview_bytes,
+     label, rights_confirmed_at, created_by,
      created_at, updated_at
    FROM pod_artwork
    WHERE tenant_id = ?`;
@@ -152,14 +173,17 @@ function parseMessages(json: string | null): JobNotice[] {
   }
 }
 
-function toSummary(row: ArtworkRow): ArtworkSummary {
+function toSummary(row: ArtworkRow, viewerUserId: string): ArtworkSummary {
   return {
     artworkId: row.artwork_id,
     createdAt: row.created_at,
+    createdBySelf: row.created_by !== null && row.created_by === viewerUserId,
     effectiveDpi: row.effective_dpi,
     heightPx: row.height_px,
+    label: row.label,
     originalObjectId: row.original_object_id,
     profileId: row.profile_id,
+    rightsConfirmedAt: row.rights_confirmed_at,
     status: row.status,
     widthPx: row.width_px,
   };
@@ -176,9 +200,9 @@ function toSummary(row: ArtworkRow): ArtworkSummary {
  * portal checkpoint and inventing a path to them here would create a second
  * delivery route with no queue behind it.
  */
-function toDetail(row: ArtworkRow): ArtworkDetail {
+function toDetail(row: ArtworkRow, viewerUserId: string): ArtworkDetail {
   return {
-    ...toSummary(row),
+    ...toSummary(row, viewerUserId),
     maxPrintMm:
       row.max_print_w_mm === null || row.max_print_h_mm === null
         ? null
@@ -388,7 +412,7 @@ export async function enqueueArtwork(
   env: Env,
   db: D1Database,
   principal: TenantAdminPrincipal,
-  input: { objectId: string; profileId: string },
+  input: CreateArtworkInput,
   now: number,
 ): Promise<CreateArtworkResult> {
   const tenantId = principal.tenantId;
@@ -412,10 +436,23 @@ export async function enqueueArtwork(
         .prepare(
           `INSERT INTO pod_artwork (
              artwork_id, tenant_id, original_object_id, profile_id, status,
+             label, rights_confirmed_at, created_by,
              created_at, updated_at
-           ) VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
+           ) VALUES (?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?)`,
         )
-        .bind(artworkId, tenantId, input.objectId, input.profileId, now, now),
+        .bind(
+          artworkId,
+          tenantId,
+          input.objectId,
+          input.profileId,
+          input.label,
+          // The SERVER's clock: the confirmation is the request that carried
+          // `rightsConfirmed: true` (artwork-routes.ts), and it happened now.
+          now,
+          principal.userId,
+          now,
+          now,
+        ),
       insertRenderJobStatement(db, {
         artworkId,
         inputBytes: original.sizeBytes,
@@ -428,6 +465,7 @@ export async function enqueueArtwork(
       auditStatement(db, principal, "pod.artwork.dispatch", artworkId, now, {
         profileId: input.profileId,
         renderJobId,
+        rightsConfirmed: true,
       }),
     ]);
   } catch (error) {
@@ -442,7 +480,7 @@ export async function enqueueArtwork(
   const row = await loadArtworkRow(db, tenantId, artworkId);
   return row === null
     ? { status: "not_found" }
-    : { artwork: toDetail(row), status: "queued" };
+    : { artwork: toDetail(row, principal.userId), status: "queued" };
 }
 
 /**
@@ -472,7 +510,7 @@ export async function createArtwork(
   farm: RenderFarmClient,
   presigner: R2Presigner,
   principal: TenantAdminPrincipal,
-  input: { objectId: string; profileId: string },
+  input: CreateArtworkInput,
   now: number,
 ): Promise<CreateArtworkResult> {
   const tenantId = principal.tenantId;
@@ -504,12 +542,26 @@ export async function createArtwork(
         .prepare(
           `INSERT INTO pod_artwork (
              artwork_id, tenant_id, original_object_id, profile_id, status,
+             label, rights_confirmed_at, created_by,
              created_at, updated_at
-           ) VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
+           ) VALUES (?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?)`,
         )
-        .bind(artworkId, tenantId, input.objectId, input.profileId, now, now),
+        .bind(
+          artworkId,
+          tenantId,
+          input.objectId,
+          input.profileId,
+          input.label,
+          // The SERVER's clock: the confirmation is the request that carried
+          // `rightsConfirmed: true` (artwork-routes.ts), and it happened now.
+          now,
+          principal.userId,
+          now,
+          now,
+        ),
       auditStatement(db, principal, "pod.artwork.dispatch", artworkId, now, {
         profileId: input.profileId,
+        rightsConfirmed: true,
       }),
     ]);
   } catch (error) {
@@ -593,7 +645,7 @@ export async function createArtwork(
     const row = await loadArtworkRow(db, tenantId, artworkId);
     return row === null
       ? { status: "farm_error" }
-      : { artwork: toDetail(row), status: "rejected" };
+      : { artwork: toDetail(row, principal.userId), status: "rejected" };
   }
 
   // ── 5b. SUCCESS — verify before ready. ───────────────────────────────────
@@ -659,7 +711,7 @@ export async function createArtwork(
   const row = await loadArtworkRow(db, tenantId, artworkId);
   return row === null
     ? { status: "farm_error" }
-    : { artwork: toDetail(row), status: "created" };
+    : { artwork: toDetail(row, principal.userId), status: "created" };
 }
 
 /**
@@ -693,7 +745,7 @@ export async function listArtwork(
     .bind(principal.tenantId)
     .all<ArtworkRow>();
 
-  return result.results.map(toSummary);
+  return result.results.map((row) => toSummary(row, principal.userId));
 }
 
 export async function getArtwork(
@@ -702,7 +754,105 @@ export async function getArtwork(
   artworkId: string,
 ): Promise<ArtworkDetail | null> {
   const row = await loadArtworkRow(db, principal.tenantId, artworkId);
-  return row === null ? null : toDetail(row);
+  return row === null ? null : toDetail(row, principal.userId);
+}
+
+/**
+ * A render that failed, as the library's poll sees it (CP5-WG (c)).
+ *
+ * A job that spends its three attempts (or whose outputs never verify) ends
+ * 'failed' and REMOVES its 'processing' artwork row (render-jobs.ts
+ * terminalFailureStatements: "replay is the retry"). The render job row stays
+ * (it is not keyed to the artwork by FK, 0017), so the detail poll can tell
+ * "your upload failed, post it again" from "there is no such artwork" without
+ * a 'failed' artwork status, which 0012's CHECK does not allow.
+ *
+ * Only a job of THIS tenant, only while no artwork row exists, and never a job
+ * that ended because an admin deleted its artwork (`artwork_deleted`): that
+ * one is gone, not failed. The job's own error code (farm codes, lease
+ * expiry, unverified outputs) is not handed out; the one coarse reason is.
+ */
+export interface FailedArtwork {
+  artworkId: string;
+  reason: "render_failed";
+  status: "failed";
+}
+
+export async function getFailedArtwork(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  artworkId: string,
+): Promise<FailedArtwork | null> {
+  const job = await db
+    .prepare(
+      `SELECT 1 AS failed
+       FROM render_jobs
+       WHERE tenant_id = ?
+         AND artwork_id = ?
+         AND state = 'failed'
+         AND error <> 'artwork_deleted'
+         AND NOT EXISTS (
+           SELECT 1 FROM pod_artwork
+           WHERE pod_artwork.tenant_id = render_jobs.tenant_id
+             AND pod_artwork.artwork_id = render_jobs.artwork_id
+         )
+       LIMIT 1`,
+    )
+    .bind(principal.tenantId, artworkId)
+    .first();
+  return job === null ? null : { artworkId, reason: "render_failed", status: "failed" };
+}
+
+export type RenameArtworkResult =
+  | { artwork: ArtworkSummary; status: "ok" }
+  | { status: "not_found" };
+
+/**
+ * PATCH /v1/admin/pod/artwork/:id `{ label }` — the seller renames a motif.
+ *
+ * NO RESCREEN, deliberately: a label is the seller's internal name and no
+ * public answer carries it (the storefront's POD fields are print areas and
+ * preview paths only: pod-mappings.ts publicPodFields; the preview route
+ * selects the preview key and hash only: public-catalog.ts findPublicPreview).
+ * What screening reads of an artwork is its original's file name
+ * (screening.ts artworkFileNames), which a rename does not touch. Nothing a
+ * visitor sees changes, so `catalog_version` is not bumped either.
+ *
+ * Audited in the same batch; a row that vanished between the read and the
+ * write answers as one that never existed.
+ */
+export async function renameArtwork(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  artworkId: string,
+  label: string | null,
+  now: number,
+): Promise<RenameArtworkResult> {
+  const tenantId = principal.tenantId;
+  const before = await loadArtworkRow(db, tenantId, artworkId);
+  if (before === null) {
+    return { status: "not_found" };
+  }
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE pod_artwork
+         SET label = ?, updated_at = MAX(updated_at, ?)
+         WHERE tenant_id = ? AND artwork_id = ?`,
+      )
+      .bind(label, now, tenantId, artworkId),
+    auditStatement(db, principal, "pod.artwork.rename", artworkId, now, {
+      hadLabel: before.label !== null,
+      hasLabel: label !== null,
+    }),
+  ]);
+  if ((results[0]?.meta.changes ?? 0) === 0) {
+    return { status: "not_found" };
+  }
+  const row = await loadArtworkRow(db, tenantId, artworkId);
+  return row === null
+    ? { status: "not_found" }
+    : { artwork: toSummary(row, principal.userId), status: "ok" };
 }
 
 /**

@@ -566,7 +566,29 @@ async function sellerQuoteFor(
   set: readonly PodMapping[],
   vatRateBp: number,
 ): Promise<SellerQuote | null> {
-  const quote = await quoteSet(db, set, 1);
+  const routing = setRouting(set);
+  return routing === null
+    ? null
+    : sellerQuoteForChoice(
+        db,
+        { printerId: routing.printerId, sku: routing.sku, slots: routing.slots.map((slot) => slot.slot) },
+        vatRateBp,
+      );
+}
+
+/**
+ * THE seller quote of one printer + SKU + slots at quantity 1: Inköp (the
+ * production cost of one item, ex VAT) and the D41 floor over it. The ONE
+ * formula behind the mapping write's floor check, the product quote
+ * (sellerQuoteFor, through a mapping set's routing) and the studio's
+ * design-time quote (designQuote) — none of them prices any other way.
+ */
+async function sellerQuoteForChoice(
+  db: D1Database,
+  choice: { printerId: string; sku: string; slots: readonly PrintSlot[] },
+  vatRateBp: number,
+): Promise<SellerQuote | null> {
+  const quote = await quotePodCost(db, { ...choice, quantity: 1 });
   if (quote === null) {
     return null;
   }
@@ -617,6 +639,99 @@ export async function quoteForProduct(
   const set = setFor(groupByScope(active), variantId);
   const quote = set === undefined ? null : await sellerQuoteFor(db, set, product.vat_rate_bp);
   return quote === null ? { status: "not_quotable" } : { quote, status: "ok" };
+}
+
+// ── the studio's design-time quote (CP5-WG) ─────────────────────────────────
+
+export interface DesignQuoteInput {
+  printerId: string;
+  sku: string;
+  slots: PrintSlot[];
+}
+
+const DESIGN_QUOTE_PARAMS = ["printerId", "sku", "slots"] as const;
+
+/**
+ * `?printerId=&sku=&slots=front,back` — each parameter exactly once, nothing
+ * else. The same grammar as a mapping's body (parseCreateMappingInput): an id
+ * of 1–128 characters, a SKU key, 1–5 known slots with none twice.
+ */
+export function parseDesignQuoteQuery(params: URLSearchParams): DesignQuoteInput | null {
+  for (const key of new Set(params.keys())) {
+    if (!(DESIGN_QUOTE_PARAMS as readonly string[]).includes(key)) {
+      return null;
+    }
+  }
+  if (DESIGN_QUOTE_PARAMS.some((key) => params.getAll(key).length !== 1)) {
+    return null;
+  }
+  const printerId = parseId(params.get("printerId"));
+  const rawSku = params.get("sku");
+  const sku = rawSku !== null && SKU_PATTERN.test(rawSku) ? rawSku : null;
+  const rawSlots = (params.get("slots") ?? "").split(",");
+  if (printerId === null || sku === null || rawSlots.length > PRINT_SLOTS.length) {
+    return null;
+  }
+  const slots: PrintSlot[] = [];
+  for (const slot of rawSlots) {
+    if (!(PRINT_SLOTS as readonly string[]).includes(slot) || slots.includes(slot as PrintSlot)) {
+      return null;
+    }
+    slots.push(slot as PrintSlot);
+  }
+  return { printerId, sku, slots };
+}
+
+export type DesignQuoteResult =
+  | { quote: SellerQuote; status: "ok" }
+  | { code: "currency_mismatch" | "printer_unavailable" | "sku_unavailable" | "slot_not_printable" | "unpriced"; status: "refused" }
+  | { status: "not_found" };
+
+/**
+ * GET /v1/admin/pod/design-quote — the seller's ONE number (+ the floor) for
+ * a printer, SKU and slots chosen BEFORE any product or mapping exists (the
+ * studio, the mapping page before a save).
+ *
+ * The same checks, in the same order, as a mapping write (createMappingOnce)
+ * minus the artwork and the product: the printer must be one this shop may
+ * map to, the SKU in its catalogue, every slot printable on it; then the ONE
+ * formula (sellerQuoteForChoice); then the shop's currency against the
+ * printer's (a mapping compares the product's, which is the shop's). The
+ * refusal codes are the mapping's precise ones; the route masks `unpriced`
+ * and `currency_mismatch` exactly as it masks them on a mapping.
+ */
+export async function designQuote(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  input: DesignQuoteInput,
+): Promise<DesignQuoteResult> {
+  const tenant = await db
+    .prepare("SELECT default_currency, vat_rate_bp FROM tenants WHERE tenant_id = ? LIMIT 1")
+    .bind(principal.tenantId)
+    .first<{ default_currency: string; vat_rate_bp: number }>();
+  if (tenant === null) {
+    return { status: "not_found" };
+  }
+  const printer: Printer | null = await loadUsablePrinter(db, principal.tenantId, input.printerId);
+  if (printer === null) {
+    return { code: "printer_unavailable", status: "refused" };
+  }
+  if (printer.capabilities.skus[input.sku] === undefined) {
+    return { code: "sku_unavailable", status: "refused" };
+  }
+  for (const slot of input.slots) {
+    if (slotFrame(printer.capabilities, input.sku, slot) === null) {
+      return { code: "slot_not_printable", status: "refused" };
+    }
+  }
+  const quote = await sellerQuoteForChoice(db, input, tenant.vat_rate_bp);
+  if (quote === null) {
+    return { code: "unpriced", status: "refused" };
+  }
+  if (quote.currency !== tenant.default_currency) {
+    return { code: "currency_mismatch", status: "refused" };
+  }
+  return { quote, status: "ok" };
 }
 
 function auditStatement(

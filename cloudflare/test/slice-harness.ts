@@ -515,7 +515,7 @@ export async function uploadOriginal(
 /** POST /v1/admin/pod/artwork → 202 'processing' with a queued render job. */
 export async function createArtwork(world: SliceWorld, tenant: Tenant, objectId: string): Promise<string> {
   const body = await expectJson<{ artwork: { artworkId: string; status: string } }>(
-    await adminCall(world, tenant, "POST", "/v1/admin/pod/artwork", { objectId, profileId: PROFILE.profileId }),
+    await adminCall(world, tenant, "POST", "/v1/admin/pod/artwork", { objectId, profileId: PROFILE.profileId, rightsConfirmed: true }),
     202,
     "create artwork",
   );
