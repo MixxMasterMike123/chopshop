@@ -2,6 +2,35 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
+## CP5 — Admin (started 2026-10-03 on Mikael's "keep going … full autonomy")
+
+### 🚀 2026-10-03 ~23:15 — the admin Worker is ON STAGING and a real sign-in works — START HERE
+
+Sources of truth: `CP5_GAP_ANALYSIS.md` (page → route map, the units), `CP5_BRIEFS.md` (rules, D99–D103 on defaults, the contracts, the briefs), one `CP5_<unit>_REPORT.md` per builder.
+
+| What | Result |
+|---|---|
+| Deployed SHA | `63760063`, attested (`codex: PASS`, `fable: PASS`), deployed with plain `scripts/cf-deploy.sh staging` from a CLEAN CHECKOUT of that SHA (a git worktree in the session's scratchpad with copies of both `node_modules`), because builders were still writing in the main tree |
+| Migration `0046_order_fulfilment.sql` on staging | applied, 17 statements; bookmark BEFORE `000002b7-00000000-000050f9-004d934c541066b2a8a95f4672bdc8a3`; `/ready` answers 0046 |
+| API Worker | redeployed (the preview D57, `/v1/me`, `/v1/admin/shop`, the seller's orders, the admin origin trusted and canonical) |
+| Web Worker | version `4bbfa27a-8936-48af-8444-96cad076b069` (the preview's client and banner) |
+| **Admin Worker, first deploy** | `ddcc232a-0f4b-4638-85d0-45c31b8514ff`, `https://chopshop-admin-stg.kent-ee2.workers.dev` |
+| Smoke, by curl | `/login` 200 with the enforced CSP and `noindex`; `/_api/v1/me` signed out 401; a storefront route through the admin host 404; the four shops on the web host 200 |
+| **Smoke, a real browser** | sign-in as the platform user on the admin host → the session cookie is kept → `/_api/v1/me` 200 (`platform_admin`) → `/_api/v1/platform/tenants` 200 with the seven staging shops → the platform tree opens |
+
+**What that build shows:** the sign-in, forgot-password and reset-password pages are real; every other admin and platform page is a stand-in that prints its name. The pages come with the next deploy.
+
+**Codex on CP5 so far:** `33490f79` (D2), `f3329972` (WX), `b3aa5605` (WA+WB), `be9c6fc2` (W2), `b609ce4b`, `63760063` clean; `a6612e86` (FA) two findings: an upload could change shop midway (fixed `63760063`), the arrival's `?shopId=` outranked a later choice (fixed in unit FB's `ActiveShop.jsx`, lands with FB).
+
+**Built and waiting in the tree (uncommitted; they share `pages.jsx`, `vite.admin.config.js`, the dev API):** FF payments, FE settings and legal adoption, FC products. **Still running:** FB the shells and acting-as, FD orders and dashboard. `guard/allowlist.txt`: a page that loses its Firebase code makes its entry stale, and its old-build data module (`<page>Data.js`, Firebase on purpose) needs an entry: one out, one in, the size never grows.
+
+**Found on the way, open:**
+- Nothing writes `order_items.production_state` yet, so an order with a POD line cannot be marked shipped or ready for pickup by the seller (it waits for the printer's status signal, CP6).
+- A checkout opened while a shop was published can be paid after it is unpublished (older than the preview; recommended: re-check the shop at payment).
+- Not smoke-tested on staging yet: an upload through the admin proxy, the reset mail (no mail account on staging), the http→https redirect.
+
+**Not started:** Worker units WC (members), WD (settings PATCH), WE (order mails, 0047), WF (balance), WG/WH (studio server, 0048/0049), WI; page units FG (catalogue content), FH (users), FI/FJ/FK/FL (platform pages), FM (POD library and mapping), FN (studio).
+
 ## CP4 — Catalogue + storefront (GO 2026-09-28, started 2026-09-28)
 
 ### ▶ RESUMED 2026-10-03 17:30 — the six findings are fixed, the locale files are DEPLOYED, the pages are shot again — START HERE
