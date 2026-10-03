@@ -26,7 +26,7 @@ const skip = DatabaseSync === null && 'node:sqlite is unavailable on this Node b
 const rules = await loadWorkerRules();
 
 /** CP3 applied, the copy's objects written, the target state read: what a reviewer has before the plan. */
-async function setup({ patch = null, statusOf, manifestPatch = null, objectFilter = null } = {}) {
+async function setup({ patch = null, statusOf, manifestPatch = null, objectFilter = null, dbPatch = null } = {}) {
   const base = tmpDir('cfport-catalogue-');
   const bundleDir = path.join(base, 'bundle');
   await buildCatalogueBundle(bundleDir, { patch });
@@ -41,6 +41,7 @@ async function setup({ patch = null, statusOf, manifestPatch = null, objectFilte
   const manifestPath = path.join(base, 'copy-manifest.json');
   writeFileSync(manifestPath, JSON.stringify(manifest));
   insertCopiedObjects(db, objectFilter ? { ...manifest, entries: manifest.entries.filter(objectFilter) } : manifest);
+  if (dbPatch) dbPatch(db);
   const targetPath = readTarget(db, base, 'target');
   return { base, bundleDir, db, emailMapPath, manifest, manifestPath, targetPath };
 }
@@ -338,11 +339,40 @@ test('an image that was refused, missing or failed is left out and counted; the 
   }
 });
 
-test('an object copied for another use (another kind) is not named where the reader asks for a different kind', { skip }, async () => {
-  // The same file as a product image and as the shop's logo: one entry, first
-  // use product_image → product_media. The identity asks for shop_branding.
+test('the same file as a product image and as the shop\'s logo: two objects, each named where its kind is asked for', { skip }, async () => {
   const shared = img('plain-1.jpg');
   const s = await setup({
+    patch(schema) {
+      schema.shops['test-shop-a'].data.storeIdentity.logoUrl = shared;
+    },
+  });
+  try {
+    const entries = s.manifest.entries.filter((e) => e.shopId === 'test-shop-a' && e.sourceKey === sourceKey(shared));
+    assert.deepEqual(entries.map((e) => e.use), ['product_image', 'branding']);
+    const [media, branding] = entries.map((e) => e.objectId);
+    assert.notEqual(media, branding);
+    const result = await run(s);
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    assert.equal(result.planJson.report['test-shop-a']['branding_left_out:wrong_kind'], undefined);
+    s.db.exec(result.planText);
+    assert.equal(JSON.parse(one(s.db, "SELECT store_identity_json AS j FROM tenant_settings WHERE tenant_id = 'test-shop-a'").j).logoObjectId, branding);
+    assert.equal(one(s.db, "SELECT COUNT(*) AS n FROM product_images WHERE product_id = 'p-plain' AND object_id = ?", media).n, 1);
+    assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM product_images WHERE object_id = ?', branding).n, 0);
+    const checks = runChecks({ actualState: readActual(s.db, s.base), bundleVerified: true, planJson: result.planJson, rules });
+    assert.deepEqual(checks.filter((c) => !c.ok && !c.name.startsWith('public')).map((c) => c.name), []);
+  } finally {
+    rmDir(s.base);
+  }
+});
+
+test('an object that exists only under another kind is not named where the reader asks for a different kind', { skip }, async () => {
+  // The logo's file is in the manifest as a product image only (a manifest of
+  // before the logo named it): the identity asks for shop_branding.
+  const shared = img('plain-1.jpg');
+  const s = await setup({
+    manifestPatch(manifest) {
+      manifest.entries = manifest.entries.filter((e) => !(e.sourceKey === sourceKey(shared) && e.use === 'branding'));
+    },
     patch(schema) {
       schema.shops['test-shop-a'].data.storeIdentity.logoUrl = shared;
     },
@@ -430,6 +460,96 @@ test('verify fails when a row is missing, an object was removed, or an identity 
     assert.equal(failed.some((n) => n.startsWith('public test-shop-a')), false);
   } finally {
     rmDir(s.base);
+  }
+});
+
+/** The plan applied, and the verifier over what the target then holds. */
+async function applied(options) {
+  const s = await setup(options);
+  const result = await run(s);
+  assert.equal(result.ok, true, JSON.stringify(result.problems));
+  s.db.exec(result.planText);
+  const verify = () => runChecks({ actualState: readActual(s.db, s.base), bundleVerified: true, planJson: result.planJson, rules });
+  const failed = () => verify().filter((c) => !c.ok).map((c) => c.name);
+  return { failed, result, s, verify };
+}
+
+test('verify: a product the screening blocked is not expected in the projection; one still pending is', { skip }, async () => {
+  const { failed, s, verify } = await applied();
+  try {
+    assert.deepEqual(failed(), []);
+    s.db.exec("UPDATE product_screening SET status = 'blocked' WHERE product_id = 'p-plain';");
+    const checks = verify();
+    assert.deepEqual(checks.filter((c) => !c.ok).map((c) => c.name), []);
+    assert.ok(checks.some((c) => c.name.startsWith('public test-shop-a') && c.note.includes('1 blocked by the screening')));
+    assert.match(checks.find((c) => c.name.startsWith('public total')).expected, /blocked by the screening 1/);
+    // Blocked AND still shown would be the Worker's predicate failing: not excused.
+    s.db.exec("UPDATE product_screening SET status = 'pending' WHERE product_id = 'p-plain';");
+    assert.ok(failed().some((n) => n.startsWith('public test-shop-a')), 'a pending product is the re-screen not run to its end');
+  } finally {
+    rmDir(s.base);
+  }
+});
+
+test('verify: a product the shop published before the import is not the plan\'s to answer for', { skip }, async () => {
+  const { failed, result, s } = await applied();
+  try {
+    assert.deepEqual(failed(), []);
+    // The same shop with one more published product of its own, and the counts the plan saw before raised by it.
+    s.db.exec(`INSERT INTO products (${all(s.db, "SELECT name FROM pragma_table_info('products')").map((r) => r.name).join(', ')})
+      SELECT ${all(s.db, "SELECT name FROM pragma_table_info('products')").map((r) => (r.name === 'product_id' ? "'p-before'" : r.name === 'sku' ? "'BEFORE-1'" : r.name === 'handle' ? "'before_BEFORE-1'" : r.name)).join(', ')} FROM products WHERE product_id = 'p-plain';`);
+    s.db.exec(`INSERT INTO product_publications (${all(s.db, "SELECT name FROM pragma_table_info('product_publications')").map((r) => r.name).join(', ')})
+      SELECT ${all(s.db, "SELECT name FROM pragma_table_info('product_publications')").map((r) => (r.name === 'product_id' ? "'p-before'" : r.name)).join(', ')} FROM product_publications WHERE product_id = 'p-plain';`);
+    const planJson = JSON.parse(JSON.stringify(result.planJson));
+    const before = (planJson.expected.shops['test-shop-a'].countsBefore ??= {});
+    before.products = (before.products ?? 0) + 1;
+    before.publications = (before.publications ?? 0) + 1;
+    const actualState = readActual(s.db, s.base);
+    assert.ok(actualState.publicIfLive['test-shop-a'].includes('p-before'), 'the earlier product is public');
+    assert.deepEqual(runChecks({ actualState, bundleVerified: true, planJson, rules }).filter((c) => !c.ok).map((c) => c.name), []);
+  } finally {
+    rmDir(s.base);
+  }
+});
+
+test('verify: a menu the plan wrote is compared; a branding update its guard skipped fails on the menu alone', { skip }, async () => {
+  // The source names a menu and no image, and the target's identity holds no
+  // menu: the menu is all the branding update writes.
+  const menuOnly = {
+    dbPatch(db) {
+      db.exec("UPDATE tenant_settings SET store_identity_json = json_remove(store_identity_json, '$.menu') WHERE tenant_id = 'test-shop-a';");
+    },
+    patch(schema) {
+      const identity = schema.shops['test-shop-a'].data.storeIdentity;
+      for (const key of ['logoUrl', 'heroImageUrl', 'faviconUrl', 'emailLogoUrl', 'gallery']) delete identity[key];
+    },
+  };
+  const { failed, result, s } = await applied(menuOnly);
+  try {
+    const want = result.planJson.expected.branding['test-shop-a'];
+    assert.equal(want.menuWritten, true);
+    assert.deepEqual(want.menu.map((item) => item.label), ['Alla produkter']);
+    assert.deepEqual(want.images, {});
+    assert.deepEqual(failed(), []);
+  } finally {
+    rmDir(s.base);
+  }
+  // The same plan against a target an admin wrote to after the target state was read: the UPDATE changes nothing.
+  const t = await setup(menuOnly);
+  try {
+    const result = await run(t);
+    t.db.exec("UPDATE tenant_settings SET updated_at = '2026-09-28T12:00:00.000Z', updated_by = 'someone' WHERE tenant_id = 'test-shop-a';");
+    t.db.exec(result.planText);
+    const failedNames = runChecks({ actualState: readActual(t.db, t.base), bundleVerified: true, planJson: result.planJson, rules }).filter((c) => !c.ok).map((c) => c.name);
+    assert.deepEqual(failedNames, ['branding test-shop-a: the identity holds the menu the plan wrote']);
+    // A plan of before the menu was recorded cannot be verified on it.
+    const old = JSON.parse(JSON.stringify(result.planJson));
+    delete old.expected.branding['test-shop-a'].menu;
+    const rebuilt = runChecks({ actualState: readActual(t.db, t.base), bundleVerified: true, planJson: old, rules }).find((c) => c.name.includes('holds the menu'));
+    assert.equal(rebuilt.ok, false);
+    assert.match(rebuilt.note, /rebuild the plan/);
+  } finally {
+    rmDir(t.base);
   }
 });
 

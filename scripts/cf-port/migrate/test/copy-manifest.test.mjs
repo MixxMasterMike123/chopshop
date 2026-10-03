@@ -153,12 +153,32 @@ test('lookups: by shop and key, by address, copied only', () => {
   upsertEntry(m, copied());
   upsertEntry(m, refused({ shopId: 'shop-b' }));
   const index = indexCopyManifest(m);
-  assert.equal(lookupEntry(index, 'shop-a', sourceKeyOf(ADDRESS)).status, 'copied');
-  assert.equal(lookupAddress(index, 'shop-b', ADDRESS).status, 'refused');
-  assert.equal(lookupCopied(index, 'shop-b', ADDRESS), null);
-  assert.equal(lookupCopied(index, 'shop-a', ADDRESS).objectId, copied().objectId);
-  assert.equal(lookupAddress(index, 'shop-c', ADDRESS), null);
-  assert.equal(lookupAddress(index, 'shop-a', `${ADDRESS}x`), null);
+  assert.equal(lookupEntry(index, 'shop-a', sourceKeyOf(ADDRESS), 'product_media').status, 'copied');
+  assert.equal(lookupAddress(index, 'shop-b', ADDRESS, 'product_media').status, 'refused');
+  assert.equal(lookupCopied(index, 'shop-b', ADDRESS, 'product_media'), null);
+  assert.equal(lookupCopied(index, 'shop-a', ADDRESS, 'product_media').objectId, copied().objectId);
+  assert.equal(lookupAddress(index, 'shop-c', ADDRESS, 'product_media'), null);
+  assert.equal(lookupAddress(index, 'shop-a', `${ADDRESS}x`, 'product_media'), null);
+  assert.equal(lookupAddress(index, 'shop-a', ADDRESS, 'shop_branding'), null, 'a product image is not a branding image');
+  assert.throws(() => lookupAddress(index, 'shop-a', ADDRESS), /unknown kind/);
+});
+
+test('one file under two kinds: two entries, each found by its kind; two uses of one kind stay one entry', () => {
+  const m = manifest();
+  const branding = copied({ objectId: '99999999-2222-4333-8444-555555555555', use: 'branding' });
+  upsertEntry(m, copied());
+  upsertEntry(m, branding);
+  assert.equal(m.entries.length, 2);
+  assert.deepEqual(copyManifestProblems(m), []);
+  const index = indexCopyManifest(m);
+  assert.equal(lookupCopied(index, 'shop-a', ADDRESS, 'product_media').objectId, copied().objectId);
+  assert.equal(lookupCopied(index, 'shop-a', ADDRESS, 'shop_branding').objectId, branding.objectId);
+  // A collection cover is product media too: it replaces the product image's entry.
+  upsertEntry(m, copied({ use: 'collection_cover' }));
+  assert.equal(m.entries.length, 2);
+  const dup = manifest();
+  dup.entries.push(copied(), copied({ use: 'collection_cover' }));
+  assert.ok(copyManifestProblems(dup).some((problem) => problem.includes('duplicate')));
 });
 
 test('write and read: atomic, round-trips, refuses an invalid manifest either way', () => {

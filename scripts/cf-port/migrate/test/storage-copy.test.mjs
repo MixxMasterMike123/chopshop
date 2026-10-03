@@ -32,7 +32,7 @@ function scratch() {
  * favicon (not of the source's storage), a page with an image inside its
  * HTML. shop-b: one product image.
  */
-async function world({ sourceOverrides = {}, apiOptions = {} } = {}) {
+async function world({ sourceOverrides = {}, apiOptions = {}, identityOfShopA = null } = {}) {
   const files = {
     [`${BUCKET_PATH}/a-main.png`]: { body: png('main'), type: 'image/png' },
     [`${BUCKET_PATH}/a-gallery.jpg`]: { body: jpeg('gallery'), type: 'image/jpeg' },
@@ -74,7 +74,7 @@ async function world({ sourceOverrides = {}, apiOptions = {} } = {}) {
       { data: { b2cImageUrl: at('b-main.png'), shopId: 'shop-b' }, id: 'p-b' },
     ],
     shops: [
-      { data: { storeIdentity: { faviconUrl: '/images/favicon.ico', logoUrl: at('a-logo.svg') } }, id: 'shop-a' },
+      { data: { storeIdentity: identityOfShopA ? identityOfShopA(at) : { faviconUrl: '/images/favicon.ico', logoUrl: at('a-logo.svg') } }, id: 'shop-a' },
       { data: { storeIdentity: {} }, id: 'shop-b' },
     ],
   });
@@ -212,6 +212,28 @@ test('copies through reserve and upload under acting-as; refusals, missing and o
     assert.ok(!text.includes('127.0.0.1:' + new URL(w.source.origin).port) && !text.includes('a-main'));
     assert.ok(!w.lines.join('\n').includes(new URL(w.source.origin).host));
     assert.ok(!w.lines.join('\n').includes(w.api.state.platformUser.password));
+  } finally {
+    await w.close();
+  }
+});
+
+test('a file that is a product image and the shop\'s logo is copied twice: one object of each kind', async () => {
+  const w = await world({ identityOfShopA: (at) => ({ logoUrl: at('a-main.png') }) });
+  try {
+    const result = await runStorageCopy(w.args, w.deps);
+    assert.equal(result.exitCode, 0);
+    const manifestPath = path.join(w.args.out, COPY_MANIFEST_FILE);
+    const both = readCopyManifest(manifestPath).entries.filter((entry) => entry.shopId === 'shop-a' && entry.sourceKey === sourceKeyOf(w.at('a-main.png')));
+    assert.deepEqual(both.map((entry) => [entry.use, entry.status]), [['product_image', 'copied'], ['branding', 'copied']]);
+    assert.notEqual(both[0].objectId, both[1].objectId);
+    assert.deepEqual(both.map((entry) => w.api.state.objects.get(entry.objectId).kind), ['product_media', 'shop_branding']);
+    assert.deepEqual(both.map((entry) => w.api.state.objects.get(entry.objectId).objectKey), both.map(objectKeyOf));
+
+    // A second run finds both copied and reserves nothing.
+    const objects = w.api.state.objects.size;
+    assert.equal((await runStorageCopy(w.args, w.deps)).exitCode, 0);
+    assert.equal(w.api.state.objects.size, objects);
+    assert.deepEqual(readCopyManifest(manifestPath).entries.filter((entry) => entry.sourceKey === both[0].sourceKey).map((entry) => entry.objectId), both.map((entry) => entry.objectId));
   } finally {
     await w.close();
   }

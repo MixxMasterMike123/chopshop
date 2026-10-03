@@ -308,7 +308,7 @@ export async function startFakeStagingApi(options = {}) {
       if (body.length > 0) return invalid();
       tenant.published = action === 'publish';
       state.audit.push({ action: `tenant.${action}`, reason: null, tenantId });
-      return send(200, detail());
+      return reply(200, detail());
     }
 
     // ── admin legal (src/routes/legal-admin.ts) and settings (src/routes/admin-settings.ts) ──
@@ -331,7 +331,8 @@ export async function startFakeStagingApi(options = {}) {
     }
     if (url.pathname === '/v1/admin/settings') {
       const principal = adminPrincipal(method === 'PUT');
-      if (principal === null || method !== 'PUT') return notFound();
+      if (principal === null || (method !== 'PUT' && method !== 'GET')) return notFound();
+      if (method === 'GET') return send(200, { settings: state.tenants.get(principal.tenantId).settings });
       const input = parseJson();
       const keys = input && typeof input === 'object' ? Object.keys(input) : [];
       if (keys.length === 0 || keys.some((key) => !['returnAddress', 'vatRegistered', 'vatNumber', 'sellerType', 'storeIdentity'].includes(key))) {

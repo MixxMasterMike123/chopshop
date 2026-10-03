@@ -64,6 +64,28 @@ test('sourceAddressesInHtml: attributes, srcset, url(), raw text, de-duplicated,
   assert.deepEqual(sourceAddressesInHtml(null), []);
 });
 
+test('collectCopySources: an address a store identity and a product both name is two sources, one per kind of object', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'copy-sources-'));
+  try {
+    const both = `${SRC}/both.png`;
+    writeTestBundle(dir, {
+      collections: [{ data: { imageUrl: both, shopId: 's1' }, id: 'c1' }],
+      products: [{ data: { b2cImageUrl: both, shopId: 's1' }, id: 'p1' }],
+      shops: [{ data: { storeIdentity: { gallery: [{ imageUrl: both }], logoUrl: both } }, id: 's1' }],
+    });
+    const { sources } = collectCopySources(dir);
+    assert.deepEqual(
+      sources.map((source) => ({ references: source.references, sourceKey: source.sourceKey, use: source.use, uses: source.uses })),
+      [
+        { references: 2, sourceKey: sourceKeyOf(both), use: 'product_image', uses: ['product_image', 'collection_cover'] },
+        { references: 2, sourceKey: sourceKeyOf(both), use: 'branding', uses: ['branding'] },
+      ],
+    );
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
 test('collectCopySources: fields per use, one source per (shop, address), counts', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'copy-sources-'));
   try {

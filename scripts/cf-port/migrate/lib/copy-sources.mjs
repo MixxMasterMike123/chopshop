@@ -19,10 +19,13 @@
  * attribute or url() text, entities undecoded; `fetchAddressOf` decodes the
  * few entities an address can carry before it is fetched.
  *
- * One source = one (shopId, address); `use` is the first use it was found
- * under in the order of USES, `uses` all of them. An address that is not of the
- * source's storage (another host, a root path, a data: URI) is never copied and
- * only counted.
+ * One source = one (shopId, address, kind of object); `use` is the first use
+ * of that kind it was found under in the order of USES, `uses` all of that
+ * kind. An address a store identity AND a product, collection or page name is
+ * two sources and becomes two objects: the Worker reads a branding image only
+ * from a `shop_branding` object. An address that is not of the source's
+ * storage (another host, a root path, a data: URI) is never copied and only
+ * counted.
  *
  * Also here: `loadWorkerModule`, which imports one self-contained module of
  * cloudflare/src (no imports of its own, types only) under plain Node, so the
@@ -34,7 +37,7 @@ import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import path from 'node:path';
 import { readCollection } from './bundle-reader.mjs';
-import { sourceKeyOf, USES } from './copy-manifest.mjs';
+import { kindOfUse, sourceKeyOf, USES } from './copy-manifest.mjs';
 import { REPO_ROOT } from './api-session.mjs';
 
 /**
@@ -147,7 +150,8 @@ function bump(map, key, by = 1) {
 /**
  * Reads the bundle and answers:
  *   sources  [{ shopId, address, sourceKey, use, uses, references }], sorted by
- *            shop, then use (USES order), then sourceKey; one per (shop, address)
+ *            shop, then use (USES order), then sourceKey; one per
+ *            (shop, address, kind)
  *   counts   { references: {shop: {use: n}}, sourceReferences: {…},
  *              notSourceStorage: {shop: {use: n}}, notFetchable: {…},
  *              rowsWithoutShop: n, pageAttachments: n }
@@ -176,7 +180,7 @@ export function collectCopySources(bundleDir, { shop = null } = {}) {
     }
     counts.sourceReferences[shopId] ??= {};
     bump(counts.sourceReferences[shopId], use);
-    const key = `${shopId}\n${address}`;
+    const key = `${shopId}\n${kindOfUse(use)}\n${address}`;
     const existing = byKey[key];
     if (existing) {
       existing.references += 1;

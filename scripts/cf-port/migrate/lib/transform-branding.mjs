@@ -190,7 +190,9 @@ export function transformBranding({ ctx, settings, shops, tenants }) {
     sections.tenant_settings.push(
       carriedRow('tenant_settings', `${tenantId}#catalogue-branding`, statement, rowContentHash('tenant_settings', columns, { ...values, tenant_id: tenantId })),
     );
-    expected[tenantId] = { images: refMap, menuWritten };
+    // The menu as the Worker's own parser stored it: what verify-catalogue.mjs compares.
+    const menu = menuWritten ? JSON.parse(parsed.input.storeIdentityJson).menu ?? null : null;
+    expected[tenantId] = { images: refMap, menu, menuWritten };
     for (const path of Object.keys(written)) count(report, tenantId, `branding_written:${path.startsWith('gallery[') ? 'gallery' : path}`);
   }
   return { expected, sections };

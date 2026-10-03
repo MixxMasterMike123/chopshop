@@ -267,6 +267,13 @@ function activeWith(object, sha256, sizeBytes) {
 
 // ── one file ────────────────────────────────────────────────────────────────
 
+// A product-media source keeps the key the journal has always had; a branding
+// source of the same address is another object and has its own.
+function pendingKeyOf(source) {
+  const kind = kindOfUse(source.use);
+  return `${source.shopId}\n${source.sourceKey}${kind === 'product_media' ? '' : `\n${kind}`}`;
+}
+
 function entryOf(source, fields) {
   return {
     contentType: null,
@@ -289,7 +296,7 @@ function entryOf(source, fields) {
  */
 async function copyOne(source, context) {
   const { fetchSourceImpl, pending, pendingFile, session, sleep, sniff, sameBytes } = context;
-  const pendingKey = `${source.shopId}\n${source.sourceKey}`;
+  const pendingKey = pendingKeyOf(source);
   if (!isFetchable(source.address)) return entryOf(source, { reason: 'not_fetchable' });
 
   const fetched = await fetchSource(fetchSourceImpl, source.address, sleep);
@@ -383,10 +390,10 @@ async function copyOne(source, context) {
 // ── the run ─────────────────────────────────────────────────────────────────
 
 function countsOf(entries, sources) {
-  const inRun = new Set(sources.map((source) => `${source.shopId}\n${source.sourceKey}`));
+  const inRun = new Set(sources.map((source) => `${source.shopId}\n${source.sourceKey}\n${kindOfUse(source.use)}`));
   const counts = {};
   for (const entry of entries) {
-    if (!inRun.has(`${entry.shopId}\n${entry.sourceKey}`)) continue;
+    if (!inRun.has(`${entry.shopId}\n${entry.sourceKey}\n${kindOfUse(entry.use)}`)) continue;
     counts[entry.shopId] ??= {};
     counts[entry.shopId][entry.use] ??= {};
     counts[entry.shopId][entry.use][entry.status] = (counts[entry.shopId][entry.use][entry.status] ?? 0) + 1;
@@ -451,7 +458,7 @@ export async function runStorageCopy(args, deps) {
     }
   }
   const index = manifest === null ? new Map() : indexCopyManifest(manifest);
-  const todo = allSources.filter((source) => lookupEntry(index, source.shopId, source.sourceKey)?.status !== 'copied');
+  const todo = allSources.filter((source) => lookupEntry(index, source.shopId, source.sourceKey, kindOfUse(source.use))?.status !== 'copied');
   const alreadyCopied = allSources.length - todo.length;
   const selected = args.limit === null ? todo : todo.slice(0, args.limit);
 
@@ -534,7 +541,7 @@ export async function runStorageCopy(args, deps) {
     if (entry.status === 'copied') {
       sameBytes[`${entry.shopId}\n${kindOfUse(entry.use)}\n${entry.sha256}`] = entry;
     }
-    const pendingKey = `${source.shopId}\n${source.sourceKey}`;
+    const pendingKey = pendingKeyOf(source);
     if (pending[pendingKey] && (entry.status === 'copied' || entry.status === 'refused')) {
       delete pending[pendingKey];
       writePending(pendingFile, pending);

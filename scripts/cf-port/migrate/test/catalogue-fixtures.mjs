@@ -59,7 +59,7 @@ export function inventCopyManifest(bundleDir, { env = 'staging', statusOf = () =
     const copied = status === 'copied';
     return {
       contentType: copied ? contentTypeOf(source) : null,
-      objectId: copied ? `obj-${sha(`${source.shopId}\n${source.sourceKey}`).slice(0, 24)}` : null,
+      objectId: copied ? `obj-${sha(`${source.shopId}\n${source.sourceKey}\n${kindOfUse(source.use)}`).slice(0, 24)}` : null,
       reason: copied ? null : status === 'refused' ? 'type_not_admitted' : status === 'missing' ? 'http_404' : 'timeout',
       sha256: copied ? sha(`bytes:${source.sourceKey}`) : null,
       shopId: source.shopId,

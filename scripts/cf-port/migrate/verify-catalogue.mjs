@@ -21,15 +21,20 @@
  *   counts       rows per shop and table = before the apply + the plan's
  *   ids          every product id of the plan is in its shop
  *   handle       no product of the plan's shops without its handle
- *   public       the public projection per shop, as it will be once the shop
- *                is live (the shop gate lifted), = the plan's published,
- *                non-POD products — for the four shops 199, the source's 205
- *                less its 6 POD products (D83); and the projection NOW equals
- *                it for every live shop and is empty for a shop not yet live
+ *   public       the public projection per shop OF THE PLAN'S PRODUCTS (a
+ *                product the shop held before the import is not the plan's
+ *                to answer for), as it will be once the shop is live (the
+ *                shop gate lifted), = the plan's published, non-POD products
+ *                less those the screening blocked — for the four shops 199,
+ *                the source's 205 less its 6 POD products (D83); and the
+ *                projection NOW equals it for every live shop and is empty
+ *                for a shop not yet live. A product still PENDING is not
+ *                excused: the re-screen route has not been run to its end
  *   objects      no image row, cover or page image without its object, or with
  *                an object that is not the shop's own active public product
  *                media; every image id of a store identity is the shop's own
- *                active public branding object and the one the plan wrote
+ *                active public branding object and the one the plan wrote;
+ *                a menu the plan wrote is the menu the identity holds
  *   screening    no imported product is approved; the count still waiting
  *                for the re-screen route is printed
  *   storage      no text of a product or page names the source's storage
@@ -86,6 +91,7 @@ export function actualQueries(rules) {
     },
     { file: 'tenant_settings', sql: 'SELECT tenant_id, store_identity_json FROM tenant_settings ORDER BY tenant_id;' },
     { file: 'branding_objects', sql: "SELECT object_id, tenant_id, bucket, kind, status FROM stored_objects WHERE kind = 'shop_branding' ORDER BY object_id;" },
+    { file: 'screening_blocked', sql: "SELECT tenant_id, product_id FROM product_screening WHERE status = 'blocked' ORDER BY tenant_id, product_id;" },
     { file: 'screening', sql: "SELECT tenant_id, status, decided_by, COUNT(*) AS n, SUM(CASE WHEN terms_version IS NULL THEN 1 ELSE 0 END) AS unscreened FROM product_screening GROUP BY tenant_id, status, decided_by ORDER BY tenant_id, status, decided_by;" },
     {
       file: 'storage_texts',
@@ -110,7 +116,7 @@ export function buildActualState(dir) {
     }
     return out;
   };
-  const state = { badObjects: {}, brandingObjects: {}, counts: countsOf([...rows('counts'), ...rows('counts_2')]), handles: {}, importRuns: {}, products: {}, publicIfLive: byTenant('public_if_live', 'product_id'), publicNow: byTenant('public_now', 'product_id'), screening: [], settings: {}, storageTexts: {}, tenants: {} };
+  const state = { badObjects: {}, brandingObjects: {}, counts: countsOf([...rows('counts'), ...rows('counts_2')]), handles: {}, importRuns: {}, products: {}, publicIfLive: byTenant('public_if_live', 'product_id'), publicNow: byTenant('public_now', 'product_id'), screening: [], screeningBlocked: byTenant('screening_blocked', 'product_id'), settings: {}, storageTexts: {}, tenants: {} };
   for (const r of rows('import_runs')) {
     need(text(r.run_id) && text(r.status), 'import_runs');
     state.importRuns[r.run_id] = r.status;
@@ -153,6 +159,19 @@ function record(checks, name, ok, expected, actual, note = '') {
 
 const sameList = (a, b) => JSON.stringify([...(a ?? [])].sort()) === JSON.stringify([...(b ?? [])].sort());
 
+/** The products of a projection that are the plan's own. */
+function ofThePlan(productIds, want) {
+  const own = new Set(want.productIds);
+  return (productIds ?? []).filter((id) => own.has(id));
+}
+
+/** What the plan's shop must show once live: its published non-POD products less those the screening blocked. */
+function expectedPublic(actual, shop, want) {
+  const blocked = new Set(actual.screeningBlocked?.[shop] ?? []);
+  const wantPublic = want.publicIfLive.filter((id) => !blocked.has(id));
+  return { blocked: want.publicIfLive.length - wantPublic.length, wantPublic };
+}
+
 /** Pure: every input passed in. */
 export function runChecks({ actualState: actual, bundleVerified, planJson, rules }) {
   const checks = [];
@@ -164,6 +183,8 @@ export function runChecks({ actualState: actual, bundleVerified, planJson, rules
 
   record(checks, 'run: the plan\'s import run is completed', actual.importRuns[expected.runId] === 'completed', 'completed', actual.importRuns[expected.runId] ?? '(absent)');
 
+  let actualIfLiveTotal = 0;
+  let blockedTotal = 0;
   for (const [shop, want] of Object.entries(expected.shops)) {
     const differing = COUNTED.filter((table) => (actual.counts[shop]?.[table] ?? 0) !== (want.countsBefore?.[table] ?? 0) + (want[PLAN_KEY[table]] ?? 0));
     record(checks, `counts ${shop}: rows per table = before + plan`, differing.length === 0,
@@ -173,13 +194,16 @@ export function runChecks({ actualState: actual, bundleVerified, planJson, rules
     const missing = want.productIds.filter((id) => !present.has(id)).length;
     record(checks, `ids ${shop}: every product id of the plan is present`, missing === 0, `${want.productIds.length} present`, `${missing} missing`);
     record(checks, `handle ${shop}: no product without its handle`, (actual.handles[shop] ?? 0) === 0, 0, actual.handles[shop] ?? 0);
-    const ifLive = actual.publicIfLive[shop] ?? [];
-    record(checks, `public ${shop}: the projection once the shop is live = the plan's published non-POD products`, sameList(ifLive, want.publicIfLive), want.publicIfLive.length, ifLive.length,
-      `the source shows ${want.sourcePublic}; ${want.sourcePublic - want.publicIfLive.length} of them are POD products without a mapping (D83)`);
+    const { blocked, wantPublic } = expectedPublic(actual, shop, want);
+    blockedTotal += blocked;
+    const ifLive = ofThePlan(actual.publicIfLive[shop], want);
+    actualIfLiveTotal += ifLive.length;
+    record(checks, `public ${shop}: the projection once the shop is live = the plan's published non-POD products`, sameList(ifLive, wantPublic), wantPublic.length, ifLive.length,
+      `the source shows ${want.sourcePublic}; ${want.sourcePublic - want.publicIfLive.length} of them are POD products without a mapping (D83)${blocked > 0 ? `; ${blocked} blocked by the screening` : ''}`);
     const tenant = actual.tenants[shop];
     const live = tenant?.status === 'active' && tenant?.published === true;
-    const now = actual.publicNow[shop] ?? [];
-    record(checks, `public ${shop}: the projection now (${live ? 'the shop is live' : 'the shop is not live yet'})`, live ? sameList(now, want.publicIfLive) : now.length === 0, live ? want.publicIfLive.length : 0, now.length,
+    const now = ofThePlan(actual.publicNow[shop], want);
+    record(checks, `public ${shop}: the projection now (${live ? 'the shop is live' : 'the shop is not live yet'})`, live ? sameList(now, wantPublic) : now.length === 0, live ? wantPublic.length : 0, now.length,
       live ? '' : 'published for the review by staging-legal.mjs --publish-for-review');
     const bad = actual.badObjects[shop] ?? {};
     record(checks, `objects ${shop}: no image, cover or page image without the shop's own active public object`, Object.values(bad).every((n) => n === 0), 0, bad);
@@ -190,9 +214,8 @@ export function runChecks({ actualState: actual, bundleVerified, planJson, rules
   }
 
   // The totals of the manifest's checklist 12 (205 in the source, 199 on Cloudflare).
-  const actualIfLiveTotal = Object.keys(expected.shops).reduce((n, shop) => n + (actual.publicIfLive[shop]?.length ?? 0), 0);
-  record(checks, 'public total: the projection once live = the source\'s less its POD products', actualIfLiveTotal === expected.publicIfLiveTotal && expected.sourcePublicTotal - expected.publicIfLiveTotal === expected.podPublishedTotal,
-    `${expected.publicIfLiveTotal} (source ${expected.sourcePublicTotal} − POD ${expected.podPublishedTotal})`, actualIfLiveTotal);
+  record(checks, 'public total: the projection once live = the source\'s less its POD products', actualIfLiveTotal === expected.publicIfLiveTotal - blockedTotal && expected.sourcePublicTotal - expected.publicIfLiveTotal === expected.podPublishedTotal,
+    `${expected.publicIfLiveTotal - blockedTotal} (source ${expected.sourcePublicTotal} − POD ${expected.podPublishedTotal}${blockedTotal > 0 ? ` − blocked by the screening ${blockedTotal}` : ''})`, actualIfLiveTotal);
 
   // The store identities.
   for (const [shop, want] of Object.entries(expected.branding ?? {})) {
@@ -210,6 +233,14 @@ export function runChecks({ actualState: actual, bundleVerified, planJson, rules
     }).length;
     record(checks, `branding ${shop}: the identity names the plan's images, each the shop's own active branding object`, JSON.stringify(got) === JSON.stringify(want.images) && notOwn === 0,
       `${Object.keys(want.images).length} image id(s) as planned`, `${Object.keys(got).length} image id(s), ${notOwn} not the shop's own active branding object, ${JSON.stringify(got) === JSON.stringify(want.images) ? 'equal' : 'DIFFERENT'} to the plan`);
+    if (want.menuWritten === true) {
+      // The images and catalog_version cannot tell: a branding UPDATE its guard skipped leaves both as they were.
+      const planned = Array.isArray(want.menu);
+      const same = planned && JSON.stringify(identity?.menu ?? null) === JSON.stringify(want.menu);
+      record(checks, `branding ${shop}: the identity holds the menu the plan wrote`, same, planned ? `${want.menu.length} menu item(s) as planned` : 'the menu in plan.json',
+        !planned ? 'plan.json records no menu' : same ? 'equal to the plan' : Array.isArray(identity?.menu) ? 'DIFFERENT to the plan' : 'no menu',
+        planned ? '' : 'rebuild the plan with import-catalogue.mjs');
+    }
   }
 
   const approvedByImport = actual.screening.filter((row) => row.decidedBy === 'import' && row.status === 'approved').reduce((n, row) => n + row.n, 0);

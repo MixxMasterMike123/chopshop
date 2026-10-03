@@ -165,7 +165,7 @@ test('archives the terms text, completes the readiness, adopts the pages as the 
     assert.equal(w.api.state.tenants.get('shop-b').settings.returnAddress, 'Test Returns 1, 111 11 Teststad');
 
     // The settings PUT is an acting-as request; the grant reason names the review.
-    const settingsPuts = w.api.state.log.filter((entry) => entry.path === '/v1/admin/settings');
+    const settingsPuts = w.api.state.log.filter((entry) => entry.path === '/v1/admin/settings' && entry.method === 'PUT');
     assert.equal(settingsPuts.length, 2); // shop-a, shop-c
     assert.ok(settingsPuts.every((entry) => entry.shop !== null && entry.origin === w.api.origin));
     const grants = w.api.state.audit.filter((a) => a.action === 'acting_as.granted');
@@ -221,6 +221,24 @@ test('without a review admin password nothing is adopted and the run says why', 
   }
 });
 
+test('a run that set the placeholder address and stopped before the adoption is carried on with the address staging holds', async () => {
+  const w = await world();
+  try {
+    const stopped = await runStagingLegal({ ...w.args, shop: 'shop-a' }, { ...w.deps, environment: {} });
+    assert.equal(stopped.exitCode, 1);
+    assert.equal(w.api.state.tenants.get('shop-a').settings.returnAddress, STAGING_RETURN_ADDRESS, 'the first run set the address');
+    assert.equal(w.api.state.acceptances.length, 0);
+
+    const result = await runStagingLegal({ ...w.args, shop: 'shop-a' }, w.deps);
+    assert.deepEqual(result.problems, []);
+    const adopted = w.api.state.acceptances.find((a) => a.tenantId === 'shop-a');
+    assert.ok(adopted.texts.angerratt.includes('platshållare'), 'the adopted page shows the address staging holds');
+    assert.ok(!Object.values(adopted.texts).some((text) => text.includes('⚠️')), 'no page says an answer is missing');
+  } finally {
+    await w.close();
+  }
+});
+
 test('an existing review admin with another password is reported, not worked around', async () => {
   const w = await world({
     users: [{ accountType: 'tenant_admin', email: reviewAdminEmail('shop-a'), id: 'old-reviewer', password: 'another-password-9' }],
@@ -270,6 +288,31 @@ test('--publish-for-review publishes exactly the shops unpublished in the source
     assert.equal(w.api.state.tenants.get('shop-c').published, true, 'a shop this step did not publish stays as it was');
     assert.equal(existsSync(file), false);
     await assert.rejects(runStagingLegal({ env: 'staging', out: w.args.out, unpublish: true, dryRun: false }, w.deps), /nothing was published/);
+  } finally {
+    await w.close();
+  }
+});
+
+test('a publish whose answer is lost is in the file all the same, and --unpublish-after-review hides the shop', async () => {
+  const w = await world();
+  try {
+    w.api.state.faults.push({ afterEffect: true, method: 'POST', path: /\/shop-a\/publish$/, status: 502, times: 1 });
+    const result = await runStagingLegal({ ...w.args, publish: true }, w.deps);
+    assert.equal(result.exitCode, 1);
+    assert.ok(result.problems.some((p) => p.includes('publish: shop-a HTTP 502')));
+    assert.equal(w.api.state.tenants.get('shop-a').published, true, 'the publish happened; only its answer was lost');
+    const file = path.join(w.args.out, PUBLISHED_FILE);
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).tenants, ['shop-a', 'shop-c']);
+
+    // The next run finds it published and keeps it listed.
+    const again = await runStagingLegal({ ...w.args, publish: true }, w.deps);
+    assert.equal(again.exitCode, 0);
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).tenants, ['shop-a', 'shop-c']);
+
+    const back = await runStagingLegal({ env: 'staging', out: w.args.out, unpublish: true, dryRun: false }, w.deps);
+    assert.equal(back.exitCode, 0);
+    assert.equal(w.api.state.tenants.get('shop-a').published, false);
+    assert.equal(w.api.state.tenants.get('shop-c').published, false);
   } finally {
     await w.close();
   }

@@ -55,7 +55,7 @@ import { insertStatement } from './sql.mjs';
 import { carriedRow, rowContentHash } from './plan.mjs';
 import { parseSourceTimestampMillis, clampForward } from './timestamps.mjs';
 import { KEEP_ADDRESSES, looksLikeEmail, resolveEmail } from './scrub.mjs';
-import { kindOfUse, lookupAddress } from './copy-manifest.mjs';
+import { KINDS, lookupAddress } from './copy-manifest.mjs';
 
 // ── shared by the four catalogue transforms ─────────────────────────────────
 
@@ -139,10 +139,12 @@ export function makeTextScrubber({ emailMap, scrubUnmapped }) {
 export function resolveImage(ctx, shopId, address, kind) {
   if (typeof address !== 'string' || address.trim().length === 0) return { status: 'empty' };
   if (!ctx.rules.isSourceStorageAddress(address)) return { status: 'not_source_storage' };
-  const entry = lookupAddress(ctx.index, shopId, address);
-  if (entry === null) return { status: 'not_in_manifest' };
+  const entry = lookupAddress(ctx.index, shopId, address, kind);
+  if (entry === null) {
+    const ofAnotherKind = KINDS.some((other) => other !== kind && lookupAddress(ctx.index, shopId, address, other) !== null);
+    return { status: ofAnotherKind ? 'wrong_kind' : 'not_in_manifest' };
+  }
   if (entry.status !== 'copied') return { status: entry.status };
-  if (kindOfUse(entry.use) !== kind) return { status: 'wrong_kind' };
   ctx.usedObjects.push({ entry, kind, objectId: entry.objectId, tenantId: shopId });
   return { entry, objectId: entry.objectId, status: 'copied' };
 }

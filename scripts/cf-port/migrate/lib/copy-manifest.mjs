@@ -8,13 +8,17 @@
  *     entries: [ { shopId, sourceKey, use, status, objectId, sha256,
  *                  sizeBytes, contentType, reason } ] }
  *
- * One entry per (shopId, sourceKey): one file, one object, many rows. The
- * manifest never holds a source address, only `sourceKey` = sha256 (hex) of
- * the address exactly as the bundle holds it. A reader hashes the address a
- * row holds (`sourceKeyOf`) and looks it up by shop (`lookupCopied`).
+ * One entry per (shopId, sourceKey, kind): one file, one object of that kind,
+ * many rows. The manifest never holds a source address, only `sourceKey` =
+ * sha256 (hex) of the address exactly as the bundle holds it. A reader hashes
+ * the address a row holds (`sourceKeyOf`) and looks it up by shop and by the
+ * kind its row asks for (`lookupCopied`).
  *
  * `use` is the use the file was first found under, in the fixed order of
- * USES; a file named by rows of two uses is still one entry and one object.
+ * USES, among the uses of one kind; a file named by rows of two uses of the
+ * same kind is still one entry and one object. A file named both by a store
+ * identity and by a product, collection or page has TWO entries, one per
+ * kind: the Worker reads a branding image only from a `shop_branding` object.
  * The object's kind follows from its use (`kindOfUse`), and the object's
  * storage key is fixed by the Worker's reserve rule
  * (`shops/<tenant>/<kind>/<objectId>/v1/<file name>`) with the file name the
@@ -46,6 +50,7 @@ const KIND_BY_USE = Object.freeze({
   page_image: 'product_media',
   branding: 'shop_branding',
 });
+export const KINDS = Object.freeze([...new Set(Object.values(KIND_BY_USE))]);
 
 // The file name the copy sends with every reservation, by the proven type.
 // Each passes the Worker's safeFileName() unchanged ([a-z0-9._-], no leading
@@ -210,8 +215,8 @@ export function copyManifestProblems(manifest) {
   manifest.entries.forEach((entry, index) => {
     for (const problem of entryProblems(entry)) problems.push(`entries[${index}]: ${problem}`);
     if (isPlainObject(entry)) {
-      const key = `${entry.shopId}\n${entry.sourceKey}`;
-      if (seen[key] === true) problems.push(`entries[${index}]: duplicate (shopId, sourceKey)`);
+      const key = `${entry.shopId}\n${entry.sourceKey}\n${KIND_BY_USE[entry.use]}`;
+      if (seen[key] === true) problems.push(`entries[${index}]: duplicate (shopId, sourceKey, kind)`);
       seen[key] = true;
     }
   });
@@ -240,38 +245,46 @@ export function writeCopyManifest(filePath, manifest) {
 }
 
 /**
- * An index for lookups: Map `${shopId}\n${sourceKey}` → entry. Built once by
- * a reader; entries are the manifest's own objects.
+ * An index for lookups: Map `${shopId}\n${sourceKey}\n${kind}` → entry. Built
+ * once by a reader; entries are the manifest's own objects.
  */
 export function indexCopyManifest(manifest) {
-  return new Map(manifest.entries.map((entry) => [`${entry.shopId}\n${entry.sourceKey}`, entry]));
+  return new Map(manifest.entries.map((entry) => [`${entry.shopId}\n${entry.sourceKey}\n${kindOfUse(entry.use)}`, entry]));
 }
 
-/** The entry for (shopId, sourceKey), or null. */
-export function lookupEntry(index, shopId, sourceKey) {
-  return index.get(`${shopId}\n${sourceKey}`) ?? null;
+function knownKind(kind) {
+  if (!KINDS.includes(kind)) throw new TypeError(`copy manifest lookup: unknown kind ${String(kind)}`);
+  return kind;
 }
 
-/** The entry for the address a row of `shopId` holds, or null. */
-export function lookupAddress(index, shopId, address) {
-  return lookupEntry(index, shopId, sourceKeyOf(address));
+/** The entry for (shopId, sourceKey) of that kind, or null. */
+export function lookupEntry(index, shopId, sourceKey, kind) {
+  return index.get(`${shopId}\n${sourceKey}\n${knownKind(kind)}`) ?? null;
 }
 
-/** The entry for that address only when it is `copied`, else null. */
-export function lookupCopied(index, shopId, address) {
-  const entry = lookupAddress(index, shopId, address);
+/** The entry of that kind for the address a row of `shopId` holds, or null. */
+export function lookupAddress(index, shopId, address, kind) {
+  return lookupEntry(index, shopId, sourceKeyOf(address), kind);
+}
+
+/** The entry of that kind for that address only when it is `copied`, else null. */
+export function lookupCopied(index, shopId, address, kind) {
+  const entry = lookupAddress(index, shopId, address, kind);
   return entry !== null && entry.status === 'copied' ? entry : null;
 }
 
 /**
  * Puts `entry` into the manifest, replacing the entry of the same
- * (shopId, sourceKey) in place, or appending it. Validates the entry.
+ * (shopId, sourceKey, kind) in place, or appending it. Validates the entry.
  */
 export function upsertEntry(manifest, entry) {
   const problems = entryProblems(entry);
   if (problems.length > 0) throw new Error(`copy manifest entry is not valid: ${problems.join('; ')}`);
   const at = manifest.entries.findIndex(
-    (existing) => existing.shopId === entry.shopId && existing.sourceKey === entry.sourceKey,
+    (existing) =>
+      existing.shopId === entry.shopId &&
+      existing.sourceKey === entry.sourceKey &&
+      KIND_BY_USE[existing.use] === KIND_BY_USE[entry.use],
   );
   if (at === -1) manifest.entries.push(entry);
   else manifest.entries[at] = entry;

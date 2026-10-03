@@ -23,7 +23,10 @@
  *         vatRegistered false;
  *       - the three legal pages, rendered from the source's templates
  *         (src/utils/legalPageRenderer.js, src/config/legalTemplates.js) with
- *         the shop's own imported identity and its POD flag, checked with the
+ *         the shop's own imported identity, its return address and VAT
+ *         answer as STAGING's settings hold them (GET /v1/admin/settings: a
+ *         run that set them and stopped before the adoption is then carried
+ *         on, not rendered without them), and its POD flag, checked with the
  *         Worker's checkHtml (a refused text is reported, not adopted), then
  *         adopted through POST /v1/admin/legal/accept-pages. The Worker lets
  *         only the shop's OWN admin adopt (legal-admin.ts maySignForSeller: an
@@ -34,8 +37,9 @@
  *         CHOPSHOP_REVIEW_ADMIN_PASSWORD, else CHOPSHOP_SLICE_ADMIN_PASSWORD
  *         (environment or ~/.config/chopshop/secrets.staging.env).
  * --publish-for-review: each shop that is unpublished in the source AND on
- *     staging is published (POST /v1/platform/tenants/:id/publish); the ids go
- *     into <out>/published-for-review.json.
+ *     staging is published (POST /v1/platform/tenants/:id/publish); its id
+ *     goes into <out>/published-for-review.json BEFORE the request, so a
+ *     publish whose answer is lost is still hidden again afterwards.
  * --unpublish-after-review: reads that file and unpublishes exactly those
  *     shops (POST /v1/platform/tenants/:id/unpublish), then removes the file.
  *
@@ -197,11 +201,21 @@ function bundleShops(bundleDir, shop) {
     .sort((a, b) => (a.tenantId < b.tenantId ? -1 : 1));
 }
 
-/** The identity the pages are rendered from, with what this step sets. */
+/** The identity the pages are rendered from, with what this step WOULD set (the dry run). */
 export function identityForPages(identity, { setReturnAddress, setVat }) {
   const out = { ...identity };
   if (setReturnAddress) out.returnAddress = STAGING_RETURN_ADDRESS;
   if (setVat) out.vatRegistered = false;
+  return out;
+}
+
+/** The identity the pages are rendered from: the bundle's, with what staging's settings hold. */
+export function identityFromSettings(identity, settings) {
+  const out = { ...identity };
+  if (typeof settings?.returnAddress === 'string' && settings.returnAddress.trim().length > 0) {
+    out.returnAddress = settings.returnAddress;
+  }
+  if (typeof settings?.vatRegistered === 'boolean') out.vatRegistered = settings.vatRegistered;
   return out;
 }
 
@@ -331,7 +345,10 @@ async function legalStepsForShop(session, sources, shop, { log, reviewPassword }
     }
 
     if (readiness.legalPagesAccepted !== true) {
-      const identity = identityForPages(shop.identity, { setReturnAddress, setVat });
+      // Read back, not remembered: an earlier run may have set what this one found in place.
+      const settings = await session.request('GET', '/v1/admin/settings', { shop: tenantId });
+      if (settings.status !== 200 || !settings.json?.settings) return { problem: `settings read HTTP ${settings.status}` };
+      const identity = identityFromSettings(shop.identity, settings.json.settings);
       const pages = renderShopPages(sources, identity, shop.pod);
       const refusals = checkPages(sources, pages);
       if (refusals.length > 0) {
@@ -403,16 +420,19 @@ async function publishForReview(session, shops, { log, outDir, publishedFile }) 
       log(`  ${shop.tenantId.padEnd(20)} already published on staging: left as it is${tenants.has(shop.tenantId) ? ' (published by an earlier run)' : ''}`);
       continue;
     }
+    // Listed BEFORE the request: a publish whose answer is lost has still
+    // happened. The shop was unpublished a moment ago, so hiding a listed shop
+    // whose publish never arrived only leaves it as it was.
+    tenants.add(shop.tenantId);
+    writeJsonAtomic(publishedFile, { createdAt: earlier?.createdAt ?? new Date().toISOString(), env: 'staging', tenants: [...tenants].sort() });
     const published = await session.request('POST', `/v1/platform/tenants/${encodeURIComponent(shop.tenantId)}/publish`);
     if (published.status !== 200 || published.json?.tenant?.published !== true) {
       problem = `publish: ${shop.tenantId} HTTP ${published.status}`;
       continue;
     }
-    tenants.add(shop.tenantId);
-    writeJsonAtomic(publishedFile, { createdAt: earlier?.createdAt ?? new Date().toISOString(), env: 'staging', tenants: [...tenants].sort() });
     log(`  ${shop.tenantId.padEnd(20)} published for the review`);
   }
-  log(`published for review: ${tenants.size} shop(s), listed in ${PUBLISHED_FILE} in --out`);
+  log(`listed in ${PUBLISHED_FILE} in --out for --unpublish-after-review: ${tenants.size} shop(s)`);
   return problem;
 }
 
