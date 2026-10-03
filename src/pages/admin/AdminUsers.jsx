@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext';
+import { MEMBER_ADMINS, REVOKE_BLOCK, useUsersData } from './adminUsersData';
 import toast from 'react-hot-toast';
 import AppLayout from '../../components/layout/AppLayout';
 import {
@@ -9,6 +9,8 @@ import {
   StatusPill,
   Button,
   InlineSearch,
+  Field,
+  Input,
 } from '../../components/admin/ui';
 
 // This admin surface lists ADMIN users for the CURRENT shop. Scoping is done by
@@ -17,80 +19,51 @@ import {
 // admin NOT impersonating sees everyone. (Fixed a cross-shop leak: this page used
 // to show every shop's admins while impersonating — see getAllUsers.)
 const AdminUsers = () => {
-  const { getAllUsers, updateUserRole, updateUserMarginal } = useAuth();
+  const { getAllUsers, updateUserRole, updateUserMarginal, inviteAdmin, removeAdmin } = useUsersData();
+  // The shop's own admins (the Cloudflare admin build): invite and remove, no
+  // roles or margin. The older build keeps its table and its links.
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [removingId, setRemovingId] = useState(null);
 
   const [users, setUsers] = useState([]);
   const [filteredUsers, setFilteredUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeCustomerTab, setActiveCustomerTab] = useState('active'); // Simplified tab system
   const [roleUpdateLoading, setRoleUpdateLoading] = useState(false);
   const [marginalUpdateLoading, setMarginalUpdateLoading] = useState(false);
   const [editingMarginals, setEditingMarginals] = useState({});
 
-  // 🆕 ADD: Tab state for separating B2B customers from Admin users
-  // B2B reseller function retired (2026-06-15) — this page now manages ADMIN
-  // users only. The B2B-customer ("Kunder") tab is hidden (the 372 legacy
-  // reseller records stay untouched in `users`; see memory b2b-removal). Default
-  // to the admins tab; the customers tab button is no longer rendered.
-  const [activeTab, setActiveTab] = useState('admins');
-
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        setLoading(true);
-        const usersList = await getAllUsers();
-        setUsers(usersList);
-        setFilteredUsers(usersList);
-      } catch (error) {
-        console.error('Error fetching users:', error);
-        toast.error('Kunde inte hämta användare');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchUsers();
+  const fetchUsers = useCallback(async () => {
+    try {
+      setLoading(true);
+      const usersList = await getAllUsers();
+      setUsers(usersList);
+      setFilteredUsers(usersList);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      toast.error('Kunde inte hämta användare');
+    } finally {
+      setLoading(false);
+    }
   }, [getAllUsers]);
 
   useEffect(() => {
-    // 🎯 SIMPLIFIED TAB FILTERING
-    const filtered = users.filter(user => {
-      const matchesSearch =
-        user.companyName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        user.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        user.contactPerson?.toLowerCase().includes(searchTerm.toLowerCase());
+    fetchUsers();
+  }, [fetchUsers]);
 
-      // 🆕 Tab-based filtering (customers vs admins)
-      const matchesTab =
-        activeTab === 'customers' ? user.role !== 'admin' : user.role === 'admin';
-
-      // Skip admin tab filtering - only apply to customer tab
-      if (activeTab === 'admins') {
-        return matchesSearch && matchesTab;
-      }
-
-      // 🎯 SIMPLE CUSTOMER TAB FILTERING - SHOW ACTIVE CUSTOMERS
-      let matchesCustomerFilter = true;
-
-      if (activeCustomerTab === 'active') {
-        // TAB 1: Active customers (any role, just active=true)
-        matchesCustomerFilter = user.active === true;
-      } else if (activeCustomerTab === 'applicants') {
-        // TAB 2: B2B Applications - inactive customers with role='reseller'
-        matchesCustomerFilter = user.role === 'reseller' && (user.active === false || user.active === undefined);
-      } else if (activeCustomerTab === 'all') {
-        // TAB 3: All customers
-        matchesCustomerFilter = true;
-      }
-
-      return matchesSearch && matchesTab && matchesCustomerFilter;
-    });
-
-    setFilteredUsers(filtered);
-  }, [searchTerm, activeCustomerTab, users, activeTab]);
-
-
+  // This page manages ADMIN users only (the trade-customer tab was retired in 2026).
+  useEffect(() => {
+    const term = searchTerm.toLowerCase();
+    setFilteredUsers(
+      users.filter(
+        (user) =>
+          user.role === 'admin' &&
+          (user.companyName?.toLowerCase().includes(term) ||
+            user.email?.toLowerCase().includes(term) ||
+            user.contactPerson?.toLowerCase().includes(term)),
+      ),
+    );
+  }, [searchTerm, users]);
 
   const handleRoleChange = async (userId, currentRole, newRole) => {
     if (currentRole === newRole) return;
@@ -150,6 +123,22 @@ const AdminUsers = () => {
     }
   };
 
+  const handleRemove = async (user) => {
+    if (user.revokeBlock) return;
+    if (!window.confirm(`Ta bort ${user.email} som administratör? Personen förlorar åtkomsten till butikens admin. Kontot raderas inte.`)) return;
+    try {
+      setRemovingId(user.id);
+      await removeAdmin(user.id);
+      toast.success(`${user.email} är inte längre administratör`);
+      await fetchUsers();
+    } catch (error) {
+      console.error('Error removing admin:', error);
+      toast.error(error?.message || 'Kunde inte ta bort administratören');
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
   const startEditingMarginal = (userId, currentMarginal) => {
     setEditingMarginals(prev => ({
       ...prev,
@@ -169,7 +158,7 @@ const AdminUsers = () => {
   const columns = [
     {
       key: 'user',
-      header: 'Företag & Kontakt',
+      header: MEMBER_ADMINS ? 'Namn & e-post' : 'Företag & Kontakt',
       render: (user) => (
         <div className="flex items-center gap-3">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-admin-border bg-admin-surface-2 text-[12px] font-medium text-admin-text-muted">
@@ -276,13 +265,17 @@ const AdminUsers = () => {
       header: 'Status',
       render: (user) => (
         <div className="space-y-1">
-          {user.active ? (
+          {MEMBER_ADMINS && user.invited ? (
+            <StatusPill tone="info">Inbjuden</StatusPill>
+          ) : MEMBER_ADMINS && user.suspended ? (
+            <StatusPill tone="warning">Inaktiv</StatusPill>
+          ) : user.active ? (
             <StatusPill tone="success">Aktiv</StatusPill>
           ) : (
             <StatusPill tone="warning">Väntar aktivering</StatusPill>
           )}
           <div className="text-[12px] text-admin-text-faint">
-            {user.createdByAdmin ? 'Skapad av admin:' : 'Ansökte:'}{' '}
+            {MEMBER_ADMINS ? 'Tillagd:' : user.createdByAdmin ? 'Skapad av admin:' : 'Ansökte:'}{' '}
             {user.createdAt ? new Date(user.createdAt).toLocaleDateString('sv-SE') : 'Okänt datum'}
           </div>
         </div>
@@ -292,38 +285,49 @@ const AdminUsers = () => {
       key: 'actions',
       header: '',
       align: 'right',
-      className: 'w-40',
+      className: MEMBER_ADMINS ? undefined : 'w-40',
       render: (user) => (
         <div onClick={(e) => e.stopPropagation()} className="flex items-center justify-end gap-2">
-          <Button as={Link} to={`/admin/users/${user.id}/edit`} variant="secondary" size="sm">
-            Redigera
-          </Button>
-          {/* Show customer marketing materials link only for customers (not admins) */}
-          {user.role !== 'admin' && (
-            <Button
-              as={Link}
-              to={`/admin/customers/${user.id}/marketing`}
-              variant="plain"
-              size="sm"
-              title="Hantera kundspecifikt marknadsföringsmaterial"
-            >
-              Material
+          {MEMBER_ADMINS ? (
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleRemove(user)}
+                disabled={Boolean(user.revokeBlock) || removingId === user.id}
+                title={user.revokeBlock ? REVOKE_BLOCK[user.revokeBlock] : undefined}
+              >
+                Ta bort som administratör
+              </Button>
+              {user.revokeBlock && (
+                <div className="text-right text-[12px] text-admin-text-faint">{REVOKE_BLOCK[user.revokeBlock]}</div>
+              )}
+            </div>
+          ) : (
+            <Button as={Link} to={`/admin/users/${user.id}/edit`} variant="secondary" size="sm">
+              Redigera
             </Button>
           )}
         </div>
       ),
     },
-  ];
+  ].filter((c) => !MEMBER_ADMINS || (c.key !== 'role' && c.key !== 'marginal'));
 
   return (
     <AppLayout>
       <Page
-        title={activeTab === 'customers' ? 'B2B Kundhantering' : 'Admin Användare'}
+        title="Admin Användare"
         back={{ to: '/admin', label: 'Admin Dashboard' }}
         actions={
-          <Button as={Link} to="/admin/users/create" variant="primary">
-            {activeTab === 'customers' ? 'Skapa Ny Kund' : 'Skapa Ny Admin'}
-          </Button>
+          MEMBER_ADMINS ? (
+            <Button variant="primary" onClick={() => setInviteOpen(true)}>
+              Bjud in administratör
+            </Button>
+          ) : (
+            <Button as={Link} to="/admin/users/create" variant="primary">
+              Skapa Ny Admin
+            </Button>
+          )
         }
       >
         <DataTable
@@ -331,25 +335,85 @@ const AdminUsers = () => {
           rows={filteredUsers}
           rowKey={(u) => u.id}
           loading={loading}
-          empty={
-            activeTab === 'customers'
-              ? 'Inga kunder hittades som matchar dina kriterier.'
-              : 'Inga admin användare hittades som matchar dina kriterier.'
-          }
+          empty="Inga admin användare hittades som matchar dina kriterier."
           toolbar={
             <InlineSearch
               value={searchTerm}
               onChange={setSearchTerm}
-              placeholder={
-                activeTab === 'customers'
-                  ? 'Sök efter namn, e-post eller företag…'
-                  : 'Sök efter namn, e-post eller admin…'
-              }
+              placeholder="Sök efter namn, e-post eller admin…"
             />
           }
         />
       </Page>
+
+      {inviteOpen && (
+        <InviteAdminDialog
+          onClose={() => setInviteOpen(false)}
+          onInvite={inviteAdmin}
+          onDone={() => {
+            setInviteOpen(false);
+            fetchUsers();
+          }}
+        />
+      )}
     </AppLayout>
+  );
+};
+
+// The invite dialog (the admin build only): two fields, the admin's own modal
+// markup and form classes. A refusal stays in the dialog as a sentence.
+const InviteAdminDialog = ({ onClose, onInvite, onDone }) => {
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    const address = email.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) return setError('Ange en giltig e-postadress.');
+    if (name.trim() === '') return setError('Ange ett namn.');
+    setSaving(true);
+    try {
+      await onInvite({ email: address, name: name.trim() });
+      toast.success(`Inbjudan skickad till ${address}`);
+      onDone();
+    } catch (err) {
+      if (err?.mailFailed) {
+        // The person is added; only the mail failed.
+        toast.error(err.message);
+        onDone();
+        return;
+      }
+      setError(err?.message || 'Kunde inte bjuda in administratören.');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4">
+      <form onSubmit={submit} className="mt-8 w-full max-w-lg rounded-[var(--radius-admin-card)] bg-admin-surface p-5 shadow-xl">
+        <h2 className="mb-4 text-[15px] font-semibold text-admin-text">Bjud in administratör</h2>
+        <div className="space-y-4">
+          <Field label="Namn" htmlFor="invite-name" required>
+            <Input id="invite-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
+          </Field>
+          <Field label="E-post" htmlFor="invite-email" required help="Personen får en länk för att välja lösenord.">
+            <Input id="invite-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>
+            Avbryt
+          </Button>
+          <Button type="submit" variant="primary" disabled={saving}>
+            {saving ? 'Skickar…' : 'Skicka inbjudan'}
+          </Button>
+        </div>
+      </form>
+    </div>
   );
 };
 

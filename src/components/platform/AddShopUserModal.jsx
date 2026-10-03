@@ -3,8 +3,7 @@
 // users/{uid} doc + claims + credentials email). The new admin logs in at the
 // admin host and useShopId() resolves to their shop (config/activeShop.js).
 import React, { useState } from 'react';
-import { httpsCallable } from 'firebase/functions';
-import { functions } from '../../firebase/config';
+import { NAME_FIELD, addShopUser } from './addShopUserData';
 import toast from 'react-hot-toast';
 import { UserPlusIcon } from '@heroicons/react/24/outline';
 
@@ -23,9 +22,7 @@ const AddShopUserModal = ({ shop, onClose }) => {
     }
     setSaving(true);
     try {
-      const createShopUser = httpsCallable(functions, 'createShopUser');
-      const res = await createShopUser({ shopId: shop.id, email: trimmed, name: name.trim() });
-      const data = res.data || {};
+      const data = await addShopUser({ shop, email: trimmed, name });
       if (data.emailSent) {
         toast.success(`Admin tillagd för ${shop.name || shop.id}. Inloggningsuppgifter skickade till ${trimmed}.`);
       } else {
@@ -73,7 +70,7 @@ const AddShopUserModal = ({ shop, onClose }) => {
               className="w-full rounded-lg bg-gray-800 border border-white/10 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-indigo-400 focus:outline-none"
             />
           </div>
-          <div>
+          {NAME_FIELD && <div>
             <label className="block text-sm text-gray-400 mb-1">Namn</label>
             <input
               value={name}
@@ -81,7 +78,7 @@ const AddShopUserModal = ({ shop, onClose }) => {
               placeholder="t.ex. Anna Andersson"
               className="w-full rounded-lg bg-gray-800 border border-white/10 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-indigo-400 focus:outline-none"
             />
-          </div>
+          </div>}
 
           {error && <p className="text-sm text-red-400">{error}</p>}
 

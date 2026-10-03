@@ -7,8 +7,7 @@
 // subdomain), so it's validated url-safe: lowercase, a-z 0-9 and hyphens,
 // 3-30 chars, must be unique.
 import React, { useState } from 'react';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { ACCENT_FIELD, provisionShop } from './provisionShopData';
 import toast from 'react-hot-toast';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { NON_SHOP_FIRST_SEGMENTS } from '../../config/tenancy';
@@ -105,34 +104,10 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
 
     try {
       setSaving(true);
-      // Uniqueness check (rules also prevent overwrite via create, but check for a clear message).
-      const existing = await getDoc(doc(db, 'shops', id));
-      if (existing.exists()) {
+      if ((await provisionShop({ id, name, accent, preset })) === 'exists') {
         setSaving(false);
         return setError(`Butiks-ID "${id}" finns redan. Välj ett annat.`);
       }
-
-      await setDoc(doc(db, 'shops', id), {
-        name: name.trim(),
-        storeIdentity: {
-          shopName: name.trim(),
-          accent,
-        },
-        status: 'active',
-        // A new shop starts hidden from search engines: the storefront is open +
-        // shoppable via link, but carries a noindex robots meta until the operator
-        // clicks GO LIVE on the shop detail page. (status=active is the kill-switch;
-        // published controls search-engine indexing only.)
-        published: false,
-        features: preset.features,
-        // Immutable audit crumb (D1) — written once at creation, never read at
-        // runtime. Live gating always reads features.pod; this field only
-        // records what was chosen at provisioning time.
-        shopType: preset.type,
-        ownerUid: null, // owner assignment is a later slice (P4.6)
-        createdAt: serverTimestamp(),
-        provisionedVia: 'platform',
-      });
 
       toast.success(`Butik "${name.trim()}" skapad`);
       onCreated?.();
@@ -180,7 +155,7 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
             <p className="mt-1 text-xs text-gray-600">a–z, 0–9, bindestreck. Kan inte ändras senare.</p>
           </div>
 
-          <div>
+          {ACCENT_FIELD && <div>
             <label className="block text-sm text-gray-400 mb-1">Accentfärg</label>
             <div className="flex items-center gap-3">
               <input
@@ -191,7 +166,7 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
               />
               <span className="font-mono text-sm text-gray-400">{accent}</span>
             </div>
-          </div>
+          </div>}
 
           <div>
             <label className="block text-sm text-gray-400 mb-1">Butikstyp</label>

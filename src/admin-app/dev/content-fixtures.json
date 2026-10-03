@@ -1,0 +1,51 @@
+{
+  "_note": "INVENTED data for the dev API's collection and page routes (unit FG). Test Shop A only; Test Shop C has none (the empty state). Product ids are those of products-fixtures.json; cover ids are its objects.",
+  "shops": {
+    "test-shop-a": {
+      "collections": [
+        {
+          "collectionId": "col-hem", "handle": "hem-och-linne", "externalRef": null, "title": "Hem och linne",
+          "description": "Mjuka saker för hemmet.", "type": "manual", "ruleTag": null, "published": true, "featured": true,
+          "sortOrder": 0, "imageObjectId": "obj-towel", "productIds": ["prod-towel", "prod-mug"],
+          "createdAt": "2026-09-01T09:00:00.000Z", "updatedAt": "2026-09-20T09:00:00.000Z"
+        },
+        {
+          "collectionId": "col-tryck", "handle": "tryck", "externalRef": null, "title": "Tryckta plagg",
+          "description": null, "type": "smart", "ruleTag": "Tryck", "published": true, "featured": false,
+          "sortOrder": 1, "imageObjectId": null, "productIds": [],
+          "createdAt": "2026-09-02T09:00:00.000Z", "updatedAt": "2026-09-21T09:00:00.000Z"
+        },
+        {
+          "collectionId": "col-nytt", "handle": "nyheter", "externalRef": null, "title": "Nyheter i höst",
+          "description": null, "type": "manual", "ruleTag": null, "published": false, "featured": false,
+          "sortOrder": null, "imageObjectId": null, "productIds": [],
+          "createdAt": "2026-09-05T09:00:00.000Z", "updatedAt": "2026-09-22T09:00:00.000Z"
+        }
+      ],
+      "pages": [
+        {
+          "pageId": "page-om", "slug": "om-oss", "kind": "page", "status": "published",
+          "title": { "sv-SE": "Om oss", "en-GB": "About us" },
+          "content": { "sv-SE": "<h2>Vår historia</h2><p>Vi säljer påhittade saker, för test.</p>", "en-GB": "<p>We sell invented things, for testing.</p>" },
+          "metaTitle": { "sv-SE": "Om Test Shop A", "en-GB": "About Test Shop A" },
+          "metaDescription": { "sv-SE": "Vilka vi är.", "en-GB": "Who we are." },
+          "publishedAt": "2026-09-10T09:00:00.000Z", "createdAt": "2026-09-10T09:00:00.000Z", "updatedAt": "2026-09-25T09:00:00.000Z"
+        },
+        {
+          "pageId": "page-frakt", "slug": "frakt", "kind": "page", "status": "draft",
+          "title": { "sv-SE": "Frakt och leverans" },
+          "content": { "sv-SE": "<p>Utkast.</p>" },
+          "metaTitle": null, "metaDescription": null,
+          "publishedAt": null, "createdAt": "2026-09-12T09:00:00.000Z", "updatedAt": "2026-09-12T09:00:00.000Z"
+        },
+        {
+          "pageId": "page-kontakt", "slug": "kontakt", "kind": "page", "status": "published",
+          "title": { "sv-SE": "Kontakt" },
+          "content": { "sv-SE": "<p>Skriv till oss på support@shop-a.example.com.</p>" },
+          "metaTitle": { "sv-SE": "Kontakta oss" }, "metaDescription": null,
+          "publishedAt": "2026-09-14T09:00:00.000Z", "createdAt": "2026-09-14T09:00:00.000Z", "updatedAt": "2026-09-14T09:00:00.000Z"
+        }
+      ]
+    }
+  }
+}

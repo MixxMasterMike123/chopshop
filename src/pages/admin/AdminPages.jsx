@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { TrashIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
-import { collection, query, onSnapshot, deleteDoc, doc, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { subscribeToPages, deleteShopPage } from './adminPagesData';
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
@@ -29,66 +28,21 @@ const AdminPages = () => {
   const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
-    console.log('AdminPages useEffect - currentUser:', currentUser);
     if (!currentUser) {
-      console.log('AdminPages - no currentUser, keeping loading true');
       return; // Keep loading until user is available
     }
 
-    console.log('AdminPages - user available, setting up Firestore query');
-    try {
-      // Scope to this shop's pages.
-      const pagesQuery = query(collection(db, 'pages'), where('shopId', '==', shopId));
-
-      console.log('AdminPages - setting up onSnapshot listener');
-      const unsubscribe = onSnapshot(pagesQuery, (snapshot) => {
-        console.log('AdminPages - snapshot received, docs:', snapshot.size);
-        const pagesData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        console.log('AdminPages - pages data:', pagesData);
+    return subscribeToPages(
+      shopId,
+      (pagesData) => {
         setPages(pagesData);
         setLoading(false);
-        console.log('AdminPages - loading set to false');
-      }, (error) => {
-        console.error('Error fetching pages:', error);
-
-                 // If it's an index error, try without orderBy
-         if (error.code === 'failed-precondition' || error.message.includes('index')) {
-          const fallbackQuery = query(collection(db, 'pages'), where('shopId', '==', shopId));
-
-          const fallbackUnsubscribe = onSnapshot(fallbackQuery, (snapshot) => {
-            const pagesData = snapshot.docs.map(doc => ({
-              id: doc.id,
-              ...doc.data()
-            }));
-            // Sort in memory if no index available
-            pagesData.sort((a, b) => {
-              const aTime = a.updatedAt?.toMillis?.() || 0;
-              const bTime = b.updatedAt?.toMillis?.() || 0;
-              return bTime - aTime;
-            });
-            setPages(pagesData);
-            setLoading(false);
-          }, (fallbackError) => {
-            console.error('Fallback query also failed:', fallbackError);
-            toast.error('Fel vid hämtning av sidor');
-            setLoading(false);
-          });
-
-          return () => fallbackUnsubscribe();
-        } else {
-          toast.error('Fel vid hämtning av sidor');
-          setLoading(false);
-        }
-      });
-
-      return () => unsubscribe();
-    } catch (error) {
-      console.error('Error setting up pages query:', error);
-      setLoading(false);
-    }
+      },
+      () => {
+        toast.error('Fel vid hämtning av sidor');
+        setLoading(false);
+      }
+    );
   }, [currentUser, shopId]);
 
   const handleDelete = async (pageId, pageTitle) => {
@@ -97,7 +51,7 @@ const AdminPages = () => {
     }
 
     try {
-      await deleteDoc(doc(db, 'pages', pageId));
+      await deleteShopPage(pageId);
       toast.success('Sidan har tagits bort');
     } catch (error) {
       console.error('Error deleting page:', error);

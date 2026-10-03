@@ -6,11 +6,12 @@
 // features field and keeps every add-on until an operator turns one off).
 // Mirrors PlatformShops' toggleStatus kill-switch write shape exactly.
 // (docs/ADDONS_PLATFORM_CONTROL_PLAN.md)
+// The data (shops, writing a flag) lives in platformAddonsData.js, which the
+// admin build swaps for the API's (vite.admin.config.js).
 import React, { useState, useEffect, useCallback } from 'react';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../firebase/config';
 import PlatformLayout from '../../components/platform/PlatformLayout';
-import { ADDON_CATALOG, isFeatureEnabled } from '../../config/addons';
+import { isFeatureEnabled } from '../../config/addons';
+import { ADDON_COLUMNS, ADDONS_FOOTNOTE, loadShops as fetchShops, writeAddon } from './platformAddonsData';
 import toast from 'react-hot-toast';
 import { BuildingStorefrontIcon, PuzzlePieceIcon } from '@heroicons/react/24/outline';
 
@@ -22,10 +23,7 @@ const PlatformAddons = () => {
   const loadShops = useCallback(async () => {
     try {
       setLoading(true);
-      const snap = await getDocs(collection(db, 'shops'));
-      const base = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      base.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
-      setShops(base);
+      setShops(await fetchShops());
     } catch (e) {
       console.error('Error loading shops:', e);
       toast.error('Kunde inte ladda butiker');
@@ -47,7 +45,7 @@ const PlatformAddons = () => {
     const cell = `${shop.id}:${key}`;
     try {
       setSavingCell(cell);
-      await updateDoc(doc(db, 'shops', shop.id), { [`features.${key}`]: next });
+      await writeAddon(shop, key, next);
       setShops((prev) =>
         prev.map((s) =>
           s.id === shop.id ? { ...s, features: { ...(s.features || {}), [key]: next } } : s
@@ -84,7 +82,7 @@ const PlatformAddons = () => {
               <thead>
                 <tr className="text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
                   <th className="px-5 py-3">Butik</th>
-                  {ADDON_CATALOG.map((addon) => (
+                  {ADDON_COLUMNS.map((addon) => (
                     <th key={addon.key} className="px-4 py-3 text-center" title={addon.description}>
                       {addon.label}
                     </th>
@@ -98,7 +96,7 @@ const PlatformAddons = () => {
                       <div className="font-medium text-white">{shop.name || shop.id}</div>
                       <div className="text-xs text-gray-500">{shop.id}</div>
                     </td>
-                    {ADDON_CATALOG.map((addon) => {
+                    {ADDON_COLUMNS.map((addon) => {
                       const on = isFeatureEnabled(shop.features, addon.key);
                       const saving = savingCell === `${shop.id}:${addon.key}`;
                       return (
@@ -135,10 +133,7 @@ const PlatformAddons = () => {
 
         <div className="mt-6 flex items-start gap-2 text-xs text-gray-600">
           <PuzzlePieceIcon className="h-4 w-4 shrink-0 mt-0.5" />
-          <p>
-            Tillägg styrs endast härifrån (plattformsnivå). Affiliate visas här men dess full­ständiga gating
-            (storefront + kassan + funktioner) aktiveras i ett kommande steg.
-          </p>
+          <p>{ADDONS_FOOTNOTE}</p>
         </div>
       </div>
     </PlatformLayout>

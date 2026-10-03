@@ -3,10 +3,19 @@
 // platform user read any user doc). Create a NEW super-admin and delete admins
 // via the platform-only callables (createPlatformSuperAdmin / deletePlatformUser).
 // Shop admins are still added per-shop on the Butiker page.
+// The data lives in platformUsersData.js, which the admin build swaps for the
+// API's (vite.admin.config.js).
 import React, { useState, useEffect, useCallback } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { db, functions } from '../../firebase/config';
+import {
+  CAN_CREATE_PLATFORM_ADMIN,
+  REMOVE_COPY,
+  USER_LIFECYCLE,
+  createSuperAdmin,
+  inviteUser,
+  loadUsers,
+  reactivateUser,
+  removeUser,
+} from './platformUsersData';
 import { useAuth } from '../../contexts/AuthContext';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import toast from 'react-hot-toast';
@@ -16,6 +25,8 @@ import {
   TrashIcon,
   ShieldCheckIcon,
   BuildingStorefrontIcon,
+  ArrowPathIcon,
+  EnvelopeIcon,
 } from '@heroicons/react/24/outline';
 
 const PlatformUsers = () => {
@@ -24,26 +35,14 @@ const PlatformUsers = () => {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [workingId, setWorkingId] = useState(null); // reactivate / invite
   const [showCreate, setShowCreate] = useState(false);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setLoadError(false);
-      const snap = await getDocs(query(collection(db, 'users'), where('role', '==', 'admin')));
-      const rows = snap.docs.map((d) => {
-        const x = d.data();
-        return {
-          uid: d.id,
-          email: x.email || '',
-          contactPerson: x.contactPerson || x.displayName || '',
-          shopId: x.shopId || null,
-          platform: x.platform === true,
-        };
-      });
-      // Platform admins first, then by email.
-      rows.sort((a, b) => (a.platform !== b.platform ? (a.platform ? -1 : 1) : a.email.localeCompare(b.email)));
-      setUsers(rows);
+      setUsers(await loadUsers());
     } catch (e) {
       console.error('Error loading users:', e);
       setLoadError(true);
@@ -58,17 +57,45 @@ const PlatformUsers = () => {
   }, [load]);
 
   const handleDelete = async (u) => {
-    if (!window.confirm(`Ta bort ${u.email}? Kontot och inloggningen tas bort permanent.`)) return;
+    if (!window.confirm(REMOVE_COPY.confirm(u.email))) return;
     try {
       setDeletingId(u.uid);
-      await httpsCallable(functions, 'deletePlatformUser')({ uid: u.uid });
-      setUsers((prev) => prev.filter((x) => x.uid !== u.uid));
-      toast.success(`${u.email} borttagen`);
+      // null: the user is gone (the row goes); a row: the user is still listed, now inactive.
+      const updated = await removeUser(u.uid);
+      setUsers((prev) => (updated ? prev.map((x) => (x.uid === u.uid ? updated : x)) : prev.filter((x) => x.uid !== u.uid)));
+      toast.success(REMOVE_COPY.done(u.email));
     } catch (e) {
       console.error('deletePlatformUser failed:', e);
-      toast.error(e?.message || 'Kunde inte ta bort användaren');
+      toast.error(e?.message || REMOVE_COPY.failed);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleReactivate = async (u) => {
+    try {
+      setWorkingId(u.uid);
+      const updated = await reactivateUser(u.uid);
+      setUsers((prev) => prev.map((x) => (x.uid === u.uid ? updated : x)));
+      toast.success(`${u.email} återaktiverad`);
+    } catch (e) {
+      console.error('reactivateUser failed:', e);
+      toast.error(e?.message || 'Kunde inte återaktivera användaren');
+    } finally {
+      setWorkingId(null);
+    }
+  };
+
+  const handleInvite = async (u) => {
+    try {
+      setWorkingId(u.uid);
+      await inviteUser(u.uid);
+      toast.success(`Inbjudan skickad till ${u.email}`);
+    } catch (e) {
+      console.error('inviteUser failed:', e);
+      toast.error(e?.message || 'Kunde inte skicka inbjudan');
+    } finally {
+      setWorkingId(null);
     }
   };
 
@@ -80,13 +107,15 @@ const PlatformUsers = () => {
             <h1 className="text-2xl font-bold text-white">Användare</h1>
             <p className="text-gray-400 mt-1">Plattformsadministratörer och butiksadmins.</p>
           </div>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-          >
-            <UserPlusIcon className="h-4 w-4" />
-            Ny plattformsadmin
-          </button>
+          {CAN_CREATE_PLATFORM_ADMIN && (
+            <button
+              onClick={() => setShowCreate(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
+              <UserPlusIcon className="h-4 w-4" />
+              Ny plattformsadmin
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -152,13 +181,40 @@ const PlatformUsers = () => {
                             Butiksadmin · {u.shopId || 'butik'}
                           </span>
                         )}
+                        {USER_LIFECYCLE && u.suspended && (
+                          <span className="ml-2 inline-flex items-center rounded-md bg-white/5 px-2 py-0.5 text-xs font-medium text-gray-400">
+                            Inaktiv
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex justify-end">
+                        <div className={'flex justify-end' + (USER_LIFECYCLE ? ' gap-2' : '')}>
+                          {USER_LIFECYCLE && !u.suspended && !u.hasPassword && (
+                            <button
+                              onClick={() => handleInvite(u)}
+                              disabled={workingId === u.uid}
+                              title="Skicka en inbjudan med länk för att välja lösenord"
+                              className="inline-flex items-center gap-1 rounded-lg px-3 py-1 text-xs font-medium bg-white/5 text-gray-300 hover:bg-white/10 disabled:opacity-50"
+                            >
+                              <EnvelopeIcon className="h-4 w-4" />
+                              {workingId === u.uid ? 'Skickar…' : 'Skicka inbjudan'}
+                            </button>
+                          )}
+                          {USER_LIFECYCLE && u.suspended ? (
+                          <button
+                            onClick={() => handleReactivate(u)}
+                            disabled={workingId === u.uid}
+                            title="Slå på kontot igen"
+                            className="inline-flex items-center gap-1 rounded-lg px-3 py-1 text-xs font-medium bg-white/5 text-gray-300 hover:bg-emerald-500/15 hover:text-emerald-300 disabled:opacity-50"
+                          >
+                            <ArrowPathIcon className="h-4 w-4" />
+                            {workingId === u.uid ? 'Återaktiverar…' : 'Återaktivera'}
+                          </button>
+                          ) : (
                           <button
                             onClick={() => handleDelete(u)}
                             disabled={isSelf || deletingId === u.uid}
-                            title={isSelf ? 'Du kan inte ta bort ditt eget konto' : 'Ta bort användaren'}
+                            title={isSelf ? REMOVE_COPY.selfTitle : REMOVE_COPY.title}
                             className={
                               'inline-flex items-center gap-1 rounded-lg px-3 py-1 text-xs font-medium ' +
                               (isSelf
@@ -167,8 +223,9 @@ const PlatformUsers = () => {
                             }
                           >
                             <TrashIcon className="h-4 w-4" />
-                            {deletingId === u.uid ? 'Tar bort…' : 'Ta bort'}
+                            {deletingId === u.uid ? REMOVE_COPY.busy : REMOVE_COPY.label}
                           </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -181,7 +238,7 @@ const PlatformUsers = () => {
         )}
       </div>
 
-      {showCreate && (
+      {CAN_CREATE_PLATFORM_ADMIN && showCreate && (
         <CreateSuperAdminModal
           onClose={() => setShowCreate(false)}
           onCreated={() => {
@@ -211,8 +268,7 @@ const CreateSuperAdminModal = ({ onClose, onCreated }) => {
     }
     setSaving(true);
     try {
-      const res = await httpsCallable(functions, 'createPlatformSuperAdmin')({ email: trimmed, name: name.trim() });
-      const data = res.data || {};
+      const data = await createSuperAdmin({ email: trimmed, name: name.trim() });
       if (data.emailSent) {
         toast.success(`Plattformsadmin skapad. Inloggningsuppgifter skickade till ${trimmed}.`);
       } else {

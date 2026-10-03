@@ -1,0 +1,17 @@
+{
+  "_note": "INVENTED data for the dev API's members rows (unit FH). status: active | suspended; invited: never set a password. user-tenant-admin and user-tenant-admin-c are the fixture users of fixtures.json, so 'self' is real for them.",
+  "members": {
+    "test-shop-a": [
+      { "userId": "user-tenant-admin", "email": "admin@example.com", "name": "Test Admin", "status": "active", "invited": false, "joinedAt": "2026-06-02T08:15:00.000Z" },
+      { "userId": "user-member-a2", "email": "maja.lindqvist@example.com", "name": "Maja Lindqvist", "status": "active", "invited": false, "joinedAt": "2026-07-14T10:30:00.000Z" },
+      { "userId": "user-member-a3", "email": "oskar.berg@example.com", "name": "Oskar Berg", "status": "active", "invited": true, "joinedAt": "2026-09-28T13:05:00.000Z" },
+      { "userId": "user-member-a4", "email": "ines.holm@example.com", "name": "Ines Holm", "status": "suspended", "invited": false, "joinedAt": "2026-08-03T09:00:00.000Z" }
+    ],
+    "test-shop-b": [
+      { "userId": "user-tenant-admin", "email": "admin@example.com", "name": "Test Admin", "status": "active", "invited": false, "joinedAt": "2026-06-02T08:15:00.000Z" }
+    ],
+    "test-shop-c": [
+      { "userId": "user-tenant-admin-c", "email": "admin-c@example.com", "name": "Test Admin C", "status": "active", "invited": false, "joinedAt": "2026-07-01T11:00:00.000Z" }
+    ]
+  }
+}

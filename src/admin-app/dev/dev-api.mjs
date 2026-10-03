@@ -27,8 +27,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PRODUCT_ROUTES } from './products-dev.mjs';
+import { CONTENT_ROUTES } from './content-dev.mjs';
 import { SHELL_PLATFORM_ROUTES, heldGrants, shellAdminRoutes } from './shells-dev.mjs';
 import { ORDER_ROUTES } from './orders-dev.mjs';
+import { PLATFORM_REST_ROUTES } from './platform-rest-dev.mjs';
+import { MEMBER_ROUTES } from './members-dev.mjs';
+import { PREVIEW_ADMIN_ROUTES, platformShopRoutes } from './platform-dev.mjs';
 
 export const DEV_API_MARKER = 'admin-dev-api-invented-data';
 export const SESSION_COOKIE = 'admin_dev_session';
@@ -388,10 +392,15 @@ const ADMIN_ROUTES = [
   ...CONNECT_ROUTES,
   ...ORDER_ROUTES,
   ...PRODUCT_ROUTES,
+  ...CONTENT_ROUTES,
+  ...MEMBER_ROUTES, // unit FH
+  ...PREVIEW_ADMIN_ROUTES, // unit FI
 ];
 
 // Unit FB adds the platform rows (tenants, acting-as) here.
 const PLATFORM_ROUTES = [
+  ...platformShopRoutes({ connectOf, rest: [...PLATFORM_REST_ROUTES, ...SHELL_PLATFORM_ROUTES] }), // unit FI: the shops, first
+  ...PLATFORM_REST_ROUTES, // unit FJ: before the shells' stand-in for the reports badge
   ...SHELL_PLATFORM_ROUTES,
   ...PLATFORM_CONNECT_ROUTES,
 ];

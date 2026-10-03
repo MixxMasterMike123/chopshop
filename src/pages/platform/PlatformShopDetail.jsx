@@ -5,16 +5,23 @@
 // (PlatformLayout). (docs/PLATFORM_ARCHITECTURE.md)
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { doc, getDoc, updateDoc, collection, query, where, getCountFromServer } from 'firebase/firestore';
-import { db } from '../../firebase/config';
-import { APP_URLS } from '../../config/urls';
+import {
+  MIGRATORS,
+  SHOW_COUNTS,
+  loadShop,
+  openStorefront,
+  setShopConnectEnabled,
+  setShopPublished,
+  setShopStatus,
+  storefrontUrlOf,
+} from './platformShopDetailData';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import ImpersonateShopModal from '../../components/platform/ImpersonateShopModal';
 import AddShopUserModal from '../../components/platform/AddShopUserModal';
 import MigrateShopifyModal from '../../components/platform/MigrateShopifyModal';
 import MigrateWooModal from '../../components/platform/MigrateWooModal';
 import { connectLabel, LegalCell, CommissionCell, platformTermsBadge } from './shopCells';
-import { getLegalReadiness } from '../../utils/legalPageReadiness';
+import { LEGAL_FACTS, legalReadinessOf } from './shopCellsData';
 import { ADDON_CATALOG, isFeatureEnabled } from '../../config/addons';
 import toast from 'react-hot-toast';
 import {
@@ -62,29 +69,17 @@ const PlatformShopDetail = () => {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const snap = await getDoc(doc(db, 'shops', shopId));
-      if (!snap.exists()) {
+      const loaded = await loadShop(shopId);
+      if (!loaded) {
         setNotFound(true);
         return;
       }
-      setShop({ id: snap.id, ...snap.data() });
-
-      // Same aggregation pattern as PlatformShops.loadShops.
-      const c = {};
-      for (const col of ['products', 'orders', 'b2cCustomers']) {
-        try {
-          const agg = await getCountFromServer(
-            query(collection(db, col), where('shopId', '==', shopId))
-          );
-          c[col] = agg.data().count;
-        } catch {
-          c[col] = null;
-        }
-      }
-      setCounts(c);
+      setShop(loaded.shop);
+      setCounts(loaded.counts);
     } catch (e) {
       console.error('Error loading shop:', e);
       toast.error('Kunde inte ladda butiken');
+      setNotFound(true); // without a shop the page below cannot render (it used to go blank)
     } finally {
       setLoading(false);
     }
@@ -110,7 +105,7 @@ const PlatformShopDetail = () => {
       // — you'd be inviting Google to index a half-finished store. Operator's call,
       // so it's a warning, not a hard block.
       const gaps = [];
-      if (!getLegalReadiness(shop.storeIdentity || {}).ready) gaps.push('juridiska sidor ej klara');
+      if (!legalReadinessOf(shop).ready) gaps.push('juridiska sidor ej klara');
       if (!shop.payments?.chargesEnabled) gaps.push('kan inte ta betalt än');
       const warn = gaps.length ? `\n\nOBS: ${gaps.join(', ')}.` : '';
       if (!window.confirm(`Vill du göra "${shop.name || shop.id}" sökbar (GO LIVE)?${warn}`)) return;
@@ -119,7 +114,7 @@ const PlatformShopDetail = () => {
     }
     try {
       setBusy('published');
-      await updateDoc(doc(db, 'shops', shop.id), { published: next });
+      await setShopPublished(shop, next);
       setShop((prev) => ({ ...prev, published: next }));
       toast.success(next ? 'Butiken är nu sökbar (indexeras)' : 'Butiken är nu dold för sökmotorer');
     } catch (e) {
@@ -136,7 +131,7 @@ const PlatformShopDetail = () => {
     if (!window.confirm(`Vill du ${verb} "${shop.name || shop.id}"?`)) return;
     try {
       setBusy('status');
-      await updateDoc(doc(db, 'shops', shop.id), { status: next });
+      await setShopStatus(shop, next);
       setShop((prev) => ({ ...prev, status: next }));
       toast.success(`"${shop.name || shop.id}" ${next === 'disabled' ? 'inaktiverad' : 'aktiverad'}`);
     } catch (e) {
@@ -153,7 +148,7 @@ const PlatformShopDetail = () => {
     const next = !(shop.payments?.connectEnabled === true);
     try {
       setBusy('connect');
-      await updateDoc(doc(db, 'shops', shop.id), { 'payments.connectEnabled': next });
+      await setShopConnectEnabled(shop, next);
       setShop((prev) => ({ ...prev, payments: { ...(prev.payments || {}), connectEnabled: next } }));
       toast.success(`Betalningar ${next ? 'aktiverade' : 'inaktiverade'} för "${shop.name || shop.id}"`);
     } catch (e) {
@@ -162,10 +157,6 @@ const PlatformShopDetail = () => {
     } finally {
       setBusy(null);
     }
-  };
-
-  const openStorefront = () => {
-    window.open(`${APP_URLS.B2C_SHOP}/${shop.id}`, '_blank', 'noopener');
   };
 
   const backLink = (
@@ -199,11 +190,11 @@ const PlatformShopDetail = () => {
     );
   }
 
-  const storefrontUrl = `${APP_URLS.B2C_SHOP}/${shop.id}`;
+  const storefrontUrl = storefrontUrlOf(shop);
   const c = connectLabel(shop);
 
   // Legal facts for the read-only Juridik card below.
-  const legalReadiness = getLegalReadiness(shop.storeIdentity || {});
+  const legalReadiness = legalReadinessOf(shop);
   const legalBlockers = legalReadiness.blockers;
   const legalNeedsReaccept = legalReadiness.needsReacceptance;
   const rawLegalAcceptance = shop.storeIdentity?.legal?.acceptance;
@@ -284,7 +275,7 @@ const PlatformShopDetail = () => {
           </div>
 
           {/* Overview / counts */}
-          <Card title="Översikt">
+          {SHOW_COUNTS && <Card title="Översikt">
             <div className="grid grid-cols-3 gap-4">
               {[
                 ['Produkter', counts?.products],
@@ -297,7 +288,7 @@ const PlatformShopDetail = () => {
                 </div>
               ))}
             </div>
-          </Card>
+          </Card>}
 
           {/* Funktioner — display-only. Butikstyp pill is derived from LIVE
               features.pod (never the immutable shopType audit crumb, D1), so it
@@ -386,7 +377,7 @@ const PlatformShopDetail = () => {
                 ))}
               </ul>
             )}
-            <dl className="mt-4 space-y-3 border-t border-white/10 pt-4 text-sm">
+            {LEGAL_FACTS && <dl className="mt-4 space-y-3 border-t border-white/10 pt-4 text-sm">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-gray-500">Butikens villkor godkända</dt>
                 <dd className="text-gray-300">
@@ -425,14 +416,14 @@ const PlatformShopDetail = () => {
                   )}
                 </dd>
               </div>
-            </dl>
+            </dl>}
           </Card>
 
           {/* Åtgärder */}
           <Card title="Åtgärder">
             <div className="flex flex-wrap gap-2">
               <button
-                onClick={openStorefront}
+                onClick={() => openStorefront(shop)}
                 className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium bg-white/5 text-gray-200 hover:bg-white/10"
               >
                 <ArrowTopRightOnSquareIcon className="h-4 w-4" />
@@ -445,20 +436,20 @@ const PlatformShopDetail = () => {
                 <UserPlusIcon className="h-4 w-4" />
                 Lägg till admin
               </button>
-              <button
+              {MIGRATORS && <button
                 onClick={() => setMigrate(true)}
                 className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium bg-white/5 text-gray-200 hover:bg-emerald-500/15 hover:text-emerald-300"
               >
                 <ArrowDownTrayIcon className="h-4 w-4" />
                 Migrera från Shopify
-              </button>
-              <button
+              </button>}
+              {MIGRATORS && <button
                 onClick={() => setMigrateWoo(true)}
                 className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium bg-white/5 text-gray-200 hover:bg-purple-500/15 hover:text-purple-300"
               >
                 <ArrowDownTrayIcon className="h-4 w-4" />
                 Migrera från WooCommerce
-              </button>
+              </button>}
               <button
                 onClick={() => setImpersonate(true)}
                 disabled={disabled}

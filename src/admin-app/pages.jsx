@@ -25,22 +25,22 @@ export { default as AdminDashboard } from '../pages/admin/AdminDashboard.jsx';
 export { default as AdminProducts } from '../pages/admin/AdminProducts.jsx';
 export { default as AdminOrders } from '../pages/admin/AdminOrders.jsx';
 export { default as AdminOrderDetail } from '../pages/admin/AdminOrderDetail.jsx';
-export const AdminCollections = pending('AdminCollections');
-export const AdminCollectionEdit = pending('AdminCollectionEdit');
-export const AdminMenu = pending('AdminMenu');
-export const AdminPages = pending('AdminPages');
-export const AdminPageEdit = pending('AdminPageEdit');
-export const AdminStorefront = pending('AdminStorefront');
+export { default as AdminCollections } from '../pages/admin/AdminCollections.jsx';
+export { default as AdminCollectionEdit } from '../pages/admin/AdminCollectionEdit.jsx';
+export { default as AdminMenu } from '../pages/admin/AdminMenu.jsx';
+export { default as AdminPages } from '../pages/admin/AdminPages.jsx';
+export { default as AdminPageEdit } from '../pages/admin/AdminPageEdit.jsx';
+export { default as AdminStorefront } from '../pages/admin/AdminStorefront.jsx';
 export { default as AdminSettings } from '../pages/admin/AdminSettings.jsx';
 export const AdminPayments = pending('AdminPayments');
-export const AdminUsers = pending('AdminUsers');
+export { default as AdminUsers } from '../pages/admin/AdminUsers.jsx';
 export { default as AdminPlatformTerms } from '../pages/admin/AdminPlatformTerms.jsx';
 export const PodAdminPage = pending('PodAdminPage');
 
 // ── the platform console (PlatformLayout shell, always dark) ──
-export { default as PlatformShops } from './PendingPlatformShops.jsx'; // stand-in with "Öppna admin" (FB) until FI
-export const PlatformShopDetail = pendingPlatform('PlatformShopDetail');
-export const PlatformAddons = pendingPlatform('PlatformAddons');
-export const PlatformUsers = pendingPlatform('PlatformUsers');
+export { default as PlatformShops } from '../pages/platform/PlatformShops.jsx';
+export { default as PlatformShopDetail } from '../pages/platform/PlatformShopDetail.jsx';
+export { default as PlatformAddons } from '../pages/platform/PlatformAddons.jsx';
+export { default as PlatformUsers } from '../pages/platform/PlatformUsers.jsx';
 export const PlatformPrinters = pendingPlatform('PlatformPrinters');
-export const PlatformReports = pendingPlatform('PlatformReports');
+export { default as PlatformReports } from '../pages/platform/PlatformReports.jsx';

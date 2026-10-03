@@ -6,8 +6,7 @@
 // the drag-sort mode (persists per-collection sortOrder). Mirrors AdminProducts.jsx.
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { collection, getDocs, doc, deleteDoc, updateDoc, writeBatch, serverTimestamp, query, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { loadShopCollections, deleteShopCollection, setCollectionFeatured, saveCollectionOrder } from './adminCollectionsData';
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
 import toast from 'react-hot-toast';
@@ -85,8 +84,7 @@ const AdminCollections = () => {
   const fetchCollections = async () => {
     try {
       setLoading(true);
-      const snap = await getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId)));
-      const data = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+      const data = await loadShopCollections(shopId);
       data.sort(compareCollections);
       setCollections(data);
     } catch (err) {
@@ -106,7 +104,7 @@ const AdminCollections = () => {
     if (!id) return;
     if (!window.confirm('Är du säker på att du vill ta bort denna samling? Åtgärden kan inte ångras.')) return;
     try {
-      await deleteDoc(doc(db, 'collections', id));
+      await deleteShopCollection(id);
       setCollections((prev) => prev.filter((c) => c.id !== id));
       toast.success('Samlingen har tagits bort');
     } catch (err) {
@@ -120,7 +118,7 @@ const AdminCollections = () => {
     const next = !isCollectionFeatured(c);
     setCollections((prev) => prev.map((x) => (x.id === c.id ? { ...x, featured: next } : x)));
     try {
-      await updateDoc(doc(db, 'collections', c.id), { featured: next, updatedAt: serverTimestamp() });
+      await setCollectionFeatured(c.id, next);
     } catch (err) {
       console.error('Error toggling featured:', err);
       setCollections((prev) => prev.map((x) => (x.id === c.id ? { ...x, featured: c.featured } : x)));
@@ -146,13 +144,7 @@ const AdminCollections = () => {
   const saveOrder = async () => {
     try {
       setSavingOrder(true);
-      for (let i = 0; i < orderDraft.length; i += 400) {
-        const batch = writeBatch(db);
-        orderDraft.slice(i, i + 400).forEach((c, j) => {
-          batch.update(doc(db, 'collections', c.id), { sortOrder: i + j, updatedAt: serverTimestamp() });
-        });
-        await batch.commit();
-      }
+      await saveCollectionOrder(orderDraft);
       const orderIdx = new Map(orderDraft.map((c, i) => [c.id, i]));
       setCollections((prev) =>
         prev.map((c) => (orderIdx.has(c.id) ? { ...c, sortOrder: orderIdx.get(c.id) } : c)).sort(compareCollections)
@@ -180,6 +172,7 @@ const AdminCollections = () => {
 
   const memberCount = (c) => {
     if (c.type === 'smart') return c.rule?.tag ? `#${c.rule.tag}` : '—';
+    if (Number.isFinite(c.productCount)) return c.productCount;
     return Array.isArray(c.productIds) ? c.productIds.length : 0;
   };
 

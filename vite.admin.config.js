@@ -100,6 +100,13 @@ const ADMIN_ALIASES = [
     'PlatformTermsGate and AdminPlatformTerms: GET /v1/admin/legal/status and /terms, POST /accept-terms; the text of the current version as archived'],
   ['src/components/platform/platformLayoutData.js', 'src/admin-app/replacements/platformLayoutData.js',
     'PlatformLayout: the launch-scope menu (3D-modeller, DAC7, Leads leave), the badge from GET /v1/platform/reports newCount, the acting-as notice'],
+  // Unit FJ: the platform console's add-ons, users and reports.
+  ['src/pages/platform/platformAddonsData.js', 'src/admin-app/replacements/platformAddonsData.js',
+    'PlatformAddons: the shops of GET /v1/platform/tenants and their features by …/features; the columns of add-ons the Worker refuses (deleted CRM add-ons, affiliate, wholesale) leave'],
+  ['src/pages/platform/platformUsersData.js', 'src/admin-app/replacements/platformUsersData.js',
+    'PlatformUsers: the user directory; "Ta bort" is deactivate, with reactivate and invite; no creating a platform admin over HTTP (D51)'],
+  ['src/pages/platform/platformReportsData.js', 'src/admin-app/replacements/platformReportsData.js',
+    'PlatformReports: the reports and the screening queue by the platform routes; the server stamps the handler; the queue has no note and no shop links'],
   // Unit FD: the seller's orders and the dashboard.
   ['src/pages/admin/adminOrdersData.js', 'src/admin-app/replacements/adminOrdersData.js',
     'AdminOrders: search by the list route\'s q (an e-mail address or an order number prefix), the exports read each order\'s detail, a re-read on window focus; no source tabs (no trade channel)'],
@@ -111,8 +118,41 @@ const ADMIN_ALIASES = [
     'presence is dropped (PLAN §2.9): nothing is rendered'],
   ['src/utils/orderUtils.js', 'src/admin-app/replacements/orderUtils.js',
     'an order of the API always has its lines; the original also parses an article-number pattern of the source system\'s first product line, which must not ship'],
+  // Unit FG: the catalogue's content pages (collections, menu, pages, the storefront's look).
+  ['src/pages/admin/adminCollectionsData.js', 'src/admin-app/replacements/adminCollectionsData.js',
+    'AdminCollections: the list, the star, delete and the order (a PATCH of sortOrder per moved collection) by the collection routes'],
+  ['src/pages/admin/adminCollectionEditData.js', 'src/admin-app/replacements/adminCollectionEditData.js',
+    'AdminCollectionEdit: the save by the collection routes (a new one created unpublished, its members set, then published), the cover as a product_media object, the picker\'s products and tags from the product routes'],
+  ['src/pages/admin/adminMenuData.js', 'src/admin-app/replacements/adminMenuData.js',
+    'AdminMenu: the sources from the admin product, collection and page lists; the menu saved as storeIdentity.menu through saveShopConfig'],
+  ['src/pages/admin/adminPagesData.js', 'src/admin-app/replacements/adminPagesData.js',
+    'AdminPages: no listener: the pages are read when the page opens and after a delete (each page in full, for its translations and SEO columns)'],
+  ['src/pages/admin/adminPageEditData.js', 'src/admin-app/replacements/adminPageEditData.js',
+    'AdminPageEdit: the page routes (per-language maps; the Worker\'s refusals of a slug or of unsafe HTML said in the toast); no attachments (D94), no legal-edit stamp (the legal slugs are reserved)'],
+  ['src/pages/admin/PageAttachments.jsx', 'src/admin-app/replacements/PageAttachments.jsx',
+    'AdminPageEdit: no attachments (D94): FileUpload, FileManager and the Firebase upload code stay out of this build'],
+  ['src/pages/admin/adminStorefrontData.js', 'src/admin-app/replacements/adminStorefrontData.js',
+    'AdminStorefront: logo, hero and favicon as shop_branding objects named by id in the identity; the identity saved through saveShopConfig; categories from the product list'],
   ['src/utils/shopPayout.js', 'src/admin-app/replacements/shopPayout.js',
     'the payout is the server\'s (the seller sees ONE number); a browser computation fails loudly'],
+  // Unit FH: the shop's own admins.
+  ['src/pages/admin/adminUsersData.js', 'src/admin-app/replacements/adminUsersData.js',
+    'AdminUsers: the shop\'s own admins by GET/POST /v1/admin/members (invite, revoke); no roles, no trade margin, no user create/edit pages'],
+  // Unit FI: the platform console's shop pages (platform-only facts: commission, Connect).
+  ['src/pages/platform/platformShopsData.js', 'src/admin-app/replacements/platformShopsData.js',
+    'PlatformShops: GET /v1/platform/tenants to its end, activate/suspend; no per-shop counts (no route: the three columns leave); an unpublished shop\'s storefront opens its preview when a grant on it is open'],
+  ['src/pages/platform/platformShopDetailData.js', 'src/admin-app/replacements/platformShopDetailData.js',
+    'PlatformShopDetail: GET /v1/platform/tenants/:id + …/connect; publish/unpublish, activate/suspend, Connect enable/disable; no counts card, no migrators'],
+  ['src/pages/platform/shopCellsData.js', 'src/admin-app/replacements/shopCellsData.js',
+    'shopCells: the commission by PATCH /v1/platform/tenants/:id (the server\'s cap decides); the legal readiness from the detail\'s settings summary; no acceptance facts (no platform read)'],
+  ['src/components/platform/provisionShopData.js', 'src/admin-app/replacements/provisionShopData.js',
+    'ProvisionShopModal: POST /v1/platform/tenants (placeholder hostname), the preset\'s features, unpublish; no accent (no platform route writes the identity)'],
+  ['src/components/platform/addShopUserData.js', 'src/admin-app/replacements/addShopUserData.js',
+    'AddShopUserModal: create the tenant admin, grant, invite (a password-set link); never a password the operator knows; no name (no route stores one)'],
+  ['src/components/platform/MigrateShopifyModal.jsx', 'src/admin-app/replacements/PlatformMigrateModal.jsx',
+    'the migrators are PORT-LATER: their buttons are not shown on PlatformShopDetail, the modal renders nothing'],
+  ['src/components/platform/MigrateWooModal.jsx', 'src/admin-app/replacements/PlatformMigrateModal.jsx',
+    'the migrators are PORT-LATER: their buttons are not shown on PlatformShopDetail, the modal renders nothing'],
 ];
 
 function adminAliases(list) {
@@ -135,13 +175,16 @@ function adminAliases(list) {
 // The files of public/ the admin's HTML and defaults name. Nothing else of
 // public/ is shipped (the rest is storefront, POD tooling or earlier brand
 // material). A later unit that needs one adds its row (the admin Worker serves
-// top-level files, /images/… and /assets/…).
+// top-level files, /images/…, /template-thumbs/… and /assets/…).
 const PUBLIC_FILES = [
   'favicon.ico',
   'favicon-192.png',
   'favicon-512.png',
   'apple-touch-icon.png',
   'images/logo.svg',
+  // The appearance page's template picker (src/config/templates.js names them).
+  'template-thumbs/nord.png',
+  'template-thumbs/sport.png',
 ];
 
 function adminOutput() {

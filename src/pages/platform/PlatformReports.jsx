@@ -20,11 +20,20 @@
 //
 // The view (ReportsView) is presentational so src/dev/platformReportsHarness.jsx
 // can render it with fixtures and no Firestore.
+// The data (the two queues, the actions) lives in platformReportsData.js,
+// which the admin build swaps for the API's (vite.admin.config.js).
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, getDocs, getDoc, doc, updateDoc, query, orderBy, where, serverTimestamp } from 'firebase/firestore';
-import { httpsCallable, getFunctions } from 'firebase/functions';
-import { db } from '../../firebase/config';
+import {
+  QUEUE_INTRO,
+  QUEUE_NOTE,
+  clearProduct,
+  loadReports,
+  markReportReviewing,
+  rejectReport,
+  takedownForReport,
+  takedownProduct,
+} from './platformReportsData';
 import { APP_URLS } from '../../config/urls';
 import { getVariantProductSlug } from '../../utils/productUrls';
 import { useAuth } from '../../contexts/AuthContext';
@@ -357,13 +366,15 @@ const QueueList = ({ queue, shopNames, busyId, onClear, onTakedownProduct }) => 
               )}
             </div>
             <div className="flex w-full shrink-0 flex-col gap-2 sm:w-56">
-              <input
-                value={notes[p.id] || ''}
-                onChange={(e) => setNotes((n) => ({ ...n, [p.id]: e.target.value }))}
-                placeholder="Anteckning (vid avpublicering)"
-                className={noteCls + ' text-xs'}
-                aria-label={`Anteckning för ${plainName(p.name)}`}
-              />
+              {QUEUE_NOTE && (
+                <input
+                  value={notes[p.id] || ''}
+                  onChange={(e) => setNotes((n) => ({ ...n, [p.id]: e.target.value }))}
+                  placeholder="Anteckning (vid avpublicering)"
+                  className={noteCls + ' text-xs'}
+                  aria-label={`Anteckning för ${plainName(p.name)}`}
+                />
+              )}
               <div className="flex gap-2">
                 <button type="button" className={btnOk + ' flex-1 justify-center'} disabled={busy} onClick={() => onClear(p)}>
                   Godkänn
@@ -443,10 +454,7 @@ export const ReportsView = ({
         />
       ) : (
         <>
-          <p className="mb-4 text-sm text-gray-500">
-            Flaggade produkter publiceras ändå — granska och avpublicera om säljaren saknar rätt till märket.
-            Nya butikers första produkter hamnar här för en rutinkoll.
-          </p>
+          <p className="mb-4 text-sm text-gray-500">{QUEUE_INTRO}</p>
           <QueueList
             queue={queue}
             shopNames={shopNames}
@@ -473,37 +481,13 @@ const PlatformReports = () => {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const [repSnap, queueSnap, shopSnap] = await Promise.all([
-        // Single orderBy on one collection — no composite index needed.
-        getDocs(query(collection(db, 'infringementReports'), orderBy('createdAt', 'desc'))),
-        // Single-field `in` — no composite index; sorted client-side.
-        getDocs(query(collection(db, 'products'), where('screening.status', 'in', Object.keys(QUEUE_STATUSES)))),
-        getDocs(collection(db, 'shops')),
-      ]);
-      const names = {};
-      shopSnap.docs.forEach((d) => {
-        const s = d.data();
-        names[d.id] = s.storeIdentity?.shopName || s.name || d.id;
-      });
-
-      const reps = repSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      // The matched product (for the storefront link) — one read per distinct id.
-      const ids = [...new Set(reps.map((r) => r.productId).filter(Boolean))];
-      const prods = {};
-      await Promise.all(ids.map(async (id) => {
-        try {
-          const snap = await getDoc(doc(db, 'products', id));
-          if (snap.exists()) prods[id] = { id, ...snap.data() };
-        } catch { /* deleted product — row still renders from the report */ }
-      }));
-
-      const q = queueSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const { reports: reps, queue: q, shopNames: names } = await loadReports();
       q.sort((a, b) =>
         (QUEUE_STATUSES[a.screening?.status]?.rank ?? 9) - (QUEUE_STATUSES[b.screening?.status]?.rank ?? 9) ||
         tsMillis(b.screening?.at) - tsMillis(a.screening?.at));
 
       setShopNames(names);
-      setReports(reps.map((r) => ({ ...r, product: prods[r.productId] || null })));
+      setReports(reps);
       setQueue(q);
     } catch (e) {
       console.error('Error loading reports:', e);
@@ -530,28 +514,19 @@ const PlatformReports = () => {
     }
   };
 
-  const takedown = (productId, reportId, note) =>
-    httpsCallable(getFunctions(undefined, 'us-central1'), 'takedownProduct')({ productId, reportId, note });
-
   const onTakedown = (report, productId, note) => {
     if (!window.confirm('Avpublicera produkten? Den försvinner direkt från butiken.')) return;
-    return act(report.id, () => takedown(productId, report.id, note), 'Produkten är avpublicerad');
+    return act(report.id, () => takedownForReport(report, productId, note), 'Produkten är avpublicerad');
   };
   const onReject = (report, note) =>
-    act(report.id, () => updateDoc(doc(db, 'infringementReports', report.id), {
-      status: 'rejected', note: note || '', handledAt: serverTimestamp(), handledBy: currentUser?.uid || null,
-    }), 'Anmälan avvisad');
+    act(report.id, () => rejectReport(report, note, currentUser?.uid), 'Anmälan avvisad');
   const onMarkReviewing = (report) =>
-    act(report.id, () => updateDoc(doc(db, 'infringementReports', report.id), { status: 'reviewing' }), 'Markerad som granskas');
+    act(report.id, () => markReportReviewing(report), 'Markerad som granskas');
   const onClear = (product) =>
-    act(product.id, () => updateDoc(doc(db, 'products', product.id), {
-      'screening.status': 'cleared',
-      'screening.clearedAt': serverTimestamp(),
-      'screening.clearedBy': currentUser?.uid || null,
-    }), 'Godkänd');
+    act(product.id, () => clearProduct(product, currentUser?.uid), 'Godkänd');
   const onTakedownProduct = (product, note) => {
     if (!window.confirm('Avpublicera produkten? Den försvinner direkt från butiken.')) return;
-    return act(product.id, () => takedown(product.id, null, note), 'Produkten är avpublicerad');
+    return act(product.id, () => takedownProduct(product, note), 'Produkten är avpublicerad');
   };
 
   return (

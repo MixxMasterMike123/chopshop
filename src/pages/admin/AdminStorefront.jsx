@@ -6,14 +6,11 @@
 // later). Images go through the shared uploader (utils/imageUpload).
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
 import AppLayout from '../../components/layout/AppLayout';
 import toast from 'react-hot-toast';
 import { STORE } from '../../config/store';
 import { useShopId } from '../../contexts/ShopContext';
-import { loadShopConfig, saveShopConfig } from '../../config/shopConfig';
-import { uploadStoreImage } from '../../utils/imageUpload';
+import { loadShopCategories, loadBranding, saveBranding, uploadBrandImage } from './adminStorefrontData';
 import { evaluateAccentContrast } from '../../utils/colorContrast';
 import { TEMPLATES } from '../../config/templates';
 import { Page, Card, CardSection, RightRail, Button } from '../../components/admin/ui';
@@ -82,14 +79,8 @@ const AdminStorefront = () => {
     let cancelled = false;
     (async () => {
       try {
-        const snap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
-        const cats = new Set();
-        snap.forEach((d) => {
-          const p = d.data();
-          const cat = (p.category || p.group || '').trim();
-          if (cat) cats.add(cat);
-        });
-        if (!cancelled) setAvailableCategories(Array.from(cats).sort());
+        const cats = await loadShopCategories(shopId);
+        if (!cancelled) setAvailableCategories(cats);
       } catch (err) {
         console.warn('AdminStorefront: could not load categories:', err?.message);
       }
@@ -101,9 +92,7 @@ const AdminStorefront = () => {
     let cancelled = false;
     (async () => {
       try {
-        // Load THIS shop's config (impersonation / shop-admin's own shop / path),
-        // not the default — so a non-default shop edits its own branding.
-        const saved = await loadShopConfig(shopId);
+        const saved = await loadBranding(shopId);
         if (cancelled) return;
         // STORE defaults under saved values (only branding keys).
         setForm({ ...pickBranding(STORE), ...pickBranding(saved) });
@@ -121,11 +110,11 @@ const AdminStorefront = () => {
   const handleSave = useCallback(async () => {
     try {
       setSaving(true);
-      await saveShopConfig(pickBranding(form), shopId);
+      await saveBranding(pickBranding(form), shopId);
       toast.success('Butikens utseende sparat. Ladda om butiken för att se ändringarna.');
     } catch (error) {
       console.error('Error saving storefront branding:', error);
-      toast.error('Kunde inte spara. Försök igen.');
+      toast.error(error?.userMessage || 'Kunde inte spara. Försök igen.');
     } finally {
       setSaving(false);
     }
@@ -148,12 +137,12 @@ const AdminStorefront = () => {
     const meta = UPLOAD_META[kind];
     try {
       setUploading((u) => ({ ...u, [kind]: true }));
-      const url = await uploadStoreImage(file, kind, shopId);
+      const url = await uploadBrandImage(file, kind, shopId);
       setField(meta.field, url);
       toast.success(`${meta.label} uppladdad. Glöm inte att spara.`);
     } catch (error) {
       console.error(`Error uploading ${kind}:`, error);
-      toast.error('Uppladdning misslyckades.');
+      toast.error(error?.userMessage || 'Uppladdning misslyckades.');
     } finally {
       setUploading((u) => ({ ...u, [kind]: false }));
     }
@@ -209,12 +198,12 @@ const AdminStorefront = () => {
     }
     try {
       setGalleryUploading(i);
-      const url = await uploadStoreImage(file, 'hero', shopId);
+      const url = await uploadBrandImage(file, 'hero', shopId);
       setGalleryItem(i, 'imageUrl', url);
       toast.success('Bild uppladdad. Glöm inte att spara.');
     } catch (error) {
       console.error('Error uploading gallery image:', error);
-      toast.error('Uppladdning misslyckades.');
+      toast.error(error?.userMessage || 'Uppladdning misslyckades.');
     } finally {
       setGalleryUploading(-1);
     }

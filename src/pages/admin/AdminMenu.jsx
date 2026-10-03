@@ -5,10 +5,8 @@
 // storefront nav (ShopNavigation) renders it instead of the auto-category dedup;
 // an empty menu falls back to today's behavior (backward-compat).
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
 import { useShopId } from '../../contexts/ShopContext';
-import { loadShopConfig, saveShopConfig } from '../../config/shopConfig';
+import { loadMenuBuilder, saveMenu } from './adminMenuData';
 import AppLayout from '../../components/layout/AppLayout';
 import { Page, Card, CardSection, Button } from '../../components/admin/ui';
 import { TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
@@ -123,41 +121,14 @@ const AdminMenu = () => {
     (async () => {
       setLoading(true);
       try {
-        const [cfg, prodSnap, collSnap, pageSnap] = await Promise.all([
-          loadShopConfig(shopId),
-          getDocs(query(collection(db, 'products'), where('shopId', '==', shopId))),
-          getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId))),
-          getDocs(query(collection(db, 'pages'), where('shopId', '==', shopId))),
-        ]);
+        const loaded = await loadMenuBuilder(shopId);
         if (cancelled) return;
 
-        setMenu(Array.isArray(cfg?.menu) ? cfg.menu : []);
-
-        const cats = new Set();
-        const tagSet = new Set();
-        prodSnap.forEach((d) => {
-          const p = d.data();
-          const cat = (p.category || p.group || '').trim();
-          if (cat) cats.add(cat);
-          if (Array.isArray(p.tags)) p.tags.forEach((t) => t && t.trim() && tagSet.add(t.trim()));
-        });
-        setCategories(Array.from(cats).sort((a, b) => a.localeCompare(b, 'sv')));
-        setTags(Array.from(tagSet).sort((a, b) => a.localeCompare(b, 'sv')));
-
-        setCollections(
-          collSnap.docs
-            .map((d) => ({ id: d.id, ...d.data() }))
-            .filter((c) => c.published === true)
-            .map((c) => ({ handle: c.handle, title: c.title }))
-            .sort((a, b) => (a.title || '').localeCompare(b.title || '', 'sv'))
-        );
-        setPages(
-          pageSnap.docs
-            .map((d) => ({ id: d.id, ...d.data() }))
-            .filter((p) => p.status === 'published' && p.slug)
-            .map((p) => ({ slug: p.slug, title: pageTitle(p.title) }))
-            .sort((a, b) => (a.title || '').localeCompare(b.title || '', 'sv'))
-        );
+        setMenu(loaded.menu);
+        setCategories(loaded.categories);
+        setTags(loaded.tags);
+        setCollections(loaded.collections);
+        setPages(loaded.pages);
       } catch (e) {
         console.error('Error loading menu builder:', e);
         toast.error('Kunde inte ladda menyn');
@@ -200,11 +171,11 @@ const AdminMenu = () => {
       // Save the COMPLETE array — saveShopConfig merges storeIdentity, so it
       // replaces the whole menu key with what we send (never a partial patch).
       const clean = menu.map((m) => ({ type: m.type, target: m.target || '', label: m.label.trim() }));
-      await saveShopConfig({ menu: clean }, shopId);
+      await saveMenu(clean, shopId);
       toast.success('Menyn sparad. Ladda om butiken för att se ändringarna.');
     } catch (e) {
       console.error('Error saving menu:', e);
-      toast.error('Kunde inte spara menyn');
+      toast.error(e?.userMessage || 'Kunde inte spara menyn');
     } finally {
       setSaving(false);
     }

@@ -3,10 +3,13 @@
 // source for the commission editor, legal-readiness badge, and Connect-status
 // label (avoids drift between the two surfaces). DARK platform design.
 import React, { useState } from 'react';
-import { httpsCallable } from 'firebase/functions';
-import { functions } from '../../firebase/config';
-import { getLegalReadiness } from '../../utils/legalPageReadiness';
-import { PLATFORM_TERMS_VERSION } from '../../config/platformTerms';
+import {
+  LEGAL_FACTS,
+  PLATFORM_TERMS_VERSION,
+  commissionErrorMessage,
+  legalReadinessOf,
+  saveShopCommission,
+} from './shopCellsData';
 import toast from 'react-hot-toast';
 
 // Stripe Connect status label for a shop, derived from the payments map (which is
@@ -58,7 +61,7 @@ export const platformTermsBadge = (shop) => {
 };
 
 export const LegalCell = ({ shop }) => {
-  const { ready, blockers, needsReacceptance } = getLegalReadiness(shop.storeIdentity || {});
+  const { ready, blockers, needsReacceptance } = legalReadinessOf(shop);
   const pt = platformTermsBadge(shop);
 
   let legal;
@@ -81,7 +84,7 @@ export const LegalCell = ({ shop }) => {
   return (
     <div className="inline-flex flex-wrap items-center gap-1.5">
       <span title={legal.title} className={`${PILL} ${TONE[legal.tone]}`}>{legal.text}</span>
-      <span title={pt.title} className={`${PILL} ${TONE[pt.tone]}`}>{pt.text}</span>
+      {LEGAL_FACTS && <span title={pt.title} className={`${PILL} ${TONE[pt.tone]}`}>{pt.text}</span>}
     </div>
   );
 };
@@ -103,12 +106,12 @@ export const CommissionCell = ({ shop, onSaved }) => {
     const bps = Math.round(n * 100);
     try {
       setSaving(true);
-      await httpsCallable(functions, 'setShopCommission')({ shopId: shop.id, commissionBps: bps });
+      await saveShopCommission(shop, bps);
       toast.success(`Avgift sparad: ${(bps / 100).toFixed(2)} %`);
       onSaved?.(bps);
       setEditing(false);
     } catch (e) {
-      toast.error(e.message || 'Kunde inte spara avgift.');
+      toast.error(commissionErrorMessage(e));
     } finally {
       setSaving(false);
     }

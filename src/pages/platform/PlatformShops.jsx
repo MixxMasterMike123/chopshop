@@ -4,9 +4,7 @@
 // audited-impersonation slice P4.3). Platform-only. (docs/PLATFORM_ARCHITECTURE.md)
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, getDocs, doc, updateDoc, query, where, getCountFromServer } from 'firebase/firestore';
-import { db } from '../../firebase/config';
-import { APP_URLS } from '../../config/urls';
+import { SHOW_COUNTS, loadShops as readShops, openStorefront, setShopStatus } from './platformShopsData';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import ProvisionShopModal from '../../components/platform/ProvisionShopModal';
 import ImpersonateShopModal from '../../components/platform/ImpersonateShopModal';
@@ -27,34 +25,10 @@ const PlatformShops = () => {
 
   // The two most-used per-shop actions live on the list row (quick access);
   // the rest stay on the detail page.
-  const openStorefront = (shop) =>
-    window.open(`${APP_URLS.B2C_SHOP}/${shop.id}`, '_blank', 'noopener');
-
   const loadShops = useCallback(async () => {
     try {
       setLoading(true);
-      const snap = await getDocs(collection(db, 'shops'));
-      const base = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-      const withCounts = await Promise.all(
-        base.map(async (shop) => {
-          const counts = {};
-          for (const col of ['products', 'orders', 'b2cCustomers']) {
-            try {
-              const agg = await getCountFromServer(
-                query(collection(db, col), where('shopId', '==', shop.id))
-              );
-              counts[col] = agg.data().count;
-            } catch {
-              counts[col] = null;
-            }
-          }
-          return { ...shop, counts };
-        })
-      );
-
-      withCounts.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
-      setShops(withCounts);
+      setShops(await readShops());
     } catch (e) {
       console.error('Error loading shops:', e);
       toast.error('Kunde inte ladda butiker');
@@ -73,7 +47,7 @@ const PlatformShops = () => {
     if (!window.confirm(`Vill du ${verb} "${shop.name || shop.id}"?`)) return;
     try {
       setSavingId(shop.id);
-      await updateDoc(doc(db, 'shops', shop.id), { status: next });
+      await setShopStatus(shop, next);
       setShops((prev) => prev.map((s) => (s.id === shop.id ? { ...s, status: next } : s)));
       toast.success(`"${shop.name || shop.id}" ${next === 'disabled' ? 'inaktiverad' : 'aktiverad'}`);
     } catch (e) {
@@ -116,9 +90,9 @@ const PlatformShops = () => {
                   <th className="px-4 py-3">Butik</th>
                   <th className="px-4 py-3">Sök</th>
                   <th className="px-4 py-3">Status</th>
-                  <th className="px-3 py-3 text-right">Produkter</th>
-                  <th className="px-3 py-3 text-right">Ordrar</th>
-                  <th className="px-3 py-3 text-right">Kunder</th>
+                  {SHOW_COUNTS && <th className="px-3 py-3 text-right">Produkter</th>}
+                  {SHOW_COUNTS && <th className="px-3 py-3 text-right">Ordrar</th>}
+                  {SHOW_COUNTS && <th className="px-3 py-3 text-right">Kunder</th>}
                   <th className="px-4 py-3 text-right">Åtgärder</th>
                 </tr>
               </thead>
@@ -156,9 +130,9 @@ const PlatformShops = () => {
                           {disabled ? 'Inaktiverad' : 'Aktiv'}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.products ?? '–'}</td>
-                      <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.orders ?? '–'}</td>
-                      <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.b2cCustomers ?? '–'}</td>
+                      {SHOW_COUNTS && <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.products ?? '–'}</td>}
+                      {SHOW_COUNTS && <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.orders ?? '–'}</td>}
+                      {SHOW_COUNTS && <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.b2cCustomers ?? '–'}</td>}
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                           <button

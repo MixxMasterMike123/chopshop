@@ -1,0 +1,23 @@
+{
+  "_note": "Unit FI: the platform-only facts of the shared fixtures' shops (commission override, domains, the settings summary). INVENTED data; hostnames under the reserved .invalid name.",
+  "shops": {
+    "test-shop-a": {
+      "commissionBps": 400,
+      "createdAt": "2026-03-01T09:00:00.000Z",
+      "domains": [{ "hostname": "test-shop-a.import.invalid", "kind": "storefront", "status": "verified" }],
+      "settings": { "returnAddressSet": true, "vatAnswered": true }
+    },
+    "test-shop-b": {
+      "commissionBps": null,
+      "createdAt": "2026-04-01T09:00:00.000Z",
+      "domains": [{ "hostname": "test-shop-b.import.invalid", "kind": "storefront", "status": "verified" }],
+      "settings": { "returnAddressSet": true, "vatAnswered": false }
+    },
+    "test-shop-c": {
+      "commissionBps": null,
+      "createdAt": "2026-09-01T09:00:00.000Z",
+      "domains": [{ "hostname": "test-shop-c.provisioned.invalid", "kind": "storefront", "status": "verified" }],
+      "settings": { "returnAddressSet": false, "vatAnswered": false }
+    }
+  }
+}

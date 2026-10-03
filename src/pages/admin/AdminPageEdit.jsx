@@ -6,12 +6,10 @@ import {
   Cog6ToothIcon,
   PaperClipIcon
 } from '@heroicons/react/24/outline';
-import { doc, getDoc, setDoc, serverTimestamp, addDoc, collection } from 'firebase/firestore';
-import { db } from '../../firebase/config';
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
-import { withShopId } from '../../config/withShopId';
-import { saveShopConfig } from '../../config/shopConfig';
+import { loadPage, savePage, ATTACHMENTS_ENABLED } from './adminPageEditData';
+import PageAttachments from './PageAttachments';
 import {
   isLegalSlug,
   LEGAL_PAGES,
@@ -25,9 +23,6 @@ import AppLayout from '../../components/layout/AppLayout';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { toast } from 'react-hot-toast';
-import FileUpload from '../../components/admin/FileUpload';
-import FileManager from '../../components/admin/FileManager';
-import { uploadFile, deleteFile } from '../../utils/fileUpload';
 import { Page, Card, CardSection, RightRail, Button, StatusPill } from '../../components/admin/ui';
 
 // ReactQuill configuration
@@ -80,8 +75,6 @@ const AdminPageEdit = () => {
 
   const isNewPage = id === 'new';
   const [hasBeenSaved, setHasBeenSaved] = useState(false);
-  const [uploadingFiles, setUploadingFiles] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState([]);
 
   // Update formData when user becomes available
   useEffect(() => {
@@ -108,9 +101,8 @@ const AdminPageEdit = () => {
 
     const fetchPage = async () => {
       try {
-        const pageDoc = await getDoc(doc(db, 'pages', id));
-        if (pageDoc.exists()) {
-                  const pageData = pageDoc.data();
+        const pageData = await loadPage(id);
+        if (pageData) {
         setFormData(prev => ({
           ...prev,
           ...pageData,
@@ -172,55 +164,19 @@ const AdminPageEdit = () => {
     setSaving(true);
 
     try {
-      const pageData = {
-        ...formData,
-        status: newStatus,
-        updatedAt: serverTimestamp(),
-        updatedBy: currentUser?.uid || '',
-        ...(isNewPage && {
-          createdAt: serverTimestamp(),
-                      createdBy: currentUser?.uid || ''
-        })
-      };
-
-      // Editing a legal page invalidates the seller's last acceptance — stamp
-      // storeIdentity.legal.customUpdatedAt so needsLegalReacceptance() flags it
-      // in AdminSettings + on the platform. Never let this fail the page save.
-      //
-      // Only on a PUBLISHED save: a draft doesn't change what the storefront
-      // serves, and stamping on every autosave-to-draft would train the seller
-      // to click past a re-acceptance notice that means nothing.
-      const stampLegalEdit = async () => {
-        if (!isLegalSlug(formData.slug) || newStatus !== 'published') return;
-        try {
-          await saveShopConfig({ legal: { customUpdatedAt: new Date().toISOString() } }, shopId);
-        } catch (e) {
-          console.error('Could not stamp legal.customUpdatedAt:', e);
-        }
-      };
+      const pageId = await savePage({ id, isNewPage, formData, newStatus, currentUser, shopId });
 
       if (isNewPage) {
-        // For new pages, use addDoc to generate a unique ID
-        const docRef = await addDoc(collection(db, 'pages'), withShopId(pageData, shopId));
-        const pageId = docRef.id;
-        await stampLegalEdit();
-
         toast.success('Sidan har skapats');
         setHasBeenSaved(true); // Mark as saved after first save
         navigate(`/admin/pages/${pageId}`);
       } else {
-        // For existing pages, use setDoc with the existing ID. This is a FULL
-        // overwrite (not merge), so we must re-stamp shopId or it would be
-        // stripped from an already-tagged doc.
-        await setDoc(doc(db, 'pages', id), withShopId(pageData, shopId));
-        await stampLegalEdit();
-
         toast.success('Sidan har uppdaterats');
         setFormData(prev => ({ ...prev, status: newStatus }));
       }
     } catch (error) {
       console.error('Error saving page:', error);
-      toast.error('Fel vid sparande av sida');
+      toast.error(error?.userMessage || 'Fel vid sparande av sida');
     } finally {
       setSaving(false);
     }
@@ -228,78 +184,6 @@ const AdminPageEdit = () => {
 
   const handlePublish = () => handleSave('published');
   const handleSaveDraft = () => handleSave('draft');
-
-  // File handling functions
-  const handleFileSelect = (files) => {
-    setSelectedFiles(prev => [...prev, ...files]);
-  };
-
-  const handleFileRemove = (index) => {
-    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleUploadFiles = async () => {
-    if (selectedFiles.length === 0) return;
-
-    setUploadingFiles(true);
-    try {
-      const uploadPromises = selectedFiles.map(file =>
-        uploadFile(file, isNewPage ? 'temp' : id, currentUser.uid, shopId)
-      );
-
-      const uploadedFiles = await Promise.all(uploadPromises);
-
-      setFormData(prev => ({
-        ...prev,
-        attachments: [...(prev.attachments || []), ...uploadedFiles]
-      }));
-
-      setSelectedFiles([]);
-      toast.success(`${uploadedFiles.length} filer laddades upp framgångsrikt`);
-    } catch (error) {
-      console.error('Upload error:', error);
-      toast.error('Ett fel uppstod vid uppladdning av filer');
-    } finally {
-      setUploadingFiles(false);
-    }
-  };
-
-  const handleDeleteFile = async (fileId) => {
-    try {
-      const fileToDelete = formData.attachments.find(f => f.id === fileId);
-      if (fileToDelete && fileToDelete.storagePath) {
-        await deleteFile(fileToDelete.storagePath);
-      }
-
-      setFormData(prev => ({
-        ...prev,
-        attachments: prev.attachments.filter(f => f.id !== fileId)
-      }));
-
-      toast.success('Filen togs bort');
-    } catch (error) {
-      console.error('Delete error:', error);
-      toast.error('Ett fel uppstod vid borttagning av filen');
-    }
-  };
-
-  const handleToggleFileVisibility = (fileId) => {
-    setFormData(prev => ({
-      ...prev,
-      attachments: prev.attachments.map(f =>
-        f.id === fileId ? { ...f, isPublic: !f.isPublic } : f
-      )
-    }));
-  };
-
-  const handleUpdateFileDisplayName = (fileId, newName) => {
-    setFormData(prev => ({
-      ...prev,
-      attachments: prev.attachments.map(f =>
-        f.id === fileId ? { ...f, displayName: newName } : f
-      )
-    }));
-  };
 
   // ── Legal slug awareness ────────────────────────────────────────────────
   // A page on one of the three legal slugs REPLACES the platform template on the
@@ -326,7 +210,7 @@ const AdminPageEdit = () => {
     { id: 'content', name: 'Innehåll', icon: DocumentDuplicateIcon },
     { id: 'attachments', name: 'Bilagor', icon: PaperClipIcon },
     { id: 'seo', name: 'SEO', icon: Cog6ToothIcon }
-  ];
+  ].filter((tab) => tab.id !== 'attachments' || ATTACHMENTS_ENABLED);
 
   const labelCls = 'block text-[13px] font-medium text-admin-text mb-1';
   const inputCls =
@@ -533,56 +417,15 @@ const AdminPageEdit = () => {
           />
         )}
 
-        {activeTab === 'attachments' && (
-          <div className="space-y-5">
-            {/* File Upload Section */}
-            <CardSection title="Ladda upp bilagor" bodyClassName="space-y-4">
-              <FileUpload
-                onFileSelect={handleFileSelect}
-                onFileRemove={handleFileRemove}
-                selectedFiles={selectedFiles}
-                disabled={uploadingFiles}
-              />
-
-              {selectedFiles.length > 0 && (
-                <div className="flex justify-end">
-                  <Button variant="primary" onClick={handleUploadFiles} disabled={uploadingFiles}>
-                    {uploadingFiles ? (
-                      <>
-                        <span className="h-4 w-4 animate-spin rounded-full border-b-2 border-current" />
-                        Laddar upp...
-                      </>
-                    ) : (
-                      `Ladda upp ${selectedFiles.length} filer`
-                    )}
-                  </Button>
-                </div>
-              )}
-            </CardSection>
-
-            {/* File Management Section */}
-            <CardSection title="Hantera bilagor">
-              <FileManager
-                files={formData.attachments || []}
-                onDeleteFile={handleDeleteFile}
-                onToggleVisibility={handleToggleFileVisibility}
-                onUpdateDisplayName={handleUpdateFileDisplayName}
-                disabled={uploadingFiles}
-              />
-            </CardSection>
-
-            {/* Help Section */}
-            <Card className="bg-admin-info-bg p-4">
-              <h4 className="mb-2 text-[13px] font-semibold text-admin-info-text">Tips för bilagor:</h4>
-              <ul className="space-y-1 text-[13px] text-admin-info-text">
-                <li>• Endast publika filer visas för besökare på sidan</li>
-                <li>• Du kan redigera filnamnet för att göra det mer beskrivande</li>
-                <li>• Största filstorlek: 10MB per fil</li>
-                <li>• Tillåtna filtyper: PDF, DOC, DOCX, XLS, XLSX, TXT, ZIP</li>
-                <li>• Filer sparas automatiskt när du sparar sidan</li>
-              </ul>
-            </Card>
-          </div>
+        {ATTACHMENTS_ENABLED && activeTab === 'attachments' && (
+          <PageAttachments
+            id={id}
+            isNewPage={isNewPage}
+            formData={formData}
+            setFormData={setFormData}
+            currentUser={currentUser}
+            shopId={shopId}
+          />
         )}
 
         {activeTab === 'seo' && (

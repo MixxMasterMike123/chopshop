@@ -45,7 +45,8 @@
 #     VITE_PLATFORM_ORG_NUMBER=…              its organisation number
 #   admin.<env>.env (OPTIONAL: the admin build needs no value today, so a missing file means "no
 #   build values"; when it exists it is checked as strictly as the other, and no name is required):
-#     only VITE_PLATFORM_LEGAL_NAME, VITE_PLATFORM_ORG_NUMBER, VITE_STRIPE_PUBLISHABLE_KEY (pk_… of
+#     only VITE_STOREFRONT_ORIGIN (the web Worker's origin: where the admin's "show in the shop" links
+#     lead), VITE_PLATFORM_LEGAL_NAME, VITE_PLATFORM_ORG_NUMBER, VITE_STRIPE_PUBLISHABLE_KEY (pk_… of
 #     the env, as above) — any other VITE_ name WITH A VALUE is refused, never silently built into
 #     public files; any name may be blanked (an empty value), which is how a root .env name is covered.
 # Only VITE_ names are handed to a build (any other line is ignored), every VITE_ variable the
@@ -217,7 +218,7 @@ if [ "$TARGET" = web ] || [ "$TARGET" = all ]; then
   check_build_values "$WEB_VALUES" storefront 1 ""
 fi
 if [ "$TARGET" = admin ] || [ "$TARGET" = all ]; then
-  check_build_values "$ADMIN_VALUES" admin 0 " VITE_PLATFORM_LEGAL_NAME VITE_PLATFORM_ORG_NUMBER VITE_STRIPE_PUBLISHABLE_KEY "
+  check_build_values "$ADMIN_VALUES" admin 0 " VITE_PLATFORM_LEGAL_NAME VITE_PLATFORM_ORG_NUMBER VITE_STRIPE_PUBLISHABLE_KEY VITE_STOREFRONT_ORIGIN "
 fi
 
 printf 'deploy: %s %s — HEAD %s reviewed (codex: PASS, fable: PASS%s)\n' "$ENV_NAME" "$TARGET" "$SHA" \

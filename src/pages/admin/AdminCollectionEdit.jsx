@@ -4,12 +4,9 @@
 // featured (homepage "Populära samlingar"). Mirrors AdminPageEdit.jsx structure.
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, setDoc, addDoc, deleteDoc, collection, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
-import { db } from '../../firebase/config';
 import { useShopId } from '../../contexts/ShopContext';
-import { withShopId } from '../../config/withShopId';
 import { slugify, getCollectionUrl } from '../../utils/productUrls';
-import { uploadImageToStorage } from '../../utils/imageUpload';
+import { loadPickerProducts, loadCollection, handleIsTaken, uploadCollectionCover, saveCollection, deleteCollection } from './adminCollectionEditData';
 import AppLayout from '../../components/layout/AppLayout';
 import { Page, Card, CardSection, RightRail, Button, StatusPill, Field, Input, Textarea } from '../../components/admin/ui';
 import { EyeIcon, TrashIcon, MagnifyingGlassIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline';
@@ -59,14 +56,10 @@ const AdminCollectionEdit = () => {
     let cancelled = false;
     (async () => {
       try {
-        const snap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
+        const { products: data, availableTags: tags } = await loadPickerProducts(shopId);
         if (cancelled) return;
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        const tags = new Set();
-        data.forEach((p) => Array.isArray(p.tags) && p.tags.forEach((t) => t && t.trim() && tags.add(t.trim())));
-        data.sort((a, b) => productName(a.name).localeCompare(productName(b.name), 'sv'));
         setProducts(data);
-        setAvailableTags(Array.from(tags).sort((a, b) => a.localeCompare(b, 'sv')));
+        setAvailableTags(tags);
       } catch (e) {
         console.error('Error loading products for picker:', e);
       }
@@ -80,14 +73,13 @@ const AdminCollectionEdit = () => {
     let cancelled = false;
     (async () => {
       try {
-        const snap = await getDoc(doc(db, 'collections', id));
+        const d = await loadCollection(id);
         if (cancelled) return;
-        if (!snap.exists()) {
+        if (!d) {
           toast.error('Samlingen kunde inte hittas');
           navigate('/admin/collections');
           return;
         }
-        const d = snap.data();
         setForm({
           ...emptyForm,
           ...d,
@@ -129,14 +121,12 @@ const AdminCollectionEdit = () => {
     if (!file.type.startsWith('image/')) { toast.error('Välj en bildfil.'); e.target.value = ''; return; }
     try {
       setUploading(true);
-      // Storage path scoped to the shop (isAdminOfShop rule); mirrors ProductForm's
-      // products/{shopId}/… convention. imageType keeps a stable name per collection.
-      const url = await uploadImageToStorage(file, `collections/${shopId}`, `cover_${Date.now()}`);
+      const url = await uploadCollectionCover(file, shopId);
       setField('imageUrl', url);
       toast.success('Bild uppladdad');
     } catch (err) {
       console.error('Image upload failed:', err);
-      toast.error('Kunde inte ladda upp bilden');
+      toast.error(err?.userMessage || 'Kunde inte ladda upp bilden');
     } finally {
       setUploading(false);
       e.target.value = '';
@@ -155,9 +145,7 @@ const AdminCollectionEdit = () => {
       // Handle must be unique within the shop — the storefront resolves a
       // collection by (shopId, handle) with limit(1), so a duplicate would make
       // one collection unreachable and render arbitrarily. Reject before writing.
-      const dupSnap = await getDocs(query(collection(db, 'collections'), where('shopId', '==', shopId), where('handle', '==', handle)));
-      const dup = dupSnap.docs.find((d) => d.id !== id);
-      if (dup) {
+      if (await handleIsTaken(shopId, handle, id)) {
         toast.error(`En annan samling använder redan slug "${handle}". Välj en unik slug.`);
         setSaving(false);
         return;
@@ -175,22 +163,18 @@ const AdminCollectionEdit = () => {
         published: publishedNext,
         featured: form.featured === true,
         sortOrder: Number.isFinite(form.sortOrder) ? form.sortOrder : null,
-        updatedAt: serverTimestamp(),
-        ...(isNew && { createdAt: serverTimestamp() }),
       };
+      const savedId = await saveCollection({ id, isNew, shopId, data, form });
       if (isNew) {
-        const ref = await addDoc(collection(db, 'collections'), withShopId(data, shopId));
         toast.success('Samlingen har skapats');
-        navigate(`/admin/collections/${ref.id}`);
+        navigate(`/admin/collections/${savedId}`);
       } else {
-        // Full overwrite (merge:false) → must re-stamp shopId (same as AdminPageEdit).
-        await setDoc(doc(db, 'collections', id), withShopId(data, shopId));
         toast.success('Samlingen har uppdaterats');
         setForm((prev) => ({ ...prev, published: publishedNext }));
       }
     } catch (e) {
       console.error('Error saving collection:', e);
-      toast.error('Kunde inte spara samlingen');
+      toast.error(e?.userMessage || 'Kunde inte spara samlingen');
     } finally {
       setSaving(false);
     }
@@ -200,7 +184,7 @@ const AdminCollectionEdit = () => {
     if (isNew) return;
     if (!window.confirm('Ta bort denna samling? Åtgärden kan inte ångras.')) return;
     try {
-      await deleteDoc(doc(db, 'collections', id));
+      await deleteCollection(id);
       toast.success('Samlingen har tagits bort');
       navigate('/admin/collections');
     } catch (e) {
