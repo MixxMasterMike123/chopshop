@@ -126,6 +126,8 @@ export async function handleAdminMembersRoute(env: Env, request: Request): Promi
       return jsonResponse({ member: result.member }, 201);
     case "refused":
       return refusalResponse(result.reason);
+    case "invalid":
+      return invalidRequestResponse();
     case "email_unavailable":
       return jsonResponse(
         {

@@ -1226,6 +1226,25 @@ describe("platform user provisioning without a password (CP5-WJ4)", () => {
     ).resolves.toEqual(auditsBefore);
   });
 
+  it("refuses an address the sign-in would refuse, and writes nothing", async () => {
+    const { createInvitedUser, isSignInEmail, parseEmail } = await import("../src/platform/provision-users");
+    // Each passes the shape gate and is refused by Better Auth's sign-in.
+    for (const email of ["admin@userprovision.c", "a..b@userprovision.test", "admin@localhost"]) {
+      expect(parseEmail(email)).toBe(email);
+      expect(isSignInEmail(email)).toBe(false);
+      await expect(
+        createInvitedUser(
+          env,
+          { accountType: "platform_admin", userId: platformAdmin.userId },
+          { accountType: "tenant_admin", email, name: "Test Refused" },
+          Date.now(),
+        ),
+      ).resolves.toEqual({ status: "invalid" });
+      await expect(rowsFor(email)).resolves.toEqual({ access: 0, accounts: 0, users: 0 });
+    }
+    expect(isSignInEmail("fine@userprovision.test")).toBe(true);
+  });
+
   it("keeps the password path for callers that choose one (the staging scripts)", async () => {
     const email = "chosen-password@userprovision.test";
     const response = await createUser({ accountType: "tenant_admin", email, password: PASSWORD });

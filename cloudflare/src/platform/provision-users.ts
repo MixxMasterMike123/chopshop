@@ -1,4 +1,5 @@
 import { generateRandomString } from "better-auth/crypto";
+import { z } from "zod";
 
 import type { PlatformPrincipal, TenantAdminPrincipal } from "../auth/live-authorization";
 import { createAuth } from "../auth/create-auth";
@@ -377,6 +378,16 @@ function localPartOf(email: string): string {
   return email.split("@")[0] as string;
 }
 
+/**
+ * Whether Better Auth's sign-in and sign-up accept the address: the same
+ * check they run (`z.email()` of the zod they use). parseEmail is a looser
+ * shape gate; `a..b@example.com` or `admin@localhost` pass it and are refused
+ * at every sign-in.
+ */
+export function isSignInEmail(email: string): boolean {
+  return z.email().safeParse(email).success;
+}
+
 function isUniqueViolation(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("UNIQUE constraint failed");
@@ -453,13 +464,22 @@ function accessStatements(
  * Duplicates: the address is checked first (the common case, a clean
  * conflict); a racing duplicate fails the batch on "user"."email" UNIQUE and
  * is the same conflict, leaving nothing behind.
+ *
+ * The address must be one Better Auth's sign-in accepts (isSignInEmail): the
+ * password path gets that check from the sign-up; this path writes the rows
+ * itself, and an identity whose address the sign-in refuses could never be
+ * used. Refused as `invalid`, with nothing written.
  */
 export async function createInvitedUser(
   env: Env,
   principal: PlatformPrincipal | TenantAdminPrincipal,
   input: CreateInvitedUserInput,
   now: number,
-): Promise<{ status: "conflict" } | { status: "ok"; user: ProvisionedUser }> {
+): Promise<CreateUserResult> {
+  if (!isSignInEmail(input.email)) {
+    return { status: "invalid" };
+  }
+
   const existing = await env.DB
     .prepare('SELECT "id" FROM "user" WHERE "email" = ? LIMIT 1')
     .bind(input.email)

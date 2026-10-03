@@ -94,7 +94,7 @@ export type MemberRefusal =
 export type InviteMemberResult =
   | { member: TenantMember; status: "ok" }
   | { reason: MemberRefusal; status: "refused" }
-  | { status: "email_unavailable" };
+  | { status: "email_unavailable" | "invalid" };
 
 export type RevokeMemberResult =
   | { status: "not_found" | "ok" }
@@ -422,6 +422,10 @@ export async function inviteTenantMember(
       { accountType: "tenant_admin", email: input.email, name: input.name },
       now,
     );
+    if (created.status === "invalid") {
+      // An address the sign-in would refuse: nothing was written.
+      return { status: "invalid" };
+    }
     if (created.status === "ok") {
       userId = created.user.userId;
       newIdentity = true;
