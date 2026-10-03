@@ -4,7 +4,52 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP5 — Admin (started 2026-10-03 on Mikael's "keep going … full autonomy")
 
-### 🚀 2026-10-03 19:10 — the admin Worker is ON STAGING and a real sign-in works — START HERE
+### 🔁 HANDOVER 2026-10-03 23:10 — every launch-scope page but the printers page is COMMITTED; Codex found 10 things to fix before the next deploy — START HERE
+
+**Tree clean, HEAD `a5b3cfa1` pushed, no builder running, no job waiting.** Staging is unchanged since 19:10: it serves `63760063` (the sign-in works, stand-ins behind it; the entry below).
+
+**Committed after that deploy, NOT attested, NOT deployed:**
+
+| Commit | What | Codex |
+|---|---|---|
+| `6f62a958` | FB shells, acting-as, terms gate · FC products · FD orders and dashboard · FE settings and legal adoption · FF payments | **3 findings (2 P1)** |
+| `e3a49bb5` | WC, a shop's own admins (routes) | **1 finding (P2)** |
+| `052fa3f1` | the admin Worker serves `/template-thumbs/` | clean |
+| `19b0488e` | FG collections, menu, pages, look · FH Administratörer · FI platform shops, detail, provisioning · FJ add-ons, users, reports | **5 findings (1 P1)** |
+| `a5b3cfa1` | WG: the design-time quote, artwork label / rights / creator, **migration 0048**, a failed render reads as failed | **1 finding (P2)**; the reviewer has NOT read this diff line by line yet |
+
+Gates at HEAD (run by the reviewer): 516 tests under Node, the admin build free of Firebase code and of the two forbidden names, the storefront build and the older build build, Worker 99 files / 4222 tests, tsc clean for the three projects, preflight tests 302, deploy tests 90, guard PASS (allowlist 296).
+
+**Codex's findings (full text: `~/chopshop-export/codex-2026-10-03/codex-<sha>.log`, the verdict is the text after the last line `codex`). Fix each with a test, then Codex on the fix:**
+
+| # | P | Where | What |
+|---|---|---|---|
+| 1 | P1 | `src/admin-app/providers/Orders.jsx:81` | the order list is not bound to the active shop: an admin of several shops who switches shop on `/admin/orders` keeps seeing the previous shop's orders |
+| 2 | P1 | `src/admin-app/adapters/product.js:185` | a group whose sizes have different prices keeps only the first row's price: saving any change overwrites every size's price with it |
+| 3 | P2 | `src/admin-app/replacements/adminOrderDetailData.js:36` | a refund answered 202 (`reserved`, Stripe's outcome unknown) is announced as "Ordern återbetalad" |
+| 4 | P2 | `cloudflare/src/platform/tenant-members.ts:464` | two concurrent invites of one new address can leave an active member with no password and no invitation (the second request reads the first's throwaway credential as a real password). The clean fix is unit WJ's item 4: `POST /v1/platform/users` without a password, created credential-less in one step |
+| 5 | P1 | `src/admin-app/replacements/platformShopDetailData.js:49` | "TA UR SÖK" promises the shop stays open by link, but on Cloudflare unpublishing closes the storefront (D57): the confirm and status texts of this build must say so |
+| 6 | P2 | `src/admin-app/replacements/adminCollectionEditData.js:111` | the members' baseline is the first load's: add then remove a product across two saves and the second PUT is skipped |
+| 7 | P2 | `src/admin-app/adapters/content.js:299` | an image whose metadata read failed is treated as removed: saving the look clears the stored object ids |
+| 8 | P2 | `src/pages/platform/PlatformUsers.jsx:192` | "Skicka inbjudan" is hidden by `hasPassword`, which is true for every provisioned admin (a random password): no retry of a failed or expired invite. Also solved at the root by WJ item 4 |
+| 9 | P2 | `src/admin-app/pages.jsx:29` | the pages' storefront links are relative to the admin origin: build them from the storefront origin + the shop, and open the PREVIEW for an unpublished shop (the place is `AdminStorefront.jsx`'s "Förhandsgranska butik"; `CP4_D2_REPORT.md` "Reviewer wiring") |
+| 10 | P2 | `scripts/cf-port/seed-staging-slice.mjs:682` | sends the old artwork body; needs `rightsConfirmed: true` |
+
+**To resume, in this order:**
+
+1. `git status --short` (expect nothing), `git log --oneline -1` (expect this entry's commit).
+2. Fix findings 1–10 (frontend 1–3, 5–7, 9: one Opus builder or by hand; 4 and 8 with unit WJ; 10 by hand). Read `a5b3cfa1`'s diff. Codex on the fixes (its quota was back at 21:32).
+3. Apply migration 0048 on staging BEFORE the deploy (`/ready` requires it): `scripts/cf-preflight.sh staging -- d1 migrations apply chopshop-stg --remote`. 0047 is skipped for good; the order-mail unit takes the next free number.
+4. Attest HEAD, `scripts/cf-deploy.sh staging` (api, web, admin; `~/.config/chopshop/admin.staging.env` exists and sets `VITE_STOREFRONT_ORIGIN`). If builders are writing in the tree, deploy from a clean checkout as on 19:10 (a git worktree of the SHA with COPIES of both `node_modules`).
+5. Smoke in a real browser on `https://chopshop-admin-stg.kent-ee2.workers.dev` (platform: `micke.ohlen@gmail.com`, `PLATFORM_ADMIN_PASSWORD`; shop admins: `staging-review+<shop>@example.com`, `CHOPSHOP_SLICE_ADMIN_PASSWORD`, both in `~/.config/chopshop/secrets.staging.env`), including an upload through the proxy. Then tell Mikael, with full links, what works on each page.
+6. Relaunch the two units stopped at launch on 19:40 (the 5-hour limit): **FK** the platform printers page (Opus; pattern `CP5_FI_REPORT.md`, a section `CP5-FK` in `src/api/admin/platform.js`) and **WJ** the Worker follow-ups the page units asked for (the legal status names its signer and time; a refused legal text names its page; the platform detail's legal readiness; a platform user without a password; `variantCount` and `tags` in the product list and `GET /v1/admin/tags`; the pages list's SEO and languages; order search by the recipient's name; a coarse payment method if stored; anchors `CP5-…-I`).
+7. Then: **FM** the artwork library and the mapping page (WG is its server; it brings melodie-mc's 6 POD products back, D83), **WH** studio assets (next free migration) → **FN** the studio, **WE** the order mails, **WD** the settings PATCH, **FL** the new platform pages; the texts the builders listed as now untrue ("inloggningsuppgifter", the unpublished-shop wording).
+
+**How the page units were built (for the next ones):** a page's Firebase code moves unchanged into `<page>Data.js` beside it (the older build keeps using it); `vite.admin.config.js` aliases that module to `src/admin-app/replacements/<page>Data.js`, which calls `src/api/admin/*`; adapters under `src/admin-app/adapters/`; one line in `src/admin-app/pages.jsx`; own dev-API files under `src/admin-app/dev/`. Allowlist: the page's entry out, the data module's in; the size never grows. Builders share the gstack browser daemon: each sets its own `BROWSE_STATE_FILE`. Never chain `guard | tail && git commit`: read the guard's own exit code.
+
+**Open for Mikael** (none blocks the steps above): D99–D103 were taken on defaults (`CP5_BRIEFS.md` §0.1); a seller sees the printer's name and article numbers when mapping (hide the supplier = an alias layer, a schema change); a checkout opened while a shop was published can be paid after it is unpublished; cancel in the order menu stops print jobs without refunding and asks no confirmation; the logout icon is off-screen at 375 px (older than the port); nothing writes `order_items.production_state` yet, so an order with a POD line cannot be marked shipped (the printer's signal, CP6).
+
+### (history) 🚀 2026-10-03 19:10 — the admin Worker is ON STAGING and a real sign-in works — START HERE
 
 Sources of truth: `CP5_GAP_ANALYSIS.md` (page → route map, the units), `CP5_BRIEFS.md` (rules, D99–D103 on defaults, the contracts, the briefs), one `CP5_<unit>_REPORT.md` per builder.
 
