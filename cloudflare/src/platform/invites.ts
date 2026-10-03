@@ -1,7 +1,7 @@
 import { generateRandomString } from "better-auth/crypto";
 
 import { createAuth } from "../auth/create-auth";
-import type { PlatformPrincipal } from "../auth/live-authorization";
+import type { PlatformPrincipal, TenantAdminPrincipal } from "../auth/live-authorization";
 import {
   isPasswordResetConfigured,
   passwordResetActionUrl,
@@ -127,7 +127,7 @@ function logInviteFailure(reason: string, error?: unknown): void {
  */
 export async function issueInvite(
   env: Env,
-  principal: PlatformPrincipal,
+  principal: PlatformPrincipal | TenantAdminPrincipal,
   userId: string,
   now: number,
 ): Promise<InviteResult> {

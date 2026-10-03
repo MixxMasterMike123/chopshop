@@ -387,6 +387,12 @@ import {
 } from "./routes/admin-orders";
 // CP5-IMPORTS-B — end
 // CP5-IMPORTS-C — begin
+import {
+  ADMIN_MEMBER_REVOKE_ROUTE,
+  ADMIN_MEMBERS_PATH,
+  handleAdminMemberRevokeRoute,
+  handleAdminMembersRoute,
+} from "./routes/admin-members";
 // CP5-IMPORTS-C — end
 // CP5-IMPORTS-D — begin
 // CP5-IMPORTS-D — end
@@ -2331,6 +2337,23 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   );
   // CP5-ROUTES-B — end
   // CP5-ROUTES-C — begin
+  // A shop's own admins (src/routes/admin-members.ts, D100): the list and the
+  // invite on the exact path, the revoke on its exact suffix. The user segment
+  // is taken from the RAW pathname and decoded once by the handler.
+  app.all(
+    ADMIN_MEMBERS_PATH,
+    onMethods(["GET", "POST"], (c) => handleAdminMembersRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_MEMBER_REVOKE_ROUTE,
+    onMethods(["POST"], (c) =>
+      handleAdminMemberRevokeRoute(
+        c.env,
+        c.req.raw,
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
   // CP5-ROUTES-C — end
   // CP5-ROUTES-D — begin
   // CP5-ROUTES-D — end

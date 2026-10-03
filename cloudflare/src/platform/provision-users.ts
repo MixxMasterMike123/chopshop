@@ -1,4 +1,4 @@
-import type { PlatformPrincipal } from "../auth/live-authorization";
+import type { PlatformPrincipal, TenantAdminPrincipal } from "../auth/live-authorization";
 import { createAuth } from "../auth/create-auth";
 
 /**
@@ -108,7 +108,7 @@ function hasOnlyKeys(
  * length with no whitespace or control bytes, lowercased so the stored identity
  * matches what a later sign-in sends.
  */
-function parseEmail(value: unknown): string | null {
+export function parseEmail(value: unknown): string | null {
   if (typeof value !== "string" || value.length > EMAIL_MAX_LENGTH) {
     return null;
   }
@@ -225,7 +225,7 @@ const INPUT_REJECTION_CODES: ReadonlySet<string> = new Set([
  */
 export async function createPlatformUser(
   env: Env,
-  principal: PlatformPrincipal,
+  principal: PlatformPrincipal | TenantAdminPrincipal,
   input: CreateUserInput,
   now: number,
 ): Promise<CreateUserResult> {
