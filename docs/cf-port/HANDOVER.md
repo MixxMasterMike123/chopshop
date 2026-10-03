@@ -31,7 +31,7 @@ Gates at HEAD: 557 tests under Node, 440 script tests, Worker 99 files / 4237, t
 
 **Next, in this order:** FK (the platform printers page) and WJ's remaining items (the legal status' signer and time, a refused legal text names its page, the platform detail's legal readiness, `variantCount` + `tags` in the product list and `GET /v1/admin/tags`, the pages list's SEO and languages, order search by the recipient's name, a coarse payment method if stored) → FM (artwork library + mapping; brings melodie-mc's 6 POD products back) → WH → FN (the studio) → WE, WD, FL.
 
-**Update 2026-10-04 00:45 — the printers page is on staging; the Worker follow-ups wait for Codex.**
+**Update 2026-10-04 00:36 — the printers page is on staging; the Worker follow-ups wait for Codex.**
 
 | Commit | What | Codex |
 |---|---|---|
@@ -42,7 +42,7 @@ Gates at HEAD: 557 tests under Node, 440 script tests, Worker 99 files / 4237, t
 
 **Deployed:** the admin Worker at `97d421c8` (attested), version `3bc8228e-9c8e-4e4e-9d95-fb965f11c05c`, from a clean checkout (builders were writing in the tree). `/platform/printers` verified in a browser: "Fake printer (staging)" active, "Snapwear (Łódź)" inactive. The API and web Workers are still `abc10141`: **`14976ab0` is NOT deployed and NOT attested.**
 
-**Running since 00:35 (they die with the window; finish from the tree):** FM (Opus; the artwork library and the mapping page, `/admin/pod`; report `CP5_FM_REPORT.md`) and FW (Sonnet; the pages read WJ's new fields; `CP5_FW_REPORT.md`). FW's fields exist on staging only once `14976ab0` is deployed.
+**Running, launched a few minutes before 00:34 (they die with the window; finish from the tree):** FM (Opus; the artwork library and the mapping page, `/admin/pod`; report `CP5_FM_REPORT.md`) and FW (Sonnet; the pages read WJ's new fields; `CP5_FW_REPORT.md`). FW's fields exist on staging only once `14976ab0` is deployed.
 
 **Next:** read Codex on `14976ab0` → fix → review FM and FW, Codex on both → attest HEAD → `scripts/cf-deploy.sh staging` → smoke (`/admin/pod`: upload an artwork, map one of melodie-mc's six POD products) → WH (studio assets, migration 0049) → FN (the studio, split FN1/FN2) → WE, WD, FL.
 
