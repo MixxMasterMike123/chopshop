@@ -218,8 +218,8 @@ src/pages/admin/adminStorefrontData.js
 src/pages/platform/PlatformDac7.jsx
 src/pages/platform/PlatformLeads.jsx
 src/pages/platform/PlatformModels.jsx
-src/pages/platform/PlatformPrinters.jsx
 src/pages/platform/platformAddonsData.js
+src/pages/platform/platformPrintersData.js
 src/pages/platform/platformReportsData.js
 src/pages/platform/platformShopDetailData.js
 src/pages/platform/platformShopsData.js

@@ -263,3 +263,60 @@ export async function requestStorefrontPreview(shopId) {
 }
 
 // ═══ end CP5-FI ═════════════════════════════════════════════════════════════
+
+// ═══ CP5-FK ═════════════════════════════════════════════════════════════════
+// The printers (cloudflare/src/routes/pod-platform.ts, "CP3: the platform
+// printer surface"; CP3_C_REPORT.md §3). PLATFORM-ONLY: these answers carry
+// every price and print frame the platform holds (the seller sees ONE
+// number). Only the platform console's printer page imports this section; no
+// module of the admin tree may. The Worker refuses each of these routes with
+// the opaque 404 when the request names a shop, and the whole surface is dark
+// (404) in an environment without a dispatch target.
+//
+//   GET   /v1/platform/printers[?cursor&limit≤50]   { printers: [PlatformPrinterView], nextCursor, defaultPrinterId }
+//   PATCH /v1/platform/printers/:id                 { name?, status?, shippingCostMinor?, capabilities? (whole),
+//                                                     tiers?: { upsert?: [{ sku, blankCostMinor, printCostsMinor }], remove?: [sku] },
+//                                                     expectedRevision? }
+//                                                   → { printer, diff, suspendedMappings }
+//                                                   400 invalid_request | invalid_tiers | invalid_capabilities | printer_not_allowed (+ problems)
+//                                                   409 revision_mismatch | concurrent_edit | tenant_printer | too_many_mappings
+//   PUT   /v1/platform/printers/default             { printerId: id | null } → { defaultPrinter: { printerId, printerActive, … } } · 422 printer_not_found | printer_inactive | tenant_printer
+// The page needs no other call: the list carries every printer whole and the
+// default's id. The single read (GET …/:id, GET …/default) and the supplier
+// catalogue (GET/PUT …/:id/catalog, POST …/catalog/apply) have no control on
+// the page and no call here.
+
+const PRINTER_PAGE = 50; // the Worker's PLATFORM_PRINTER_PAGE_MAX
+
+/** Every printer, read to the end of its cursor: { printers: [PlatformPrinterView], defaultPrinterId }. */
+export async function readAllPrinters({ signal } = {}) {
+  const printers = [];
+  let cursor = null;
+  let defaultPrinterId = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const { data } = await platformRequest('GET', withQuery('/v1/platform/printers', { limit: PRINTER_PAGE, cursor }), { signal });
+    if (Array.isArray(data?.printers)) printers.push(...data.printers);
+    if (page === 0) defaultPrinterId = typeof data?.defaultPrinterId === 'string' ? data.defaultPrinterId : null;
+    cursor = typeof data?.nextCursor === 'string' && data.nextCursor !== '' ? data.nextCursor : null;
+    if (cursor === null) break;
+  }
+  return { printers, defaultPrinterId };
+}
+
+/** A partial edit (the body as the route takes it). → { printer, diff, suspendedMappings }. */
+export async function patchPrinter(printerId, body) {
+  const { data } = await platformRequest('PATCH', `/v1/platform/printers/${segment(printerId)}`, { json: body });
+  return {
+    printer: data?.printer ?? null,
+    diff: data?.diff ?? null,
+    suspendedMappings: Number.isInteger(data?.suspendedMappings) ? data.suspendedMappings : 0,
+  };
+}
+
+/** Sets (an id) or clears (null) the default printer. → { printerId, printerActive, updatedAt, updatedBy }. */
+export async function putDefaultPrinter(printerId) {
+  const { data } = await platformRequest('PUT', '/v1/platform/printers/default', { json: { printerId } });
+  return data?.defaultPrinter ?? null;
+}
+
+// ═══ end CP5-FK ═════════════════════════════════════════════════════════════

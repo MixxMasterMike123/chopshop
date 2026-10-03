@@ -33,6 +33,7 @@ import { ORDER_ROUTES } from './orders-dev.mjs';
 import { PLATFORM_REST_ROUTES } from './platform-rest-dev.mjs';
 import { MEMBER_ROUTES } from './members-dev.mjs';
 import { PREVIEW_ADMIN_ROUTES, platformShopRoutes } from './platform-dev.mjs';
+import { PRINTER_ROUTES } from './printers-dev.mjs';
 
 export const DEV_API_MARKER = 'admin-dev-api-invented-data';
 export const SESSION_COOKIE = 'admin_dev_session';
@@ -403,6 +404,7 @@ const PLATFORM_ROUTES = [
   ...PLATFORM_REST_ROUTES, // unit FJ: before the shells' stand-in for the reports badge
   ...SHELL_PLATFORM_ROUTES,
   ...PLATFORM_CONNECT_ROUTES,
+  ...PRINTER_ROUTES, // unit FK
 ];
 
 function match(pattern, path) {

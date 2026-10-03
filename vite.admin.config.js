@@ -155,6 +155,9 @@ const ADMIN_ALIASES = [
     'the migrators are PORT-LATER: their buttons are not shown on PlatformShopDetail, the modal renders nothing'],
   ['src/components/platform/MigrateWooModal.jsx', 'src/admin-app/replacements/PlatformMigrateModal.jsx',
     'the migrators are PORT-LATER: their buttons are not shown on PlatformShopDetail, the modal renders nothing'],
+  // Unit FK: the platform console's printers (platform-only: prices, frames, the default printer).
+  ['src/pages/platform/platformPrintersData.js', 'src/admin-app/replacements/platformPrintersData.js',
+    'PlatformPrinters: GET /v1/platform/printers; status, garment prices and frames by PATCH …/:id (only the changed fields, fenced on the revision); the default printer by PUT …/default; no print-shop accounts (print portal PORT-LATER), no routing per garment (a mapping names its printer)'],
 ];
 
 function adminAliases(list) {

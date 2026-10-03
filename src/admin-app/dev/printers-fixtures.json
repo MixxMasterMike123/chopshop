@@ -1,0 +1,113 @@
+{
+  "_note": "INVENTED DATA ONLY (unit FK). Printers, prices and frames are made up; no supplier's real prices or names.",
+  "defaultPrinterId": "fake-printer",
+  "printers": [
+    {
+      "printerId": "fake-printer",
+      "tenantId": null,
+      "type": "api",
+      "name": "Exempeltryck (API)",
+      "status": "active",
+      "currency": "SEK",
+      "shippingCostMinor": 3900,
+      "revision": 3,
+      "createdAt": "2026-09-20T08:00:00.000Z",
+      "updatedAt": "2026-10-01T08:00:00.000Z",
+      "catalog": null,
+      "capabilities": {
+        "models": {
+          "garment_tee": {
+            "garment": "tee",
+            "printAreasMm": {
+              "front": { "w": 280, "h": 380, "offsetTopMm": 70 },
+              "back": { "w": 280, "h": 400 }
+            }
+          },
+          "garment_hoodie": {
+            "garment": "hoodie",
+            "provisional": true,
+            "printAreasMm": {
+              "front": { "w": 260, "h": 300, "offsetTopMm": 90 }
+            }
+          }
+        },
+        "skus": {
+          "DEV-TEE-S": { "label": "Svart / S", "model": "garment_tee" },
+          "DEV-TEE-M": { "label": "Svart / M", "model": "garment_tee" },
+          "DEV-HOOD-M": { "label": "Grå / M", "model": "garment_hoodie" }
+        }
+      },
+      "tiers": [
+        { "sku": "DEV-HOOD-M", "blankCostMinor": 21300, "printCostsMinor": { "front": 3300, "back": 3300 } },
+        { "sku": "DEV-TEE-M", "blankCostMinor": 4700, "printCostsMinor": { "front": 3300, "back": 3300 } },
+        { "sku": "DEV-TEE-S", "blankCostMinor": 4700, "printCostsMinor": { "front": 3300, "back": 3300 } }
+      ]
+    },
+    {
+      "printerId": "handtryck-exempel",
+      "tenantId": null,
+      "type": "manual",
+      "name": "Handtryck i Exempelby",
+      "status": "inactive",
+      "currency": "SEK",
+      "shippingCostMinor": 0,
+      "revision": 0,
+      "createdAt": "2026-09-22T08:00:00.000Z",
+      "updatedAt": "2026-09-22T08:00:00.000Z",
+      "catalog": null,
+      "capabilities": {
+        "models": {
+          "tee-classic": {
+            "garment": "tee",
+            "name": "Klassisk",
+            "printAreasMm": { "front": { "w": 250, "h": 350, "offsetTopMm": 80 } }
+          },
+          "tee-fitted": {
+            "garment": "tee",
+            "name": "Figursydd",
+            "printAreasMm": { "front": { "w": 230, "h": 330, "offsetTopMm": 80 } }
+          },
+          "bag-plain": {
+            "garment": "bag",
+            "printAreasMm": { "front": { "w": 300, "h": 300 } }
+          }
+        },
+        "skus": {
+          "HT-TEE-C": { "label": "Klassisk vit", "model": "tee-classic" },
+          "HT-TEE-F": { "label": "Figursydd vit", "model": "tee-fitted" },
+          "HT-BAG": { "label": "Natur", "model": "bag-plain" }
+        }
+      },
+      "tiers": [
+        { "sku": "HT-TEE-C", "blankCostMinor": 5200, "printCostsMinor": { "front": 2500 } },
+        { "sku": "HT-TEE-F", "blankCostMinor": 5900, "printCostsMinor": { "front": 2500 } }
+      ]
+    },
+    {
+      "printerId": "supplier-import",
+      "tenantId": null,
+      "type": "api",
+      "name": "Importerat API-tryckeri (inte den här miljöns)",
+      "status": "inactive",
+      "currency": "SEK",
+      "shippingCostMinor": 4500,
+      "revision": 1,
+      "createdAt": "2026-09-18T08:00:00.000Z",
+      "updatedAt": "2026-09-18T08:00:00.000Z",
+      "catalog": null,
+      "capabilities": {
+        "models": {
+          "garment_tee": { "garment": "tee", "printAreasMm": { "front": { "w": 280, "h": 380 } } }
+        },
+        "skus": { "IMP-TEE-M": { "model": "garment_tee" } }
+      },
+      "tiers": [
+        { "sku": "IMP-TEE-M", "blankCostMinor": 5000, "printCostsMinor": { "front": 3000 } }
+      ]
+    }
+  ],
+  "mappings": [
+    { "mappingId": "map-dev-1", "tenantId": "test-shop-a", "productId": "prod-dev-1", "printerId": "fake-printer", "sku": "DEV-TEE-M", "slots": ["front", "back"] },
+    { "mappingId": "map-dev-2", "tenantId": "test-shop-a", "productId": "prod-dev-2", "printerId": "fake-printer", "sku": "DEV-HOOD-M", "slots": ["front"] }
+  ]
+}

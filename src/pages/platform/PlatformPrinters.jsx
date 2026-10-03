@@ -27,11 +27,16 @@
 // it the price floor — then comes from the routed printer's tier instead of the
 // mockup template. Rerouting does NOT reprice existing products: podCostSek is
 // frozen on the product at publish time (see the notice after saving).
+//
+// DATA: every read and write goes through ./platformPrintersData (Firebase in
+// the older build; the admin build's alias list swaps in the API's version,
+// src/admin-app/replacements/platformPrintersData.js).
 import React, { useState, useEffect, useCallback } from 'react';
-import { collection, getDoc, getDocs, query, where, doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { db, functions, auth } from '../../firebase/config';
 import PlatformLayout from '../../components/platform/PlatformLayout';
+import {
+  CREATE_ACCOUNT, ROUTE_BY_GARMENT, PAGE_INTRO, ROUTING_HEADING, ROUTING_INTRO, ROUTING_FOOTNOTE,
+  loadPrinters, createPrintShopAccount, setPrinterActive, tierEditorNote, savePrinterTier, savePrintRouting,
+} from './platformPrintersData';
 import PrinterRow, {
   inputCls, btnPrimary,
   docToForm, formToPricing, formToPrintAreas, incompleteAreaCells,
@@ -85,16 +90,11 @@ const PlatformPrinters = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [shopSnap, printerSnap, tierSnap, routeSnap] = await Promise.all([
-        getDocs(collection(db, 'shops')),
-        getDocs(query(collection(db, 'users'), where('role', '==', 'print_shop'))),
-        getDocs(collection(db, 'printers')),
-        getDoc(doc(db, 'settings', 'printRouting')),
-      ]);
-      setShops(shopSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setPrinters(printerSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setTiers(Object.fromEntries(tierSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }])));
-      const routing = routeSnap.exists() ? routeSnap.data() || {} : {};
+      const loaded = await loadPrinters();
+      setShops(loaded.shops);
+      setPrinters(loaded.printers);
+      setTiers(loaded.tiers);
+      const routing = loaded.routing;
       const byGarment = routing.byGarment && typeof routing.byGarment === 'object' ? routing.byGarment : {};
       // Every garment gets a key so the selects are controlled from the first
       // render ('' = no explicit rule → the default printer).
@@ -124,7 +124,7 @@ const PlatformPrinters = () => {
     if (selectedShops.length === 0) { toast.error('Välj minst en butik.'); return; }
     setSaving(true);
     try {
-      const res = await httpsCallable(functions, 'createPrintShopUser')({
+      const res = await createPrintShopAccount({
         email: email.trim(), name: name.trim(), printShopShops: selectedShops,
       });
       const pw = res.data?.tempPassword;
@@ -173,18 +173,11 @@ const PlatformPrinters = () => {
 
   const toggleActive = async (row) => {
     try {
-      if (row.kind === 'user') {
-        await updateDoc(doc(db, 'users', row.id), { active: !row.active });
-      }
-      // Mirror onto the tier doc so the routing resolver (client + server) can
-      // skip a deactivated printer without a users/ read — a routed line must
-      // never land on a printer printGuard would reject. For an API printer
-      // this flag IS the switch (no users doc exists).
-      await setDoc(doc(db, 'printers', row.id), { active: !row.active }, { merge: true });
+      await setPrinterActive(row);
       toast.success(row.active ? 'Tryckeri inaktiverat' : 'Tryckeri aktiverat');
       load();
     } catch (e) {
-      toast.error('Kunde inte ändra status.');
+      toast.error(e?.userMessage || 'Kunde inte ändra status.');
     }
   };
 
@@ -194,6 +187,8 @@ const PlatformPrinters = () => {
     if (openUid === row.id) { setOpenUid(null); setForm(null); return; }
     setOpenUid(row.id);
     setForm(docToForm(tiers[row.id]));
+    const note = tierEditorNote(tiers[row.id]);
+    if (note) toast(note, { duration: 12000 });
   };
 
   const saveTier = async (row) => {
@@ -216,25 +211,18 @@ const PlatformPrinters = () => {
         pricing: formToPricing(form),
         printAreasMm,
         provisionalAreas: garments.filter((g) => form.provisional.has(g)),
-        updatedAt: serverTimestamp(),
-        updatedBy: auth.currentUser?.uid || null,
       };
-      // mergeFields, not merge:true: a deep merge would keep a price or a print
-      // frame the operator just EMPTIED alive inside the nested maps — and an
-      // emptied frame must mean "cannot print". The listed fields are replaced
-      // whole; any other field on the doc (type, catalog, shippingSek from the
-      // SnapWear seed) survives.
-      await setDoc(doc(db, 'printers', row.id), payload, { mergeFields: Object.keys(payload) });
+      const saved = await savePrinterTier(row, payload, tiers[row.id]);
       const before = tiers[row.id]?.printAreasMm || {};
       const changed = POD_GARMENTS
         .filter((g) => stable(before[g.id]) !== stable(printAreasMm[g.id]))
         .map((g) => g.label);
       setAreasChanged(changed);
-      setTiers((t) => ({ ...t, [row.id]: { ...(t[row.id] || {}), id: row.id, ...payload } }));
-      toast.success('Plagg, priser & tryckytor sparade.');
+      setTiers((t) => ({ ...t, [row.id]: saved.doc }));
+      toast.success(['Plagg, priser & tryckytor sparade.', saved.note].filter(Boolean).join(' '));
     } catch (e) {
       console.error('saveTier failed:', e);
-      toast.error('Kunde inte spara plagg & priser.');
+      toast.error(e?.userMessage || 'Kunde inte spara plagg & priser.');
     } finally {
       setSavingTier(false);
     }
@@ -267,19 +255,14 @@ const PlatformPrinters = () => {
       );
       // Which garments actually changed printer — the notice below names them.
       const changed = POD_GARMENTS.filter((g) => (route[g.id] || '') !== (savedRoute[g.id] || ''));
-      await setDoc(doc(db, 'settings', 'printRouting'), {
-        byGarment,
-        defaultPrinterUid: defaultUid || null,
-        updatedAt: serverTimestamp(),
-        updatedBy: auth.currentUser?.uid || null,
-      }, { merge: true });
+      await savePrintRouting({ byGarment, defaultPrinterUid: defaultUid || null });
       setSavedRoute({ ...route });
       setSavedDefaultUid(defaultUid);
       setRerouted(changed.map((g) => g.label));
       toast.success('Styrning sparad.');
     } catch (e) {
       console.error('saveRouting failed:', e);
-      toast.error('Kunde inte spara styrningen.');
+      toast.error(e?.userMessage || 'Kunde inte spara styrningen.');
     } finally {
       setSavingRoute(false);
     }
@@ -290,11 +273,11 @@ const PlatformPrinters = () => {
       <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
         <h1 className="mb-1 text-lg font-bold">Tryckerier</h1>
         <p className="mb-5 text-sm text-gray-400">
-          Skapa och hantera tryckerikonton. Ett tryckeri ser endast POD-ordrar för sina tilldelade butiker
-          (via säkra serveranrop — ingen direkt databasåtkomst, inga kunduppgifter utöver leveransadress).
+          {PAGE_INTRO}
         </p>
 
         {/* Create form */}
+        {CREATE_ACCOUNT && (
         <form onSubmit={handleCreate} className="mb-8 rounded-xl border border-white/10 bg-white/5 p-4">
           <h2 className="mb-3 text-sm font-semibold">Nytt tryckerikonto</h2>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -333,16 +316,16 @@ const PlatformPrinters = () => {
             </button>
           </div>
         </form>
+        )}
 
         {/* Routing — which printer makes which garment (settings/printRouting) */}
         <section className="mb-8 rounded-xl border border-white/10 bg-white/5 p-4">
-          <h2 className="mb-1 text-sm font-semibold">Styrning per plagg</h2>
+          <h2 className="mb-1 text-sm font-semibold">{ROUTING_HEADING}</h2>
           <p className="mb-4 text-xs text-gray-500">
-            Välj vilket tryckeri som tillverkar varje plaggtyp. Ett tryckeri kan väljas för ett plagg
-            först när det kryssat i plagget under “Plagg &amp; priser”. Produktens produktionskostnad —
-            och därmed prisgolvet — hämtas från det valda tryckeriets prislista.
+            {ROUTING_INTRO}
           </p>
 
+          {ROUTE_BY_GARMENT && (
           <div className="mb-4 grid gap-2 sm:grid-cols-2">
             {POD_GARMENTS.map((g) => {
               const options = printersFor(g.id);
@@ -371,6 +354,7 @@ const PlatformPrinters = () => {
               );
             })}
           </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
             <label className="flex items-center gap-3 text-sm text-gray-300">
@@ -388,8 +372,7 @@ const PlatformPrinters = () => {
           </div>
 
           <p className="mt-3 text-xs text-gray-500">
-            Plagg utan eget val går till standardtryckeriet — men bara om det tillverkar plagget. Ett plagg
-            som inget tryckeri tillverkar visas inte i designstudion och kan inte köpas.
+            {ROUTING_FOOTNOTE}
           </p>
 
           {/* Frozen-cost notice. podCostSek is stamped on the product at publish
