@@ -4,8 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { useTranslation } from '../../contexts/TranslationContext';
 import AppLayout from '../../components/layout/AppLayout';
-import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { loadDashboardStats } from './adminDashboardData';
 import { format } from 'date-fns';
 import { sv } from 'date-fns/locale';
 import AdminPresence from '../../components/AdminPresence';
@@ -114,81 +113,10 @@ const AdminDashboard = () => {
       try {
         setLoading(true);
 
-        // (B2B users stat removed 2026-06-15 — reseller function retired; no
-        // longer read the global `users` collection here.)
-
-        // Fetch B2C customers stats (scoped to the active shop)
-        const b2cCustomersRef = collection(db, 'b2cCustomers');
-        const b2cCustomersSnap = await getDocs(
-          query(b2cCustomersRef, where('shopId', '==', shopId))
-        );
-
-        // Fetch orders stats with detailed breakdown (scoped to the active shop).
-        // The recent-orders query (shopId + orderBy createdAt desc) is backed by
-        // the existing [shopId ASC, createdAt DESC] composite index (Phase 2).
-        const ordersRef = collection(db, 'orders');
-        const ordersSnap = await getDocs(
-          query(ordersRef, where('shopId', '==', shopId))
-        );
-        const recentOrdersSnap = await getDocs(
-          query(ordersRef, where('shopId', '==', shopId), orderBy('createdAt', 'desc'), limit(5))
-        );
-
-        // Calculate order statistics and revenue
-        let totalRevenue = 0;
-        let pendingOrders = 0;
-        let processingOrders = 0;
-        let completedOrders = 0;
-        let affiliateRevenue = 0;
-
-        ordersSnap.forEach(doc => {
-          const order = doc.data();
-
-          // Calculate revenue (handle both B2B and B2C order formats)
-          const orderValue = order.total || order.totalAmount || order.prisInfo?.totalPris || 0;
-          totalRevenue += orderValue;
-
-          // Count orders by status
-          if (order.status === 'pending') {
-            pendingOrders++;
-          } else if (order.status === 'processing') {
-            processingOrders++;
-          } else if (order.status === 'delivered' || order.status === 'shipped') {
-            completedOrders++;
-          }
-
-          // Calculate affiliate revenue
-          if (order.affiliateCommission) {
-            affiliateRevenue += order.affiliateCommission;
-          }
-        });
-
-        // Fetch affiliate stats (scoped to the active shop). Scope by shopId only
-        // (single-field, index-free) and count active ones client-side — avoids a
-        // [shopId, status] composite index that doesn't exist, consistent with the
-        // client-side order tallying above.
-        const affiliatesRef = collection(db, 'affiliates');
-        const affiliatesSnap = await getDocs(
-          query(affiliatesRef, where('shopId', '==', shopId))
-        );
-        const activeAffiliatesCount = affiliatesSnap.docs.filter(
-          (d) => d.data().status === 'active'
-        ).length;
-
-        setStats({
-          totalRevenue: Math.round(totalRevenue),
-          b2cCustomers: b2cCustomersSnap.size,
-          totalOrders: ordersSnap.size,
-          pendingOrders,
-          processingOrders,
-          completedOrders,
-          affiliateRevenue: Math.round(affiliateRevenue),
-          activeAffiliates: activeAffiliatesCount,
-          recentOrders: recentOrdersSnap.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }))
-        });
+        // The numbers come from the page's data module (adminDashboardData):
+        // Firestore in the older build, the order list in the admin build. A
+        // stat a build does not have is null; its tile and link leave.
+        setStats(await loadDashboardStats(shopId));
       } catch (err) {
         console.error('Error fetching admin stats:', err);
         setError('Failed to load dashboard statistics');
@@ -232,7 +160,7 @@ const AdminDashboard = () => {
       header: t('admin.dashboard.products', 'produkter'),
       align: 'right',
       render: (order) => (
-        <span className="tabular-nums text-admin-text-muted">{order.items?.length || 0}</span>
+        <span className="tabular-nums text-admin-text-muted">{order.items?.length ?? order.itemCount ?? 0}</span>
       ),
     },
     {
@@ -287,23 +215,27 @@ const AdminDashboard = () => {
             metrics={[
               { key: 'revenue', label: 'Total Intäkt', value: formatCurrency(stats.totalRevenue) },
               { key: 'b2c', label: 'B2C Kunder', value: stats.b2cCustomers },
-              { key: 'affiliateRevenue', label: 'Affiliate Intäkt', value: formatCurrency(stats.affiliateRevenue) },
-            ]}
+              { key: 'affiliateRevenue', label: 'Affiliate Intäkt', value: stats.affiliateRevenue === null ? null : formatCurrency(stats.affiliateRevenue) },
+            ].filter((m) => m.value !== null)}
           />
           {/* Quick links mirroring the old card footers. */}
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
             <Link to="/admin/orders" className="text-admin-text-muted hover:text-admin-text hover:underline">
               Visa alla ordrar
             </Link>
-            <Link to="/admin/b2c-customers" className="text-admin-text-muted hover:text-admin-text hover:underline">
-              Hantera kunder
-            </Link>
-            <Link to="/admin/affiliates" className="text-admin-text-muted hover:text-admin-text hover:underline">
-              Hantera affiliates
-            </Link>
+            {stats.b2cCustomers !== null && (
+              <Link to="/admin/b2c-customers" className="text-admin-text-muted hover:text-admin-text hover:underline">
+                Hantera kunder
+              </Link>
+            )}
+            {stats.activeAffiliates !== null && (
+              <Link to="/admin/affiliates" className="text-admin-text-muted hover:text-admin-text hover:underline">
+                Hantera affiliates
+              </Link>
+            )}
           </div>
 
-          {/* B2B Kunder card removed (2026-06-15) — reseller function retired. */}
+          {/* B2B Kunder card removed (2026-06-15) — the trade-customer function retired. */}
 
           {/* Order-status metrics strip — totals, pending, processing, completed,
               and active affiliates. */}
@@ -314,7 +246,7 @@ const AdminDashboard = () => {
               { key: 'processing', label: 'Bearbetas', value: stats.processingOrders },
               { key: 'completed', label: 'Levererade', value: stats.completedOrders },
               { key: 'affiliates', label: 'Aktiva Affiliates', value: stats.activeAffiliates },
-            ]}
+            ].filter((m) => m.value !== null)}
           />
 
           {/* Admin Presence */}

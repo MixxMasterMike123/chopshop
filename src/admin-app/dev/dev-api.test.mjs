@@ -87,7 +87,8 @@ describe('the admin routes and their guard', () => {
       [admin.state, { cookie: admin.cookie, 'x-shop-id': 'test-shop-b' }, '/_api/v1/admin/shop'],
       [admin.state, { cookie: admin.cookie, 'x-shop-id': 'other-shop' }, '/_api/v1/admin/shop'],
       [platform.state, { cookie: platform.cookie, 'x-shop-id': 'test-shop-a' }, '/_api/v1/admin/shop'],
-      [admin.state, { cookie: admin.cookie, 'x-shop-id': 'test-shop-a' }, '/_api/v1/admin/products'],
+      // (an unknown route: /v1/admin/products has rows since unit FC)
+      [admin.state, { cookie: admin.cookie, 'x-shop-id': 'test-shop-a' }, '/_api/v1/admin/no-such-route'],
     ];
     for (const [state, headers, path] of cases) {
       const answer = call(state, 'GET', path, { headers });

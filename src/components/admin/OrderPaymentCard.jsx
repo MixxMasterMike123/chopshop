@@ -44,9 +44,14 @@ export const connectFeeSekOf = (order) =>
 const OrderPaymentCard = ({ order, subtotal, vat, total, paid, isB2C, affiliateCode, affiliatePct }) => {
   const feeSek = connectFeeSekOf(order);
   const refundedSek = Number(order?.payment?.refundedTotalSek) || 0;
+  // The admin build hands over the server's payout (`serverPayoutSek`, the ONE
+  // number as the API computed it) and never computes one; the older build
+  // derives it from the order document as before.
   const payoutSek = feeSek == null
     ? null
-    : shopPayoutSek({ total, feeSek, chargedSek: order?.payment?.amount, refundedSek });
+    : Number.isFinite(order?.serverPayoutSek)
+      ? order.serverPayoutSek
+      : shopPayoutSek({ total, feeSek, chargedSek: order?.payment?.amount, refundedSek });
   return (
     <Card>
       <div className="flex items-center gap-2 border-b border-admin-border px-4 py-3">

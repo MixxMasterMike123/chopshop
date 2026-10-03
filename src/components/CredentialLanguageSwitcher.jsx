@@ -8,6 +8,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
+// Where the choice is kept is data: the Cloudflare admin build swaps this
+// module (alias list).
+import { rememberCredentialLanguage } from '../utils/credentialLanguageStorage';
 
 const CredentialLanguageSwitcher = ({ currentLanguage, onLanguageChange }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -20,18 +23,8 @@ const CredentialLanguageSwitcher = ({ currentLanguage, onLanguageChange }) => {
   const currentLang = languages.find(lang => lang.code === currentLanguage) || languages[0];
 
   const handleLanguageChange = (languageCode) => {
-    // Store in unified key (shared with main app)
-    localStorage.setItem('b8shield-language', languageCode);
-    // Also store in credential-specific key for backward compatibility
-    localStorage.setItem('b8shield-credential-language', languageCode);
-    
-    // Store in cookie for 30 days (unified key)
-    const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + 30);
-    document.cookie = `b8shield-language=${languageCode}; expires=${expiryDate.toUTCString()}; path=/`;
-    // Also set credential-specific cookie for backward compatibility
-    document.cookie = `b8shield-credential-language=${languageCode}; expires=${expiryDate.toUTCString()}; path=/`;
-    
+    rememberCredentialLanguage(languageCode);
+
     onLanguageChange(languageCode);
     setIsOpen(false);
   };

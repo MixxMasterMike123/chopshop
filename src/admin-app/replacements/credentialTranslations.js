@@ -6,10 +6,13 @@
 //
 // Swedish is part of the bundle; another language is loaded when chosen. A
 // key a file lacks falls back to the text in the code, as before. The chosen
-// language is kept under this build's own key (the language switcher's own
-// writes are its business).
+// language is kept under this build's own key; the older admin's key is read
+// once (by its suffix, legacyStorage.js: CP5-FB).
+
+import { readWithLegacy } from './legacyStorage.js';
 
 const STORAGE_KEY = 'admin.credentialLanguage';
+const LEGACY_SUFFIXES = ['-credential-language', '-language'];
 const DEFAULT_LANGUAGE = 'sv-SE';
 
 const BUNDLED = import.meta.glob('../../locales/sv-SE.json', { eager: true, import: 'default' });
@@ -27,7 +30,7 @@ class CredentialTranslations {
 
   getStoredLanguage() {
     try {
-      const stored = globalThis.localStorage?.getItem(STORAGE_KEY);
+      const stored = readWithLegacy(STORAGE_KEY, LEGACY_SUFFIXES, isCode);
       if (isCode(stored) && (BUNDLED[fileOf(stored)] || LAZY[fileOf(stored)])) return stored;
     } catch {
       /* storage refused: the default */

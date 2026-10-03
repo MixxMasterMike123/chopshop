@@ -3,7 +3,7 @@
 //
 // What changed vs the old inline form:
 //  • ONE section (no Allmänt/B2B/B2C tabs). All info + images on one page.
-//  • B2B removed entirely (reseller descriptions/images, EAN fields,
+//  • B2B removed entirely (trade-customer descriptions/images, EAN fields,
 //    manufacturingCost, the B2B availability toggles).
 //  • Translations removed: fields are plain Swedish strings. Existing products
 //    that stored name/descriptions as per-locale objects ({'sv-SE': '...'}) are
@@ -58,29 +58,21 @@
 // shopId from useShopId().
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, doc, getDoc, addDoc, setDoc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
-import { ref, deleteObject } from 'firebase/storage';
-import { uploadImageToStorage } from '../../utils/imageUpload';
-import { db, storage } from '../../firebase/config';
 import toast from 'react-hot-toast';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { ProductImageRail, VariantImagePicker } from './ProductImages';
-import { withShopId } from '../../config/withShopId';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
-import { listMappings } from '../../utils/podMappings';
-import { priceFloor, sellerProfitInkl, sellerMargin, priceForMargin, roundUpTo9, inklMoms, FEE_RATE, FEE_FIXED } from '../../wagons/pod-wagon/podPricing';
 import { CardSection, RightRail, Button } from './ui';
-import { skuFromName, uniqueSku } from '../../utils/productUrls';
-import { deriveVariantsFromGroups } from '../../utils/variantDerivation';
-import { query, where, getDocs } from 'firebase/firestore';
+import { skuFromName } from '../../utils/productUrls';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { isProductFeatured } from '../../utils/productSorting';
 import { useAuth } from '../../contexts/AuthContext';
-import { screenProduct, screeningNotice } from '../../utils/contentScreening';
-import { loadScreeningBlocklist } from '../../utils/loadContentScreening';
+// The data layer (Firebase in the older build; the admin build's alias list
+// swaps in the API's — src/admin-app/replacements/productFormData.js).
+import { useProductPod, useProductSave, POD_FLAG_EDITABLE, PERSONALIZED_EDITABLE, TAKEDOWN_REINSTATE_IN_FORM } from './productFormData';
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 
@@ -368,54 +360,21 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
   // a platform user re-activating it IS the reinstatement and clears the stamp.
   const { isPlatform } = useAuth() || {};
   const takenDown = Boolean(product?.takedown);
-  const takedownLocked = takenDown && !isPlatform;
+  const takedownLocked = takenDown && !(isPlatform && TAKEDOWN_REINSTATE_IN_FORM);
   const podEnabled = isEnabled('pod');
 
   // ── POD live-gate state ────────────────────────────────────────────────────
-  // The SKUs that have a ROUTABLE print connection (a podMappings row with a
-  // garment — routableMappingSkus below). null = not loaded yet.
-  // Connection is checked against the SAVED product's SKUs (mappings key on what
-  // is in the database, not on unsaved form edits).
-  const [podMappingSkus, setPodMappingSkus] = useState(null);
-  useEffect(() => {
-    if (!podEnabled || !shopId) return;
-    let alive = true;
-    listMappings(shopId)
-      .then((ms) => { if (alive) setPodMappingSkus(routableMappingSkus(ms)); })
-      .catch(() => { if (alive) setPodMappingSkus(new Set()); });
-    return () => { alive = false; };
-  }, [podEnabled, shopId]);
-  // Coverage rule (matches the print pipeline's longest-prefix resolution): the
-  // PARENT sku's mapping is the fallback for every colour, so parent-mapped =
-  // fully covered. Without a parent row, EVERY variant-group sku must be mapped
-  // — one override row alone must never count as "connected" (P1 2026-08-15).
-  const podCoverage = (parentSku, groupSkus, mappingSkus) => {
-    if (!mappingSkus) return false; // not loaded → fail closed
-    if (parentSku && mappingSkus.has(parentSku)) return true;
-    const groups = (groupSkus || []).filter(Boolean);
-    return groups.length > 0 && groups.every((sku) => mappingSkus.has(sku));
-  };
-  // Only a mapping WITH a garment covers a sku: since SnapWear A4 a garment-less
-  // row routes to no printer and checkout refuses the line (409), so counting
-  // it would put a product live that can never be bought.
-  const routableMappingSkus = (mappings) =>
-    new Set(mappings.filter((m) => m.garment).map((m) => m.sku).filter(Boolean));
-  const podConnected = product
-    ? podCoverage(
-        product.sku,
-        Array.isArray(product.variantGroups) ? product.variantGroups.map((g) => g?.sku) : [],
-        podMappingSkus
-      )
-    : false;
+  // Whether the SAVED product has a routable print connection, the price floor
+  // and "Inköp" — from the data layer (productFormData.js). `pod.loaded` =
+  // the connection is known (no false alarm during the fetch).
+  const pod = useProductPod({ podEnabled, isPodProduct: formData.isPodProduct, product, shopId });
+  const podConnected = pod.connected;
   // Gate: a POD product without a connection can be SAVED but never LIVE.
   // (Only asserted once mappings have loaded — no false alarm during the fetch.)
-  const podGateActive = podEnabled && formData.isPodProduct && podMappingSkus !== null && !podConnected;
-  // Break-even price floor (podPricing.js) — computable when the Studio stamped
-  // the template's cost on the product. Legacy POD products without the stamp
-  // simply get no floor here (the Studio enforces it on their next publish).
-  const podFloor = podEnabled && formData.isPodProduct && Number.isFinite(product?.podCostSek)
-    ? priceFloor(product.podCostSek)
-    : null;
+  const podGateActive = podEnabled && formData.isPodProduct && pod.loaded && !podConnected;
+  // The break-even price floor (kr incl. moms), or null when none is known.
+  const podFloor = pod.floor;
+  const saveProduct = useProductSave();
   // Margin target for the "räkna fram ett pris"-verktyget under prisfältet. Pure
   // UI state — it never leaves the form; only the button writes formData.price.
   // 40 % matches the Studio's default so the two surfaces suggest the same price.
@@ -733,19 +692,6 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
     setExistingGallery((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const deleteImageFromStorage = async (imageUrl) => {
-    try {
-      const url = new URL(imageUrl);
-      const pathStart = url.pathname.indexOf('/o/') + 3;
-      const pathEnd = url.pathname.indexOf('?');
-      const storagePath = decodeURIComponent(url.pathname.substring(pathStart, pathEnd));
-      await deleteObject(ref(storage, storagePath));
-    } catch (err) {
-      console.error('Error deleting image from storage:', err);
-      // non-fatal — continue
-    }
-  };
-
   // ----- save -----
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -790,233 +736,55 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
       }
     }
 
-    setSaving(true);
-    try {
-      const productId = product ? (product.documentId || product.id || formData.id) : `prod_${Date.now()}`;
+    const price = parseFloat(formData.price) || 0;
+    // Was-price for a REA. Only persist a genuine sale (> the selling price);
+    // anything else stores 0 (= not on sale), so a stale/lower value never shows.
+    const compareAtRaw = parseFloat(formData.compareAtPrice);
+    const compareAtPrice = Number.isFinite(compareAtRaw) && compareAtRaw > price ? compareAtRaw : 0;
+    const b2bPrice = parseFloat(formData.b2bPrice) || 0;
 
-      // Enforce per-shop SKU uniqueness (collision = two products on one URL /
-      // cart line). Load this shop's existing SKUs and de-dupe, excluding this
-      // product's own current SKU when editing.
-      const skuSnap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
-      const takenSkus = [];
-      skuSnap.forEach((docSnap) => {
-        if (docSnap.id === productId) return; // ignore self (edit)
-        const s = (docSnap.data().sku || '').trim();
-        if (s) takenSkus.push(s);
-      });
-      const requestedSku = resolvedSku;
-      resolvedSku = uniqueSku(resolvedSku, takenSkus, product ? (formData.sku || '') : '');
-      if (resolvedSku !== requestedSku) {
-        // Not silent: the operator may rely on the exact SKU externally.
-        toast(`SKU "${requestedSku}" används redan av en annan produkt — sparas som "${resolvedSku}".`, { icon: '⚠️' });
-      }
-
-      // Resolve images.
-      let mainImageUrl = formData.b2cImageUrl;
-      if (mainImageFile) {
-        mainImageUrl = await uploadImageToStorage(mainImageFile, `products/${shopId}/${productId}`, 'b2c_main');
-      }
-
-      let gallery = [...existingGallery];
-      for (let i = 0; i < galleryFiles.length; i++) {
-        const u = await uploadImageToStorage(galleryFiles[i], `products/${shopId}/${productId}`, `b2c_gallery_${Date.now()}_${i}`);
-        gallery.push(u);
-      }
-      // Orphan sweep: delete every image the product ARRIVED with that survives
-      // in neither the final gallery nor the final main image. Resolving here
-      // (instead of queueing on each remove click) is what makes re-picking the
-      // huvudbild safe in both directions — promoting a gallery image rescues
-      // it, and replacing the old huvudbild collects it.
-      const keptUrls = new Set([...gallery, mainImageUrl, formData.imageUrl].filter(Boolean));
-      const originalUrls = [
-        product?.b2cImageUrl,
-        product?.imageUrl,
-        ...(Array.isArray(product?.b2cImageGallery) ? product.b2cImageGallery : []),
-      ].filter(Boolean);
-      for (const url of new Set(originalUrls)) {
-        if (!keptUrls.has(url)) await deleteImageFromStorage(url);
-      }
-
-      const price = parseFloat(formData.price) || 0;
-      // Was-price for a REA. Only persist a genuine sale (> the selling price);
-      // anything else stores 0 (= not on sale), so a stale/lower value never shows.
-      const compareAtRaw = parseFloat(formData.compareAtPrice);
-      const compareAtPrice = Number.isFinite(compareAtRaw) && compareAtRaw > price ? compareAtRaw : 0;
-      const b2bPrice = parseFloat(formData.b2bPrice) || 0;
-
-      // Variants (v2.2): upload any pending per-variant images, persist the
-      // cleaned rail (`variantGroups`), then DERIVE the sellable rows — one
-      // per (group × size), or one for a sizeless group. Empty group sku/price
-      // auto-derive (sku from product-sku + label slug, price from the product
-      // price); per-size row skus append the size slug. All row skus are made
-      // unique within the product (server repricing + cart lineId key on them).
-      const editedGroups = formData.variantGroups.filter((g) => (g.label || '').trim());
-      // A nameless group with ANY data entered (sku/price/image/sizes) is a
-      // mistake to surface, not to silently drop. A fully empty one (just
-      // clicked "+ Lägg till variant") is dropped without fuss.
-      const namelessWithData = formData.variantGroups.some(
-        (g) => !(g.label || '').trim() && ((g.sku || '').trim() || g.images.length > 0 || g.sizes.length > 0 || parseFloat(g.price) > 0)
-      );
-      if (namelessWithData) {
-        toast.error('Varje variant behöver ett namn.');
-        setSaving(false);
+    // Variants (v2.2): the save uploads any pending per-variant images, persists
+    // the cleaned rail, then DERIVES the sellable rows — one per (group × size),
+    // or one for a sizeless group (utils/variantDerivation.js). Empty group
+    // sku/price auto-derive (sku from product-sku + label slug, price from the
+    // product price); per-size row skus append the size slug.
+    const editedGroups = formData.variantGroups.filter((g) => (g.label || '').trim());
+    // A nameless group with ANY data entered (sku/price/image/sizes) is a
+    // mistake to surface, not to silently drop. A fully empty one (just
+    // clicked "+ Lägg till variant") is dropped without fuss.
+    const namelessWithData = formData.variantGroups.some(
+      (g) => !(g.label || '').trim() && ((g.sku || '').trim() || g.images.length > 0 || g.sizes.length > 0 || parseFloat(g.price) > 0)
+    );
+    if (namelessWithData) {
+      toast.error('Varje variant behöver ett namn.');
+      return;
+    }
+    const labelSeen = new Set();
+    for (const g of editedGroups) {
+      const key = g.label.trim().toLowerCase();
+      if (labelSeen.has(key)) {
+        toast.error(`Två varianter heter "${g.label.trim()}" — ge dem olika namn.`);
         return;
       }
-      const labelSeen = new Set();
-      for (const g of editedGroups) {
-        const key = g.label.trim().toLowerCase();
-        if (labelSeen.has(key)) {
-          toast.error(`Två varianter heter "${g.label.trim()}" — ge dem olika namn.`);
-          setSaving(false);
-          return;
-        }
-        labelSeen.add(key);
-      }
+      labelSeen.add(key);
+    }
 
-      // Resolve each group's images first (the one async step: upload pending
-      // files in list order, keep already-uploaded URLs), then hand the
-      // resolved groups to the shared PURE derivation so this and the Design
-      // Studio publish wizard produce byte-identical rows. Money paths key on
-      // the row sku — see utils/variantDerivation.js.
-      const resolvedGroups = [];
-      for (const g of editedGroups) {
-        const label = g.label.trim();
-        const images = [];
-        for (let i = 0; i < g.images.length; i++) {
-          const im = g.images[i];
-          if (im.url) {
-            images.push(im.url);
-          } else if (im.file) {
-            images.push(await uploadImageToStorage(im.file, `products/${shopId}/${productId}`, `variant_${skuFromName(label)}_${i}`));
-          }
-        }
-        resolvedGroups.push({ ...g, images });
-      }
-      const { cleanGroups, cleanVariants } = deriveVariantsFromGroups(resolvedGroups, {
-        productSku: resolvedSku,
-        productPrice: price,
-        skuFromName,
+    setSaving(true);
+    try {
+      // The write itself — the SKU's uniqueness, the images, the variant rows,
+      // the POD live-gate and the screening notice — is the data layer's.
+      const result = await saveProduct({
+        product, shopId, formData, resolvedSku, mainImageFile, existingGallery, galleryFiles,
+        editedGroups, price, compareAtPrice, b2bPrice, b2bEnabled, podEnabled, pod, isPlatform,
       });
-
-      // POD LIVE-GATE, decided on the SKUs BEING SAVED (P1 fix 2026-08-15: the
-      // render-time check uses the SAVED sku, so editing the SKU could carry a
-      // stale "connected" verdict onto skus the Print Queue will never find).
-      // Mappings are fetched fresh if the initial load hasn't landed.
-      let podConnectedFinal = false;
-      if (podEnabled && formData.isPodProduct === true) {
-        let mappingSkus = podMappingSkus;
-        if (mappingSkus === null) {
-          try {
-            mappingSkus = routableMappingSkus(await listMappings(shopId));
-          } catch {
-            mappingSkus = new Set(); // unreadable → fail closed (draft)
-          }
-        }
-        podConnectedFinal = podCoverage(resolvedSku, cleanGroups.map((g) => g?.sku), mappingSkus);
-      }
-      const hasVariants = cleanVariants.length > 0;
-
-      // Build the persisted doc. Single price → BOTH consumer-price fields.
-      const data = {
-        name: formData.name,            // plain string going forward
-        sku: resolvedSku,               // guaranteed non-empty + per-shop-unique
-        category: formData.category,    // browse taxonomy / URL driver (was `group`)
-        tags: formData.tags,
-        hasVariants,
-        variantGroups: cleanGroups,
-        // v2.1 options-matrix is superseded by the rail — cleared on save so
-        // the storefront renders the grouped picker for re-saved products.
-        options: [],
-        variants: cleanVariants,
-        b2cPrice: price,
-        basePrice: price,               // keep in sync for the `b2cPrice || basePrice` fallback
-        compareAtPrice,                 // was-price for a REA (0 = not on sale)
-        // Wholesale price — only written for B2B shops (a non-B2B shop's
-        // products never gain the field). NOT folded into base/b2cPrice.
-        ...(b2bEnabled ? { b2bPrice } : {}),
-        isActive: formData.isActive,
-        // Always written so the boolean supersedes the legacy `featured` tag.
-        featured: formData.featured === true,
-        imageUrl: mainImageUrl || formData.imageUrl || '',
-        b2cImageUrl: mainImageUrl || '',
-        b2cImageGallery: gallery,
-        // POD marker — always written so unchecking persists.
-        isPodProduct: formData.isPodProduct === true,
-        availability: {
-          // LIVE-GATE (enforced at save, not only in the UI): an unconnected POD
-          // product is never written live. podMappingSkus === null (load raced
-          // the save) counts as unconnected — fail CLOSED, the seller can re-save
-          // once the connection exists.
-          b2c: formData.availability.b2c !== false
-            && !(podEnabled && formData.isPodProduct === true && !podConnectedFinal),
-          // Only carry the b2b availability flag for B2B shops, so a non-B2B
-          // shop's products never gain a stray key.
-          ...(b2bEnabled ? { b2b: formData.availability.b2b !== false } : {}),
-        },
-        descriptions: {
-          b2c: formData.descriptions.b2c || '',
-          b2cMoreInfo: formData.descriptions.b2cMoreInfo || '',
-        },
-        // Right-of-withdrawal (POD): always written so toggling OFF persists
-        // (a product can move from personalized → standard). Size guide is
-        // free text; empty string when unset.
-        isPersonalized: formData.isPersonalized === true,
-        sizeGuide: formData.sizeGuide || '',
-        weight: formData.weight,
-        dimensions: formData.dimensions,
-        shipping: formData.shipping,
-        // Per-product delivery modes (validated above: at least one is true).
-        delivery: { shipping: !!formData.delivery?.shipping, pickup: !!formData.delivery?.pickup },
-        updatedAt: serverTimestamp(),
-      };
-
-      if (formData.launchDate) data.launchDate = new Date(formData.launchDate);
-
-      if (!product) {
-        data.createdAt = serverTimestamp();
-        await addDoc(collection(db, 'products'), withShopId(data, shopId));
-        toast.success('Produkt tillagd');
-      } else {
-        if (!productId || !String(productId).trim()) {
-          toast.error('Fel: Produkt-ID saknas. Ladda om sidan.');
-          setSaving(false);
-          return;
-        }
-        const docRef = doc(db, 'products', productId);
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          // Platform reinstatement of a taken-down product: clear the stamp
-          // (and take it out of the review queue's taken_down state) so the
-          // seller owns the isActive toggle again. Only ever for platform —
-          // the rules reject both keys from a shop admin.
-          const reinstate = isPlatform && snap.data().takedown && formData.isActive === true
-            ? {
-                takedown: deleteField(),
-                ...(snap.data().screening?.status === 'taken_down' ? { 'screening.status': 'cleared' } : {}),
-              }
-            : {};
-          await updateDoc(docRef, { ...data, ...reinstate });
-        } else {
-          await setDoc(docRef, withShopId({ ...data, createdAt: serverTimestamp() }, shopId));
-        }
-        toast.success('Produkt uppdaterad');
-      }
-
-      if (formData.availability.b2c !== false && podEnabled && formData.isPodProduct === true && !podConnectedFinal) {
-        toast('Sparad som utkast — produkten visas i webbshoppen först när tryckkopplingen (med plagg valt) finns.', { icon: '🔒' });
-      }
-
-      // Brand screening notice (SnapWear A11) for a product that is going
-      // live. Advisory only — the save already happened; the server trigger
-      // stamps `screening` and the platform reviews (the client never writes it).
-      if (data.isActive === true && data.availability.b2c === true) {
-        const hits = screenProduct(data, await loadScreeningBlocklist());
-        if (hits.length > 0) toast(screeningNotice(hits), { icon: '⚠️', duration: 12000 });
+      if (!result?.saved) {
+        setSaving(false);
+        return;
       }
       onSaved?.();
     } catch (err) {
       console.error('Error saving product:', err);
-      toast.error('Misslyckades med att spara produkten');
+      toast.error(err?.userMessage || 'Misslyckades med att spara produkten');
       setSaving(false);
     }
   };
@@ -1288,16 +1056,16 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                     {/* podCostSek lagras EX moms (tryckeriets pris); säljaren ser
                         alltid inkl. moms (Mikael 2026-08-30). */}
                     <p className="mt-2 text-[13px] text-admin-text-muted">
-                      Inköp: <span className="font-medium text-admin-text">{Math.round(inklMoms(product.podCostSek))} kr</span> inkl. moms
+                      Inköp: <span className="font-medium text-admin-text">{pod.inkopKr} kr</span> inkl. moms
                     </p>
                     <p className={`mt-1 text-[12px] ${parseFloat(formData.price) < podFloor ? 'text-admin-critical-text' : 'text-admin-text-muted'}`}>
                       Prisgolv: <span className="font-medium">{podFloor} kr</span> — vid det priset tjänar du 0 kr
-                      (avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr inräknad).
+                      {pod.feeNote}
                     </p>
                     {(() => {
                       const pNow = parseFloat(formData.price);
-                      const profitNow = sellerProfitInkl(pNow, product.podCostSek);
-                      const marginNow = sellerMargin(pNow, product.podCostSek);
+                      const profitNow = pod.profitAt(pNow);
+                      const marginNow = pod.marginAt(pNow);
                       return profitNow != null && pNow >= podFloor ? (
                         <p className="mt-0.5 text-[12px] text-admin-text-muted">
                           Vid {pNow} kr tjänar du ca <span className="font-medium text-admin-text">{Math.round(profitNow)} kr</span> per försäljning
@@ -1308,10 +1076,9 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                     {/* Marginal → pris, samma verktyg som i Designstudion: skriv
                         målmarginalen, få ett …9-pris som faktiskt GER den marginalen
                         (priceForMargin är avgiftsmedveten), aldrig under golvet. */}
-                    {(() => {
+                    {pod.suggestPrice && (() => {
                       const m = parseFloat(podMarginTarget);
-                      const raw = Number.isFinite(m) ? priceForMargin(product.podCostSek, m / 100) : null;
-                      const suggested = raw == null ? null : Math.max(roundUpTo9(raw), podFloor);
+                      const suggested = Number.isFinite(m) ? pod.suggestPrice(m) : null;
                       // flex-wrap: fältet ligger i en max-w-xs-kolumn, så
                       // förhandsvisning + knapp lägger sig på egen rad när det knappar.
                       return (
@@ -1486,7 +1253,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
               </label>
               {takenDown && (
                 <p className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] leading-relaxed text-admin-caution-text">
-                  {isPlatform
+                  {isPlatform && TAKEDOWN_REINSTATE_IN_FORM
                     ? 'Avpublicerad av plattformen efter en anmälan. Markera Aktiv och spara för att återpublicera — spärren tas då bort.'
                     : 'Produkten har stängts av av plattformen efter en anmälan om varumärkes- eller upphovsrättsintrång. Kontakta plattformen om du anser att det är fel.'}
                 </p>
@@ -1502,7 +1269,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                 availability object (never replace it) so the b2c toggle can't
                 clobber the sibling b2b key, and vice versa. */}
             <CardSection title="Publicering" bodyClassName="space-y-3">
-              {podEnabled && (
+              {podEnabled && POD_FLAG_EDITABLE && (
                 <>
                   <label className="flex items-center gap-2 text-[13px] text-admin-text">
                     <input
@@ -1519,7 +1286,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                         // While mappings are still loading (podMappingSkus null) an
                         // EXISTING product's connection state is unknown — fail SAFE
                         // and warn anyway rather than silently skipping the guard.
-                        if (formData.isPodProduct && !next && (podConnected || (product && podMappingSkus === null))) {
+                        if (formData.isPodProduct && !next && (podConnected || (product && !pod.loaded))) {
                           const ok = window.confirm(
                             'Produkten har en tryckkoppling. Om du tar bort POD-markeringen slutar kopplingen att gälla och produkten behandlas som en vanlig produkt. Fortsätta?'
                           );
@@ -1602,6 +1369,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
             </CardSection>
 
             {/* Right of withdrawal / made-to-order (POD consumer law). */}
+            {PERSONALIZED_EDITABLE && (
             <CardSection title="Ångerrätt" bodyClassName="space-y-3">
               <label className="flex items-center gap-2 text-[13px] text-admin-text">
                 <input
@@ -1619,6 +1387,7 @@ const ProductForm = ({ product, shopId, availableCategories = [], availableTags 
                 Lämna omarkerad för en standardprodukt med full ångerrätt.
               </p>
             </CardSection>
+            )}
 
             {/* Organization — tags (category lives in the main column, Shopify-style) */}
             <CardSection title="Organisation" bodyClassName="space-y-4">

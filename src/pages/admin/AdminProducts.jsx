@@ -6,8 +6,7 @@
 // collection for the form's autocomplete.
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { collection, getDocs, doc, deleteDoc, updateDoc, writeBatch, serverTimestamp, query, where } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { LIST_SHOWS_VARIANT_COUNT, loadShopProducts, deleteProduct, setProductFeatured, saveProductOrder, openProduct } from './adminProductsData';
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
@@ -118,13 +117,10 @@ const AdminProducts = () => {
   const fetchProducts = async () => {
     try {
       setLoading(true);
-      const snap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
-      const data = [];
+      const data = await loadShopProducts(shopId);
       const categories = new Set();
       const tags = new Set();
-      snap.forEach((d) => {
-        const p = { ...d.data(), id: d.id };
-        data.push(p);
+      data.forEach((p) => {
         // category (new) with fallback to the legacy `group` field.
         const cat = (p.category || p.group || '').trim();
         if (cat) categories.add(cat);
@@ -162,7 +158,7 @@ const AdminProducts = () => {
     if (!window.confirm('Är du säker på att du vill ta bort denna produkt? Denna åtgärd kan inte ångras.')) return;
     try {
       setLoading(true);
-      await deleteDoc(doc(db, 'products', productId));
+      await deleteProduct(productId);
       setProducts((prev) => prev.filter((p) => p.id !== productId));
       if (editing?.product?.id === productId) setEditing(null);
       toast.success('Produkten har tagits bort');
@@ -186,7 +182,7 @@ const AdminProducts = () => {
     const next = !isProductFeatured(p);
     setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, featured: next } : x)));
     try {
-      await updateDoc(doc(db, 'products', p.id), { featured: next, updatedAt: serverTimestamp() });
+      await setProductFeatured(p.id, next);
     } catch (err) {
       console.error('Error toggling featured:', err);
       setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, featured: p.featured } : x)));
@@ -214,15 +210,7 @@ const AdminProducts = () => {
   const saveOrder = async () => {
     try {
       setSavingOrder(true);
-      // Positions are just the draft index. Batched writes, chunked well under
-      // Firestore's 500-op batch limit.
-      for (let i = 0; i < orderDraft.length; i += 400) {
-        const batch = writeBatch(db);
-        orderDraft.slice(i, i + 400).forEach((p, j) => {
-          batch.update(doc(db, 'products', p.id), { sortOrder: i + j, updatedAt: serverTimestamp() });
-        });
-        await batch.commit();
-      }
+      await saveProductOrder(orderDraft);
       const orderIdx = new Map(orderDraft.map((p, i) => [p.id, i]));
       setProducts((prev) => prev.map((p) => (orderIdx.has(p.id) ? { ...p, sortOrder: orderIdx.get(p.id) } : p)));
       setSortMode(false);
@@ -366,7 +354,7 @@ const AdminProducts = () => {
         </button>
       ),
     },
-  ];
+  ].filter((c) => c.key !== 'variants' || LIST_SHOWS_VARIANT_COUNT);
 
   const rows = filteredProduct ? [filteredProduct] : products;
 
@@ -516,7 +504,14 @@ const AdminProducts = () => {
           rows={rows}
           rowKey={(p) => p.id}
           loading={loading}
-          onRowClick={(p) => setEditing({ product: { ...p, documentId: p.id } })}
+          onRowClick={(p) =>
+            openProduct(p)
+              .then((product) => setEditing({ product }))
+              .catch((err) => {
+                console.error('Error opening product:', err);
+                toast.error('Kunde inte öppna produkten: ' + (err.message || 'Okänt fel'));
+              })
+          }
           empty="Inga produkter hittades."
           toolbar={
             <div className="w-full sm:max-w-xs">

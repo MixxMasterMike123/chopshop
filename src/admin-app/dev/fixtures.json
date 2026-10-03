@@ -34,6 +34,22 @@
         "vatNumber": "SE000000000001",
         "sellerType": "company",
         "updatedAt": "2026-10-01T09:00:00.000Z"
+      },
+      "legal": {
+        "_note": "Unit FE: the platform-terms status and the legal-pages adoption the dev API starts from (dev-api.mjs SETTINGS_LEGAL_ROUTES).",
+        "terms": { "accepted": true, "inGrace": false, "currentVersion": "2026-09-07" },
+        "pages": {
+          "acceptanceId": "dev-adoption-a",
+          "acceptedAt": "2026-10-01T09:30:00.000Z",
+          "custom": false,
+          "customPages": { "angerratt": false, "integritetspolicy": false, "kopvillkor": false },
+          "pageSha256": {},
+          "pod": true,
+          "source": "worker",
+          "templateVersion": "2026-09-07",
+          "textsSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "version": null
+        }
       }
     },
     "test-shop-b": {
@@ -70,6 +86,46 @@
         "sellerType": null,
         "updatedAt": null
       }
+    },
+    "test-shop-c": {
+      "shop": {
+        "tenantId": "test-shop-c",
+        "shopName": "Test Shop C",
+        "supportEmail": "support@shop-c.example.com",
+        "status": "active",
+        "published": false,
+        "defaultLocale": "sv-SE",
+        "currency": "SEK",
+        "vatRateBp": 2500,
+        "features": {
+          "pod": false,
+          "pickup": true,
+          "affiliate": false,
+          "discountCodes": false,
+          "productReviews": false,
+          "abandonedCheckout": false,
+          "contentStudio": false,
+          "marketingMaterials": false,
+          "b2b": false,
+          "dining": false,
+          "ambassador": false,
+          "campaigns": false,
+          "writers": false
+        }
+      },
+      "settings": {
+        "storeIdentity": {},
+        "returnAddress": null,
+        "vatRegistered": null,
+        "vatNumber": null,
+        "sellerType": null,
+        "updatedAt": null
+      },
+      "legal": {
+        "_note": "Unit FE: a new shop with nothing answered: no return address, no VAT answer, no adoption.",
+        "terms": { "accepted": true, "inGrace": false, "currentVersion": "2026-09-07" },
+        "pages": null
+      }
     }
   },
   "users": [
@@ -91,8 +147,51 @@
       "platform": true,
       "memberships": [],
       "actingAs": []
+    },
+    {
+      "user": { "id": "user-platform-acting", "email": "platform-acting@example.com", "name": "Test Operator Acting" },
+      "password": "dev-password-3",
+      "accountType": "platform_admin",
+      "platform": true,
+      "memberships": [],
+      "actingAs": [
+        { "tenantId": "test-shop-a", "expiresAt": "2099-01-01T00:00:00.000Z" }
+      ]
+    },
+    {
+      "user": { "id": "user-tenant-admin-c", "email": "admin-c@example.com", "name": "Test Admin C" },
+      "password": "dev-password-4",
+      "accountType": "tenant_admin",
+      "platform": false,
+      "memberships": [
+        { "tenantId": "test-shop-c", "role": "admin" }
+      ],
+      "actingAs": []
+    },
+    {
+      "_note": "Unit FB: an admin of several shops (two active, one suspended): the shop picker and Byt butik.",
+      "user": { "id": "user-tenant-admin-multi", "email": "admin-multi@example.com", "name": "Test Admin Multi" },
+      "password": "dev-password-5",
+      "accountType": "tenant_admin",
+      "platform": false,
+      "memberships": [
+        { "tenantId": "test-shop-a", "role": "admin" },
+        { "tenantId": "test-shop-b", "role": "admin" },
+        { "tenantId": "test-shop-c", "role": "admin" }
+      ],
+      "actingAs": []
     }
   ],
+  "connectScenarios": {
+    "_note": "Unit FF: the shop's Stripe Connect state per scenario; pick one with the cookie admin_dev_connect=<name> (dev-api.mjs).",
+    "notfound": { "notFound": true },
+    "disabled": { "enabled": false, "hasAccount": false, "status": "none", "chargesEnabled": false, "requirementsDue": [] },
+    "none": { "enabled": true, "hasAccount": false, "status": "none", "chargesEnabled": false, "requirementsDue": [] },
+    "restricted": { "enabled": true, "hasAccount": true, "status": "restricted", "chargesEnabled": false, "requirementsDue": ["external_account", "individual.verification.document", "tos_acceptance.date", "some.unmapped_code"] },
+    "pending": { "enabled": true, "hasAccount": true, "status": "pending", "chargesEnabled": false, "requirementsDue": [] },
+    "active": { "enabled": true, "hasAccount": true, "status": "active", "chargesEnabled": true, "requirementsDue": [], "payoutDelayDays": 7 },
+    "stripedown": { "enabled": true, "hasAccount": true, "status": "onboarding", "chargesEnabled": false, "requirementsDue": [], "stripeDown": true }
+  },
   "resetTokens": {
     "devresettoken0000000001": "user-tenant-admin"
   }

@@ -21,24 +21,24 @@ export { default as ForgotPasswordPage } from '../pages/ForgotPasswordPage.jsx';
 export { default as ResetPasswordPage } from './ResetPasswordPage.jsx';
 
 // ── the shop admin (AppLayout shell; FB …) ──
-export const AdminDashboard = pending('AdminDashboard');
-export const AdminProducts = pending('AdminProducts');
-export const AdminOrders = pending('AdminOrders');
-export const AdminOrderDetail = pending('AdminOrderDetail');
+export { default as AdminDashboard } from '../pages/admin/AdminDashboard.jsx';
+export { default as AdminProducts } from '../pages/admin/AdminProducts.jsx';
+export { default as AdminOrders } from '../pages/admin/AdminOrders.jsx';
+export { default as AdminOrderDetail } from '../pages/admin/AdminOrderDetail.jsx';
 export const AdminCollections = pending('AdminCollections');
 export const AdminCollectionEdit = pending('AdminCollectionEdit');
 export const AdminMenu = pending('AdminMenu');
 export const AdminPages = pending('AdminPages');
 export const AdminPageEdit = pending('AdminPageEdit');
 export const AdminStorefront = pending('AdminStorefront');
-export const AdminSettings = pending('AdminSettings');
+export { default as AdminSettings } from '../pages/admin/AdminSettings.jsx';
 export const AdminPayments = pending('AdminPayments');
 export const AdminUsers = pending('AdminUsers');
-export const AdminPlatformTerms = pending('AdminPlatformTerms');
+export { default as AdminPlatformTerms } from '../pages/admin/AdminPlatformTerms.jsx';
 export const PodAdminPage = pending('PodAdminPage');
 
 // ── the platform console (PlatformLayout shell, always dark) ──
-export const PlatformShops = pendingPlatform('PlatformShops');
+export { default as PlatformShops } from './PendingPlatformShops.jsx'; // stand-in with "Öppna admin" (FB) until FI
 export const PlatformShopDetail = pendingPlatform('PlatformShopDetail');
 export const PlatformAddons = pendingPlatform('PlatformAddons');
 export const PlatformUsers = pendingPlatform('PlatformUsers');

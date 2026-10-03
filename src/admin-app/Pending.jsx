@@ -1,9 +1,14 @@
 // A stand-in for an admin or platform page that still reads from Firebase.
 // Its route exists (so the router, the guards, the providers and the client
 // are proven end to end); it shows the page's name, the active shop and the
-// signed-in user. A unit swaps the page in by its ONE line of pages.jsx.
+// signed-in user, inside the shell its page mounts (AppLayout for the admin,
+// PlatformLayout for the console: unit FB), so the shells can be looked at
+// before every page is swapped. A unit swaps the page in by its ONE line of
+// pages.jsx.
 
 import React from 'react';
+import AppLayout from '../components/layout/AppLayout';
+import PlatformLayout from '../components/platform/PlatformLayout';
 import { useAuth } from './providers/Session.jsx';
 import { useShopId } from './providers/ActiveShop.jsx';
 
@@ -12,14 +17,13 @@ export function pending(name) {
     const { currentUser } = useAuth();
     const shopId = useShopId();
     return (
-      <main
-        className="min-h-screen bg-admin-bg text-admin-text flex items-center justify-center p-8"
-        data-pending-page={name}
-      >
-        <p className="text-sm text-admin-text-muted">
-          {name} · {shopId} · {currentUser?.email}
-        </p>
-      </main>
+      <AppLayout>
+        <div className="py-16 text-center" data-pending-page={name}>
+          <p className="text-sm text-admin-text-muted">
+            {name} · {shopId} · {currentUser?.email}
+          </p>
+        </div>
+      </AppLayout>
     );
   }
   Pending.displayName = `Pending(${name})`;
@@ -31,14 +35,13 @@ export function pendingPlatform(name) {
   function PendingPlatform() {
     const { currentUser } = useAuth();
     return (
-      <main
-        className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center p-8"
-        data-pending-page={name}
-      >
-        <p className="text-sm text-gray-400">
-          {name} · {currentUser?.email}
-        </p>
-      </main>
+      <PlatformLayout>
+        <div className="px-6 lg:px-10 py-16 text-center" data-pending-page={name}>
+          <p className="text-sm text-gray-400">
+            {name} · {currentUser?.email}
+          </p>
+        </div>
+      </PlatformLayout>
     );
   }
   PendingPlatform.displayName = `Pending(${name})`;

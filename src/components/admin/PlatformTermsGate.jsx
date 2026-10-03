@@ -18,24 +18,19 @@
  * failed read costs at most one session — far better than locking a paying
  * seller out of their own admin over a transient Firestore hiccup. The hard
  * consequences (checkout) hang off other gates, not this one.
+ *
+ * The terms, the shop's acceptance and the act of accepting come from
+ * ./platformTermsData (the Cloudflare admin build swaps that module: the
+ * API's legal routes).
  */
 
 import React, { useEffect, useState } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
 import DOMPurify from 'dompurify';
-import { db } from '../../firebase/config';
 import { useAuth } from '../../contexts/AuthContext';
 import { getImpersonation } from '../../config/impersonation';
 import { isUnresolvedShopId } from '../../config/tenancy';
-import {
-  hasAcceptedCurrentPlatformTerms,
-  recordPlatformTermsAcceptance,
-} from '../../utils/legalAcceptance';
-import { renderPlatformTerms } from '../../utils/platformTermsRenderer';
+import { acceptPlatformTerms, initialPlatformTerms, loadPlatformTerms } from './platformTermsData';
 import { Card, CardSection, Button } from './ui';
-
-// Rendered once per module — the templates are constant.
-const RENDERED = renderPlatformTerms();
 
 const fmtDate = (iso) => {
   const s = String(iso || '').trim();
@@ -76,6 +71,7 @@ const LegalHtml = ({ html }) => (
 
 const PlatformTermsGate = ({ shopId, children }) => {
   const { currentUser, userProfile, isPlatform } = useAuth();
+  // { rendered, accepted, acceptance } of ./platformTermsData; null = unread.
   const [shopDoc, setShopDoc] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [accepted, setAccepted] = useState(false);
@@ -96,13 +92,13 @@ const PlatformTermsGate = ({ shopId, children }) => {
     setLoaded(false);
     (async () => {
       try {
-        const snap = await getDoc(doc(db, 'shops', shopId));
+        const state = await loadPlatformTerms(shopId);
         if (!alive) return;
-        setShopDoc(snap.exists() ? snap.data() : {});
+        setShopDoc(state);
       } catch (e) {
         if (!alive) return;
         // Fail OPEN: render the admin. Acceptance is enforced again next load.
-        console.warn('PlatformTermsGate: could not read shop doc, letting through', e);
+        console.warn('PlatformTermsGate: could not read the terms state, letting through', e);
         setShopDoc(null);
       } finally {
         if (alive) setLoaded(true);
@@ -114,11 +110,12 @@ const PlatformTermsGate = ({ shopId, children }) => {
   }, [eligible, shopId]);
 
   const mustAccept =
-    eligible && loaded && shopDoc !== null && !accepted && !hasAcceptedCurrentPlatformTerms(shopDoc);
+    eligible && loaded && shopDoc !== null && !accepted && !shopDoc.accepted;
 
   if (!mustAccept) return children;
 
-  const prior = shopDoc?.platformTerms;
+  const RENDERED = shopDoc.rendered || initialPlatformTerms();
+  const prior = shopDoc.acceptance;
   const staleVersion =
     prior && String(prior.acceptedAt || '').trim() && prior.version !== RENDERED.version;
 
@@ -126,7 +123,7 @@ const PlatformTermsGate = ({ shopId, children }) => {
     setError('');
     setSaving(true);
     try {
-      await recordPlatformTermsAcceptance({ shopId, user: currentUser });
+      await acceptPlatformTerms({ shopId, user: currentUser, version: RENDERED.version });
       setAccepted(true);
     } catch (e) {
       console.error('PlatformTermsGate: acceptance failed', e);

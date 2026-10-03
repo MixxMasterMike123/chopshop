@@ -1,0 +1,391 @@
+{
+  "_note": "INVENTED products for the admin dev API (src/admin-app/dev/products-dev.mjs, unit FC). No real shop, product or person. Images are generated SVG placeholders.",
+  "shops": {
+    "test-shop-a": {
+      "objects": {
+        "obj-towel": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiNlOWU0ZGEiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjN2E2YTU1IiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjN2E2YTU1Ij5IYW5kZHVrPC90ZXh0Pjwvc3ZnPg=="
+        },
+        "obj-tee-front": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiNmMWYxZWYiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjMjIyMjIyIiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMjIyMjIyIj5GcmFtPC90ZXh0Pjwvc3ZnPg=="
+        },
+        "obj-tee-back": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiNmMWYxZWYiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjNTU1NTU1IiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjNTU1NTU1Ij5CYWs8L3RleHQ+PC9zdmc+"
+        },
+        "obj-tee-detail": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiNkY2RjZDgiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjMzMzMzMzIiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMzMzMzMzIj5EZXRhbGo8L3RleHQ+PC9zdmc+"
+        },
+        "obj-tee-model": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiNjZmQ4ZGMiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjMjYzMjM4IiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMjYzMjM4Ij5Nb2RlbGw8L3RleHQ+PC9zdmc+"
+        },
+        "obj-tee-black": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiMxZDFkMWQiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjZWVlZWVlIiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZWVlZWVlIj5TdmFydDwvdGV4dD48L3N2Zz4="
+        },
+        "obj-tee-black-2": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiMyYTJhMmEiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjYmJiYmJiIiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjYmJiYmJiIj5TdmFydCAyPC90ZXh0Pjwvc3ZnPg=="
+        },
+        "obj-tee-white": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiNmYWZhZmEiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjOTk5OTk5IiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjOTk5OTk5Ij5WaXQ8L3RleHQ+PC9zdmc+"
+        },
+        "obj-tee-sand": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiNkOGM3YTUiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjNWQ0YTJiIiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjNWQ0YTJiIj5TYW5kPC90ZXh0Pjwvc3ZnPg=="
+        },
+        "obj-hoodie": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiMzZDRhM2YiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjZDllMmRhIiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZDllMmRhIj5Ib29kaWU8L3RleHQ+PC9zdmc+"
+        },
+        "obj-cap": {
+          "contentType": "image/svg+xml",
+          "url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgNDAwIDQwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIGZpbGw9IiM4YTJmMmYiLz48Y2lyY2xlIGN4PSIyMDAiIGN5PSIxNzAiIHI9IjkwIiBmaWxsPSIjZjVlNmU2IiBvcGFjaXR5PSIwLjg1Ii8+PHRleHQgeD0iMjAwIiB5PSIzMzAiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZjVlNmU2Ij5LZXBzPC90ZXh0Pjwvc3ZnPg=="
+        }
+      },
+      "products": [
+        {
+          "product": {
+            "description": "Tvättad linne, 50 × 70 cm.",
+            "currency": "SEK",
+            "isPod": false,
+            "screeningStatus": "approved",
+            "weightGrams": 220,
+            "allowShipping": true,
+            "allowPickup": true,
+            "shippingRates": {
+              "sweden": {
+                "cost": 4900
+              }
+            },
+            "featured": true,
+            "sortOrder": 0,
+            "compareAtPriceMinor": null,
+            "category": "Hem",
+            "tags": [
+              "Linne",
+              "Nyhet"
+            ],
+            "moreInfo": "<p>Tvätta i 40 grader.</p>",
+            "sizeGuide": null,
+            "size": null,
+            "brand": null,
+            "eanCode": null,
+            "stock": null,
+            "launchDate": null,
+            "isPersonalized": false,
+            "productId": "prod-towel",
+            "sku": "linnehandduk",
+            "name": "Linnehandduk",
+            "priceMinor": 34900,
+            "status": "active",
+            "handle": "Linnehandduk_linnehandduk"
+          },
+          "variants": [],
+          "images": [
+            {
+              "objectId": "obj-towel"
+            }
+          ],
+          "publication": {
+            "published": true,
+            "publishedAt": "2026-09-20T10:00:00.000Z"
+          }
+        },
+        {
+          "product": {
+            "description": "Ekologisk bomull, tryck fram och bak.",
+            "currency": "SEK",
+            "isPod": true,
+            "screeningStatus": "approved",
+            "weightGrams": 180,
+            "allowShipping": true,
+            "allowPickup": false,
+            "shippingRates": null,
+            "featured": false,
+            "sortOrder": 1,
+            "compareAtPriceMinor": 34900,
+            "category": "Tröjor",
+            "tags": [
+              "Tryck"
+            ],
+            "moreInfo": null,
+            "sizeGuide": "S: bröst 96 cm\nM: bröst 102 cm\nL: bröst 108 cm",
+            "size": null,
+            "brand": null,
+            "eanCode": null,
+            "stock": null,
+            "launchDate": null,
+            "isPersonalized": false,
+            "productId": "prod-tee",
+            "sku": "tshirt-fjall",
+            "name": "T-shirt Fjäll",
+            "priceMinor": 29900,
+            "status": "active",
+            "handle": "T-shirt Fjäll_tshirt-fjall"
+          },
+          "variants": [
+            {
+              "variantId": "var-tee-svart-s",
+              "sku": "tshirt-fjall-svart-s",
+              "label": "Svart / S",
+              "priceMinor": 29900,
+              "active": true,
+              "group": "Svart",
+              "size": "S",
+              "position": 0,
+              "onOrder": true
+            },
+            {
+              "variantId": "var-tee-svart-m",
+              "sku": "tshirt-fjall-svart-m",
+              "label": "Svart / M",
+              "priceMinor": 29900,
+              "active": true,
+              "group": "Svart",
+              "size": "M",
+              "position": 1
+            },
+            {
+              "variantId": "var-tee-svart-l",
+              "sku": "tshirt-fjall-svart-l",
+              "label": "Svart / L",
+              "priceMinor": 29900,
+              "active": true,
+              "group": "Svart",
+              "size": "L",
+              "position": 2
+            },
+            {
+              "variantId": "var-tee-vit-s",
+              "sku": "tshirt-fjall-vit-s",
+              "label": "Vit / S",
+              "priceMinor": 29900,
+              "active": true,
+              "group": "Vit",
+              "size": "S",
+              "position": 3
+            },
+            {
+              "variantId": "var-tee-vit-m",
+              "sku": "tshirt-fjall-vit-m",
+              "label": "Vit / M",
+              "priceMinor": 29900,
+              "active": true,
+              "group": "Vit",
+              "size": "M",
+              "position": 4
+            },
+            {
+              "variantId": "var-tee-sand",
+              "sku": "tshirt-fjall-sand",
+              "label": "Sand",
+              "priceMinor": 32900,
+              "active": true,
+              "group": "Sand",
+              "size": null,
+              "position": 5
+            }
+          ],
+          "images": [
+            {
+              "objectId": "obj-tee-front"
+            },
+            {
+              "objectId": "obj-tee-back"
+            },
+            {
+              "objectId": "obj-tee-detail"
+            },
+            {
+              "objectId": "obj-tee-model"
+            },
+            {
+              "objectId": "obj-tee-black",
+              "variantId": "var-tee-svart-s"
+            },
+            {
+              "objectId": "obj-tee-black-2",
+              "variantId": "var-tee-svart-s"
+            },
+            {
+              "objectId": "obj-tee-white",
+              "variantId": "var-tee-vit-s"
+            },
+            {
+              "objectId": "obj-tee-sand",
+              "variantId": "var-tee-sand"
+            }
+          ],
+          "publication": {
+            "published": true,
+            "publishedAt": "2026-09-20T10:00:00.000Z"
+          }
+        },
+        {
+          "product": {
+            "description": "Tjock hoodie med borstad insida.",
+            "currency": "SEK",
+            "isPod": true,
+            "screeningStatus": "approved",
+            "weightGrams": 520,
+            "allowShipping": true,
+            "allowPickup": false,
+            "shippingRates": null,
+            "featured": false,
+            "sortOrder": 2,
+            "compareAtPriceMinor": null,
+            "category": "Tröjor",
+            "tags": [],
+            "moreInfo": null,
+            "sizeGuide": null,
+            "size": null,
+            "brand": null,
+            "eanCode": null,
+            "stock": null,
+            "launchDate": null,
+            "isPersonalized": false,
+            "productId": "prod-hoodie",
+            "sku": "hoodie-skiss",
+            "name": "Hoodie Skiss",
+            "priceMinor": 59900,
+            "status": "active",
+            "handle": "Hoodie Skiss_hoodie-skiss"
+          },
+          "variants": [],
+          "images": [
+            {
+              "objectId": "obj-hoodie"
+            }
+          ],
+          "publication": {
+            "published": false,
+            "publishedAt": null
+          }
+        },
+        {
+          "product": {
+            "description": null,
+            "currency": "SEK",
+            "isPod": false,
+            "screeningStatus": null,
+            "weightGrams": 0,
+            "allowShipping": true,
+            "allowPickup": false,
+            "shippingRates": null,
+            "featured": false,
+            "sortOrder": null,
+            "compareAtPriceMinor": null,
+            "category": "Hem",
+            "tags": [],
+            "moreInfo": null,
+            "sizeGuide": null,
+            "size": null,
+            "brand": null,
+            "eanCode": null,
+            "stock": null,
+            "launchDate": null,
+            "isPersonalized": false,
+            "productId": "prod-mug",
+            "sku": "kaffemugg",
+            "name": "Kaffemugg",
+            "priceMinor": 19900,
+            "status": "draft",
+            "handle": "Kaffemugg_kaffemugg"
+          },
+          "variants": [],
+          "images": [],
+          "publication": null
+        },
+        {
+          "product": {
+            "description": null,
+            "currency": "SEK",
+            "isPod": false,
+            "screeningStatus": "blocked",
+            "weightGrams": 0,
+            "allowShipping": true,
+            "allowPickup": false,
+            "shippingRates": null,
+            "featured": false,
+            "sortOrder": null,
+            "compareAtPriceMinor": null,
+            "category": "Accessoarer",
+            "tags": [],
+            "moreInfo": null,
+            "sizeGuide": null,
+            "size": null,
+            "brand": null,
+            "eanCode": null,
+            "stock": null,
+            "launchDate": null,
+            "isPersonalized": false,
+            "productId": "prod-cap",
+            "sku": "keps-retro",
+            "name": "Keps Retro",
+            "priceMinor": 24900,
+            "status": "active",
+            "handle": "Keps Retro_keps-retro"
+          },
+          "variants": [],
+          "images": [
+            {
+              "objectId": "obj-cap"
+            }
+          ],
+          "publication": {
+            "published": false,
+            "publishedAt": "2026-09-01T10:00:00.000Z"
+          },
+          "takenDown": true
+        },
+        {
+          "product": {
+            "description": null,
+            "currency": "SEK",
+            "isPod": false,
+            "screeningStatus": "approved",
+            "weightGrams": 0,
+            "allowShipping": true,
+            "allowPickup": false,
+            "shippingRates": null,
+            "featured": false,
+            "sortOrder": null,
+            "compareAtPriceMinor": null,
+            "category": null,
+            "tags": [],
+            "moreInfo": null,
+            "sizeGuide": null,
+            "size": null,
+            "brand": null,
+            "eanCode": null,
+            "stock": null,
+            "launchDate": null,
+            "isPersonalized": false,
+            "productId": "prod-old",
+            "sku": "gammal-vara",
+            "name": "Gammal vara",
+            "priceMinor": 9900,
+            "status": "archived",
+            "handle": "Gammal vara_gammal-vara"
+          },
+          "variants": [],
+          "images": [],
+          "publication": null
+        }
+      ],
+      "quotes": {
+        "prod-tee": {
+          "inkopMinor": 14000,
+          "priceFloorMinor": 25300,
+          "currency": "SEK"
+        }
+      }
+    }
+  }
+}

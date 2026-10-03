@@ -23,8 +23,14 @@ import { setRequestShopId } from '../../api/admin/client.js';
 import { resolveActiveShopId, shopEntryOf, usableShopIds } from '../../api/admin/session.js';
 import { useAuth } from './Session.jsx';
 import { getChosenShopId, setChosenShopId, shopIdOnArrival, subscribeChosenShopId } from './activeShopStore.js';
+import { publishActingAs } from '../replacements/impersonation.js';
 
-const ARRIVAL_SHOP_ID = shopIdOnArrival();
+// `?shopId=` of the arrival ranks first until the tab chooses again (the
+// picker, "Byt butik", the intake): then the choice decides (CP5-FB).
+let arrivalShopId = shopIdOnArrival();
+subscribeChosenShopId(() => {
+  arrivalShopId = null;
+});
 
 const ShopContext = createContext(UNRESOLVED_SHOP_ID);
 const ActiveShopContext = createContext({
@@ -51,12 +57,15 @@ export function ShopProvider({ children, tree = 'admin' }) {
 
   const usable = useMemo(() => (tree === 'admin' ? usableShopIds(me) : []), [me, tree]);
   const shopId = useMemo(
-    () => (tree === 'admin' ? resolveActiveShopId(me, { requested: ARRIVAL_SHOP_ID, chosen }) : null),
+    () => (tree === 'admin' ? resolveActiveShopId(me, { requested: arrivalShopId, chosen }) : null),
     [me, chosen, tree],
   );
 
   // The client's X-Shop-Id, before any child renders or runs an effect.
   setRequestShopId(shopId);
+  // The open grants and the tab's shop, for getImpersonation() (CP5-FB:
+  // the banner, the shell's nav offset, the terms gate).
+  publishActingAs({ grants: actingAs, shopId });
 
   // The shop in use is this tab's choice from now on (a reload keeps it after
   // the `?shopId=` of the arrival has been stripped from the address).

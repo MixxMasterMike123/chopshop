@@ -1,15 +1,13 @@
 // AdminSettings.jsx — store/application settings. Add-ons are controlled per
 // shop from the PLATFORM console (/addons); the old per-user wagon toggle was
 // removed (add-ons S4, docs/ADDONS_PLATFORM_CONTROL_PLAN.md).
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { addDoc, collection, doc, getDocs, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import DOMPurify from 'dompurify';
 import AppLayout from '../../components/layout/AppLayout';
 import toast from 'react-hot-toast';
-import { db } from '../../firebase/config';
 import { STORE } from '../../config/store';
 import { loadShopConfig, saveShopConfig, loadCartRecovery, saveCartRecovery, loadReviewSettings, saveReviewSettings } from '../../config/shopConfig';
-import { withShopId } from '../../config/withShopId';
 import { APP_URLS } from '../../config/urls';
 import { useShopId } from '../../contexts/ShopContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -22,8 +20,19 @@ import {
   LEGAL_TEMPLATE_DISCLAIMER,
 } from '../../config/legalTemplates';
 import { renderLegalPage } from '../../utils/legalPageRenderer';
-import { recordLegalAcceptance } from '../../utils/legalAcceptance';
+import { recordLegalAcceptance, renderAcceptedLegalTexts } from '../../utils/legalAcceptance';
+import {
+  LEGAL_TEXTS_IN_SETTINGS,
+  PLATFORM_OWNED_FIELDS,
+  collectCustomHtml,
+  legalTextsChanged,
+  loadLegalState,
+  openLegalText,
+  revertLegalText,
+  takeOverLegalText,
+} from './adminSettingsData';
 import PickupLocationsEditor from '../../components/admin/PickupLocationsEditor';
+import { LEGAL_DOC_TYPO } from '../../components/admin/PlatformTermsGate';
 import {
   Page,
   Card,
@@ -42,11 +51,11 @@ const AdminSettings = () => {
   const [storeForm, setStoreForm] = useState(STORE);
   // The shop this admin manages (impersonation > shop-admin's own shop > path).
   // Config MUST read/write THIS shop, not the default — else a non-default shop
-  // (e.g. 'sillmans') would save to 'b8shield' and the storefront, which reads
+  // (e.g. 'sillmans') would save to the default shop and the storefront, which reads
   // its own shopId, would never see the change (pickup locations, branding…).
   const shopId = useShopId();
   const navigate = useNavigate();
-  const { currentUser } = useAuth();
+  const { currentUser, actingAs } = useAuth();
   const { isEnabled } = useShopFeatures();
   const abandonedCheckoutEnabled = isEnabled('abandonedCheckout');
   const productReviewsEnabled = isEnabled('productReviews');
@@ -61,23 +70,50 @@ const AdminSettings = () => {
   const [reviewDelayDays, setReviewDelayDays] = useState(7);
   const [savingReviews, setSavingReviews] = useState(false);
 
+  // The server's legal state where the build has one (adminSettingsData.js:
+  // null in the older build, which reads the readiness off the form).
+  const [legalState, setLegalState] = useState(null);
+  // The seller's own legal texts as last saved (LEGAL_TEXTS_IN_SETTINGS), so
+  // leaving an unchanged text field writes nothing.
+  const savedLegalTextsRef = useRef({});
+
   // Seed the store-identity form from the shopConfig SEAM for THIS shop.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       let saved = {};
+      let legal = null;
       try {
         saved = (await loadShopConfig(shopId)) || {};
       } catch (e) {
         console.warn('AdminSettings: could not load shop config, using defaults:', e?.message);
       }
+      try {
+        legal = await loadLegalState(shopId);
+      } catch (e) {
+        console.warn('AdminSettings: could not load the legal state:', e?.message);
+      }
       if (cancelled) return;
-      setStoreForm({ ...STORE, ...Object.fromEntries(
+      const form = { ...STORE, ...Object.fromEntries(
         Object.entries(saved).filter(([, v]) => v !== undefined && v !== null && v !== '')
-      ) });
+      ) };
+      if (legal?.acceptance) form.legal = { ...(form.legal || {}), acceptance: legal.acceptance };
+      savedLegalTextsRef.current = { ...(form.legal?.customTexts || {}) };
+      setLegalState(legal);
+      setStoreForm(form);
       setLoading(false);
     })();
     return () => { cancelled = true; };
+  }, [shopId]);
+
+  // Re-read the server's legal state after a write that changes it.
+  const refreshLegalState = useCallback(async () => {
+    try {
+      const next = await loadLegalState(shopId);
+      if (next) setLegalState(next);
+    } catch (e) {
+      console.warn('AdminSettings: could not reload the legal state:', e?.message);
+    }
   }, [shopId]);
 
   // Load the cart-recovery reminder delay for THIS shop (default 1h).
@@ -157,6 +193,7 @@ const AdminSettings = () => {
         ? { ...rest, legal: { noWithdrawalNotice: legal.noWithdrawalNotice } }
         : rest;
       await saveShopConfig(patch, shopId);
+      await refreshLegalState();
       toast.success('Butiksinställningar sparade. Ladda om butiken för att se ändringarna.');
     } catch (error) {
       console.error('Error saving store identity:', error);
@@ -164,49 +201,20 @@ const AdminSettings = () => {
     } finally {
       setSaving(false);
     }
-  }, [storeForm, shopId]);
+  }, [storeForm, shopId, refreshLegalState]);
 
   // ── Juridiska sidor: copy-on-write + seller acceptance ────────────────────
   // A legal page is either the PLATFORM TEMPLATE (default) or the SELLER's own
-  // text (a CMS `pages` doc on the same legal slug, flagged in
-  // storeIdentity.legal.custom[key]). Taking over the text copies the currently
-  // rendered template into that CMS page, so the seller starts from the full
-  // legal text rather than a blank editor.
+  // text (flagged in storeIdentity.legal.custom[key]). Taking over the text
+  // copies the currently rendered template, so the seller starts from the full
+  // legal text rather than a blank editor. Where that text lives is the data
+  // layer's (adminSettingsData.js): a CMS page on the legal slug in the older
+  // build, the identity itself (legal.customTexts) where LEGAL_TEXTS_IN_SETTINGS.
   const [legalBusyKey, setLegalBusyKey] = useState('');   // key being switched
   const [legalAccepted, setLegalAccepted] = useState(false); // the checkbox
   const [acceptingLegal, setAcceptingLegal] = useState(false);
-
-  // Read the content of a multilingual-or-plain CMS field. Mirrors
-  // useContentTranslation().getContentValue / DynamicPage, but standalone: the
-  // acceptance snapshot must capture the SWEDISH consumer text regardless of
-  // which admin UI language happens to be active.
-  const readContentValue = useCallback((field) => {
-    if (!field) return '';
-    if (typeof field === 'string') return field;
-    if (typeof field === 'object') {
-      if (field['sv-SE']) return field['sv-SE'];
-      const first = Object.keys(field)[0];
-      if (first) return field[first] || '';
-    }
-    return '';
-  }, []);
-
-  // Find this shop's CMS page on a given slug, if it exists.
-  // Nothing enforces slug uniqueness on `pages`, so more than one doc can share
-  // a slug. Prefer a PUBLISHED one — that is the doc DynamicPage serves — so the
-  // editor, the acceptance snapshot and the storefront all resolve to the same
-  // document instead of an arbitrary `docs[0]`.
-  const findLegalPage = useCallback(async (slug, { publishedOnly = false } = {}) => {
-    const snap = await getDocs(query(
-      collection(db, 'pages'),
-      where('shopId', '==', shopId),
-      where('slug', '==', slug)
-    ));
-    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    const published = docs.find((p) => p.status === 'published');
-    if (publishedOnly) return published || null;
-    return published || docs[0] || null;
-  }, [shopId]);
+  const [legalOpenKey, setLegalOpenKey] = useState('');   // text shown on this page
+  const [legalRefused, setLegalRefused] = useState({});   // key → the server refused its HTML
 
   // Persist a legal patch to storeIdentity.legal AND mirror it into the local
   // form, so the readiness banner + the rows re-render without a reload.
@@ -221,6 +229,7 @@ const AdminSettings = () => {
   // customUpdatedAt back in time and make a real re-acceptance notice vanish).
   const persistLegal = useCallback(async (patch) => {
     await saveShopConfig({ legal: patch }, shopId);
+    if (patch.customTexts) Object.assign(savedLegalTextsRef.current, patch.customTexts);
     setStoreForm(prev => ({
       ...prev,
       legal: {
@@ -229,13 +238,15 @@ const AdminSettings = () => {
         // `custom` is a map of per-page flags: merge it like Firestore does,
         // or taking over page B would locally "forget" page A's flag.
         ...(patch.custom ? { custom: { ...(prev.legal?.custom || {}), ...patch.custom } } : {}),
+        ...(patch.customTexts ? { customTexts: { ...(prev.legal?.customTexts || {}), ...patch.customTexts } } : {}),
       },
     }));
   }, [shopId]);
 
   // "Redigera texten själv" — copy-on-write. Renders the template as it stands
-  // today, writes it into a CMS page on the legal slug (reusing an existing one
-  // rather than creating a duplicate), flags the key as custom and opens the editor.
+  // today, hands it to the data layer as the seller's own text (never
+  // overwriting one the seller already has), flags the key as custom and opens
+  // the editor.
   const takeOverLegalPage = useCallback(async (slug) => {
     const key = LEGAL_PAGE_KEYS[slug];
     if (!key) return;
@@ -245,88 +256,60 @@ const AdminSettings = () => {
       const rendered = renderLegalPage(slug, storeForm, { pod: isEnabled('pod') });
       if (!rendered) throw new Error('Kunde inte generera texten');
 
-      const existing = await findLegalPage(slug);
-      let pageId = existing?.id;
-      if (existing) {
-        // Reuse the page already on this slug rather than creating a duplicate.
-        // Only SEED the template text when that page has no content of its own —
-        // a page the seller previously wrote (and reverted to draft, or drafted
-        // by hand) must never be overwritten; there is no undo for that.
-        const existingHtml = readContentValue(existing.content).trim();
-        await updateDoc(doc(db, 'pages', existing.id), {
-          ...(existingHtml ? {} : { content: { 'sv-SE': rendered.html } }),
-          status: 'published',
-          updatedAt: serverTimestamp(),
-          updatedBy: currentUser?.uid || '',
-        });
-      } else {
-        const created = await addDoc(collection(db, 'pages'), withShopId({
-          title: { 'sv-SE': rendered.title },
-          slug,
-          content: { 'sv-SE': rendered.html },
-          status: 'published',
-          metaTitle: '',
-          metaDescription: '',
-          attachments: [],
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          createdBy: currentUser?.uid || '',
-          updatedBy: currentUser?.uid || '',
-        }, shopId));
-        pageId = created.id;
-      }
+      const { navigateTo, legalPatch } = await takeOverLegalText({
+        shopId,
+        slug,
+        key,
+        rendered,
+        uid: currentUser?.uid || '',
+        currentText: storeForm.legal?.customTexts?.[key],
+      });
 
       // Narrow patch: only THIS key's flag. The merge write leaves the other
       // two keys' flags untouched (see persistLegal).
-      await persistLegal({ custom: { [key]: true }, customUpdatedAt: new Date().toISOString() });
+      await persistLegal(legalPatch);
 
       toast.success('Du äger nu texten. Kom ihåg att godkänna villkoren på nytt när du är klar.');
-      navigate(`/admin/pages/${pageId}`);
+      if (navigateTo) navigate(navigateTo);
+      else setLegalOpenKey(key);
     } catch (error) {
       console.error('Error taking over legal page:', error);
       toast.error(error?.message || 'Kunde inte ta över texten');
     } finally {
       setLegalBusyKey('');
     }
-  }, [storeForm, isEnabled, findLegalPage, readContentValue, currentUser, shopId, persistLegal, navigate]);
+  }, [storeForm, isEnabled, currentUser, shopId, persistLegal, navigate]);
 
-  // Open the seller's own page in the CMS editor.
+  // Open the seller's own text in its editor.
   const editLegalPage = useCallback(async (slug) => {
     const key = LEGAL_PAGE_KEYS[slug];
     try {
       setLegalBusyKey(key);
-      const existing = await findLegalPage(slug);
-      if (!existing) {
+      const opened = await openLegalText({ shopId, slug });
+      if (!opened) {
         toast.error('Sidan hittades inte. Återgå till plattformens mall och ta över texten på nytt.');
         return;
       }
-      navigate(`/admin/pages/${existing.id}`);
+      if (opened.navigateTo) navigate(opened.navigateTo);
+      else setLegalOpenKey(prev => (prev === key ? '' : key));
     } catch (error) {
       console.error('Error opening legal page:', error);
       toast.error('Kunde inte öppna sidan');
     } finally {
       setLegalBusyKey('');
     }
-  }, [findLegalPage, navigate]);
+  }, [shopId, navigate]);
 
-  // "Återgå till plattformens mall" — clears the custom flag and unpublishes the
-  // seller's page (never deletes it, so the text is recoverable) so it stops
-  // rendering on the storefront.
+  // "Återgå till plattformens mall" — clears the custom flag; the seller's own
+  // text is kept (never deleted), so it is recoverable.
   const revertLegalPage = useCallback(async (slug) => {
     const key = LEGAL_PAGE_KEYS[slug];
     if (!key) return;
     if (!window.confirm('Plattformens mall visas igen och din egen text sparas som utkast. Fortsätt?')) return;
     try {
       setLegalBusyKey(key);
-      const existing = await findLegalPage(slug);
-      if (existing) {
-        await updateDoc(doc(db, 'pages', existing.id), {
-          status: 'draft',
-          updatedAt: serverTimestamp(),
-          updatedBy: currentUser?.uid || '',
-        });
-      }
-      await persistLegal({ custom: { [key]: false }, customUpdatedAt: new Date().toISOString() });
+      const patch = await revertLegalText({ shopId, slug, key, uid: currentUser?.uid || '' });
+      await persistLegal(patch);
       toast.success('Plattformens mall visas igen.');
     } catch (error) {
       console.error('Error reverting legal page:', error);
@@ -334,7 +317,78 @@ const AdminSettings = () => {
     } finally {
       setLegalBusyKey('');
     }
-  }, [findLegalPage, currentUser, persistLegal]);
+  }, [shopId, currentUser, persistLegal]);
+
+  // The seller's own text, edited on this page (LEGAL_TEXTS_IN_SETTINGS).
+  const changeLegalText = useCallback((key, value) => {
+    setLegalRefused(prev => (prev[key] ? { ...prev, [key]: false } : prev));
+    setStoreForm(prev => ({
+      ...prev,
+      legal: { ...(prev.legal || {}), customTexts: { ...(prev.legal?.customTexts || {}), [key]: value } },
+    }));
+  }, []);
+
+  // Saved when the field is left, as the page editor saved it; unchanged → nothing.
+  const saveLegalText = useCallback(async (key, value) => {
+    if (savedLegalTextsRef.current[key] === value) return;
+    try {
+      await persistLegal({ customTexts: { [key]: value }, customUpdatedAt: new Date().toISOString() });
+    } catch (error) {
+      console.error('Error saving legal text:', error);
+      toast.error('Kunde inte spara texten');
+    }
+  }, [persistLegal]);
+
+  // The texts as this page SHOWS them (LEGAL_TEXTS_IN_SETTINGS): the template
+  // rendered from the form, or the seller's own HTML as DOMPurify leaves it.
+  // These very strings are what an acceptance sends: what is adopted is what
+  // was shown.
+  const podEnabled = isEnabled('pod');
+  const legalInputs = JSON.stringify([
+    storeForm.shopName, storeForm.legalName, storeForm.address, storeForm.supportEmail,
+    storeForm.orgNumber, storeForm.vatNumber, storeForm.returnAddress, storeForm.phone,
+    storeForm.sellerType, storeForm.vatRegistered, storeForm.legal?.custom, storeForm.legal?.customTexts,
+    podEnabled,
+  ]);
+  const { shownCustomHtml, shownTexts } = useMemo(() => {
+    if (!LEGAL_TEXTS_IN_SETTINGS) return { shownCustomHtml: {}, shownTexts: null };
+    const customHtml = {};
+    for (const [slug, key] of Object.entries(LEGAL_PAGE_KEYS)) {
+      if (storeForm.legal?.custom?.[key] !== true) continue;
+      const draft = storeForm.legal?.customTexts?.[key];
+      const raw = typeof draft === 'string' && draft.trim()
+        ? draft
+        : (renderLegalPage(slug, storeForm, { pod: podEnabled })?.html || '');
+      customHtml[key] = DOMPurify.sanitize(raw);
+    }
+    return {
+      shownCustomHtml: customHtml,
+      shownTexts: renderAcceptedLegalTexts(storeForm, { pod: podEnabled }, customHtml),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legalInputs]);
+
+  // The text in the editor: the saved draft, or the template it starts from.
+  const legalDraftOf = (slug, key) => {
+    const draft = storeForm.legal?.customTexts?.[key];
+    if (typeof draft === 'string' && draft.trim()) return draft;
+    return renderLegalPage(slug, storeForm, { pod: podEnabled })?.html || '';
+  };
+
+  // Do the texts shown differ from the latest adoption? (null: this build
+  // reads it off the identity, legalPageReadiness.js needsLegalReacceptance.)
+  const [legalTextsDiffer, setLegalTextsDiffer] = useState(null);
+  useEffect(() => {
+    if (!LEGAL_TEXTS_IN_SETTINGS || !legalState || !shownTexts) return undefined;
+    let cancelled = false;
+    const customPages = Object.fromEntries(
+      Object.values(LEGAL_PAGE_KEYS).map((key) => [key, Boolean(shownCustomHtml[key]?.trim())])
+    );
+    legalTextsChanged(legalState, shownTexts, customPages)
+      .then((differ) => { if (!cancelled) setLegalTextsDiffer(differ); })
+      .catch((e) => console.warn('AdminSettings: could not compare the legal texts:', e?.message));
+    return () => { cancelled = true; };
+  }, [legalState, shownTexts, shownCustomHtml]);
 
   // Record the seller's acceptance. Saves the identity FIRST so the snapshot in
   // the evidence doc is exactly what the shop has stored, then renders + records.
@@ -350,21 +404,11 @@ const AdminSettings = () => {
       const { legal: _legal, ...identityWithoutLegal } = storeForm;
       await saveShopConfig(identityWithoutLegal, shopId);
 
-      // Pull the seller's own HTML for every key they took over, so the
-      // evidence snapshot holds the text the STOREFRONT actually serves.
-      // Only a PUBLISHED page counts: DynamicPage falls back to the platform
-      // template when the seller's page is a draft, so snapshotting draft HTML
-      // would record an acceptance of text nobody can read.
+      // The seller's own HTML for every key they took over, so the evidence
+      // snapshot holds the text the STOREFRONT actually serves (the data
+      // layer says where it lives; see adminSettingsData.js).
       const custom = storeForm.legal?.custom || {};
-      const customHtml = {};
-      const unpublished = [];
-      for (const [slug, key] of Object.entries(LEGAL_PAGE_KEYS)) {
-        if (custom[key] !== true) continue;
-        const page = await findLegalPage(slug, { publishedOnly: true });
-        const html = readContentValue(page?.content);
-        if (html) customHtml[key] = html;
-        else unpublished.push(LEGAL_PAGES[slug].title);
-      }
+      const { customHtml, unpublished } = await collectCustomHtml({ shopId, custom, shownCustomHtml });
       // The seller owns the text but hasn't published it — the storefront is
       // still showing the platform template. Refuse rather than record an
       // acceptance that misrepresents what the shop publishes.
@@ -381,29 +425,46 @@ const AdminSettings = () => {
         pod: isEnabled('pod'),
         custom,
         customHtml,
+        // The texts as shown on this page, where the build shows them.
+        ...(shownTexts ? { texts: shownTexts } : {}),
       });
 
       setStoreForm(prev => ({ ...prev, legal: { ...(prev.legal || {}), acceptance: pointer } }));
       setLegalAccepted(false);
+      setLegalRefused({});
+      await refreshLegalState();
       toast.success('Villkoren är godkända. Kassan är nu öppen.');
     } catch (error) {
       console.error('Error accepting legal terms:', error);
+      if (Array.isArray(error?.refusedKeys) && error.refusedKeys.length > 0) {
+        setLegalRefused(Object.fromEntries(error.refusedKeys.map((key) => [key, true])));
+        setLegalOpenKey(error.refusedKeys[0]);
+      }
       toast.error(error?.message || 'Kunde inte godkänna villkoren');
     } finally {
       setAcceptingLegal(false);
     }
-  }, [storeForm, shopId, findLegalPage, readContentValue, currentUser, isEnabled]);
+  }, [storeForm, shopId, shownCustomHtml, shownTexts, currentUser, isEnabled, refreshLegalState]);
 
   // Live legal-page readiness, recomputed from the in-progress form so the
   // banner updates as the seller fills in the return address / VAT status.
-  const legalReadiness = getLegalReadiness(storeForm);
+  // Where the build has the server's legal state, the banner shows the
+  // checkout's own gate instead (as saved; re-read after every save).
+  const formReadiness = getLegalReadiness(storeForm);
+  const legalReadiness = legalState?.readiness
+    ? { ...formReadiness, ...legalState.readiness, needsReacceptance: legalTextsDiffer === true }
+    : formReadiness;
 
   // The acceptance button only unblocks once the OTHER hard gates are clear —
   // accepting a page that still prints "⚠️ Returadress ej angiven" would record
-  // a broken text as the seller's own terms.
-  const otherLegalBlockers = legalReadiness.blockers.filter((b) => b.key !== 'acceptance');
+  // a broken text as the seller's own terms. (From the form: the acceptance
+  // saves it first.)
+  const otherLegalBlockers = formReadiness.blockers.filter((b) => b.key !== 'acceptance');
   const legalAcceptance = storeForm.legal?.acceptance;
-  const canAcceptLegal = legalAccepted && otherLegalBlockers.length === 0 && Boolean(currentUser?.uid);
+  // Only the shop's own admin adopts the texts: a platform user acting as the
+  // shop may not (the API refuses it), so the button says why instead.
+  const actingAsShop = Array.isArray(actingAs) && actingAs.some((grant) => grant?.tenantId === shopId);
+  const canAcceptLegal = legalAccepted && otherLegalBlockers.length === 0 && Boolean(currentUser?.uid) && !actingAsShop;
 
   const formatAcceptedAt = (iso) => {
     if (!iso) return '';
@@ -463,9 +524,13 @@ const AdminSettings = () => {
                         type={field.type}
                         value={storeForm[field.key] ?? ''}
                         placeholder={field.placeholder}
+                        readOnly={PLATFORM_OWNED_FIELDS.includes(field.key)}
                         onChange={(e) => setStoreForm(prev => ({ ...prev, [field.key]: e.target.value }))}
                         className={inputCls}
                       />
+                      {PLATFORM_OWNED_FIELDS.includes(field.key) && (
+                        <p className={helpCls}>Sätts av plattformen och kan inte ändras här.</p>
+                      )}
                     </div>
                   ))}
 
@@ -478,9 +543,13 @@ const AdminSettings = () => {
                       max="1"
                       value={storeForm.vatRate ?? ''}
                       placeholder={String(STORE.vatRate)}
+                      readOnly={PLATFORM_OWNED_FIELDS.includes('vatRate')}
                       onChange={(e) => setStoreForm(prev => ({ ...prev, vatRate: parseFloat(e.target.value) }))}
                       className={inputCls}
                     />
+                    {PLATFORM_OWNED_FIELDS.includes('vatRate') && (
+                      <p className={helpCls}>Sätts av plattformen och kan inte ändras här.</p>
+                    )}
                   </div>
 
                   <div className="md:col-span-2">
@@ -750,6 +819,12 @@ const AdminSettings = () => {
                                   href={`${APP_URLS.B2C_SHOP}/${shopId}/${slug}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
+                                  onClick={LEGAL_TEXTS_IN_SETTINGS ? (e) => {
+                                    // The shop shows only what was adopted: the
+                                    // texts to adopt are shown here instead.
+                                    e.preventDefault();
+                                    setLegalOpenKey(prev => (prev === key ? '' : key));
+                                  } : undefined}
                                   className="underline hover:text-admin-text"
                                 >
                                   Förhandsgranska
@@ -772,6 +847,42 @@ const AdminSettings = () => {
                                 </Button>
                               )}
                             </div>
+                            {/* The text itself, shown and (when it is the
+                                seller's own) edited here: what is shown is
+                                what an acceptance adopts. */}
+                            {LEGAL_TEXTS_IN_SETTINGS && legalOpenKey === key && shownTexts && (
+                              <div className="w-full space-y-3">
+                                {isCustom && (
+                                  <div>
+                                    <label className={labelCls}>Din text (HTML)</label>
+                                    <textarea
+                                      rows={12}
+                                      value={legalDraftOf(slug, key)}
+                                      onChange={(e) => changeLegalText(key, e.target.value)}
+                                      onBlur={(e) => saveLegalText(key, e.target.value)}
+                                      className={inputCls}
+                                    />
+                                    {legalRefused[key] ? (
+                                      <p className="mt-1 text-[12px] text-admin-critical-text">
+                                        Texten godtogs inte: den innehåller HTML som inte kan publiceras (till exempel
+                                        skript, formulär, inbäddat innehåll eller data:-adresser).
+                                      </p>
+                                    ) : (
+                                      <p className={helpCls}>
+                                        Sparas när du lämnar fältet. Det som visas nedan är det som godkänns.
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
+                                <div
+                                  className={
+                                    'max-h-[60vh] overflow-y-auto rounded-[var(--radius-admin)] border border-admin-border ' +
+                                    `bg-admin-surface-2 p-4 ${LEGAL_DOC_TYPO}`
+                                  }
+                                  dangerouslySetInnerHTML={{ __html: shownTexts[key] }}
+                                />
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -810,7 +921,9 @@ const AdminSettings = () => {
 
                       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                         <p className="text-[12px] text-admin-text-muted">
-                          {otherLegalBlockers.length > 0 ? (
+                          {actingAsShop ? (
+                            'Endast butikens egen administratör kan godkänna villkoren, inte plattformen för butikens räkning.'
+                          ) : otherLegalBlockers.length > 0 ? (
                             <>Kan inte godkännas ännu: {otherLegalBlockers.map((b) => b.label).join(', ')}.</>
                           ) : !currentUser?.uid ? (
                             'Du behöver vara inloggad för att godkänna villkoren.'

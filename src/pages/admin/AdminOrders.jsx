@@ -12,6 +12,7 @@ import { exportPickupOrdersToCSV } from '../../utils/pickupExport';
 import { formatPickupDayShort } from '../../utils/pickupDates';
 import { exportSingleOrderVerification, exportAllOrderVerifications } from '../../utils/orderVerification';
 import { getEnhancedOrderDistribution } from '../../utils/orderUtils';
+import { SHOW_SOURCE_TABS, searchOrders, withExportDetails, onOrdersStale } from './adminOrdersData';
 import { ArrowDownTrayIcon, DocumentTextIcon, PrinterIcon, TruckIcon, MapPinIcon } from '@heroicons/react/24/outline';
 import {
   Page,
@@ -28,6 +29,8 @@ import {
 // Total units on an order (sum of line-item quantities), via the same resolver
 // the order-detail page uses — always returns a non-empty array, so this is safe.
 const orderItemCount = (order) => {
+  // A list row of the admin build carries the count, not the lines.
+  if (!Array.isArray(order.items) && Number.isSafeInteger(order.itemCount)) return order.itemCount;
   try {
     return getEnhancedOrderDistribution(order).reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
   } catch {
@@ -75,7 +78,7 @@ const AdminOrders = () => {
         return;
       }
 
-      const result = exportOrdersToCSV(ordersToExport);
+      const result = exportOrdersToCSV(await withExportDetails(ordersToExport));
       
       if (result.success) {
         toast.success(result.message);
@@ -96,7 +99,9 @@ const AdminOrders = () => {
     try {
       setPickupExportLoading(true);
       const ordersToExport = sortedOrders.length > 0 ? sortedOrders : orders;
-      const result = exportPickupOrdersToCSV(ordersToExport);
+      const result = exportPickupOrdersToCSV(
+        await withExportDetails(ordersToExport.filter((o) => o.deliveryMethod === 'pickup'))
+      );
       if (result.success) {
         toast.success(result.message);
       } else {
@@ -114,7 +119,8 @@ const AdminOrders = () => {
   const handleExportVerification = async (order) => {
     try {
       const loadingToast = toast.loading('Skapar PDF...');
-      const result = await exportSingleOrderVerification(order);
+      const [fullOrder] = await withExportDetails([order]);
+      const result = await exportSingleOrderVerification(fullOrder);
       toast.dismiss(loadingToast);
       
       if (result.success) {
@@ -140,7 +146,7 @@ const AdminOrders = () => {
 
       setVerificationProgress({ current: 0, total: ordersToExport.length });
       
-      const result = await exportAllOrderVerifications(ordersToExport, {
+      const result = await exportAllOrderVerifications(await withExportDetails(ordersToExport), {
         delay: 1000,
         onProgress: (progress) => {
           setVerificationProgress(progress);
@@ -179,19 +185,48 @@ const AdminOrders = () => {
       }
     };
     fetchOrders();
+    // A quiet re-read when the list may be stale (the admin build: the window
+    // got the focus back); a failure keeps the list on screen.
+    return onOrdersStale(() => {
+      getAllOrders().then(setOrders, (e) => console.warn('Could not refresh orders:', e?.message));
+    });
   }, [getAllOrders]);
+
+  // The search's matches (null while none is asked). The older build filters
+  // the loaded orders; the admin build asks the server (adminOrdersData).
+  const [searchResult, setSearchResult] = useState(null);
+  useEffect(() => {
+    if (!searchTerm || !Array.isArray(orders)) {
+      setSearchResult(null);
+      return undefined;
+    }
+    const controller = new AbortController();
+    searchOrders(orders, searchTerm, { signal: controller.signal })
+      .then((matches) => {
+        if (!controller.signal.aborted) setSearchResult({ term: searchTerm, orders: matches });
+      })
+      .catch((e) => {
+        if (controller.signal.aborted || e?.name === 'AbortError') return;
+        console.error('Error searching orders:', e);
+        setSearchResult({ term: searchTerm, orders: [] });
+      });
+    return () => controller.abort();
+  }, [orders, searchTerm]);
 
   const filteredOrders = useMemo(() => {
     if (!Array.isArray(orders)) {
       return [];
     }
 
+    // 0. The search's matches (the last answer stays while a new one is asked)
+    const searched = searchTerm ? (searchResult ? searchResult.orders : []) : orders;
+
     // 1. Filter by Source
-    let sourceFiltered = orders;
+    let sourceFiltered = searched;
     if (activeSourceTab === 'b2b') {
-      sourceFiltered = orders.filter(order => order.source === 'b2b' || !order.source); // !order.source for legacy B2B
+      sourceFiltered = searched.filter(order => order.source === 'b2b' || !order.source); // !order.source for legacy B2B
     } else if (activeSourceTab === 'b2c') {
-      sourceFiltered = orders.filter(order => order.source === 'b2c');
+      sourceFiltered = searched.filter(order => order.source === 'b2c');
     }
     
     // 2. Filter by Status
@@ -200,20 +235,8 @@ const AdminOrders = () => {
       statusFiltered = sourceFiltered.filter(order => order.status === activeStatusTab);
     }
 
-    // 3. Filter by Search Term
-    if (!searchTerm) {
-      return statusFiltered;
-    }
-
-    return statusFiltered.filter(order =>
-      (order.orderNumber && order.orderNumber.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.userId && order.userId.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.customerInfo?.email && order.customerInfo.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.customerInfo?.firstName && order.customerInfo.firstName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.customerInfo?.lastName && order.customerInfo.lastName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (order.companyName && order.companyName.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
-  }, [orders, searchTerm, activeSourceTab, activeStatusTab]);
+    return statusFiltered;
+  }, [orders, searchTerm, searchResult, activeSourceTab, activeStatusTab]);
 
   const sortedOrders = useMemo(() => {
     return [...filteredOrders].sort((a, b) => {
@@ -286,7 +309,7 @@ const AdminOrders = () => {
       toast.success('Orderstatus uppdaterad');
     } catch (error) {
       console.error('Error updating order status:', error);
-      toast.error('Kunde inte uppdatera orderstatus');
+      toast.error(error?.userMessage || 'Kunde inte uppdatera orderstatus');
     } finally {
       setLoading(false);
     }
@@ -317,8 +340,8 @@ const AdminOrders = () => {
     try {
       setPrintLoading(true);
       
-      // Get selected orders
-      const ordersToProcess = filteredOrders.filter(order => selectedOrders.has(order.id));
+      // Get selected orders (with their delivery address)
+      const ordersToProcess = await withExportDetails(filteredOrders.filter(order => selectedOrders.has(order.id)));
       
       // Create user data map for B2B orders (simplified - would need proper user fetching)
       const userDataMap = {};
@@ -509,6 +532,7 @@ const AdminOrders = () => {
             disabled={isLoading}
             source={order.source}
             isPickup={order.deliveryMethod === 'pickup'}
+            options={order.statusOptions}
           />
         </div>
       ),
@@ -598,12 +622,14 @@ const AdminOrders = () => {
   // IndexTable header pattern — filters live INSIDE the table card).
   const tableToolbar = (
     <>
-      <ViewTabs
-        ariaLabel="Filtrera på källa"
-        options={sourceTabOptions}
-        value={activeSourceTab}
-        onChange={setActiveSourceTab}
-      />
+      {SHOW_SOURCE_TABS && (
+        <ViewTabs
+          ariaLabel="Filtrera på källa"
+          options={sourceTabOptions}
+          value={activeSourceTab}
+          onChange={setActiveSourceTab}
+        />
+      )}
       <InlineSearch
         value={searchTerm}
         onChange={setSearchTerm}

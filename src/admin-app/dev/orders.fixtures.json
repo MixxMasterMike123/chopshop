@@ -1,0 +1,158 @@
+{
+  "_comment": "INVENTED orders of Test Shop A for the admin dev API (unit FD). Amounts in minor units (öre). The dev API derives the list rows, money and payout from these.",
+  "test-shop-a": [
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000001",
+      "orderNumber": "20261003-A1B2C3D4",
+      "createdAt": "2026-10-03T08:12:00.000Z",
+      "customerEmail": "anna.exempel@example.com",
+      "deliveryMethod": "shipping",
+      "fulfilment": "unfulfilled",
+      "status": "paid",
+      "shippingMinor": 4900,
+      "feeMinor": 1625,
+      "recipient": { "name": "Anna Exempel", "phone": "070-000 00 01", "addressLine1": "Exempelgatan 1", "addressLine2": "lgh 1101", "postalCode": "111 11", "city": "Stockholm", "country": "SE" },
+      "items": [
+        { "sku": "TEE-BLACK-M", "name": "T-shirt Svart", "variantLabel": "M", "quantity": 2, "unitPriceMinor": 24900, "podState": "none" },
+        { "sku": "CAP-01", "name": "Keps", "variantLabel": null, "quantity": 1, "unitPriceMinor": 19900, "podState": "none" }
+      ]
+    },
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000002",
+      "orderNumber": "20261002-B2C3D4E5",
+      "createdAt": "2026-10-02T15:40:00.000Z",
+      "customerEmail": "bo.prov@example.com",
+      "deliveryMethod": "pickup",
+      "fulfilment": "unfulfilled",
+      "status": "paid",
+      "shippingMinor": 0,
+      "feeMinor": 750,
+      "recipient": { "name": "Bo Prov", "phone": "070-000 00 02", "pickupLocationId": "pickup-1", "pickupLocationName": "Butiken på Testgatan", "pickupLocationAddress": "Testgatan 5, 222 22 Testby", "pickupDate": "2026-10-08" },
+      "items": [
+        { "sku": "MUG-WHITE", "name": "Mugg Vit", "variantLabel": null, "quantity": 3, "unitPriceMinor": 15000, "podState": "none" }
+      ]
+    },
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000003",
+      "orderNumber": "20261002-C3D4E5F6",
+      "createdAt": "2026-10-02T09:05:00.000Z",
+      "customerEmail": "cecilia.test@example.com",
+      "deliveryMethod": "shipping",
+      "fulfilment": "unfulfilled",
+      "status": "paid",
+      "shippingMinor": 4900,
+      "feeMinor": 9800,
+      "recipient": { "name": "Cecilia Test", "phone": null, "addressLine1": "Provvägen 12", "addressLine2": null, "postalCode": "333 33", "city": "Göteborg", "country": "SE" },
+      "consent": { "marketing": false, "recordedAt": "2026-10-02T09:04:30.000Z", "terms": true, "withdrawal": { "disclosureVersion": "2026-07-01", "personalizedItems": [0], "waived": true } },
+      "items": [
+        { "sku": "POD-HOODIE-L", "name": "Hoodie med eget tryck", "variantLabel": "L", "quantity": 1, "unitPriceMinor": 59900, "podState": "queued" },
+        { "sku": "STICKER-3", "name": "Klistermärken 3-pack", "variantLabel": null, "quantity": 1, "unitPriceMinor": 4900, "podState": "none" }
+      ]
+    },
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000004",
+      "orderNumber": "20261001-D4E5F6A7",
+      "createdAt": "2026-10-01T18:22:00.000Z",
+      "customerEmail": "david.prov@example.com",
+      "deliveryMethod": "shipping",
+      "fulfilment": "shipped",
+      "status": "partially_refunded",
+      "shippingMinor": 4900,
+      "feeMinor": 1490,
+      "refundedMinor": 24900,
+      "refunds": [ { "refundId": "0f000000-0000-4000-8000-000000000041", "amountMinor": 24900, "state": "succeeded", "origin": "admin", "reason": "En tröja saknades", "createdAt": "2026-10-02T10:00:00.000Z" } ],
+      "recipient": { "name": "David Prov", "phone": "070-000 00 04", "addressLine1": "Fiktivgatan 4", "addressLine2": null, "postalCode": "444 44", "city": "Malmö", "country": "SE" },
+      "shipments": [ { "trackingNumber": "RR000000001SE", "carrier": "PostNord", "createdAt": "2026-10-01T20:00:00.000Z" } ],
+      "statusHistory": [
+        { "track": "payment", "from": null, "to": "paid", "at": "2026-10-01T18:22:05.000Z", "by": "system", "reason": null },
+        { "track": "fulfilment", "from": "unfulfilled", "to": "processing", "at": "2026-10-01T19:00:00.000Z", "by": "admin", "reason": null },
+        { "track": "fulfilment", "from": "processing", "to": "shipped", "at": "2026-10-01T20:00:00.000Z", "by": "admin", "reason": null },
+        { "track": "payment", "from": "paid", "to": "partially_refunded", "at": "2026-10-02T10:00:05.000Z", "by": "admin", "reason": "En tröja saknades" }
+      ],
+      "items": [
+        { "sku": "TEE-WHITE-S", "name": "T-shirt Vit", "variantLabel": "S", "quantity": 2, "unitPriceMinor": 24900, "podState": "none" }
+      ]
+    },
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000005",
+      "orderNumber": "20260930-E5F6A7B8",
+      "createdAt": "2026-09-30T11:11:00.000Z",
+      "customerEmail": "eva.exempel@example.com",
+      "deliveryMethod": "shipping",
+      "fulfilment": "unfulfilled",
+      "status": "paid",
+      "cancelledAt": "2026-09-30T12:00:00.000Z",
+      "shippingMinor": 4900,
+      "feeMinor": 990,
+      "recipient": { "name": "Eva Exempel", "phone": null, "addressLine1": "Låtsasvägen 5", "addressLine2": null, "postalCode": "555 55", "city": "Uppsala", "country": "SE" },
+      "items": [
+        { "sku": "TOTE-01", "name": "Tygkasse", "variantLabel": null, "quantity": 1, "unitPriceMinor": 14900, "podState": "none" }
+      ]
+    },
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000006",
+      "orderNumber": "20260929-F6A7B8C9",
+      "createdAt": "2026-09-29T14:30:00.000Z",
+      "customerEmail": "filip.test@example.com",
+      "deliveryMethod": "shipping",
+      "fulfilment": "processing",
+      "status": "refunded",
+      "shippingMinor": 4900,
+      "feeMinor": 1490,
+      "refundedMinor": 34700,
+      "refunds": [ { "refundId": "0f000000-0000-4000-8000-000000000061", "amountMinor": 34700, "state": "succeeded", "origin": "admin", "reason": "Kunden ångrade köpet", "createdAt": "2026-09-30T08:00:00.000Z" } ],
+      "withdrawalRequest": { "withdrawalId": "0e000000-0000-4000-8000-000000000061", "consumerName": "Filip Test", "contactEmail": "filip.test@example.com", "eligible": true, "orderAgeDays": 0, "reason": null, "receivedAt": "2026-09-29T20:00:00.000Z", "shopNotified": true, "statement": "Jag ångrar mitt köp.", "exemptItems": [], "withdrawnItems": [] },
+      "recipient": { "name": "Filip Test", "phone": null, "addressLine1": "Testallén 6", "addressLine2": null, "postalCode": "666 66", "city": "Umeå", "country": "SE" },
+      "items": [
+        { "sku": "TEE-BLACK-L", "name": "T-shirt Svart", "variantLabel": "L", "quantity": 1, "unitPriceMinor": 29800, "podState": "none" }
+      ]
+    },
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000007",
+      "orderNumber": "20260928-A7B8C9D0",
+      "createdAt": "2026-09-28T10:00:00.000Z",
+      "customerEmail": "greta.prov@example.com",
+      "deliveryMethod": "pickup",
+      "fulfilment": "ready_for_pickup",
+      "status": "paid",
+      "shippingMinor": 0,
+      "feeMinor": 500,
+      "recipient": { "name": "Greta Prov", "phone": "070-000 00 07", "pickupLocationId": "pickup-2", "pickupLocationName": "Lagret i Exempelstad", "pickupLocationAddress": "Lagervägen 7, 777 77 Exempelstad", "pickupDate": "2026-10-04" },
+      "items": [
+        { "sku": "POSTER-A3", "name": "Poster A3", "variantLabel": null, "quantity": 2, "unitPriceMinor": 9900, "podState": "none" }
+      ]
+    },
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000008",
+      "orderNumber": "20260925-B8C9D0E1",
+      "createdAt": "2026-09-25T09:30:00.000Z",
+      "customerEmail": "hugo.exempel@example.com",
+      "deliveryMethod": "shipping",
+      "fulfilment": "delivered",
+      "status": "paid",
+      "shippingMinor": 4900,
+      "feeMinor": 4200,
+      "recipient": { "name": "Hugo Exempel", "phone": null, "addressLine1": "Exempelstigen 8", "addressLine2": null, "postalCode": "888 88", "city": "Luleå", "country": "SE" },
+      "shipments": [ { "trackingNumber": "RR000000008SE", "carrier": "PostNord", "createdAt": "2026-09-26T09:00:00.000Z" } ],
+      "items": [
+        { "sku": "POD-TEE-M", "name": "T-shirt med eget tryck", "variantLabel": "M", "quantity": 1, "unitPriceMinor": 34900, "podState": "sent" }
+      ]
+    },
+    {
+      "orderId": "0a000000-0000-4000-8000-000000000009",
+      "orderNumber": "20260920-C9D0E1F2",
+      "createdAt": "2026-09-20T13:45:00.000Z",
+      "customerEmail": "ida.test@example.com",
+      "deliveryMethod": "shipping",
+      "fulfilment": "completed",
+      "status": "paid",
+      "shippingMinor": 4900,
+      "feeMinor": 990,
+      "recipient": { "name": "Ida Test", "phone": null, "addressLine1": "Provgränd 9", "addressLine2": null, "postalCode": "999 99", "city": "Visby", "country": "SE" },
+      "shipments": [ { "trackingNumber": null, "carrier": null, "createdAt": "2026-09-21T09:00:00.000Z" } ],
+      "items": [
+        { "sku": "CAP-01", "name": "Keps", "variantLabel": null, "quantity": 1, "unitPriceMinor": 19900, "podState": "none" }
+      ]
+    }
+  ]
+}

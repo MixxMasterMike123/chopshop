@@ -5,25 +5,24 @@
  *
  * Read-only by design: accepting happens ONCE in PlatformTermsGate, which is
  * the surface that records evidence. This page is the archive you go back to.
+ *
+ * The terms and the acceptance come from components/admin/platformTermsData
+ * (the Cloudflare admin build swaps that module: the API's legal routes).
  */
 
 import React, { useEffect, useState } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
 import DOMPurify from 'dompurify';
 import AppLayout from '../../components/layout/AppLayout';
 import { Page, Card, CardSection, StatusPill } from '../../components/admin/ui';
 import { LEGAL_DOC_TYPO } from '../../components/admin/PlatformTermsGate';
-import { db } from '../../firebase/config';
+import { initialPlatformTerms, loadPlatformTerms } from '../../components/admin/platformTermsData';
 import { useShopId } from '../../contexts/ShopContext';
 import { isUnresolvedShopId } from '../../config/tenancy';
-import { renderPlatformTerms } from '../../utils/platformTermsRenderer';
-
-const RENDERED = renderPlatformTerms();
 
 // The draft banner ships inside the templates until a lawyer signs off; the
 // note below is shown only while that banner is still there.
-const IS_DRAFT =
-  RENDERED.terms.html.includes('UTKAST') || RENDERED.dpa.html.includes('UTKAST');
+const isDraft = (rendered) =>
+  rendered.terms.html.includes('UTKAST') || rendered.dpa.html.includes('UTKAST');
 
 const fmtDateTime = (iso) => {
   const s = String(iso || '').trim();
@@ -43,6 +42,8 @@ const AdminPlatformTerms = () => {
   const shopId = useShopId();
   const [terms, setTerms] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [RENDERED, setRendered] = useState(initialPlatformTerms);
+  const IS_DRAFT = isDraft(RENDERED);
 
   useEffect(() => {
     if (isUnresolvedShopId(shopId)) {
@@ -53,8 +54,11 @@ const AdminPlatformTerms = () => {
     setLoading(true);
     (async () => {
       try {
-        const snap = await getDoc(doc(db, 'shops', shopId));
-        if (alive) setTerms(snap.exists() ? snap.data()?.platformTerms || null : null);
+        const state = await loadPlatformTerms(shopId, { withText: true });
+        if (alive) {
+          setTerms(state.acceptance);
+          if (state.rendered) setRendered(state.rendered);
+        }
       } catch (e) {
         console.error('AdminPlatformTerms: could not read acceptance', e);
       } finally {

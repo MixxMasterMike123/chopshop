@@ -35,16 +35,39 @@ const getStatusStyles = (status) => {
   }
 };
 
-const OrderStatusMenu = ({ currentStatus, onStatusChange, disabled, className = '', source, isPickup = false }) => {
+// Every status the menu can name, with its label's key and Swedish default.
+const STATUS_LABELS = {
+  pending: ['order_status.pending', 'Väntar'],
+  confirmed: ['order_status.confirmed', 'Bekräftad'],
+  processing: ['order_status.processing', 'Behandlas'],
+  ready_for_pickup: ['order_status.ready_for_pickup', 'Redo att hämtas'],
+  shipped: ['order_status.shipped', 'Skickad'],
+  delivered: ['order_status.delivered', 'Levererad'],
+  invoiced: ['order_status.invoiced', 'Fakturerad'],
+  paid: ['order_status.paid', 'Betald'],
+  completed: ['order_status.completed', 'Slutförd'],
+  cancelled: ['order_status.cancelled', 'Avbruten'],
+};
+
+// `options` (optional): the statuses this order may move to, in order. When a
+// caller passes it (the admin build: the steps the server's transition table
+// allows from the order's state), the menu offers exactly those and nothing
+// else, and is disabled when there are none. Without it, the menu offers the
+// lifecycle of the order's source, as before.
+const OrderStatusMenu = ({ currentStatus, onStatusChange, disabled, className = '', source, isPickup = false, options }) => {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
+  const labelOf = (value) => (STATUS_LABELS[value] ? t(...STATUS_LABELS[value]) : null);
+  const isDisabled = disabled || (Array.isArray(options) && options.length === 0);
 
   // Status options with shorter labels. B2B Faktura orders use the invoice
   // lifecycle (pending → invoiced → paid → shipped → completed); everything else
   // uses the consumer lifecycle. Source-aware so each surface shows the right set.
   // Click & Collect orders additionally expose 'ready_for_pickup'.
-  const statusOptions = source === 'b2b'
+  const statusOptions = Array.isArray(options)
+    ? options.filter((value) => STATUS_LABELS[value]).map((value) => ({ value, label: labelOf(value) }))
+    : source === 'b2b'
     ? [
         { value: 'pending', label: t('order_status.pending', 'Väntar') },
         { value: 'invoiced', label: t('order_status.invoiced', 'Fakturerad') },
@@ -76,6 +99,7 @@ const OrderStatusMenu = ({ currentStatus, onStatusChange, disabled, className = 
     // its label so the pill reads "Tryckt" instead of falling through to "Okänd".
     if (currentStatus === 'printed') return t('order_status.printed', 'Tryckt');
     const status = statusOptions.find(option => option.value === currentStatus);
+    if (!status && Array.isArray(options) && labelOf(currentStatus)) return labelOf(currentStatus);
     return status ? status.label : t('order_status.unknown', 'Okänd');
   };
 
@@ -103,10 +127,10 @@ const OrderStatusMenu = ({ currentStatus, onStatusChange, disabled, className = 
     <div className={`relative inline-block ${className}`} ref={menuRef}>
       <button
         type="button"
-        disabled={disabled}
+        disabled={isDisabled}
         className={`inline-flex w-32 justify-center items-center px-4 py-1 text-xs font-medium rounded-md ${
           getStatusStyles(currentStatus)
-        } ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'}`}
+        } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'}`}
         onClick={() => setIsOpen(!isOpen)}
       >
         <span className="mr-1">{getCurrentStatusLabel()}</span>

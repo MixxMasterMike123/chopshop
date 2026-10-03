@@ -7,9 +7,7 @@ import { sv } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import AppLayout from '../../components/layout/AppLayout';
 import OrderStatusMenu from '../../components/OrderStatusMenu';
-import { doc, getDoc } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { db, functions } from '../../firebase/config';
+import { fetchOrderUser, refundWholeOrder } from './adminOrderDetailData';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import { printShippingLabel } from '../../utils/labelPrinter';
 import LabelPrintInstructions from '../../components/LabelPrintInstructions';
@@ -131,16 +129,7 @@ const AdminOrderDetail = () => {
       setUserLoading(true);
       console.log('Fetching user data for ID:', userId);
       
-      const userDocRef = doc(db, 'users', userId);
-      const userDocSnap = await getDoc(userDocRef);
-      
-      if (userDocSnap.exists()) {
-        console.log('User found in database');
-        return userDocSnap.data();
-      } else {
-        console.log('User not found in database');
-        return null;
-      }
+      return await fetchOrderUser(userId);
     } catch (err) {
       console.error('Error fetching user data:', err);
       return null;
@@ -260,6 +249,11 @@ const AdminOrderDetail = () => {
         return { text: 'Slutförd', color: 'bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-300' };
       case 'cancelled':
         return { text: 'Avbruten', color: 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-300' };
+      // Set by the refund flow (money), never by the status menu.
+      case 'refunded':
+        return { text: 'Återbetald', color: 'bg-rose-100 dark:bg-rose-900 text-rose-800 dark:text-rose-300' };
+      case 'partially_refunded':
+        return { text: 'Delvis återbetald', color: 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-300' };
       default:
         return { text: status || 'Unknown', color: 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300' };
     }
@@ -282,7 +276,7 @@ const AdminOrderDetail = () => {
       await fetchOrder();
     } catch (err) {
       console.error('Error updating order status:', err);
-      toast.error('Failed to update order status: ' + (err.message || ''));
+      toast.error(err?.userMessage || 'Failed to update order status: ' + (err.message || ''));
     } finally {
       setUpdateStatusLoading(false);
     }
@@ -312,9 +306,7 @@ const AdminOrderDetail = () => {
     if (!window.confirm('Återbetala hela ordern? Detta kan inte ångras.')) return;
     setRefundLoading(true);
     try {
-      // Server is Connect-aware: a destination-charge order is refunded with
-      // transfer reversal + fee refund; a legacy order takes a plain refund.
-      await httpsCallable(functions, 'refundOrder')({ orderId });
+      await refundWholeOrder(orderId, order);
       toast.success('Ordern återbetalad');
       setFetchAttempted(false);
       await fetchOrder();
@@ -563,7 +555,7 @@ const AdminOrderDetail = () => {
       <LabelPrintInstructions />
       {/* Order deletion is PLATFORM-only (P1-09: accounting records) — hide
           the button for shop admins instead of letting them hit a rules deny. */}
-      {isPlatform && (
+      {isPlatform && deleteOrder && (
         <Button variant="destructive" onClick={handleDeleteOrder} disabled={deleteLoading}>
           <TrashIcon className="h-4 w-4" />
           {deleteLoading ? 'Tar bort…' : 'Ta bort'}
@@ -610,7 +602,7 @@ const AdminOrderDetail = () => {
                     {updateStatusLoading ? (
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-admin-text-muted border-r-transparent" />
                     ) : (
-                      <OrderStatusMenu currentStatus={order.status} onStatusChange={handleStatusUpdate} source={order.source} isPickup={isPickup} />
+                      <OrderStatusMenu currentStatus={order.status} onStatusChange={handleStatusUpdate} source={order.source} isPickup={isPickup} options={order.statusOptions} />
                     )}
                     {paid && order.status !== 'refunded' && (
                       <Button variant="plain" disabled={refundLoading} onClick={handleRefund}>

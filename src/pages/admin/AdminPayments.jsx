@@ -1,8 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { db, functions } from '../../firebase/config';
+import {
+  BALANCE_READ,
+  callConnect,
+  connectEnabledFor,
+  getConnectBalance,
+  getPayoutDelay,
+  refreshOnReturn,
+  setPayoutDelay,
+  subscribeConnect,
+  useLoginLinkRefusal,
+} from './adminPaymentsData';
 import { useShopId } from '../../contexts/ShopContext';
 import { useAuth } from '../../contexts/AuthContext';
 import AppLayout from '../../components/layout/AppLayout';
@@ -100,6 +108,7 @@ const AdminPayments = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { isPlatform } = useAuth();
+  const loginLinkRefusal = useLoginLinkRefusal(shopId);
 
   const [pay, setPay] = useState(null);       // shops/{id}.payments
   const [loading, setLoading] = useState(true);
@@ -111,10 +120,10 @@ const AdminPayments = () => {
   // Live subscription to the shop's payments map.
   useEffect(() => {
     if (!shopId) return;
-    const unsub = onSnapshot(
-      doc(db, 'shops', shopId),
-      (snap) => {
-        setPay((snap.data() || {}).payments || {});
+    const unsub = subscribeConnect(
+      shopId,
+      (payments) => {
+        setPay(payments);
         setLoading(false);
       },
       (e) => { setError(e.message); setLoading(false); }
@@ -122,11 +131,7 @@ const AdminPayments = () => {
     return () => unsub();
   }, [shopId]);
 
-  const call = useCallback(async (name) => {
-    const fn = httpsCallable(functions, name);
-    const res = await fn({ shopId });
-    return res.data;
-  }, [shopId]);
+  const call = useCallback((name) => callConnect(shopId, name), [shopId]);
 
   // On return from Stripe onboarding, re-poll the real status (don't trust ?return).
   // The return_url carries ?shopId= (set server-side) so the managed-shop context
@@ -144,7 +149,7 @@ const AdminPayments = () => {
         try {
           setBusy('refresh');
           setError('');
-          const res = await call('refreshConnectStatus');
+          const res = await refreshOnReturn(shopId);
           if (res?.chargesEnabled) {
             setNoticeTone('success');
             setNotice('Klart! Utbetalningar är nu aktiverade för din butik.');
@@ -163,7 +168,7 @@ const AdminPayments = () => {
         }
       })();
     }
-  }, [shopId, call, location.search, navigate]);
+  }, [shopId, location.search, navigate]);
 
   const run = async (name, action) => {
     setError(''); setNotice(''); setBusy(action);
@@ -200,7 +205,7 @@ const AdminPayments = () => {
 
   const status = pay?.connectStatus || 'none';
   const ui = STATUS_UI[status] || STATUS_UI.none;
-  const connectEnabled = pay?.connectEnabled === true || isPlatform;
+  const connectEnabled = connectEnabledFor(pay, isPlatform);
   const hasAccount = !!pay?.stripeAccountId;
   const chargesEnabled = pay?.chargesEnabled === true;
   const requirementsDue = Array.isArray(pay?.requirementsDue) ? pay.requirementsDue : [];
@@ -312,13 +317,16 @@ const AdminPayments = () => {
                 till ditt bankkonto automatiskt. I Stripe-panelen ser du saldo och kommande utbetalningar.
               </p>
               <div className="flex items-center gap-3">
-                <Button variant="secondary" disabled={busy === 'dashboard'} onClick={() => run('createConnectLoginLink', 'dashboard')}>
+                <Button variant="secondary" disabled={busy === 'dashboard' || !!loginLinkRefusal} title={loginLinkRefusal || undefined} onClick={() => run('createConnectLoginLink', 'dashboard')}>
                   {busy === 'dashboard' ? 'Öppnar…' : 'Öppna Stripe-panel'}
                 </Button>
                 <Button variant="plain" disabled={busy === 'refresh'} onClick={() => run('refreshConnectStatus', 'refresh')}>
                   {busy === 'refresh' ? 'Uppdaterar…' : 'Uppdatera status'}
                 </Button>
               </div>
+              {loginLinkRefusal && (
+                <p className="mt-2 text-[12px] text-admin-text-muted">{loginLinkRefusal}</p>
+              )}
             </>
           )}
         </CardSection>
@@ -329,9 +337,16 @@ const AdminPayments = () => {
 
         {/* Balance & payout risk — noise before money can flow, so only once
             the account is live (charges enabled). */}
-        {hasAccount && chargesEnabled && (
+        {hasAccount && chargesEnabled && BALANCE_READ && (
           <CardSection title="Saldo & utbetalningsrisk">
             <BalancePanel shopId={shopId} isPlatform={isPlatform} />
+          </CardSection>
+        )}
+        {/* Without a balance read, the payout-delay control stands alone,
+            for the platform only. */}
+        {hasAccount && chargesEnabled && !BALANCE_READ && isPlatform && (
+          <CardSection title="Saldo & utbetalningsrisk">
+            <PayoutDelayPanel shopId={shopId} />
           </CardSection>
         )}
       </div>
@@ -352,8 +367,7 @@ const BalancePanel = ({ shopId, isPlatform }) => {
     setErr('');
     try {
       setLoading(true);
-      const res = await httpsCallable(functions, 'getConnectBalance')({ shopId });
-      setBal(res.data);
+      setBal(await getConnectBalance(shopId));
     } catch (e) {
       setErr(e.message || 'Kunde inte hämta saldo.');
     } finally {
@@ -400,9 +414,35 @@ const BalancePanel = ({ shopId, isPlatform }) => {
   );
 };
 
+// Platform-only, where no balance read exists: the payout-delay control with
+// the current delay as the platform reads it.
+const PayoutDelayPanel = ({ shopId }) => {
+  const [current, setCurrent] = useState(undefined);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+
+  const load = useCallback(async () => {
+    setErr('');
+    try {
+      setCurrent(await getPayoutDelay(shopId));
+    } catch (e) {
+      setErr(e.message || 'Något gick fel.');
+    } finally {
+      setLoading(false);
+    }
+  }, [shopId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) return null;
+  if (err) return <p className="text-[13px] text-red-700">{err}</p>;
+  return <PayoutDelayEditor shopId={shopId} current={current} onSaved={load} standalone />;
+};
+
 // Platform-only: hold a SPECIFIC seller's payouts longer (targeted risk control,
 // not a blanket hold). 'minimum' resets to the account-country floor.
-const PayoutDelayEditor = ({ shopId, current, onSaved }) => {
+// `standalone`: the first thing in its section (no balance above it), so no divider.
+const PayoutDelayEditor = ({ shopId, current, onSaved, standalone = false }) => {
   const [days, setDays] = useState(typeof current === 'number' ? String(current) : '');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -411,7 +451,7 @@ const PayoutDelayEditor = ({ shopId, current, onSaved }) => {
     setMsg('');
     try {
       setSaving(true);
-      await httpsCallable(functions, 'setConnectPayoutDelay')({ shopId, delayDays: value });
+      await setPayoutDelay(shopId, value);
       setMsg('Sparat.');
       onSaved?.();
     } catch (e) {
@@ -422,7 +462,7 @@ const PayoutDelayEditor = ({ shopId, current, onSaved }) => {
   };
 
   return (
-    <div className="mt-3 border-t border-admin-border-soft pt-3">
+    <div className={standalone ? undefined : 'mt-3 border-t border-admin-border-soft pt-3'}>
       <label className="block text-[12px] font-semibold text-admin-text-muted mb-1">
         Utbetalningsfördröjning (dagar) — riskkontroll för denna säljare
       </label>

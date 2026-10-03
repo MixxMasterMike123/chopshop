@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { collection, query, where, getCountFromServer } from 'firebase/firestore';
-import { db } from '../../firebase/config';
 import { useAuth } from '../../contexts/AuthContext';
+// The badge count, the menu's scope and the arrival notices are data: the
+// Cloudflare admin build swaps this module (alias list).
+import { scopePlatformNav, useNavBadgeCounts, usePlatformNotices } from './platformLayoutData';
 import {
   BuildingStorefrontIcon,
   PuzzlePieceIcon,
@@ -26,7 +27,7 @@ import {
  * Slice P4.0/P4.1: only "Shops" is live; the rest are placeholders for later
  * slices (add-ons, payments, settings).
  */
-const NAV = [
+const NAV = scopePlatformNav([
   { name: 'Butiker', path: '/shops', icon: BuildingStorefrontIcon, live: true },
   { name: 'Tillägg', path: '/addons', icon: PuzzlePieceIcon, live: true },
   { name: '3D-modeller', path: '/models', icon: CubeIcon, live: true },
@@ -38,7 +39,7 @@ const NAV = [
   { name: 'Användare', path: '/users', icon: UsersIcon, live: true },
   { name: 'Betalningar', path: '/payments', icon: CreditCardIcon, live: false },
   { name: 'Inställningar', path: '/settings', icon: Cog6ToothIcon, live: false },
-];
+]);
 
 // Pages that change a badge's underlying data call this so the sidebar count
 // refreshes without a reload (each page mounts its own PlatformLayout).
@@ -47,32 +48,17 @@ export const notifyPlatformBadgesChanged = () => {
   try { window.dispatchEvent(new Event(BADGES_EVENT)); } catch { /* non-browser */ }
 };
 
-// Nav badge counts. One aggregation read per layout mount: count of
-// infringementReports still status 'new' (a report nobody has looked at).
-// A failure just hides the badge — the nav must never break over it.
-const useNavBadgeCounts = (override) => {
-  const [counts, setCounts] = useState({});
-  useEffect(() => {
-    if (override) return undefined;
-    let cancelled = false;
-    const load = () => {
-      getCountFromServer(query(collection(db, 'infringementReports'), where('status', '==', 'new')))
-        .then((agg) => { if (!cancelled) setCounts({ reports: agg.data().count }); })
-        .catch(() => {});
-    };
-    load();
-    window.addEventListener(BADGES_EVENT, load);
-    return () => { cancelled = true; window.removeEventListener(BADGES_EVENT, load); };
-  }, [override]);
-  return override || counts;
-};
+// Nav badge counts (./platformLayoutData): unhandled infringement reports, one
+// read per layout mount and on BADGES_EVENT. A failure just hides the badge —
+// the nav must never break over it.
 
 // `badgeCounts` is for the dev harness only (renders without Firestore).
 const PlatformLayout = ({ children, badgeCounts }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser, logout } = useAuth() || {};
-  const counts = useNavBadgeCounts(badgeCounts);
+  const counts = useNavBadgeCounts(badgeCounts, BADGES_EVENT);
+  usePlatformNotices();
 
   const isActive = (path) =>
     location.pathname === path || (path === '/shops' && location.pathname === '/');

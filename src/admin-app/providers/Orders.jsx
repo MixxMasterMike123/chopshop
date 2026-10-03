@@ -1,31 +1,76 @@
 // The admin build's replacement for src/contexts/OrderContext.jsx (alias list,
-// vite.admin.config.js): the shell of `useOrder()` with the same members, so
-// the order pages resolve while they are stand-ins. Unit FD fills each
-// function from the order routes (WB: GET /v1/admin/orders, the detail,
-// POST …/status, …/refunds, …/cancel). Until then every function rejects
-// with `not_available`.
+// vite.admin.config.js): `useOrder()` with the members the order pages read,
+// on the order routes (CP5 unit FD; src/api/admin/orders.js).
 //
-// `deleteOrder` stays a refusal for good: an order is permanent evidence
-// (D68). `PRODUCT_SETTINGS` (a price table of the earlier wholesale era) is not
-// carried; no launch-scope page reads it.
+//   getAllOrders()                  the whole list, walked page by page (the
+//                                   page has always loaded every order and
+//                                   filters, counts and searches in memory)
+//   getOrderById(id)                the detail, or null (the route's 404)
+//   updateOrderStatus(id, step, x)  a fulfilment step (POST …/fulfilment, with
+//                                   x.trackingNumber on 'shipped'), or
+//                                   'cancelled' (POST …/cancel)
+//
+// `deleteOrder` is NOT provided: an order is permanent evidence (D68), and the
+// detail page shows its delete button only when the context has the function.
+// The functions are module-level (stable): the pages' effects depend on them.
+// A refusal of the API rejects with an Error whose `userMessage` is the Swedish
+// sentence the pages show (adapters/order.js refusalMessage).
 
 import React, { createContext, useContext } from 'react';
 import { notAvailable } from '../../api/admin/client.js';
+import { cancelOrder, changeFulfilment, getOrder, listAllOrders } from '../../api/admin/orders.js';
+import { orderFromDetail, orderFromListRow, refusalMessage } from '../adapters/order.js';
 
 const unavailable = (what) => async () => {
   throw notAvailable(what);
 };
 
+/** The API's error, with the page's Swedish sentence as its message when there is one. */
+export function withUserMessage(error) {
+  const sentence = refusalMessage(error);
+  if (sentence && error && typeof error === 'object') {
+    error.userMessage = sentence;
+    error.message = sentence;
+  }
+  return error;
+}
+
+/** Why a cancellation from the admin's status menu was made (the route requires a reason). */
+export const CANCEL_REASON = 'Avbruten av butiken i admin';
+
+async function getAllOrders() {
+  const { orders, truncated } = await listAllOrders();
+  if (truncated) console.warn('Orderlistan: bara de senaste ordrarna visas (gränsen för en hämtning nåddes).');
+  return orders.map(orderFromListRow);
+}
+
+async function getOrderById(orderId) {
+  const order = await getOrder(orderId);
+  return order === null ? null : orderFromDetail(order);
+}
+
+async function updateOrderStatus(orderId, newStatus, additionalData = {}) {
+  try {
+    if (newStatus === 'cancelled') {
+      await cancelOrder(orderId, { reason: CANCEL_REASON });
+    } else {
+      await changeFulfilment(orderId, { to: newStatus, trackingNumber: additionalData.trackingNumber });
+    }
+    return true;
+  } catch (error) {
+    throw withUserMessage(error);
+  }
+}
+
 const VALUE = Object.freeze({
   loading: false,
   error: null,
-  getOrderById: unavailable('Ordern'),
+  getOrderById,
+  getAllOrders,
+  updateOrderStatus,
   getUserOrders: unavailable('En användares ordrar'),
   getRecentOrders: unavailable('Senaste ordrar'),
-  getAllOrders: unavailable('Orderlistan'),
-  updateOrderStatus: unavailable('Ändra orderstatus'),
   getOrderStats: unavailable('Orderstatistik'),
-  deleteOrder: unavailable('Radera en order'),
   cancelOrder: unavailable('Avbryta en order'),
   updateProductSettings: unavailable('Produktinställningar'),
   isDemoMode: false,

@@ -15,6 +15,9 @@ import { WAGON_FEATURE_KEY } from '../../config/addons';
 import ImpersonationBanner from '../auth/ImpersonationBanner';
 import PlatformTermsGate from '../admin/PlatformTermsGate';
 import { getImpersonation } from '../../config/impersonation';
+// What this build's shell shows (the menu's scope, who may pick or switch a
+// shop) is data: the Cloudflare admin build swaps this module (alias list).
+import { scopeAdminNav, mayPickShop, maySwitchShop } from './adminShellScope';
 
 // 🚂 WAGON SYSTEM: Import wagon registry for menu items
 import wagonRegistry from '../../wagons/WagonRegistry.js';
@@ -41,7 +44,8 @@ import {
 } from '@heroicons/react/24/outline';
 
 const AppLayout = ({ children }) => {
-  const { currentUser, userProfile, logout, isPlatform } = useAuth();
+  const auth = useAuth();
+  const { currentUser, userProfile, logout } = auth;
   const { t } = useTranslation();
   const store = useStoreSettings();
   const { isEnabled: isAddonEnabled } = useShopFeatures();
@@ -114,7 +118,7 @@ const AppLayout = ({ children }) => {
     .join('')
     .toUpperCase() || 'B';
 
-  const adminNavLinks = [
+  const adminNavLinks = scopeAdminNav([
     {
       name: t('nav.admin_dashboard', 'Admin Dashboard'),
       path: '/admin',
@@ -207,7 +211,7 @@ const AppLayout = ({ children }) => {
       icon: Cog6ToothIcon,
       description: t('nav.admin_settings_desc', 'Systeminställningar'),
     }
-  ];
+  ]);
 
   // The native "Marknadsföringsmaterial" add-on link. OPT-IN key (only a
   // literal true enables it) — no platform-user bypass, entitlement is a
@@ -301,7 +305,7 @@ const AppLayout = ({ children }) => {
     // broken data — the rules invariant says every shop admin's users doc
     // carries a shopId — so fail LOUD rather than let them pick a tenant they
     // don't administer (the silent-wrong-shop class this change exists to kill).
-    if (!isPlatform) {
+    if (!mayPickShop(auth)) {
       return (
         <div className="grid min-h-screen place-items-center bg-admin-bg px-4">
           <div className="max-w-md rounded-[var(--radius-admin)] bg-admin-surface p-6 text-center ring-1 ring-admin-border">
@@ -369,7 +373,7 @@ const AppLayout = ({ children }) => {
               picker (impersonation keeps its own banner + exit, so it is left
               alone here). For a normal shop admin it stays a plain label: they
               have exactly one shop and nothing to switch to. */}
-          {isPlatform && !getImpersonation() ? (
+          {maySwitchShop(auth) && !getImpersonation() ? (
             <button
               onClick={handleShopSwitch}
               className="ml-1 flex items-center gap-2 rounded-[var(--radius-admin-el)] py-1 pl-2 pr-1 hover:bg-white/10"

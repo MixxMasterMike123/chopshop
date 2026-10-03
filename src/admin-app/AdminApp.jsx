@@ -16,6 +16,9 @@ import { Toaster } from 'react-hot-toast';
 import ScrollToTop from '../components/ScrollToTop';
 import AdminRoute from '../components/auth/AdminRoute';
 import AddonGate from '../components/addons/AddonGate';
+// ?shopId= and the console's ?impersonate= (the alias list hands this build
+// its own intake: replacements/AdminShopIdIntake.jsx, unit FB).
+import AdminShopIdIntake from '../components/auth/AdminShopIdIntake';
 import { isUnresolvedShopId } from '../config/tenancy';
 import Providers from './Providers.jsx';
 import NotFound from './NotFound.jsx';
@@ -81,6 +84,7 @@ export default function AdminApp() {
     <BrowserRouter>
       <ScrollToTop />
       <Providers tree="admin">
+        <AdminShopIdIntake />
         <div className="min-h-screen bg-gray-50">
           <Toaster
             position="top-right"

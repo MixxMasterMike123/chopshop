@@ -1,20 +1,23 @@
 // ShopPicker — the admin surface's answer to "no shop resolved".
 //
-// Replaces the old b8shield default fallback (removed 2026-08-15). A platform
-// operator's /admin/* URL carries no shop and they have no own shopId, so the
-// context used to resolve SILENTLY to b8shield — the operator would edit a
-// tenant the UI never named. That is the seam behind the Kent wrong-shop Connect
-// binding. Now an unresolved context renders this: an explicit, deliberate
-// choice, remembered for next time (config/activeShop last-picked).
+// Replaces the old silent default-shop fallback (removed 2026-08-15). A
+// platform operator's /admin/* URL carries no shop and they have no own
+// shopId, so the context used to resolve SILENTLY to a fixed default shop —
+// the operator would edit a tenant the UI never named. That is the seam behind
+// the Kent wrong-shop Connect binding. Now an unresolved context renders this:
+// an explicit, deliberate choice, remembered for next time (config/activeShop
+// last-picked).
 //
 // Platform-operator UI only. A real shop admin always resolves to their own
 // users/{uid}.shopId and never sees this. Choosing a shop here is NOT an
 // authorization step — the Firestore/Storage rules remain the hard gate
 // (isPlatform bypasses scoping); this only decides which tenant the admin UI
 // renders, and says so out loud in the top bar afterwards.
+//
+// The list comes from ./shopPickerData (the Cloudflare admin build swaps that
+// module: the shops of GET /v1/me).
 import React, { useEffect, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { loadPickerShops } from './shopPickerData';
 import { setDeepLinkShopId, setLastPickedShopId } from '../../config/activeShop';
 import { BuildingStorefrontIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 
@@ -27,11 +30,8 @@ const ShopPicker = ({ onLogout }) => {
     let cancelled = false;
     (async () => {
       try {
-        const snap = await getDocs(collection(db, 'shops'));
+        const list = await loadPickerShops();
         if (cancelled) return;
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
         setShops(list);
       } catch (e) {
         console.error('ShopPicker: could not load shops:', e);

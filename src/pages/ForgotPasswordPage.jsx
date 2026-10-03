@@ -135,11 +135,6 @@ const ForgotPasswordPage = () => {
                 {t('forgot_password.back_to_login', 'Back to login')}
               </Link>
             </div>
-            <div className="text-sm">
-              <Link to="/register" className="font-medium text-primary-600 hover:text-primary-500">
-                {t('forgot_password.create_account', 'Create an account')}
-              </Link>
-            </div>
           </div>
         </form>
       </div>
