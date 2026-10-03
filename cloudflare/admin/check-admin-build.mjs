@@ -54,7 +54,7 @@ const SECRET_MARKERS = [
 // The admin Worker serves /index.html (never as a file), /assets/…, /images/…
 // and top-level files with a dot (cloudflare/admin/src/routing.ts).
 function servable(path) {
-  return path === 'index.html' || path.startsWith('assets/') || path.startsWith('images/') || (!path.includes('/') && path.includes('.'));
+  return path === 'index.html' || path.startsWith('assets/') || path.startsWith('images/') || path.startsWith('template-thumbs/') || (!path.includes('/') && path.includes('.'));
 }
 
 function walk(dir) {

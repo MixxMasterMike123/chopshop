@@ -181,7 +181,7 @@ describe("classifyAdminRequest", () => {
   });
 
   it("serves built files from the build, never the shell", () => {
-    for (const path of ["/assets/index-abc.js", "/assets/x/y.css", "/images/logo.svg", "/favicon.ico", "/manifest.json"]) {
+    for (const path of ["/assets/index-abc.js", "/assets/x/y.css", "/images/logo.svg", "/template-thumbs/nord.png", "/favicon.ico", "/manifest.json"]) {
       expect(classifyAdminRequest("GET", path)).toEqual({ kind: "static" });
     }
   });

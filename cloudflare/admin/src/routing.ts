@@ -23,7 +23,8 @@ export type AdminRoute =
 
 const API_PREFIX = "/_api";
 const READ_METHODS = new Set(["GET", "HEAD"]);
-const STATIC_PREFIXES = ["/assets/", "/images/"];
+// /template-thumbs/…: the storefront templates' thumbnails the appearance page shows.
+const STATIC_PREFIXES = ["/assets/", "/images/", "/template-thumbs/"];
 
 /** One top-level segment holding a dot (`/favicon.ico`, `/manifest.json`). */
 function isTopLevelFile(pathname: string): boolean {
