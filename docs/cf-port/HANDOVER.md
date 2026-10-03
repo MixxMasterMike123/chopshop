@@ -4,7 +4,7 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP5 — Admin (started 2026-10-03 on Mikael's "keep going … full autonomy")
 
-### 🚀 2026-10-04 00:25 — the admin's PAGES are on staging; Codex's ten findings are fixed — START HERE
+### 🚀 2026-10-04 00:05 — the admin's PAGES are on staging; Codex's ten findings are fixed — START HERE
 
 **Deployed SHA `d92458f1`, attested, tree clean, pushed.** API `dbd1b35d-3d0e-4bd7-8f42-65741591190f`, web `5fccd42f-aa75-485d-858d-7c92750867d9` (both at `abc10141`), admin `f3ad5bff-603c-4a9f-9b38-48435898a8b0` (`d92458f1`). Migration 0048 applied on staging (bookmark BEFORE `000002cd-00000000-000050f9-66a757f1e50aa3fdacb674dc560f14ed`); `/ready` answers 0048.
 
