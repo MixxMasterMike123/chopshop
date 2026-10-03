@@ -370,6 +370,24 @@ import {
 // CP4-D2 (imports) — begin
 import { ADMIN_PREVIEW_PATH, handleAdminPreviewRoute } from "./routes/admin-preview";
 // CP4-D2 (imports) — end
+// CP5-IMPORTS-A — begin
+// CP5-IMPORTS-A — end
+// CP5-IMPORTS-B — begin
+// CP5-IMPORTS-B — end
+// CP5-IMPORTS-C — begin
+// CP5-IMPORTS-C — end
+// CP5-IMPORTS-D — begin
+// CP5-IMPORTS-D — end
+// CP5-IMPORTS-E — begin
+// CP5-IMPORTS-E — end
+// CP5-IMPORTS-F — begin
+// CP5-IMPORTS-F — end
+// CP5-IMPORTS-G — begin
+// CP5-IMPORTS-G — end
+// CP5-IMPORTS-H — begin
+// CP5-IMPORTS-H — end
+// CP5-IMPORTS-I — begin
+// CP5-IMPORTS-I — end
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -2268,6 +2286,25 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     onMethods(["POST"], (c) => handleAdminPreviewRoute(c.env, c.req.raw)),
   );
   // CP4-D2 — end
+  // CP5: one block per builder (docs/cf-port/CP5_BRIEFS.md §0); a builder edits only its own.
+  // CP5-ROUTES-A — begin
+  // CP5-ROUTES-A — end
+  // CP5-ROUTES-B — begin
+  // CP5-ROUTES-B — end
+  // CP5-ROUTES-C — begin
+  // CP5-ROUTES-C — end
+  // CP5-ROUTES-D — begin
+  // CP5-ROUTES-D — end
+  // CP5-ROUTES-E — begin
+  // CP5-ROUTES-E — end
+  // CP5-ROUTES-F — begin
+  // CP5-ROUTES-F — end
+  // CP5-ROUTES-G — begin
+  // CP5-ROUTES-G — end
+  // CP5-ROUTES-H — begin
+  // CP5-ROUTES-H — end
+  // CP5-ROUTES-I — begin
+  // CP5-ROUTES-I — end
 
   // Public reads answer through the ETag/304 handlers (src/storefront/public-routes.ts):
   // bodies are byte-identical to the plain handlers, plus `ETag: "<catalog_version>"` and
