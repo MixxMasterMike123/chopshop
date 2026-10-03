@@ -32,7 +32,7 @@ export { default as AdminPages } from '../pages/admin/AdminPages.jsx';
 export { default as AdminPageEdit } from '../pages/admin/AdminPageEdit.jsx';
 export { default as AdminStorefront } from '../pages/admin/AdminStorefront.jsx';
 export { default as AdminSettings } from '../pages/admin/AdminSettings.jsx';
-export const AdminPayments = pending('AdminPayments');
+export { default as AdminPayments } from '../pages/admin/AdminPayments.jsx';
 export { default as AdminUsers } from '../pages/admin/AdminUsers.jsx';
 export { default as AdminPlatformTerms } from '../pages/admin/AdminPlatformTerms.jsx';
 export const PodAdminPage = pending('PodAdminPage');
