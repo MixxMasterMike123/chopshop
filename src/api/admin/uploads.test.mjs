@@ -43,6 +43,21 @@ describe('sha256', () => {
 });
 
 describe('uploadObject', () => {
+  it('stays with the shop it started in when the active shop changes midway', async () => {
+    script.push(
+      () => {
+        // The user switches shop while the reservation is on its way.
+        setRequestShopId('test-shop-b');
+        return answer(201, { object: { objectId: 'obj-1' } });
+      },
+      () => answer(500, { error: { code: 'internal_error' } }),
+      () => answer(204),
+    );
+    await assert.rejects(uploadObject(png, { kind: 'product_media' }), { status: 500 });
+    assert.deepEqual(calls.map((call) => call.init.method), ['POST', 'PUT', 'DELETE']);
+    assert.deepEqual(calls.map((call) => call.init.headers['x-shop-id']), ['test-shop-a', 'test-shop-a', 'test-shop-a']);
+  });
+
   it('reserve → PUT the bytes → the object, with X-Shop-Id on both', async () => {
     script.push(
       () => answer(201, { object: { objectId: 'obj-1', objectKey: 'shops/test-shop-a/shop_branding/obj-1/v1/logo.png' } }),

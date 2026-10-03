@@ -15,7 +15,7 @@
 // this only saves a pointless request): a public image (product_media,
 // shop_branding) 15 MiB, an SVG 512 KiB, a private object 100 MB.
 
-import { AdminApiError, adminRequest, segment } from './client.js';
+import { AdminApiError, adminRequest, getRequestShopId, segment } from './client.js';
 
 export const PUBLIC_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
 export const SVG_MAX_BYTES = 512 * 1024;
@@ -49,6 +49,9 @@ export async function uploadObject(file, { kind, contentType, fileName, shopId, 
   if (!file || typeof file.size !== 'number' || typeof file.arrayBuffer !== 'function') {
     throw new AdminApiError({ status: 0, code: 'bad_request', message: 'Not a file' });
   }
+  // The shop is fixed NOW: the three requests of one upload go to one shop,
+  // whatever the tab's active shop becomes while the file is hashed or sent.
+  const shop = shopId ?? getRequestShopId() ?? undefined;
   const type = contentType || file.type || 'application/octet-stream';
   if (file.size < 1 || file.size > sizeCap(kind, type)) {
     throw new AdminApiError({ status: 413, code: 'payload_too_large', message: 'Filen är för stor' });
@@ -59,7 +62,7 @@ export async function uploadObject(file, { kind, contentType, fileName, shopId, 
   const reserve = { contentType: type, kind, sha256, sizeBytes: file.size };
   if (name) reserve.fileName = name;
 
-  const { data: reserved } = await adminRequest('POST', '/v1/admin/objects', { json: reserve, shopId, signal });
+  const { data: reserved } = await adminRequest('POST', '/v1/admin/objects', { json: reserve, shopId: shop, signal });
   const objectId = reserved?.object?.objectId;
   if (typeof objectId !== 'string' || objectId === '') {
     throw new AdminApiError({ status: 0, code: 'bad_response', message: 'The reservation named no object' });
@@ -69,13 +72,13 @@ export async function uploadObject(file, { kind, contentType, fileName, shopId, 
     const { data } = await adminRequest('PUT', `/v1/admin/objects/${segment(objectId)}/content`, {
       body: file,
       contentType: type,
-      shopId,
+      shopId: shop,
       signal,
     });
     const object = data?.object ?? null;
     return { objectId, url: typeof object?.url === 'string' ? object.url : null, object };
   } catch (error) {
-    await adminRequest('DELETE', `/v1/admin/objects/${segment(objectId)}`, { shopId }).catch(() => {});
+    await adminRequest('DELETE', `/v1/admin/objects/${segment(objectId)}`, { shopId: shop }).catch(() => {});
     throw error;
   }
 }
