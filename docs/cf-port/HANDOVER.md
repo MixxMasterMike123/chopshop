@@ -4,7 +4,39 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP4 — Catalogue + storefront (GO 2026-09-28, started 2026-09-28)
 
-### ⏸ PAUSED 2026-09-28 19:30 until the weekly reset (Saturday 2026-10-03, 17:00) — START HERE
+### ▶ RESUMED 2026-10-03 17:30 — the six findings are fixed, the locale files are DEPLOYED, the pages are shot again — START HERE
+
+The pause below is closed; its resume steps 1–5 are done. **Tree clean, pushed. Waiting for Mikael's review of the four shops (step 6).**
+
+| Step | Result |
+|---|---|
+| The six findings of Codex | fixed in ONE commit, `900b6753`, by the reviewer (no builder), a test per finding; each fix was broken once to see its test fail |
+| Codex on `900b6753` | no finding (log `~/chopshop-export/codex-2026-10-03/codex-900b6753.log`) |
+| The gate | 439 script tests, 120 under Node, the storefront build check, the older build, guard PASS (allowlist 298). The Worker's suite was not run: no Worker code changed |
+| Attestation | `codex: PASS`, `fable: PASS` on `900b6753`, notes pushed |
+| `scripts/cf-deploy.sh staging web` | web Worker version `56403476-b8a2-4fb4-843b-12ffb37caf2e`. The API Worker is unchanged (`895c24d9`'s code) |
+| The twelve pages, three widths | 36 shots, **no console error, no failed request**, every page shows its heading. `~/chopshop-export/shots-staging-2026-10-03/` (with `diff/` against the baseline) |
+| The texts | the product page now reads "Lägg i kundvagnen", "Välj..", "Stil": the shop's own, as in the baseline |
+
+**What the fix changed in the tools (for whoever runs them next):**
+
+- The copy manifest is keyed by (shop, sourceKey, KIND). `lookupEntry`, `lookupAddress` and `lookupCopied` take the kind as their last argument. A file a store identity and a product both name is two sources and two objects. The manifest on staging (524 entries) is valid as it is.
+- `staging-legal.mjs` reads `GET /v1/admin/settings` before it renders, and writes a shop to `published-for-review.json` BEFORE the publish request (a shop listed there whose publish never arrived is only left unpublished by `--unpublish-after-review`).
+- `verify-catalogue.mjs` has one more state query, `screening_blocked`; a state file made before it reads as "none blocked". A blocked product is not expected in the projection, a PENDING one still is. `plan.json` now records the menu a plan writes (`expected.branding.<shop>.menu`); a plan of before that which wrote a menu fails the menu check with "rebuild the plan".
+- The handover's open point on the menu is closed: the staging plan wrote no menu for any of the four shops (`menuWritten` false ×4), and the saved staging state verifies with the new verifier: PASS, 41 checks.
+
+**The diff against the baseline (melodie-mc), by cause:**
+
+| Difference | Cause |
+|---|---|
+| Most pages 28 px shorter | D81, the footer's "Mitt konto" row |
+| Home and product list much shorter (desktop 2990 → 2150, 5198 → 2882) | 6 of 12 products are POD without a mapping (D83) |
+| Cart desktop 4.1 %, cart tablet −7 px, checkout mobile 1.3 % | NOT looked into here; `CP4_F_REPORT.md` names the cart without a total |
+| Legal pages on mobile −3 px (not −28), platform terms mobile +46 px | NOT looked into: the text wraps differently somewhere. For the design gate |
+
+**Next:** Mikael reviews `https://chopshop-web-stg.kent-ee2.workers.dev/<shop>` (melodie-mc, gif-sundsvall, ninetone, sillmans). After the review: `node scripts/cf-port/staging-legal.mjs --env staging --out ~/chopshop-export/legal-staging-2026-09-28 --unpublish-after-review`. Then step 7 of the list below, each with his go. HEAD after this entry is a docs commit and has no attestation of its own; the deployed, attested SHA is `900b6753`.
+
+### (history) ⏸ PAUSED 2026-09-28 19:30 until the weekly reset (Saturday 2026-10-03, 17:00)
 
 Mikael paused the work: 87 % of the week and 83 % of the week's Fable were used on a Monday. **Tree clean, HEAD pushed, no builder running, nothing half done.** Staging stays as it is: the four shops are imported and can be looked at, three of them published for the review.
 
