@@ -20,20 +20,24 @@ export const LIST_PAGE_SIZE = 100;
 /** The walk stops after this many pages (100 × 50 = 5 000 orders). */
 export const MAX_LIST_PAGES = 50;
 
-const ORDER_NUMBER_PREFIX = /^[0-9A-Za-z-]{1,40}$/;
+// The Worker's grammar of a `q` without "@" (admin-order-list.ts NAME_QUERY_PATTERN):
+// an order number prefix and a part of the recipient's name are the same text.
+const NAME_QUERY = /^[\p{L}\p{M}\p{N} '’.-]{1,100}$/u;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
 
 /**
  * What the route's `q` can search for a text a person typed: an exact e-mail
- * address (it holds `@`), or an order number prefix. Null when the text is
- * neither (a name, a part of an address): the route would refuse it.
+ * address (it holds `@`), else an order number prefix OR a part of the
+ * recipient's name (1–100 letters, digits, spaces, `'`, `’`, `.`, `-`).
+ * Returns the trimmed text, or null when the route would refuse it (`%`, `_`,
+ * `\`, `<`, empty, too long): such a text matches nothing and is not sent.
  */
 export function searchQueryOf(text) {
   if (typeof text !== 'string') return null;
   const q = text.trim();
   if (q === '') return null;
   if (q.includes('@')) return EMAIL.test(q) ? q.toLowerCase() : null;
-  return ORDER_NUMBER_PREFIX.test(q) ? q : null;
+  return NAME_QUERY.test(q) ? q : null;
 }
 
 /**

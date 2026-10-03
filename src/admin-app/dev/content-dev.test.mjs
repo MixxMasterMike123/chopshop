@@ -14,7 +14,6 @@ import * as menu from '../replacements/adminMenuData.js';
 import * as pagesList from '../replacements/adminPagesData.js';
 import * as pageEdit from '../replacements/adminPageEditData.js';
 import * as storefront from '../replacements/adminStorefrontData.js';
-import { forgetProducts } from '../replacements/contentSources.js';
 
 const realFetch = globalThis.fetch;
 let state;
@@ -26,7 +25,6 @@ function install() {
   const answer = route(state, 'POST', new URL('/_api/api/auth/sign-in/email', 'http://dev.invalid'), {}, { email: 'admin@example.com', password: 'dev-password-1' });
   cookie = answer.setCookie.split(';')[0];
   log = [];
-  forgetProducts();
   globalThis.fetch = async (url, init = {}) => {
     const headers = { ...(init.headers ?? {}), cookie };
     let body = null;
@@ -71,7 +69,10 @@ describe('collections', () => {
   });
 
   it('the picker: products by name with their tags', async () => {
+    log.length = 0;
     const { products, availableTags } = await collectionEdit.loadPickerProducts('test-shop-a');
+    // the tags come with the list: no read of a single product
+    assert.deepEqual(log.filter(([, url]) => /\/v1\/admin\/products\/[^/?]+/.test(url)), []);
     assert.ok(products.some((p) => p.id === 'prod-towel'));
     assert.equal(products.some((p) => p.id === 'prod-old'), false);
     assert.deepEqual(availableTags, ['Linne', 'Nyhet', 'Tryck']);
@@ -158,12 +159,23 @@ describe('collections', () => {
 });
 
 describe('pages', () => {
-  it('the list: every page in full (translations, SEO line), newest change first; delete refreshes', async () => {
+  it('the list: the SEO texts and content languages from the list itself (no read per page), newest change first; delete refreshes', async () => {
     const seen = [];
+    log.length = 0;
     const stop = pagesList.subscribeToPages('test-shop-a', (pages) => seen.push(pages), (error) => assert.fail(error));
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.deepEqual(seen.at(-1).map((p) => p.slug), ['om-oss', 'kontakt', 'frakt']);
     assert.deepEqual(Object.keys(seen.at(-1)[0].content).sort(), ['en-GB', 'sv-SE']);
+    assert.deepEqual(log.filter(([, url]) => /\/v1\/admin\/pages\/[^/?]+/.test(url)), [], 'no page is read on its own');
+    const [om, kontakt, frakt] = seen.at(-1);
+    assert.deepEqual(om.metaTitle, { 'sv-SE': 'Om Test Shop A', 'en-GB': 'About Test Shop A' });
+    assert.deepEqual(om.metaDescription, { 'sv-SE': 'Vilka vi är.', 'en-GB': 'Who we are.' });
+    assert.equal(kontakt.metaDescription, '');
+    assert.equal(frakt.metaTitle, '', 'a page without an SEO title has no "SEO:" line');
+    // the page's "Översättningar n/3" rule (AdminPages getTranslationStatus), on the rows as the list gives them
+    const done = (page) => ['sv-SE', 'en-GB', 'en-US'].filter((lang) => ['title', 'content', 'metaTitle', 'metaDescription']
+      .every((f) => (typeof page[f] === 'string' ? lang === 'sv-SE' && page[f].length > 0 : Boolean(page[f]?.[lang]?.length)))).length;
+    assert.deepEqual([om, kontakt, frakt].map(done), [2, 0, 0]);
     assert.equal(seen.at(-1)[0].updatedAt.toDate().getUTCFullYear(), 2026);
     await pagesList.deleteShopPage('page-frakt');
     assert.deepEqual(seen.at(-1).map((p) => p.slug), ['om-oss', 'kontakt']);

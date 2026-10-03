@@ -23,6 +23,7 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'orders.fixtures.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 const ORDER_NUMBER_PREFIX = /^[0-9A-Za-z-]{1,40}$/;
+const NAME_QUERY = /^[\p{L}\p{M}\p{N} '’.-]{1,100}$/u;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
 const STATUSES = ['paid', 'processing', 'printed', 'shipped', 'ready_for_pickup', 'delivered', 'completed', 'partially_refunded', 'refunded', 'cancelled'];
 const FULFILMENT = ['unfulfilled', 'processing', 'shipped', 'ready_for_pickup', 'delivered', 'completed'];
@@ -199,6 +200,7 @@ function parseList(url) {
   }
   let email = null;
   let prefix = null;
+  let name = null;
   const qRaw = p.get('q');
   if (qRaw !== null) {
     const q = qRaw.trim();
@@ -206,11 +208,13 @@ function parseList(url) {
       if (!EMAIL.test(q)) return null;
       email = q.toLowerCase();
     } else {
-      if (!ORDER_NUMBER_PREFIX.test(q)) return null;
-      prefix = q.toUpperCase();
+      // as the Worker: the order number prefix OR a part of the recipient's name
+      if (!NAME_QUERY.test(q)) return null;
+      name = q.toLowerCase();
+      prefix = ORDER_NUMBER_PREFIX.test(q) ? q.toUpperCase() : null;
     }
   }
-  return { status, fulfilment, since, until, limit, cursor, email, prefix };
+  return { status, fulfilment, since, until, limit, cursor, email, prefix, name };
 }
 
 function inWindow(o, f) {
@@ -221,7 +225,11 @@ function inWindow(o, f) {
   if (f.since !== null && at < Date.parse(f.since)) return false;
   if (f.until !== null && at >= Date.parse(f.until)) return false;
   if (f.email !== null && o.customerEmail !== f.email) return false;
-  if (f.prefix !== null && !o.orderNumber.startsWith(f.prefix)) return false;
+  if (f.name !== null || f.prefix !== null) {
+    const byNumber = f.prefix !== null && o.orderNumber.startsWith(f.prefix);
+    const byName = f.name !== null && (o.recipient?.name ?? '').toLowerCase().includes(f.name);
+    if (!byNumber && !byName) return false;
+  }
   return true;
 }
 

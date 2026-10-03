@@ -364,7 +364,12 @@ const SETTINGS_LEGAL_ROUTES = [
     if (typeof custom !== 'boolean' && !(customMap && Object.keys(customMap).sort().join(',') === FE_LEGAL_KEYS.join(',')
       && FE_LEGAL_KEYS.every((k) => typeof customMap[k] === 'boolean'))) return invalid();
     if (!texts || typeof texts !== 'object' || Object.keys(texts).sort().join(',') !== FE_LEGAL_KEYS.join(',')) return invalid();
-    if (!FE_LEGAL_KEYS.every((k) => typeof texts[k] === 'string' && texts[k].length > 0 && !FE_REFUSED_HTML.test(texts[k]))) return invalid();
+    if (!FE_LEGAL_KEYS.every((k) => typeof texts[k] === 'string' && texts[k].length > 0)) return invalid();
+    // The shape is judged first; then a refused text names its page(s), in key order (the Worker's: legal-pages.ts).
+    const refusedPages = FE_LEGAL_KEYS.filter((k) => FE_REFUSED_HTML.test(texts[k]));
+    if (refusedPages.length > 0) {
+      return json(400, { error: { code: 'invalid_request', message: 'A text holds markup that cannot be published', page: refusedPages[0], pages: refusedPages, reason: 'script' } });
+    }
     const pageSha256 = Object.fromEntries(FE_LEGAL_KEYS.map((k) => [k, createHash('sha256').update(texts[k], 'utf8').digest('hex')]));
     const acceptance = {
       acceptanceId: randomBytes(8).toString('hex'),
@@ -377,9 +382,10 @@ const SETTINGS_LEGAL_ROUTES = [
       templateVersion,
       textsSha256: createHash('sha256').update(JSON.stringify(texts), 'utf8').digest('hex'),
       version: null,
+      acceptedBy: { kind: 'admin', name: entry.user.name ?? null, email: entry.user.email ?? null },
     };
     feHeld(state, feShopId(headers)).adoption = acceptance;
-    const { pageSha256: _p, source: _s, version: _v, ...answer } = acceptance;
+    const { pageSha256: _p, source: _s, version: _v, acceptedBy: _b, ...answer } = acceptance;
     return json(201, { acceptance: answer });
   }],
 ];

@@ -56,6 +56,16 @@ describe('acceptanceOf', () => {
     assert.deepEqual(acceptanceOf(status({ acceptedVersion: 'v1', inGrace: true })), { acceptedAt: null, version: 'v1' });
   });
 
+  it('latestAcceptance: the version, the date and the signer, also of an OLDER version', () => {
+    const older = { version: 'v1', acceptedAt: '2026-02-01T09:00:00.000Z', acceptedBy: { kind: 'admin', name: 'Anna', email: 'anna@shop.se' } };
+    assert.deepEqual(acceptanceOf(status({ acceptedVersion: 'v1', inGrace: true, latestAcceptance: older })),
+      { acceptedAt: '2026-02-01T09:00:00.000Z', version: 'v1', email: 'anna@shop.se' });
+    const platform = { version: 'v2', acceptedAt: '2026-10-01T09:00:00.000Z', acceptedBy: { kind: 'platform', name: null, email: null } };
+    assert.equal(acceptanceOf(status({ latestAcceptance: platform })).email, 'Plattformen');
+    // without a named signer there is no `email` key (the page prints "okänd användare")
+    assert.equal('email' in acceptanceOf(status({ latestAcceptance: { ...older, acceptedBy: { kind: 'admin', name: null, email: null } } })), false);
+  });
+
   it('none', () => {
     assert.equal(acceptanceOf(status({})), null);
     assert.equal(acceptanceOf(null), null);

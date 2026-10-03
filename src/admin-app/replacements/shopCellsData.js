@@ -6,24 +6,31 @@
 // PLATFORM-ONLY: the commission is written here. Only the platform console's
 // pages (shopCells, PlatformShopDetail) import this module.
 //
-// What the platform detail does not carry: who accepted the legal pages or
-// the platform's terms, when, and which version (gap analysis §2c,
-// PlatformShopDetail). LEGAL_FACTS is false, so the platform-terms pill and
-// the two "godkända" rows are not shown; the readiness comes from the
-// detail's settings summary (return address, VAT answer) with the adoption
-// listed as unknown.
+// What the platform detail carries (unit WJ): the checkout's own legal gate
+// (`legal.checkoutOpen`), who adopted the legal pages and accepted the
+// platform terms, and when. The readiness is the checkout's: "Juridik OK" and
+// the GO LIVE warning mean what the checkout decides.
 
 import { patchTenant } from '../../api/admin/platform.js';
-import { commissionErrorMessage as messageOf, legalReadinessFromSummary } from '../adapters/platformShops.js';
+import { commissionErrorMessage as messageOf, legalReadinessFromLegal } from '../adapters/platformShops.js';
 
-/** Not read by this build (the pill reads it only when LEGAL_FACTS is true). */
-export const PLATFORM_TERMS_VERSION = null;
+// The platform's current terms version (the detail's `legal.terms.currentVersion`),
+// which the "gammal version" pill compares the accepted one with. It is the
+// same for every shop; the data module of the detail sets it from each read.
+let currentTermsVersion = null;
+export { currentTermsVersion as PLATFORM_TERMS_VERSION };
 
-export const LEGAL_FACTS = false;
+/** Called with each detail read (platformShopDetailData.js). */
+export function noteCurrentTermsVersion(version) {
+  if (typeof version === 'string' && version !== '') currentTermsVersion = version;
+}
 
-/** The readiness from the shop's `legalSummary` (adapters/platformShops.js toDetailShop). */
+/** The seller's adoption of the pages and the platform terms (who, when, which version) are read: their pill and rows show. */
+export const LEGAL_FACTS = true;
+
+/** The readiness from the shop's `legal` (adapters/platformShops.js toDetailShop). */
 export function legalReadinessOf(shop) {
-  return legalReadinessFromSummary(shop.legalSummary);
+  return legalReadinessFromLegal(shop.legal);
 }
 
 /** PATCH /v1/platform/tenants/:id { commissionBps }. The server's cap decides (400 over it). */

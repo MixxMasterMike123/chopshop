@@ -27,6 +27,7 @@ import {
   setTenantStatus,
 } from '../../api/admin/platform.js';
 import { toDetailShop } from '../adapters/platformShops.js';
+import { noteCurrentTermsVersion } from './shopCellsData.js';
 import { openStorefrontOf } from './platformStorefront.js';
 import { APP_URLS } from './urls.js';
 
@@ -47,6 +48,7 @@ export async function loadShop(shopId) {
     // The detail still shows; the opt-in then reads "not invited".
     console.warn('Connect view not available:', error?.code || error?.message);
   }
+  noteCurrentTermsVersion(detail.legal?.terms?.currentVersion);
   return { shop: toDetailShop(detail, connect), counts: null };
 }
 

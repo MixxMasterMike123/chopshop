@@ -11,6 +11,7 @@ import {
   identityPartOf,
   mergeLikeFirestore,
   readinessFromStatus,
+  pageNamesOf,
   refusedTextKeys,
   settingsPutBody,
   textsChangedSince,
@@ -118,6 +119,14 @@ describe('acceptanceFromView', () => {
     assert.deepEqual(acceptanceFromView({ acceptanceId: 'a1', acceptedAt: '2026-10-03T10:00:00.000Z', templateVersion: '2026-09-07', textsSha256: 'x' }),
       { acceptedAt: '2026-10-03T10:00:00.000Z', templateVersion: '2026-09-07', acceptanceId: 'a1' });
   });
+  it('the signer: a person of the shop by address, a platform signer as "Plattformen"', () => {
+    const view = { acceptanceId: 'a1', acceptedAt: 't', templateVersion: 'v1' };
+    assert.equal(acceptanceFromView({ ...view, acceptedBy: { kind: 'admin', name: 'Anna', email: 'anna@shop.se' } }).email, 'anna@shop.se');
+    assert.equal(acceptanceFromView({ ...view, acceptedBy: { kind: 'admin', name: 'Anna', email: null } }).email, 'Anna');
+    assert.equal(acceptanceFromView({ ...view, acceptedBy: { kind: 'platform', name: null, email: null } }).email, 'Plattformen');
+    assert.equal('email' in acceptanceFromView({ ...view, acceptedBy: { kind: 'admin', name: null, email: null } }), false, 'no one named: the page\'s own fallback');
+    assert.equal('email' in acceptanceFromView(view), false, 'the POST answer names no signer: the caller\'s own email stays');
+  });
   it('an imported row with only `version`', () => {
     assert.equal(acceptanceFromView({ acceptedAt: 't', templateVersion: null, version: 'v1' }).templateVersion, 'v1');
   });
@@ -144,10 +153,15 @@ describe('acceptPagesBody (the exact body of accept-pages)', () => {
     assert.throws(() => acceptPagesBody({ templateVersion: 'v', texts: TEXTS, pod: false, customPages: { kopvillkor: true } }));
   });
 
-  it('customPagesOf / refusedTextKeys', () => {
+  it('customPagesOf / refusedTextKeys (the pages the Worker names) / pageNamesOf', () => {
     assert.deepEqual(customPagesOf({ kopvillkor: true, angerratt: 'x' }), { kopvillkor: true, angerratt: false, integritetspolicy: false });
-    assert.deepEqual(refusedTextKeys({ kopvillkor: true, angerratt: false, integritetspolicy: true }), ['kopvillkor', 'integritetspolicy']);
-    assert.deepEqual(refusedTextKeys(NONE), []);
+    assert.deepEqual(refusedTextKeys({ page: 'angerratt', pages: ['angerratt', 'kopvillkor'], reason: 'script' }), ['kopvillkor', 'angerratt']);
+    assert.deepEqual(refusedTextKeys({ pages: ['nope', 'integritetspolicy'] }), ['integritetspolicy']);
+    assert.deepEqual(refusedTextKeys({ code: 'invalid_request' }), [], 'no page named: a malformed body');
+    assert.deepEqual(refusedTextKeys(null), []);
+    assert.equal(pageNamesOf(['kopvillkor']), 'Köpvillkor');
+    assert.equal(pageNamesOf(['kopvillkor', 'angerratt']), 'Köpvillkor och Ångerrätt');
+    assert.equal(pageNamesOf(['kopvillkor', 'angerratt', 'integritetspolicy']), 'Köpvillkor, Ångerrätt och Integritetspolicy');
   });
 });
 

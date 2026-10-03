@@ -23,7 +23,7 @@ import { LEGAL_PAGES, LEGAL_PAGE_KEYS, LEGAL_TEMPLATE_VERSION } from '../../conf
 import { renderLegalPage } from '../../utils/legalPageRenderer.js';
 import { acceptLegalPages } from '../../api/admin/legal.js';
 import { AdminApiError, notAvailable } from '../../api/admin/client.js';
-import { LEGAL_KEYS, acceptanceFromView, refusedTextKeys } from '../adapters/settings.js';
+import { LEGAL_KEYS, acceptanceFromView, pageNamesOf, refusedTextKeys } from '../adapters/settings.js';
 
 export function renderAcceptedLegalTexts(identity = {}, options = {}, customHtml = {}) {
   const out = {};
@@ -42,13 +42,15 @@ function legalError(message, refusedKeys = []) {
   return error;
 }
 
-function errorOfAnswer(error, customPages) {
+function errorOfAnswer(error) {
   if (!(error instanceof AdminApiError)) return error;
   if (error.status === 400 && error.code === 'invalid_request') {
-    const keys = refusedTextKeys(customPages);
+    // The Worker names the page(s) whose HTML it refuses (`details.pages`);
+    // a 400 that names none is a body that was not the route's shape.
+    const keys = refusedTextKeys(error.details);
     return keys.length > 0
       ? legalError(
-        'Din egen text innehåller HTML som inte kan publiceras (till exempel skript, formulär, inbäddat innehåll eller data:-adresser). Ändra texten och godkänn igen.',
+        `Texten för ${pageNamesOf(keys)} innehåller HTML som inte kan publiceras (till exempel skript, formulär, inbäddat innehåll eller data:-adresser). Ändra texten och godkänn igen.`,
         keys,
       )
       : legalError('Villkoren kunde inte godkännas: förfrågan avvisades.');
@@ -99,7 +101,7 @@ export async function recordLegalAcceptance({ shopId, user, identity, pod, custo
       { shopId },
     );
   } catch (error) {
-    throw errorOfAnswer(error, customPages);
+    throw errorOfAnswer(error);
   }
   const pointer = acceptanceFromView(acceptance);
   if (!pointer) throw new Error('Svaret saknar godkännandet.');

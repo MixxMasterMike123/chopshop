@@ -10,7 +10,8 @@ import {
   featureMapOf,
   hasOpenGrant,
   inviteErrorText,
-  legalReadinessFromSummary,
+  legalFactsOf,
+  legalReadinessFromLegal,
   pageStatusOf,
   previewUrlOf,
   provisionFeaturesOf,
@@ -65,7 +66,7 @@ describe('the detail', () => {
     assert.equal(shop.status, 'disabled');
     assert.equal(shop.published, false);
     assert.deepEqual(shop.payments, { chargesEnabled: false, stripeAccountId: true, connectEnabled: true, commissionBps: 400 });
-    assert.deepEqual(shop.legalSummary, { returnAddressSet: true, vatAnswered: false });
+    assert.equal('legalSummary' in shop, false, 'the readiness is the detail\'s `legal`, not the settings summary');
   });
   it('without a Connect view the shop reads "not invited"; a null commission stays null', () => {
     const shop = toDetailShop({ ...DETAIL, tenant: { ...DETAIL.tenant, commissionBps: null } }, null);
@@ -84,20 +85,58 @@ describe('the detail', () => {
   });
 });
 
-describe('legal readiness from the summary', () => {
-  it('never reads ready: the adoption is not known here', () => {
-    const r = legalReadinessFromSummary({ returnAddressSet: true, vatAnswered: true });
+const ADMIN = { kind: 'admin', name: 'Anna', email: 'anna@shop.se' };
+const LEGAL = {
+  checkoutOpen: true,
+  readiness: { returnAddress: true, vatAnswered: true, legalPagesAccepted: true, ready: true },
+  pagesAdoption: { acceptedAt: '2026-10-01T09:30:00.000Z', templateVersion: 'v7', pages: ['angerratt', 'integritetspolicy', 'kopvillkor'], acceptedBy: ADMIN },
+  terms: {
+    currentVersion: 'v7', acceptedCurrent: true, gateOpen: true, inGrace: false, graceDeadline: null,
+    latestAcceptance: { version: 'v7', acceptedAt: '2026-10-01T09:00:00.000Z', acceptedBy: { kind: 'platform', name: 'Mikael', email: 'm@platform.se' } },
+  },
+};
+
+describe('legal facts and readiness from the detail\'s `legal`', () => {
+  it('who adopted the pages and accepted the terms, and when, where the page reads them', () => {
+    const shop = toDetailShop({ ...DETAIL, legal: LEGAL }, null);
+    assert.deepEqual(shop.storeIdentity.legal.acceptance, { email: 'anna@shop.se', acceptedAt: '2026-10-01T09:30:00.000Z', templateVersion: 'v7' });
+    assert.deepEqual(shop.platformTerms, { email: 'm@platform.se', acceptedAt: '2026-10-01T09:00:00.000Z', version: 'v7' });
+    assert.equal(shop.legal, LEGAL);
+  });
+  it('a platform signer the console is not told the person of reads "Plattformen"', () => {
+    const f = legalFactsOf({ ...LEGAL, terms: { ...LEGAL.terms, latestAcceptance: { ...LEGAL.terms.latestAcceptance, acceptedBy: { kind: 'platform', name: null, email: null } } } });
+    assert.equal(f.platformTerms.email, 'Plattformen');
+  });
+  it('nothing adopted or accepted: the page\'s "Ej godkända" (no acceptedAt)', () => {
+    const f = legalFactsOf({ ...LEGAL, pagesAdoption: null, terms: { ...LEGAL.terms, latestAcceptance: null } });
+    assert.deepEqual(f.storeIdentity, {});
+    assert.equal(f.platformTerms, null);
+    assert.deepEqual(legalFactsOf(undefined), { legal: null, storeIdentity: {}, platformTerms: null });
+  });
+  it('ready is the checkout\'s own answer', () => {
+    assert.deepEqual(legalReadinessFromLegal(LEGAL), { ready: true, blockers: [], missing: [], needsReacceptance: false });
+    // a shop in the grace period: the checkout is open, no blocker
+    assert.equal(legalReadinessFromLegal({ ...LEGAL, terms: { ...LEGAL.terms, acceptedCurrent: false, inGrace: true } }).ready, true);
+  });
+  it('names every missing part, in the order of the seller\'s own list', () => {
+    const closed = {
+      checkoutOpen: false,
+      readiness: { returnAddress: false, vatAnswered: false, legalPagesAccepted: false, ready: false },
+      pagesAdoption: null,
+      terms: { ...LEGAL.terms, acceptedCurrent: false, gateOpen: false, latestAcceptance: null },
+    };
+    const r = legalReadinessFromLegal(closed);
     assert.equal(r.ready, false);
-    assert.deepEqual(r.blockers.map((b) => b.key), ['acceptanceUnknown']);
+    assert.deepEqual(r.blockers.map((b) => b.key), ['platformTerms', 'returnAddress', 'vatRegistered', 'acceptance']);
+    assert.equal(r.blockers[1].label, 'Returadress saknas');
   });
-  it('lists the missing return address and VAT answer', () => {
-    const r = legalReadinessFromSummary({ returnAddressSet: false, vatAnswered: false });
-    assert.deepEqual(r.blockers.map((b) => b.key), ['returnAddress', 'vatRegistered', 'acceptanceUnknown']);
-    assert.equal(r.needsReacceptance, false);
+  it('ready follows checkoutOpen, not the pieces (one predicate with the checkout)', () => {
+    assert.equal(legalReadinessFromLegal({ ...LEGAL, checkoutOpen: false }).ready, false);
   });
-  it('the unknown adoption is not the "bad" acceptance key', () => {
-    const r = legalReadinessFromSummary({});
-    assert.equal(r.blockers.some((b) => b.key === 'acceptance'), false);
+  it('a detail without `legal` is never ready', () => {
+    const r = legalReadinessFromLegal(undefined);
+    assert.equal(r.ready, false);
+    assert.deepEqual(r.blockers.map((b) => b.key), ['acceptance']);
   });
 });
 

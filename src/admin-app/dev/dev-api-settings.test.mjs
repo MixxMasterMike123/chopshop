@@ -52,6 +52,22 @@ describe('settings and legal pages (dev API)', () => {
     });
     assert.equal(html.status, 400);
     assert.equal(html.body.error.code, 'invalid_request');
+    // the refused text names its page(s), in key order; a malformed body names none
+    assert.deepEqual([html.body.error.page, html.body.error.pages], ['angerratt', ['angerratt']]);
+    const two = call(state, 'POST', '/_api/v1/admin/legal/accept-pages', {
+      headers: h, body: { templateVersion: 'v', texts: { ...TEXTS, kopvillkor: '<script>x</script>', angerratt: '<p onclick="x()">a</p>' }, pod: true, custom: MAP },
+    });
+    assert.deepEqual(two.body.error.pages, ['angerratt', 'kopvillkor']);
+    assert.equal(call(state, 'POST', '/_api/v1/admin/legal/accept-pages', { headers: h, body: { texts: { angerratt: '<script>' } } }).body.error.pages, undefined);
+  });
+
+  it('the adoption names who signed it (GET pages), its answer does not', () => {
+    const { state, headers } = signedIn('admin@example.com', 'dev-password-1');
+    const h = { ...headers, 'x-shop-id': 'test-shop-a' };
+    assert.deepEqual(call(state, 'GET', '/_api/v1/admin/legal/pages', { headers: h }).body.acceptance.acceptedBy, { kind: 'admin', name: 'Test Admin', email: 'admin@example.com' });
+    const made = call(state, 'POST', '/_api/v1/admin/legal/accept-pages', { headers: h, body: { templateVersion: 'v', texts: TEXTS, pod: true, custom: MAP } });
+    assert.equal('acceptedBy' in made.body.acceptance, false);
+    assert.equal(call(state, 'GET', '/_api/v1/admin/legal/pages', { headers: h }).body.acceptance.acceptedBy.email, 'admin@example.com');
   });
 
   it('an acting-as platform user reads, saves, but never adopts', () => {

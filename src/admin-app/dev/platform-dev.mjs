@@ -78,6 +78,7 @@ function shopsOf(state) {
       createdAt: platform.createdAt ?? '2026-01-01T09:00:00.000Z',
       domains: platform.domains ?? [],
       settings: platform.settings ?? { returnAddressSet: false, vatAnswered: false },
+      legal: platform.legal ?? null,
       fixtureFeatures: shop.features ?? {},
       ...fi.overrides[id],
     };
@@ -106,6 +107,37 @@ function pick(features) {
   return Object.fromEntries(FEATURE_KEYS.filter((k) => typeof features?.[k] === 'boolean').map((k) => [k, features[k]]));
 }
 
+const TERMS_CURRENT = '2026-09-07';
+
+/**
+ * The detail's `legal` (platform/tenant-directory.ts, unit WJ): the checkout's own
+ * gate (`checkoutOpen`), its readiness, the latest legal-pages adoption and the
+ * platform terms with the latest acceptance. The platform sees the signer's person.
+ */
+function legalOf(shop) {
+  const f = shop.legal ?? { terms: { acceptedCurrent: false, inGrace: false, latestAcceptance: null }, pagesAdoption: null };
+  const readiness = {
+    returnAddress: shop.settings.returnAddressSet === true,
+    vatAnswered: shop.settings.vatAnswered === true,
+    legalPagesAccepted: f.pagesAdoption !== null,
+  };
+  readiness.ready = readiness.returnAddress && readiness.vatAnswered && readiness.legalPagesAccepted;
+  const gateOpen = f.terms.acceptedCurrent === true || f.terms.inGrace === true;
+  return {
+    checkoutOpen: gateOpen && readiness.ready,
+    readiness,
+    pagesAdoption: f.pagesAdoption ? structuredClone(f.pagesAdoption) : null,
+    terms: {
+      currentVersion: TERMS_CURRENT,
+      acceptedCurrent: f.terms.acceptedCurrent === true,
+      gateOpen,
+      inGrace: f.terms.inGrace === true,
+      graceDeadline: f.terms.inGrace === true ? '2026-12-15T00:00:00.000Z' : null,
+      latestAcceptance: f.terms.latestAcceptance ? structuredClone(f.terms.latestAcceptance) : null,
+    },
+  };
+}
+
 function detailOf(state, shop, connectOf, headers) {
   const c = connectOf(state, shop.tenantId, headers);
   const now = new Date().toISOString();
@@ -116,6 +148,7 @@ function detailOf(state, shop, connectOf, headers) {
     })),
     domainsTruncated: false,
     features: featureViews(state, shop),
+    legal: legalOf(shop),
     settings: { ...shop.settings },
     tenant: {
       catalogVersion: 1,

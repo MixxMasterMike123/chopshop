@@ -2,8 +2,10 @@
 // → the `shop` objects PlatformShops, PlatformShopDetail and shopCells read
 // (the Firestore shops/{id} document's names). Pure; tested under Node.
 //
-// PLATFORM-ONLY facts (commission, Connect) pass through here; only the
-// platform console's data modules import this file.
+// PLATFORM-ONLY facts (commission, Connect, who signed what) pass through
+// here; only the platform console's data modules import this file.
+
+import { signerLabelOf } from './signer.js';
 
 /** The add-on keys the old document could hold that the API never names (deleted D2, not ported D81). */
 const KEYS_THE_API_DOES_NOT_NAME = ['affiliate', 'ambassador', 'b2b', 'campaigns', 'dining', 'writers'];
@@ -74,34 +76,58 @@ export function toDetailShop(detail, connect = null) {
       connectEnabled: connect?.enabled === true,
       commissionBps: Number.isInteger(t.commissionBps) ? t.commissionBps : null,
     },
-    legalSummary: {
-      returnAddressSet: detail.settings?.returnAddressSet === true,
-      vatAnswered: detail.settings?.vatAnswered === true,
-    },
+    ...legalFactsOf(detail.legal),
     domains: Array.isArray(detail.domains) ? detail.domains : [],
   };
 }
 
-/** The label the old readiness gave the acceptance blocker; here it is not known (no platform read yet). */
-export const ACCEPTANCE_UNKNOWN = {
-  key: 'acceptanceUnknown',
-  label: 'Butiksägarens godkännande av sidorna kan inte läsas här ännu',
-};
+/**
+ * The detail's `legal` → what the page reads of a shop's legal facts:
+ *   legal                     the checkout's own gate, kept whole (legalReadinessFromLegal)
+ *   storeIdentity.legal.acceptance   who adopted the legal pages, when, which template version
+ *   platformTerms             who accepted the platform's terms (the latest version), when
+ * `email` is the signer's label (signer.js): the person, or "Plattformen".
+ */
+export function legalFactsOf(legal) {
+  if (!legal || typeof legal !== 'object') return { legal: null, storeIdentity: {}, platformTerms: null };
+  const adoption = legal.pagesAdoption;
+  const latest = legal.terms?.latestAcceptance;
+  return {
+    legal,
+    storeIdentity: adoption && typeof adoption.acceptedAt === 'string'
+      ? { legal: { acceptance: { email: signerLabelOf(adoption.acceptedBy), acceptedAt: adoption.acceptedAt, templateVersion: adoption.templateVersion ?? '' } } }
+      : {},
+    platformTerms: latest && typeof latest.acceptedAt === 'string'
+      ? { email: signerLabelOf(latest.acceptedBy), acceptedAt: latest.acceptedAt, version: latest.version ?? '' }
+      : null,
+  };
+}
+
+/** The labels of the older build's readiness (src/utils/legalPageReadiness.js), for the same keys. */
+const BLOCKER_LABELS = Object.freeze({
+  platformTerms: 'Plattformsvillkoren är inte godkända',
+  returnAddress: 'Returadress saknas',
+  vatRegistered: 'Momsregistrering ej angiven (krävs för att momstexten ska matcha kassan)',
+  acceptance: 'Villkoren är inte godkända av butiksägaren',
+});
 
 /**
- * getLegalReadiness()'s shape from the detail's settings summary. The return
- * address and the VAT answer are known; the seller's adoption of the pages is
- * not in the platform detail, so it is always listed as unknown and the shop
- * never reads "ready" here (a warning too many rather than a false OK).
+ * getLegalReadiness()'s shape from the detail's `legal`. `ready` is the
+ * checkout's own answer (`checkoutOpen`: the platform terms gate AND the three
+ * legal conditions, one predicate with the checkout). The blockers say which
+ * part is missing. A detail without `legal` is never ready.
  */
-export function legalReadinessFromSummary(summary) {
-  const blockers = [];
-  if (summary?.returnAddressSet !== true) blockers.push({ key: 'returnAddress', label: 'Returadress saknas' });
-  if (summary?.vatAnswered !== true) {
-    blockers.push({ key: 'vatRegistered', label: 'Momsregistrering ej angiven (krävs för att momstexten ska matcha kassan)' });
+export function legalReadinessFromLegal(legal) {
+  const readiness = legal?.readiness;
+  if (!readiness || typeof readiness !== 'object') {
+    return { ready: false, blockers: [{ key: 'acceptance', label: BLOCKER_LABELS.acceptance }], missing: [], needsReacceptance: false };
   }
-  blockers.push(ACCEPTANCE_UNKNOWN);
-  return { ready: false, blockers, missing: [], needsReacceptance: false };
+  const blockers = [];
+  if (legal.terms?.gateOpen !== true) blockers.push({ key: 'platformTerms', label: BLOCKER_LABELS.platformTerms });
+  if (readiness.returnAddress !== true) blockers.push({ key: 'returnAddress', label: BLOCKER_LABELS.returnAddress });
+  if (readiness.vatAnswered !== true) blockers.push({ key: 'vatRegistered', label: BLOCKER_LABELS.vatRegistered });
+  if (readiness.legalPagesAccepted !== true) blockers.push({ key: 'acceptance', label: BLOCKER_LABELS.acceptance });
+  return { ready: legal.checkoutOpen === true, blockers, missing: [], needsReacceptance: false };
 }
 
 /** A refused commission in the page's words (the page checks 0–100 % itself; the server's cap decides). */

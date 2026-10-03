@@ -21,6 +21,7 @@
 // handed in.
 
 import { toPagePlatformTerms } from '../../storefront/adapters/legal.js';
+import { signerLabelOf } from './signer.js';
 
 const text = (v) => (typeof v === 'string' && v.trim() !== '' ? v : null);
 
@@ -34,9 +35,19 @@ export function renderedTermsOf(termsApi, { render, termsTitle, dpaTitle } = {})
     : null;
 }
 
-/** The latest acceptance the status names. The date of an OLDER version's acceptance is not in the answer. */
+/**
+ * The latest acceptance the status names: `latestAcceptance` (version, time and
+ * signer, also of an OLDER version than the current one); `email` is the
+ * signer's label (signer.js), where the page prints "Godkända av …". Without
+ * `latestAcceptance` (an older answer), the status's own fields.
+ */
 export function acceptanceOf(status) {
   if (!status || typeof status !== 'object') return null;
+  const latest = status.latestAcceptance;
+  if (latest && typeof latest === 'object' && text(latest.acceptedAt) && text(latest.version)) {
+    const signer = signerLabelOf(latest.acceptedBy);
+    return { acceptedAt: latest.acceptedAt, version: latest.version, ...(signer ? { email: signer } : {}) };
+  }
   if (text(status.acceptedAt) && text(status.currentVersion)) {
     return { acceptedAt: status.acceptedAt, version: status.currentVersion };
   }

@@ -77,7 +77,8 @@ describe('the platform\'s terms', () => {
     const { state, cookie } = signedIn('admin@example.com', 'dev-password-1');
     const status = call(state, 'GET', '/_api/v1/admin/legal/status', { headers: shop(cookie) }).body;
     assert.deepEqual(Object.keys(status).sort(),
-      ['accepted', 'acceptedAt', 'acceptedVersion', 'currentVersion', 'graceDeadline', 'inGrace', 'readiness']);
+      ['accepted', 'acceptedAt', 'acceptedVersion', 'currentVersion', 'graceDeadline', 'inGrace', 'latestAcceptance', 'readiness']);
+    assert.deepEqual(status.latestAcceptance.acceptedBy, { kind: 'admin', name: 'Test Admin', email: 'admin@example.com' });
     assert.equal(status.accepted, true);
     assert.equal(typeof status.readiness.ready, 'boolean');
     const terms = call(state, 'GET', '/_api/v1/admin/legal/terms', { headers: shop(cookie) }).body;

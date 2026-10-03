@@ -6,26 +6,17 @@
 // There is no listener: the pages are read when the page opens and again after
 // each change made through this module (a delete). No polling.
 //
-// The list route carries the title but not the content or the SEO texts, and
-// the page's "Översättningar" column and its "SEO:" line read them: each page
-// is read in full, four at a time.
+// The list route carries the SEO texts (metaTitle, metaDescription) and the
+// languages that have content (contentLanguages), which is all the page's
+// "Översättningar" column and its "SEO:" line read: one list, no read per page.
 
-import { deletePage, getPage, listAllPages } from '../../api/admin/content.js';
+import { deletePage, listAllPages } from '../../api/admin/content.js';
 import { pageDocFromApi } from '../adapters/content.js';
-import { inPool } from './contentSources.js';
 
 const subscribers = new Set();
 
 async function readPages(shopId) {
-  const summaries = await listAllPages({}, { shopId });
-  const docs = await inPool(summaries, 4, async (summary) => {
-    try {
-      return pageDocFromApi((await getPage(summary.pageId, { shopId })) ?? summary);
-    } catch {
-      return pageDocFromApi(summary);
-    }
-  });
-  const pages = docs.filter(Boolean);
+  const pages = (await listAllPages({}, { shopId })).map(pageDocFromApi).filter(Boolean);
   // Newest change first, as the older build's fallback sorts.
   pages.sort((a, b) => (b.updatedAt?.toMillis?.() || 0) - (a.updatedAt?.toMillis?.() || 0));
   return pages;

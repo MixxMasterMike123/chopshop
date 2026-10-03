@@ -3,9 +3,11 @@
 // src/pages/admin/adminOrdersData.js (the older build's); both export the same
 // names with the same meaning, so the page is the same file in both builds.
 //
-//   searchOrders   the route's `q`: an exact e-mail address or an order number
-//                  prefix. Any other text (a name, a part of an address)
-//                  matches nothing; the route cannot search it.
+//   searchOrders   the route's `q`: an exact e-mail address (it holds `@`), or an
+//                  order number prefix or a part of the recipient's name (the
+//                  Worker's grammar, api/admin/orders.js searchQueryOf). Text
+//                  the route would refuse (`%`, `_`, `<` …) matches nothing and
+//                  is not sent.
 //   withExportDetails  the list's rows carry no lines, address or pickup
 //                  date; the exports read them, so each order's detail is
 //                  read first (a few at a time).

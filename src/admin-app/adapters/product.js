@@ -101,6 +101,12 @@ export function productFromListItem(item) {
     takedown: item.takenDown === true ? { at: null } : null,
     published: item.published === true,
     screeningStatus: item.screeningStatus ?? null,
+    tags: Array.isArray(item.tags) ? item.tags.filter((t) => typeof t === 'string') : [],
+    // The list route carries the COUNT of the active variants, not the rows;
+    // the page's "Varianter" column reads `variants.length`, so the list row
+    // holds that many empty stand-ins (the form reads the real rows from the
+    // product's own detail: productFromDetail).
+    variants: Array.from({ length: Number.isSafeInteger(item.variantCount) && item.variantCount > 0 ? item.variantCount : 0 }, () => ({})),
   };
 }
 

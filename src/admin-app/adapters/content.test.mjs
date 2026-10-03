@@ -76,6 +76,18 @@ describe('pages', () => {
     assert.equal(doc.metaTitle, '');
   });
 
+  it('a list row: the SEO maps, and the content languages stand in for the content (never its text)', () => {
+    const doc = pageDocFromApi({ pageId: 'p', slug: 's', status: 'draft', title: { 'sv-SE': 'T' }, metaTitle: { 'sv-SE': 'S' }, metaDescription: null, contentLanguages: ['en-GB', 'sv-SE'] });
+    assert.deepEqual(Object.keys(doc.content), ['en-GB', 'sv-SE']);
+    assert.ok(Object.values(doc.content).every((v) => v.trim() === '' && v.length > 0), 'present for the status rule, no text');
+    assert.deepEqual(doc.metaTitle, { 'sv-SE': 'S' });
+    assert.equal(doc.metaDescription, '');
+    assert.equal(pageDocFromApi({ pageId: 'p', title: {}, contentLanguages: [] }).content && Object.keys(pageDocFromApi({ pageId: 'p', title: {}, contentLanguages: [] }).content).length, 0);
+    assert.equal(pageDocFromApi({ pageId: 'p', title: {} }).content, '');
+    // a full page keeps its own content
+    assert.deepEqual(pageDocFromApi({ pageId: 'p', title: {}, content: { 'sv-SE': '<p>x</p>' }, contentLanguages: ['sv-SE'] }).content, { 'sv-SE': '<p>x</p>' });
+  });
+
   it('the Worker\'s refusals are said, each at its place', () => {
     assert.equal(pageRefusal({ code: 'slug_reserved' }).field, 'slug');
     assert.equal(pageRefusal({ code: 'slug_taken' }).field, 'slug');

@@ -8,7 +8,11 @@
 //                                     { ready, blockers } (legalPageReadiness.js shape)
 //   acceptanceFromView(view)          GET /v1/admin/legal/pages `acceptance` → the
 //                                     pointer the page reads (storeIdentity.legal.acceptance)
+//                                     (`email` is the signer's label: signer.js)
 //   acceptPagesBody(input)            the exact body of POST /v1/admin/legal/accept-pages
+//   refusedTextKeys(details)          the pages a refused text is laid at (error.details.pages)
+
+import { signerLabelOf } from './signer.js';
 
 /**
  * Identity keys the API refuses in `storeIdentity` (cloudflare/src/platform/
@@ -140,14 +144,18 @@ export function readinessFromStatus(status) {
 /**
  * The adoption pointer the page reads (`storeIdentity.legal.acceptance` in
  * the older build: { uid, email, acceptedAt, templateVersion, acceptanceId }).
- * The API's view names no person (no uid, no address): both are absent.
- * An imported adoption may carry `version` instead of `templateVersion`.
+ * The view names its signer (`acceptedBy`): `email` is the signer's label (the
+ * address, or "Plattformen" for a platform signer); there is no uid. A view
+ * without a signer (the POST's answer) has no `email` key. An imported
+ * adoption may carry `version` instead of `templateVersion`.
  */
 export function acceptanceFromView(view) {
   if (!view || typeof view !== 'object' || typeof view.acceptedAt !== 'string') return null;
   const templateVersion = typeof view.templateVersion === 'string' ? view.templateVersion
     : typeof view.version === 'string' ? view.version : '';
+  const signer = signerLabelOf(view.acceptedBy);
   return {
+    ...(signer ? { email: signer } : {}),
     acceptedAt: view.acceptedAt,
     templateVersion,
     acceptanceId: typeof view.acceptanceId === 'string' ? view.acceptanceId : '',
@@ -213,14 +221,25 @@ export function textsChangedSince(adopted, { templateVersion, customPages, shas 
   return false;
 }
 
+/** The pages' names in the seller's language (the keys are the API's). */
+export const LEGAL_PAGE_NAMES = Object.freeze({
+  kopvillkor: 'Köpvillkor',
+  angerratt: 'Ångerrätt',
+  integritetspolicy: 'Integritetspolicy',
+});
+
 /**
- * The pages a 400 `invalid_request` of accept-pages is laid at. The route
- * answers the same 400 for a malformed body and for a text its HTML check
- * refuses, without naming the page; the body is built by acceptPagesBody and
- * the templates render to markup the check admits (staging-legal.mjs adopts
- * them unchanged), so the refusal is the seller's own text: every page that
- * is custom. Empty when none is.
+ * The pages a 400 `invalid_request` of accept-pages names (`error.details.pages`,
+ * in the Worker's key order; the unknown ones are ignored). Empty when it names
+ * none: then the body itself was malformed, not a text refused.
  */
-export function refusedTextKeys(customPages) {
-  return LEGAL_KEYS.filter((key) => customPages?.[key] === true);
+export function refusedTextKeys(details) {
+  const pages = details && typeof details === 'object' && Array.isArray(details.pages) ? details.pages : [];
+  return LEGAL_KEYS.filter((key) => pages.includes(key));
+}
+
+/** "Köpvillkor och Ångerrätt": the pages as a sentence part. */
+export function pageNamesOf(keys) {
+  const names = keys.map((key) => LEGAL_PAGE_NAMES[key]).filter(Boolean);
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} och ${names.at(-1)}`;
 }

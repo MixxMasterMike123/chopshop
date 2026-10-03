@@ -191,6 +191,9 @@ function parsePage(body, create) {
 const pageSummary = (p) => ({
   pageId: p.pageId, slug: p.slug, path: `/${p.slug}`, kind: p.kind ?? 'page', status: p.status, title: { ...p.title },
   publishedAt: p.publishedAt ?? null, createdAt: p.createdAt, updatedAt: p.updatedAt,
+  // the Worker's list also carries the SEO texts and the languages that have content (never the content)
+  metaTitle: p.metaTitle ? { ...p.metaTitle } : null, metaDescription: p.metaDescription ? { ...p.metaDescription } : null,
+  contentLanguages: Object.entries(p.content ?? {}).filter(([, text]) => typeof text === 'string' && text !== '').map(([lang]) => lang).sort(),
 });
 
 const pageFull = (p) => ({

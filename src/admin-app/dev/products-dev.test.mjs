@@ -31,6 +31,18 @@ describe('the dev catalogue', () => {
     assert.equal(page.some((p) => p.sku === 'gammal-vara'), false);
   });
 
+  it('the list carries variantCount (active only) and tags, as the page reads them', () => {
+    const { req } = shopA();
+    const items = req('GET', '/v1/admin/products?limit=100').body.products;
+    const tee = items.find((p) => p.productId === 'prod-tee');
+    assert.equal(tee.variantCount, 6);
+    assert.deepEqual(items.find((p) => p.productId === 'prod-towel').tags, ['Linne', 'Nyhet']);
+    const row = productFromListItem(tee);
+    assert.equal(row.variants.length, 6);
+    req('DELETE', '/v1/admin/products/prod-tee/variants/var-tee-svart-s'); // in use: deactivated, no longer counted
+    assert.equal(req('GET', '/v1/admin/products?limit=100').body.products.find((p) => p.productId === 'prod-tee').variantCount, 5);
+  });
+
   it('the rail product reads back as groups with sizes and images', () => {
     const { req } = shopA();
     const detail = req('GET', '/v1/admin/products/prod-tee');

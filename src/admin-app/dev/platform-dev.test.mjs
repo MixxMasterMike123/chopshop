@@ -43,7 +43,7 @@ describe('the directory and the detail', () => {
     const { state, cookie } = platform();
     const d = call(state, 'GET', '/_api/v1/platform/tenants/test-shop-a', { headers: { cookie } });
     assert.equal(d.status, 200);
-    assert.deepEqual(Object.keys(d.body).sort(), ['domains', 'domainsTruncated', 'features', 'settings', 'tenant']);
+    assert.deepEqual(Object.keys(d.body).sort(), ['domains', 'domainsTruncated', 'features', 'legal', 'settings', 'tenant']);
     assert.equal(d.body.tenant.commissionBps, 400);
     assert.deepEqual(Object.keys(d.body.tenant.connect).sort(), ['accountId', 'chargesEnabled', 'detailsSubmitted', 'payoutsEnabled', 'syncedAt']);
     assert.equal(d.body.features.length, 6);

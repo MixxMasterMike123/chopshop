@@ -82,7 +82,15 @@ describe('the list', () => {
     assert.equal(p.imageUrl, 'https://img.example.com/a.png');
     assert.equal(p.category, '');
     assert.ok(p.takedown);
-    assert.equal('variants' in p, false, 'the list carries no variants: the column leaves');
+    assert.deepEqual(p.tags, []);
+    assert.equal(p.variants.length, 0, 'no count: the column reads "—"');
+  });
+  it('the list row\'s variantCount and tags reach the page (the "Varianter" column, the tag filter)', () => {
+    const p = productFromListItem({ productId: 'p1', status: 'active', variantCount: 3, tags: ['Sommar', 'Nyhet'] });
+    assert.equal(p.variants.length, 3);
+    assert.deepEqual(p.tags, ['Sommar', 'Nyhet']);
+    assert.equal(productFromListItem({ productId: 'p2', status: 'active', variantCount: -1, tags: 'x' }).variants.length, 0);
+    assert.deepEqual(productFromListItem({ productId: 'p2', status: 'active', tags: ['a', 7, null] }).tags, ['a']);
   });
   it('hides an archived product (the build\'s "delete")', () => {
     assert.equal(productFromListItem({ productId: 'p', status: 'archived' }), null);

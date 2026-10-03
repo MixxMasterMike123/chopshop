@@ -6,6 +6,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { setRequestShopId } from '../../api/admin/client.js';
+import { searchOrders } from '../replacements/adminOrdersData.js';
 import { createState, route } from './dev-api.mjs';
 import { orderFromDetail, orderFromListRow } from '../adapters/order.js';
 
@@ -27,6 +29,30 @@ const POD = '0a000000-0000-4000-8000-000000000003';
 const CANCELLED = '0a000000-0000-4000-8000-000000000005';
 const SHIPPED = '0a000000-0000-4000-8000-000000000004';
 
+describe('the page\'s search box (adminOrdersData.searchOrders)', () => {
+  it('asks the route for a name too, and sends nothing for text the route would refuse', async () => {
+    const { state, headers } = admin();
+    const realFetch = globalThis.fetch;
+    const sent = [];
+    globalThis.fetch = async (url, init = {}) => {
+      sent.push(String(url));
+      const out = route(state, init.method ?? 'GET', new URL(String(url), 'http://dev.invalid'), { ...headers(), ...(init.headers ?? {}) }, null);
+      return new Response(JSON.stringify(out.body), { status: out.status, headers: { 'content-type': 'application/json' } });
+    };
+    setRequestShopId('test-shop-a');
+    try {
+      assert.deepEqual((await searchOrders([], ' Bo Prov ')).map((o) => o.customerInfo.name), ['Bo Prov']);
+      assert.ok(sent.some((u) => new URL(u, 'http://x').searchParams.get('q') === 'Bo Prov'), 'the trimmed name is the q');
+      sent.length = 0;
+      assert.deepEqual(await searchOrders([], '50%'), []);
+      assert.equal(sent.length, 0, 'a text outside the grammar is not sent');
+    } finally {
+      globalThis.fetch = realFetch;
+      setRequestShopId(null);
+    }
+  });
+});
+
 describe('the order list', () => {
   it('newest first, window counters, and the adapter reads every row', () => {
     const { state, headers } = admin();
@@ -47,11 +73,17 @@ describe('the order list', () => {
     assert.equal(new Set([...first.body.orders, ...second.body.orders].map((o) => o.orderId)).size, first.body.orders.length + second.body.orders.length);
   });
 
-  it('q: an e-mail address exactly, an order number prefix; other text is a 400', () => {
+  it('q: an e-mail address exactly, an order number prefix, or a part of the recipient\'s name; other text is a 400', () => {
     const { state, headers } = admin();
     assert.equal(call(state, 'GET', '/_api/v1/admin/orders?q=BO.PROV@example.com', { headers: headers() }).body.count, 1);
     assert.equal(call(state, 'GET', '/_api/v1/admin/orders?q=20261002', { headers: headers() }).body.count, 2);
-    assert.equal(call(state, 'GET', '/_api/v1/admin/orders?q=Bo%20Prov', { headers: headers() }).status, 400);
+    const names = (q) => call(state, 'GET', `/_api/v1/admin/orders?q=${encodeURIComponent(q)}`, { headers: headers() }).body.orders.map((o) => o.recipientName);
+    assert.deepEqual(names('Bo Prov'), ['Bo Prov']);
+    assert.deepEqual(names(' ANNA exe '), ['Anna Exempel']);
+    assert.deepEqual(names('Nobody Here'), []);
+    for (const bad of ['50%', 'a_b', '<b>', ' ', 'x'.repeat(101)]) {
+      assert.equal(call(state, 'GET', `/_api/v1/admin/orders?q=${encodeURIComponent(bad)}`, { headers: headers() }).status, 400, bad);
+    }
   });
 
   it('the empty shop (cookie)', () => {

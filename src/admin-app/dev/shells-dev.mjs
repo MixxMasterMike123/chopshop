@@ -111,6 +111,11 @@ const ARCHIVED_TEXT = JSON.stringify({
   terms: PLATFORM_TERMS_TEMPLATE,
   dpa: PLATFORM_DPA_TEMPLATE,
 });
+// Who signed, as the Worker tells the SHOP (cloudflare/src/legal/signer.ts): a person of the shop by
+// name and address; a platform signer only as such.
+const ADMIN_SIGNER = { kind: 'admin', name: 'Test Admin', email: 'admin@example.com' };
+const PLATFORM_SIGNER = { kind: 'platform', name: null, email: null };
+
 const ARCHIVED_SHA = createHash('sha256').update(ARCHIVED_TEXT, 'utf8').digest('hex');
 
 /** The shop's terms state in this server: { scenario, current, acceptances: [{version, acceptedAt}] }. */
@@ -122,12 +127,12 @@ function termsOf(state, shop, headers) {
   if (held && held.scenario === scenario) return held;
   const fixtureAccepted = shop.legal?.terms?.accepted === true;
   const next = { scenario, current: PLATFORM_TERMS_VERSION, acceptances: [] };
-  if (scenario === 'stale') next.acceptances.push({ version: OLDER_VERSION, acceptedAt: '2026-02-01T09:00:00.000Z' });
+  if (scenario === 'stale') next.acceptances.push({ version: OLDER_VERSION, acceptedAt: '2026-02-01T09:00:00.000Z', acceptedBy: PLATFORM_SIGNER });
   else if (scenario === 'notext') {
     next.current = NEWER_VERSION;
-    next.acceptances.push({ version: PLATFORM_TERMS_VERSION, acceptedAt: '2026-10-01T09:00:00.000Z' });
+    next.acceptances.push({ version: PLATFORM_TERMS_VERSION, acceptedAt: '2026-10-01T09:00:00.000Z', acceptedBy: ADMIN_SIGNER });
   } else if (scenario !== 'unaccepted' && fixtureAccepted) {
-    next.acceptances.push({ version: PLATFORM_TERMS_VERSION, acceptedAt: '2026-10-01T09:00:00.000Z' });
+    next.acceptances.push({ version: PLATFORM_TERMS_VERSION, acceptedAt: '2026-10-01T09:00:00.000Z', acceptedBy: ADMIN_SIGNER });
   }
   state.terms.set(tenantId, next);
   return next;
@@ -143,6 +148,7 @@ function termsStatus(t) {
     currentVersion: t.current,
     graceDeadline: current === null && latest ? '2026-12-15T00:00:00.000Z' : null,
     inGrace: current === null && latest !== null,
+    latestAcceptance: latest && { version: latest.version, acceptedAt: latest.acceptedAt, acceptedBy: { ...latest.acceptedBy } },
   };
 }
 
@@ -179,7 +185,7 @@ export function shellAdminRoutes(readinessStatus) {
       }
       const already = t.acceptances.find((a) => a.version === t.current);
       if (already) return json(200, { acceptance: { termsVersion: already.version, acceptedAt: already.acceptedAt } });
-      const acceptance = { version: t.current, acceptedAt: new Date().toISOString() };
+      const acceptance = { version: t.current, acceptedAt: new Date().toISOString(), acceptedBy: { kind: 'admin', name: entry.user.name ?? null, email: entry.user.email ?? null } };
       t.acceptances.push(acceptance);
       return json(201, { acceptance: { termsVersion: acceptance.version, acceptedAt: acceptance.acceptedAt } });
     }],

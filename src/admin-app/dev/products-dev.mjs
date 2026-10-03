@@ -74,6 +74,9 @@ function listItemOf(cat, record) {
     priceMinor: p.priceMinor, productId: p.productId, published: record.publication?.published === true,
     screeningStatus: p.screeningStatus, sku: p.sku, sortOrder: p.sortOrder, status: p.status,
     takenDown: record.takenDown === true, updatedAt: record.updatedAt ?? '2026-10-01T09:00:00.000Z',
+    // the Worker's list also carries the ACTIVE variants' count and the tags as typed
+    variantCount: record.variants.filter((v) => v.active !== false).length,
+    tags: Array.isArray(p.tags) ? [...p.tags] : [],
   };
 }
 

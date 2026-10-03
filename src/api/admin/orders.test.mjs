@@ -47,11 +47,19 @@ describe('searchQueryOf: what the route can search', () => {
   it('an order number prefix', () => {
     assert.equal(searchQueryOf('20261003-a1'), '20261003-a1');
   });
-  it('nothing else: a name with a space, a broken address, empty text', () => {
-    assert.equal(searchQueryOf('Anna Exempel'), null);
+  it('a name or a part of one, trimmed, as the Worker\'s grammar has it', () => {
+    assert.equal(searchQueryOf('  Anna Exempel '), 'Anna Exempel');
+    assert.equal(searchQueryOf('Åsa Öberg-Lund'), 'Åsa Öberg-Lund');
+    assert.equal(searchQueryOf("O'Brien"), "O'Brien");
+    assert.equal(searchQueryOf('O’Brien Jr.'), 'O’Brien Jr.');
+    assert.equal(searchQueryOf('e\u0301va'), 'e\u0301va');
+    assert.equal(searchQueryOf('a'.repeat(100)), 'a'.repeat(100));
+  });
+  it('nothing else: a broken address, characters outside the grammar, empty or too long text', () => {
     assert.equal(searchQueryOf('anna@'), null);
     assert.equal(searchQueryOf('   '), null);
     assert.equal(searchQueryOf(undefined), null);
+    for (const bad of ['50%', 'a_b', 'a\\b', '<script>', 'a,b', 'a'.repeat(101)]) assert.equal(searchQueryOf(bad), null, bad);
   });
 });
 

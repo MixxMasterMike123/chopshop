@@ -172,6 +172,18 @@ export function languageMap(value) {
   return map;
 }
 
+/**
+ * The content a LIST row stands for: the list carries `contentLanguages` (the
+ * languages whose content is not empty), never the content itself. The
+ * "Översättningar" column only asks whether a language has some, so each listed
+ * language gets a one-space stand-in. Never used for a page's own read.
+ */
+function contentOfListRow(p) {
+  if (isObject(p.content)) return { ...p.content };
+  if (!Array.isArray(p.contentLanguages)) return '';
+  return Object.fromEntries(p.contentLanguages.filter((l) => typeof l === 'string' && l !== '').map((l) => [l, ' ']));
+}
+
 /** A page of the list or the edit form, from the API's page (summary or full). */
 export function pageDocFromApi(p) {
   if (!p || typeof p.pageId !== 'string') return null;
@@ -181,7 +193,7 @@ export function pageDocFromApi(p) {
     status: p.status,
     kind: p.kind,
     title: isObject(p.title) ? { ...p.title } : {},
-    content: isObject(p.content) ? { ...p.content } : '',
+    content: contentOfListRow(p),
     metaTitle: isObject(p.metaTitle) ? { ...p.metaTitle } : '',
     metaDescription: isObject(p.metaDescription) ? { ...p.metaDescription } : '',
     attachments: [],

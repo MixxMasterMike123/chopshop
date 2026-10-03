@@ -16,11 +16,8 @@ import { getProduct, listAllProducts, setProductOrder, updateProduct } from '../
 import { orderEntries, productFromDetail, productFromListItem } from '../adapters/product.js';
 import { skuFromName } from '../../utils/productUrls';
 
-/**
- * The list route carries no variant count (AdminProductListItem): the
- * "Varianter" column has no source in this build and leaves the table.
- */
-export const LIST_SHOWS_VARIANT_COUNT = false;
+/** The list route carries `variantCount` (the active variants): the "Varianter" column reads it. */
+export const LIST_SHOWS_VARIANT_COUNT = true;
 
 export async function loadShopProducts(shopId) {
   const items = await listAllProducts({ shopId });

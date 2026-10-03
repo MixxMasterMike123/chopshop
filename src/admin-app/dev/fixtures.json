@@ -46,6 +46,7 @@
           "pageSha256": {},
           "pod": true,
           "source": "worker",
+          "acceptedBy": { "kind": "admin", "name": "Test Admin", "email": "admin@example.com" },
           "templateVersion": "2026-09-07",
           "textsSha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "version": null
