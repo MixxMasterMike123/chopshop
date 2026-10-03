@@ -31,7 +31,7 @@
 // DATA: every read and write goes through ./platformPrintersData (Firebase in
 // the older build; the admin build's alias list swaps in the API's version,
 // src/admin-app/replacements/platformPrintersData.js).
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import {
   CREATE_ACCOUNT, ROUTE_BY_GARMENT, PAGE_INTRO, ROUTING_HEADING, ROUTING_INTRO, ROUTING_FOOTNOTE,
@@ -69,6 +69,11 @@ const PlatformPrinters = () => {
   const [openUid, setOpenUid] = useState(null);
   const [form, setForm] = useState(null);
   const [savingTier, setSavingTier] = useState(false);
+  // True from the click on Spara until its answer: the editor is locked for
+  // that time (no other printer opened, no field changed), so the answer is
+  // applied to the printer and the draft it was sent for.
+  const tierSaveRunning = useRef(false);
+  const editForm = useCallback((update) => { if (!tierSaveRunning.current) setForm(update); }, []);
   // Garments whose print frames changed in the LAST tier save → the notice.
   const [areasChanged, setAreasChanged] = useState([]);
 
@@ -183,6 +188,7 @@ const PlatformPrinters = () => {
 
   // ── Tier editor ──────────────────────────────────────────────────────────
   const toggleEditor = (row) => {
+    if (tierSaveRunning.current) return;
     setAreasChanged([]);
     if (openUid === row.id) { setOpenUid(null); setForm(null); return; }
     setOpenUid(row.id);
@@ -192,12 +198,13 @@ const PlatformPrinters = () => {
   };
 
   const saveTier = async (row) => {
-    if (savingTier) return;
+    if (savingTier || tierSaveRunning.current) return;
     const incomplete = incompleteAreaCells(form);
     if (incomplete.length) {
       toast.error(`Ange både bredd och höjd (eller inget) för: ${incomplete.join(', ')}.`);
       return;
     }
+    tierSaveRunning.current = true;
     setSavingTier(true);
     try {
       const garments = POD_GARMENTS.filter((g) => form.garments.has(g.id)).map((g) => g.id);
@@ -227,6 +234,7 @@ const PlatformPrinters = () => {
       console.error('saveTier failed:', e);
       toast.error(e?.userMessage || 'Kunde inte spara plagg & priser.');
     } finally {
+      tierSaveRunning.current = false;
       setSavingTier(false);
     }
   };
@@ -404,7 +412,7 @@ const PlatformPrinters = () => {
                 row={r}
                 open={openUid === r.id}
                 form={openUid === r.id ? form : null}
-                setForm={setForm}
+                setForm={editForm}
                 saving={savingTier}
                 areasNotice={openUid === r.id ? areasChanged : []}
                 onToggleEditor={() => toggleEditor(r)}
