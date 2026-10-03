@@ -490,7 +490,18 @@ describe("CP2 vertical slice", () => {
         withdrawal: { disclosureVersion: null, personalizedItems: [], waived: false },
       });
       expect(read.withdrawal).toEqual({ waived: false });
-      expectNoDeniedKeys(read, "admin read");
+      // CP5-WB: the read carries the order's lines, and a line its own SKU —
+      // the SHOP's article number, never the printer's. That one key is let
+      // through on the lines only; the printer's SKU value must not appear.
+      const { items: readItems, ...readRest } = read as unknown as Record<string, unknown> & {
+        items: Array<Record<string, unknown> & { sku: string }>;
+      };
+      expectNoDeniedKeys(readRest, "admin read");
+      for (const { sku, ...line } of readItems) {
+        expect(sku).toBe("SLICE-TEE-1");
+        expectNoDeniedKeys(line, "admin read line");
+      }
+      expect(JSON.stringify(read)).not.toContain(TEE_S);
       expect(numbersOf(read), "neither half of the fee is shown").not.toContain(withheld);
       expect(numbersOf(read)).not.toContain(commission);
       await assertLedgerBalanced(env.DB, orderId, { payoutMinor: read.payout.amountMinor, stripe: world.stripe });

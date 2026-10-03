@@ -20,7 +20,7 @@ import {
  * and dist/api/index.mjs, where they are registered):
  *
  *   POST /api/auth/request-password-reset   { email }         → always 200
- *   GET  /api/auth/reset-password/:token    ?callbackURL=…    → 302 to the web app
+ *   GET  /api/auth/reset-password/:token    ?callbackURL=…    → 302 to the admin app
  *   POST /api/auth/reset-password           { token, newPassword }
  *
  * (`/forget-password` does not exist in core 1.6.29 — only in the email-otp
@@ -36,7 +36,10 @@ import {
 /** Better Auth's reset token lifetime, and therefore the email's. */
 export const PASSWORD_RESET_TOKEN_TTL_SECONDS = 60 * 60;
 
-/** Where the web app handles `?token=` / `?error=` after the link redirects. */
+/**
+ * Where the admin app (CP5: the admin Worker's SPA, `ResetPasswordPage`)
+ * handles `?token=` / `?error=` after the link redirects.
+ */
 export const PASSWORD_RESET_WEB_PATH = "/reset-password";
 
 const MINUTE_MS = 60 * 1_000;
@@ -71,27 +74,40 @@ export function isPasswordResetConfigured(env: Env): boolean {
 }
 
 /**
- * The web surfaces a reset link may land on (CP3). The ordinary reset lands on
- * `web`; a platform invite (src/platform/invites.ts) lands on `platform` for a
- * platform admin and on `admin` for a tenant admin (PLAN §2.1: admin and
- * platform are one hostname each).
+ * The surfaces a reset link may land on (CP5). Every account that can reset a
+ * password is an admin-surface account: a shop's admin or a platform user. A
+ * storefront has no accounts (D81), so no link lands on the storefront.
+ *
+ *   - the ordinary reset (`POST /api/auth/request-password-reset`) and a
+ *     tenant admin's invite land on `admin`;
+ *   - a platform user's invite lands on `platform` — the admin origin unless
+ *     the allowlist names another host for it (D102: one host, one Worker).
+ *
+ * The ordinary reset does not look the account up to choose: it is answered
+ * before Better Auth knows whether the address exists, and the admin host
+ * serves the platform console too, so `admin` is right for both kinds.
  */
-export type ResetPageSurface = "admin" | "platform" | "web";
+export type ResetPageSurface = "admin" | "platform";
 
-const RESET_PAGE_SURFACES: readonly ResetPageSurface[] = ["web", "admin", "platform"];
+const RESET_PAGE_SURFACES: readonly ResetPageSurface[] = ["admin", "platform"];
 
 /**
- * The canonical origin of one reset surface. The allowlist (src/lib/origins.ts)
- * lists `api` and `web` today; until it also lists `admin` and `platform`, those
- * surfaces are served by the web origin and land there. The origin is always an
- * allowlist value, never anything the request carried.
+ * The canonical origin of one reset surface, always an allowlist value and
+ * never anything the request carried.
+ *
+ * TRANSITIONAL: while the allowlist does not list `admin` (the deployed configs
+ * before the CP5 wiring), both surfaces resolve to the `web` origin, exactly
+ * as every link did before CP5, so an environment is never left without a
+ * working reset by a code deploy that precedes its config. Once `admin` is
+ * listed (the CP5 wiring adds it to every env, and the preflight is to
+ * require it) no link lands on `web`.
  */
 export function resetPageOrigin(
   origins: CanonicalOrigins,
   surface: ResetPageSurface,
 ): string {
-  const listed = (origins as Readonly<Partial<Record<ResetPageSurface, string>>>)[surface];
-  return typeof listed === "string" ? listed : origins.web;
+  const admin = origins.admin ?? origins.web;
+  return surface === "platform" ? (origins.platform ?? admin) : admin;
 }
 
 /** Every distinct origin a reset link may land on (Better Auth must trust them). */
@@ -100,12 +116,12 @@ export function resetPageOrigins(origins: CanonicalOrigins): string[] {
 }
 
 /**
- * The web page the emailed link lands on. The ordinary reset (no surface)
- * always lands on the canonical web origin.
+ * The page the emailed link lands on. The ordinary reset (no surface) lands
+ * on the admin surface.
  */
 export function passwordResetCallbackUrl(
   origins: CanonicalOrigins,
-  surface: ResetPageSurface = "web",
+  surface: ResetPageSurface = "admin",
 ): string {
   return `${resetPageOrigin(origins, surface)}${PASSWORD_RESET_WEB_PATH}`;
 }
@@ -120,7 +136,7 @@ export function passwordResetActionUrl(
   env: Env,
   origins: CanonicalOrigins,
   token: string,
-  surface: ResetPageSurface = "web",
+  surface: ResetPageSurface = "admin",
 ): string {
   const url = new URL(
     `/api/auth/reset-password/${encodeURIComponent(token)}`,
@@ -224,7 +240,7 @@ function parseRequestedEmail(body: unknown): string | null {
  *
  * Rate limits first (per IP before the body is read, per address after), then
  * the request Better Auth sees is REBUILT: only the normalized email survives,
- * and `redirectTo` is set to the canonical web reset page. Whatever the client
+ * and `redirectTo` is set to the canonical admin reset page. Whatever the client
  * sent as `redirectTo`/`callbackURL` never reaches Better Auth, so it can
  * neither steer the link nor probe the trusted-origin list with a 403.
  *
@@ -289,12 +305,14 @@ export async function handleRequestPasswordReset(
  * `GET /api/auth/reset-password/:token` — the link in the email.
  *
  * The `callbackURL` query is rebuilt before Better Auth sees it: it survives
- * only when it is EXACTLY one of the canonical reset pages (the web page, or the
- * admin/platform page an invite points at), and is otherwise replaced with the
- * canonical web reset page. Every other query parameter is dropped. A doctored
- * link therefore cannot bounce a valid token to any page outside the allowlist,
- * trusted or not. While the allowlist has only `web`, this is exactly the old
- * rule: the callback is always the web reset page.
+ * only when it is EXACTLY one of the canonical reset pages (the admin page, or
+ * the platform page a platform user's invite points at), and is otherwise
+ * replaced with the canonical admin reset page. Every other query parameter is
+ * dropped. A doctored link therefore cannot bounce a valid token to any page
+ * outside the allowlist, trusted or not — and a link minted before CP5, whose
+ * callback is the storefront's reset page, is sent to the admin page instead.
+ * While the allowlist does not list `admin`, both pages are the web page
+ * (resetPageOrigin), which is exactly the rule before CP5.
  */
 export function canonicalResetLinkRequest(
   request: Request,

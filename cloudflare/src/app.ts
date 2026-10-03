@@ -371,8 +371,20 @@ import {
 import { ADMIN_PREVIEW_PATH, handleAdminPreviewRoute } from "./routes/admin-preview";
 // CP4-D2 (imports) — end
 // CP5-IMPORTS-A — begin
+import {
+  ADMIN_SHOP_PATH,
+  handleAdminShopRoute,
+  handleMeRoute,
+  ME_PATH,
+} from "./routes/admin-session";
 // CP5-IMPORTS-A — end
 // CP5-IMPORTS-B — begin
+import {
+  ADMIN_ORDER_FULFILMENT_ROUTE,
+  ADMIN_ORDERS_PATH,
+  handleAdminOrderFulfilmentRoute,
+  handleAdminOrderListRoute,
+} from "./routes/admin-orders";
 // CP5-IMPORTS-B — end
 // CP5-IMPORTS-C — begin
 // CP5-IMPORTS-C — end
@@ -417,7 +429,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0045_order_recipients.sql";
+const REQUIRED_MIGRATION = "0046_order_fulfilment.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -2288,8 +2300,35 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // CP4-D2 — end
   // CP5: one block per builder (docs/cf-port/CP5_BRIEFS.md §0); a builder edits only its own.
   // CP5-ROUTES-A — begin
+  // Who am I (any signed-in admin-surface user; 401 when signed out — the one
+  // admin-surface route that is not the opaque 404) and the active shop
+  // (X-Shop-Id, membership or acting-as; the opaque 404 to anyone else).
+  app.all(ME_PATH, onMethods(["GET"], (c) => handleMeRoute(c.env, c.req.raw)));
+  app.all(
+    ADMIN_SHOP_PATH,
+    onMethods(["GET"], (c) => handleAdminShopRoute(c.env, c.req.raw)),
+  );
   // CP5-ROUTES-A — end
   // CP5-ROUTES-B — begin
+  // The seller's order list and fulfilment change (src/routes/admin-orders.ts).
+  // Exact paths: the list is `/v1/admin/orders` itself, which the CP2 patterns
+  // below (`/v1/admin/orders/:orderId`, `/refunds`, `/cancel`) never match, and
+  // `/fulfilment` is a fourth exact suffix none of them claims. The order
+  // segment is taken from the RAW pathname and decoded once by the handler.
+  app.all(
+    ADMIN_ORDERS_PATH,
+    onMethods(["GET"], (c) => handleAdminOrderListRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    ADMIN_ORDER_FULFILMENT_ROUTE,
+    onMethods(["POST"], (c) =>
+      handleAdminOrderFulfilmentRoute(
+        c.env,
+        c.req.raw,
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
   // CP5-ROUTES-B — end
   // CP5-ROUTES-C — begin
   // CP5-ROUTES-C — end

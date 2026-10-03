@@ -21,7 +21,8 @@ import { printerCancellationId, printerCancellationInsert } from "./dispatch-eff
  *          cancellation API, so its effect is the human-action alert
  *          `printer_cancellation_needed`.
  *   4. AFTER PRODUCTION (`order_items.production_state` produced/shipped, or
- *      the order already printed/shipped/handed over)
+ *      the order already printed/shipped/handed over: `orders.status`, or
+ *      since 0046 `orders.fulfilment_status`)
  *        → refused as a RETURN CASE (409 `return_case`); nothing changes.
  *
  * Also: an `unknown` row (answer lost) gets `cancel_requested = 1`, which stops
@@ -93,6 +94,30 @@ export function parseCancelOrderInput(body: unknown): { reason: string } | null 
     : { reason };
 }
 
+/**
+ * The seller's fulfilment states (0046 `orders.fulfilment_status`) that make a
+ * cancellation a return case: the goods have left the shop or are waiting for
+ * the buyer. Since 0046 the seller's fulfilment lives in its own column and
+ * `orders.status` is the money path's; the guard reads BOTH, so an order
+ * shipped before 0046 (its `status`) and one shipped after (its
+ * `fulfilment_status`) are refused alike.
+ *
+ * Only this guard reads the new column. The refund's dispatch stop and the
+ * withholding release (src/commerce/refund-dispatch-stop.ts,
+ * withholding-release.ts) keep reading `status` alone, and agree with it
+ * wherever they act: both touch only an order with dispatch rows, i.e. with
+ * POD lines, and the seller cannot move an order with an unsent POD line to
+ * shipped or ready for pickup — nor, therefore, further
+ * (src/commerce/fulfilment.ts `printer_ships`); a sent line is
+ * `production_state` 'shipped', which all three guards already read.
+ */
+export const RETURN_CASE_FULFILMENT_STATES = [
+  "shipped",
+  "ready_for_pickup",
+  "delivered",
+  "completed",
+] as const;
+
 /** No line is physically made, and the order is not past production. */
 function notProducedSql(): string {
   return `NOT EXISTS (
@@ -103,7 +128,8 @@ function notProducedSql(): string {
     AND NOT EXISTS (
       SELECT 1 FROM orders AS q
       WHERE q.order_id = ? AND q.tenant_id = ?
-        AND q.status IN (${RETURN_CASE_ORDER_STATUSES.map((status) => `'${status}'`).join(", ")})
+        AND (q.status IN (${RETURN_CASE_ORDER_STATUSES.map((status) => `'${status}'`).join(", ")})
+             OR q.fulfilment_status IN (${RETURN_CASE_FULFILMENT_STATES.map((state) => `'${state}'`).join(", ")}))
     )`;
 }
 

@@ -666,7 +666,7 @@ describe("create or reuse the account — reserve first", () => {
 describe("onboarding link", () => {
   beforeEach(fresh);
 
-  it("return and refresh URLs come from the canonical web origin and carry the shop id", async () => {
+  it("return and refresh URLs come from the canonical admin origin and carry the shop id", async () => {
     const { accountId, shop } = await shopWithAccount("ln-ok");
     const body = await seller<{ onboarding: { expiresAt: string; url: string } }>(OWN, shop, "POST", LINK, 200);
     expect(body.onboarding.url).toMatch(/^https:\/\/connect\.stripe\.test\//);
@@ -674,8 +674,8 @@ describe("onboarding link", () => {
     expect(fake.callsOf("createOnboardingLink").map((entry) => entry.params)).toEqual([
       {
         accountId,
-        refreshUrl: `https://web.test.invalid/admin/payments?refresh=1&shopId=${shop.tenantId}`,
-        returnUrl: `https://web.test.invalid/admin/payments?return=1&shopId=${shop.tenantId}`,
+        refreshUrl: `https://admin.test.invalid/admin/payments?refresh=1&shopId=${shop.tenantId}`,
+        returnUrl: `https://admin.test.invalid/admin/payments?return=1&shopId=${shop.tenantId}`,
       },
     ]);
     expect(await auditActions(shop.tenantId, "connect.onboarding_link")).toEqual([
@@ -696,7 +696,7 @@ describe("onboarding link", () => {
       const params = entry.params as { refreshUrl: string; returnUrl: string };
       return [params.refreshUrl, params.returnUrl];
     });
-    expect(urls.every((url) => new URL(url).origin === "https://web.test.invalid")).toBe(true);
+    expect(urls.every((url) => new URL(url).origin === "https://admin.test.invalid")).toBe(true);
   });
 
   it("without a valid allowlist the surface does not exist (404, Stripe untouched)", async () => {

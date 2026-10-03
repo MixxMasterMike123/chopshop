@@ -784,6 +784,45 @@ describe("GET /v1/admin/orders/:orderId", () => {
         consent: null,
         // D98: no recipient on a seeded checkout (as before 0045).
         recipient: null,
+        // CP5-WB: the buyer, the delivery, the fulfilment, the lines, the
+        // parcels and the history (payment track: the webhook, the refund).
+        cancelledAt: null,
+        createdAt: paidAt,
+        customerEmail: expect.stringMatching(/@example\.test$/) as unknown as string,
+        deliveryMethod: "pickup",
+        fulfilment: "unfulfilled",
+        items: [
+          {
+            lineNo: 1,
+            lineTotalMinor: 20_000,
+            name: "Tee 0",
+            podState: "queued",
+            quantity: 1,
+            sku: expect.stringMatching(/^SKU-prod_/) as unknown as string,
+            unitPriceMinor: 20_000,
+            variantLabel: null,
+          },
+        ],
+        shipments: [],
+        shippingCountry: null,
+        statusHistory: [
+          {
+            at: paidAt,
+            by: "system",
+            from: null,
+            reason: "stripe.payment_intent.succeeded",
+            to: "paid",
+            track: "payment",
+          },
+          {
+            at: expect.any(String) as unknown as string,
+            by: "admin",
+            from: "paid",
+            reason: "refund",
+            to: "partially_refunded",
+            track: "payment",
+          },
+        ],
         currency: "SEK",
         money: {
           chargedMinor: 20_000,
@@ -829,9 +868,40 @@ describe("GET /v1/admin/orders/:orderId", () => {
 
   it("never exposes the fee's breakdown (the seller sees ONE number)", async () => {
     const order = await paidOrder();
+    // CP5-WB: the walk below covers the new fields — the lines (with the POD
+    // line's seller word), a parcel's shipment, the status history — and the
+    // order list, not only the money.
+    await env.DB.prepare(
+      "UPDATE order_items SET dispatch_state = 'accepted', printer_job_ref = 'JOBREF-DENY-1' WHERE order_id = ?",
+    )
+      .bind(order.orderId)
+      .run();
+    const fulfilment = await worker.fetch(
+      adminRequest(`/v1/admin/orders/${order.orderId}/fulfilment`, "POST", {
+        body: { note: "packas", to: "processing" },
+        cookie: adminA.cookie,
+        idempotencyKey: crypto.randomUUID(),
+        shopId: TENANT_A,
+      }),
+      moneyEnv(stripe),
+    );
+    expect(fulfilment.status).toBe(200);
     const response = await readOrder(order.orderId);
-    const text = await response.text();
-    const body = JSON.parse(text) as unknown;
+    const listResponse = await worker.fetch(
+      adminRequest("/v1/admin/orders", "GET", { cookie: adminA.cookie, origin: null, shopId: TENANT_A }),
+      moneyEnv(stripe),
+    );
+    expect(listResponse.status).toBe(200);
+    const detailText = await response.text();
+    const listText = await listResponse.text();
+    const text = `${detailText}${listText}`;
+    const body = [JSON.parse(detailText), JSON.parse(listText)] as unknown;
+    const detail = JSON.parse(detailText) as {
+      order: { items: unknown[]; statusHistory: unknown[] };
+    };
+    expect(detail.order.items).toHaveLength(1);
+    expect(detail.order.statusHistory.length).toBeGreaterThanOrEqual(2);
+    expect((JSON.parse(listText) as { orders: unknown[] }).orders.length).toBeGreaterThanOrEqual(1);
 
     const DENYLIST = [
       "withh", "production", "cost", "commission", "bps", "snapshot",
@@ -859,10 +929,14 @@ describe("GET /v1/admin/orders/:orderId", () => {
     // withheld, not the 1 000 commission, not the per-line 9 840 cost.
     expect(text).not.toContain("12300");
     expect(text).not.toContain("9840");
-    expect(text).not.toMatch(/[^0-9]1000[^0-9]/);
+    // (the detail only: the list legitimately shows other orders' 1 000 refunds)
+    expect(detailText).not.toMatch(/[^0-9]1000[^0-9]/);
     expect(text).not.toContain(accountA);
     expect(text).not.toContain(order.paymentIntentId);
     expect(text).not.toContain("2500170");
+    // CP5-WB: no printer job reference, no user id (the history says a kind).
+    expect(text).not.toContain("JOBREF-DENY-1");
+    expect(text).not.toContain(adminA.userId);
   });
 
   it("404s another shop's order and a malformed id", async () => {

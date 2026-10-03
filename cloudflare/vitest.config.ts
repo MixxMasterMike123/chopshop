@@ -33,6 +33,7 @@ export default defineConfig({
             // var exactly as the deploy config declares it. .invalid is
             // reserved (RFC 2606): a link built from these can never resolve.
             CANONICAL_ORIGINS: {
+              admin: "https://admin.test.invalid",
               api: "https://api.test.invalid",
               web: "https://web.test.invalid",
             },

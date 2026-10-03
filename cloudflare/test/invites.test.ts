@@ -14,7 +14,7 @@ import {
 import { hashEmailRecipient, parseAuthEmailJob } from "../src/email/auth-email-job";
 import type { AuthEmailJob } from "../src/email/auth-email-job";
 import { RESEND_FETCH_OVERRIDE } from "../src/email/email-queue-consumer";
-import type { CanonicalOrigins } from "../src/lib/origins";
+import { type CanonicalOrigins, parseCanonicalOrigins } from "../src/lib/origins";
 import {
   INVITE_TOKEN_TTL_SECONDS,
   inviteSurfaceFor,
@@ -31,8 +31,13 @@ import {
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
 const PLATFORM_HOST = "https://console.invites.example.com";
 const ADMIN_HOST = "https://admin.invites.example.com";
-const WEB_ORIGIN = "https://web.test.invalid";
-const WEB_RESET_PAGE = `${WEB_ORIGIN}/reset-password`;
+// CP5-WA: the reset pages are the admin surface's (the web origin only while
+// the test config's allowlist does not list `admin`); read from the config so
+// this suite holds before and after the allowlist gains it.
+const TEST_ORIGINS = parseCanonicalOrigins(env.CANONICAL_ORIGINS);
+const RESET_ORIGIN = resetPageOrigin(TEST_ORIGINS, "admin");
+const ADMIN_RESET_PAGE = passwordResetCallbackUrl(TEST_ORIGINS, "admin");
+const PLATFORM_RESET_PAGE = passwordResetCallbackUrl(TEST_ORIGINS, "platform");
 const SHOP = "invites-shop";
 const NOW = 1_789_000_000_000;
 const PASSWORD = "test-password-long-enough";
@@ -180,7 +185,7 @@ async function setPassword(token: string, newPassword = NEW_PASSWORD): Promise<R
   return worker.fetch(
     new Request(`${AUTH_ORIGIN}/api/auth/reset-password`, {
       body: JSON.stringify({ newPassword, token }),
-      headers: { "content-type": "application/json", origin: WEB_ORIGIN },
+      headers: { "content-type": "application/json", origin: RESET_ORIGIN },
       method: "POST",
     }),
     env,
@@ -297,7 +302,7 @@ describe("issuing an invite", () => {
     expect(link.pathname).toMatch(/^\/api\/auth\/reset-password\/[A-Za-z0-9]{32}$/);
     expect([...link.searchParams.keys()]).toEqual(["callbackURL"]);
     // From the allowlist — never the host the operator called from.
-    expect(link.searchParams.get("callbackURL")).toBe(WEB_RESET_PAGE);
+    expect(link.searchParams.get("callbackURL")).toBe(ADMIN_RESET_PAGE);
     expect(job.actionUrl).not.toContain("invites.example.com");
 
     await expect(
@@ -344,8 +349,8 @@ describe("issuing an invite", () => {
     await expect(response.json()).resolves.toMatchObject({
       invite: { surface: "platform", userId: platformTarget.userId },
     });
-    // The allowlist lists `web` only today, so both surfaces land on it.
-    expect(new URL(job.actionUrl).searchParams.get("callbackURL")).toBe(WEB_RESET_PAGE);
+    // The platform page: the admin origin unless the allowlist names another (D102).
+    expect(new URL(job.actionUrl).searchParams.get("callbackURL")).toBe(PLATFORM_RESET_PAGE);
 
     expect(inviteSurfaceFor("platform_admin")).toBe("platform");
     expect(inviteSurfaceFor("tenant_admin")).toBe("admin");
@@ -365,17 +370,19 @@ describe("issuing an invite", () => {
 
     expect(resetPageOrigin(widened, "platform")).toBe("https://platform.allowlist.invalid");
     expect(resetPageOrigin(widened, "admin")).toBe("https://admin.allowlist.invalid");
-    expect(resetPageOrigin(widened, "web")).toBe("https://web.allowlist.invalid");
-    expect(resetPageOrigin(narrow, "platform")).toBe("https://web.allowlist.invalid");
-    expect(resetPageOrigins(narrow)).toEqual(["https://web.allowlist.invalid"]);
+    // CP5-WA: once `admin` is listed, no reset page is on the web origin.
     expect(resetPageOrigins(widened).sort()).toEqual([
       "https://admin.allowlist.invalid",
       "https://platform.allowlist.invalid",
-      "https://web.allowlist.invalid",
     ]);
+    // Transitional: an allowlist without `admin` lands both on the web origin.
+    expect(resetPageOrigin(narrow, "platform")).toBe("https://web.allowlist.invalid");
+    expect(resetPageOrigin(narrow, "admin")).toBe("https://web.allowlist.invalid");
+    expect(resetPageOrigins(narrow)).toEqual(["https://web.allowlist.invalid"]);
 
     // The link handler keeps an allowlisted reset page and replaces anything
-    // else — including the API origin and a lookalike path — with the web page.
+    // else — the API origin, a lookalike path, and the storefront's page a
+    // pre-CP5 link carries — with the admin page.
     const linkTo = (callback: string) =>
       new URL(
         canonicalResetLinkRequest(
@@ -393,11 +400,15 @@ describe("issuing an invite", () => {
       "https://api.allowlist.invalid/reset-password",
       "https://admin.allowlist.invalid/reset-password/../steal",
       "https://admin.allowlist.invalid/elsewhere",
+      "https://web.allowlist.invalid/reset-password",
     ]) {
       expect(linkTo(doctored).searchParams.get("callbackURL"), doctored).toBe(
-        "https://web.allowlist.invalid/reset-password",
+        "https://admin.allowlist.invalid/reset-password",
       );
     }
+    expect(
+      linkTo(passwordResetCallbackUrl(widened, "platform")).searchParams.get("callbackURL"),
+    ).toBe("https://platform.allowlist.invalid/reset-password");
   });
 });
 

@@ -47,7 +47,11 @@ describe("canonical origin allowlist", () => {
     ["a JSON string of a string", JSON.stringify("https://api.test.invalid")],
     ["missing web", { api: VALID.api }],
     ["missing api", { web: VALID.web }],
-    ["an unknown key", { ...VALID, admin: "https://admin.test.invalid" }],
+    ["an unknown key", { ...VALID, print: "https://print.test.invalid" }],
+    ["platform without admin", { ...VALID, platform: "https://admin.test.invalid" }],
+    ["an http admin", { ...VALID, admin: "http://admin.test.invalid" }],
+    ["an admin with a path", { ...VALID, admin: "https://admin.test.invalid/admin" }],
+    ["a non-string platform", { ...VALID, admin: "https://admin.test.invalid", platform: 1 }],
     ["an empty origin", { ...VALID, web: "" }],
     ["a non-string origin", { ...VALID, web: 443 }],
     ["http", { ...VALID, web: "http://web.test.invalid" }],
@@ -66,6 +70,37 @@ describe("canonical origin allowlist", () => {
       CanonicalOriginsError,
     );
     expect(readCanonicalOrigins(withOrigins(value))).toBeNull();
+  });
+
+  it("accepts an admin origin and makes it the platform origin too (D102)", () => {
+    const parsed = parseCanonicalOrigins({ ...VALID, admin: "https://admin.test.invalid" });
+    expect(parsed).toEqual({
+      ...VALID,
+      admin: "https://admin.test.invalid",
+      platform: "https://admin.test.invalid",
+    });
+    expect(Object.isFrozen(parsed)).toBe(true);
+    const env2 = withOrigins({ ...VALID, admin: "https://admin.test.invalid" });
+    expect(canonicalOrigin(env2, "admin")).toBe("https://admin.test.invalid");
+    expect(canonicalOrigin(env2, "platform")).toBe("https://admin.test.invalid");
+  });
+
+  it("keeps a platform origin the var names", () => {
+    expect(
+      parseCanonicalOrigins({
+        ...VALID,
+        admin: "https://admin.test.invalid",
+        platform: "https://console.test.invalid",
+      }).platform,
+    ).toBe("https://console.test.invalid");
+  });
+
+  it("lists neither admin nor platform when the var names neither", () => {
+    const parsed = parseCanonicalOrigins(VALID);
+    expect(parsed).toEqual(VALID);
+    expect("admin" in parsed).toBe(false);
+    expect(() => canonicalOrigin(withOrigins(VALID), "admin")).toThrow(CanonicalOriginsError);
+    expect(() => canonicalOrigin(withOrigins(VALID), "platform")).toThrow(CanonicalOriginsError);
   });
 
   it("never echoes the offending value in its error", () => {

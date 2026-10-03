@@ -19,12 +19,15 @@ import {
 import { isSameOriginRequest } from "../lib/same-origin";
 import { readAdminOrderWithdrawal } from "../commerce/withdrawals";
 import { readOrderRecipient } from "../commerce/recipient";
+import { readOrderFulfilmentRecord } from "../commerce/fulfilment";
 
 /**
  * The tenant-admin money surface (CP2-A):
  *
  *   GET  /v1/admin/orders/:orderId          the order's money facts + payout
  *                                           + the buyer's consent facts (CP2-E)
+ *                                           + the lines, delivery, fulfilment,
+ *                                             shipments, status history (CP5-WB)
  *   POST /v1/admin/orders/:orderId/refunds  { amountMinor, reason }
  *                                           + header Idempotency-Key: <uuid> (CP2-E)
  *
@@ -72,6 +75,9 @@ export async function handleAdminOrderRoute(
   // CP2-E: what the buyer consented to at checkout (src/legal/consent.ts) —
   // terms, the separate marketing box, and a waived right of withdrawal.
   const consent = await readAdminOrderConsent(env.DB, principal.tenantId, orderId);
+  // CP5-WB: the parcels sent (tracking number, carrier) and every change of
+  // the order's payment and fulfilment state, each actor as a kind, never an id.
+  const record = await readOrderFulfilmentRecord(env.DB, principal.tenantId, orderId);
   return jsonResponse({
     order: {
       ...order,
@@ -79,6 +85,8 @@ export async function handleAdminOrderRoute(
       // D98: who gets the order and where, so the shop can deliver it
       // (src/commerce/recipient.ts RecipientView); null before 0045.
       recipient: await readOrderRecipient(env.DB, principal.tenantId, orderId),
+      shipments: record.shipments,
+      statusHistory: record.statusHistory,
       withdrawal: { waived: consent?.isPersonalized ?? false },
       // CP4-G: the buyer's withdrawal on record for this order, with the
       // server's time of receipt; null when there is none.

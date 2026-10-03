@@ -9,9 +9,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import worker from "../src/index";
 import { createAuth } from "../src/auth/create-auth";
 import {
+  canonicalResetLinkRequest,
   PASSWORD_RESET_EMAIL_LIMIT,
   PASSWORD_RESET_IP_LIMIT,
+  passwordResetCallbackUrl,
+  resetPageOrigin,
+  resetPageOrigins,
 } from "../src/auth/password-reset";
+import { parseCanonicalOrigins } from "../src/lib/origins";
 import {
   hashEmailRecipient,
   parseAuthEmailJob,
@@ -25,8 +30,13 @@ import { RESEND_FETCH_OVERRIDE } from "../src/email/email-queue-consumer";
  * call goes through RESEND_FETCH_OVERRIDE. Nothing leaves the process.
  */
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
-const WEB_ORIGIN = "https://web.test.invalid";
-const RESET_PAGE = `${WEB_ORIGIN}/reset-password`;
+// The reset page of the test config's allowlist (CP5-WA: the admin surface's;
+// the web origin only while the config does not list `admin`). Read from the
+// config, so the suite holds before and after the allowlist gains it; the
+// "with the admin origin listed" block pins the CP5 landing explicitly.
+const TEST_ORIGINS = parseCanonicalOrigins(env.CANONICAL_ORIGINS);
+const WEB_ORIGIN = resetPageOrigin(TEST_ORIGINS, "admin");
+const RESET_PAGE = passwordResetCallbackUrl(TEST_ORIGINS);
 const EMAIL = "reset-user@passwordreset.test";
 const PASSWORD = "original-password-long-enough";
 const NEW_PASSWORD = "brand-new-password-long-enough";
@@ -89,7 +99,7 @@ async function drainAuthLimiter(): Promise<void> {
 async function requestReset(
   targetEnv: Env,
   body: unknown,
-  options: { ip?: string; raw?: string } = {},
+  options: { ip?: string; origin?: string; raw?: string } = {},
 ): Promise<Response> {
   await drainAuthLimiter();
   return worker.fetch(
@@ -98,7 +108,7 @@ async function requestReset(
       headers: {
         "cf-connecting-ip": options.ip ?? nextIp(),
         "content-type": "application/json",
-        origin: WEB_ORIGIN,
+        origin: options.origin ?? WEB_ORIGIN,
       },
       method: "POST",
     }),
@@ -445,7 +455,7 @@ describe("the emailed link and the reset itself", () => {
     expect(resend.requests).toHaveLength(1);
   });
 
-  it("redirects the link to the canonical web page, whatever callbackURL it carries", async () => {
+  it("redirects the link to the canonical reset page, whatever callbackURL it carries", async () => {
     const link = new URL(job.actionUrl);
     link.searchParams.set("callbackURL", "https://evil.example/steal");
 
@@ -462,7 +472,7 @@ describe("the emailed link and the reset itself", () => {
     );
   });
 
-  it("bounces an unknown token to the web page with an error", async () => {
+  it("bounces an unknown token to the reset page with an error", async () => {
     const response = await worker.fetch(
       new Request(
         `${AUTH_ORIGIN}/api/auth/reset-password/zzzzzzzzzzzzzzzzzzzzzzzz?callbackURL=https://evil.example`,
@@ -561,5 +571,93 @@ describe("the ordinary reset token still lives one hour", () => {
 
     vi.setSystemTime(issuedAt + HOUR_MS + 1_000);
     expect((await follow()).get("error")).toBe("INVALID_TOKEN");
+  });
+});
+
+/**
+ * CP5-WA — the admin origin listed (the allowlist every env carries after the
+ * CP5 wiring). Every reset link lands on the admin SPA's page; nothing lands
+ * on the storefront any more, and the storefront origin is no longer trusted
+ * as a reset page by Better Auth.
+ */
+describe("with the admin origin listed", () => {
+  const ADMIN_ORIGIN = "https://admin.test.invalid";
+  const ADMIN_PAGE = `${ADMIN_ORIGIN}/reset-password`;
+  const STOREFRONT_PAGE = `${TEST_ORIGINS.web}/reset-password`;
+  const listed = { api: TEST_ORIGINS.api, web: TEST_ORIGINS.web, admin: ADMIN_ORIGIN };
+  const email = "admin-landing@passwordreset.test";
+
+  beforeAll(async () => {
+    await drainAuthLimiter();
+    const signUp = await createAuth(env).handler(
+      new Request(`${AUTH_ORIGIN}/api/auth/sign-up/email`, {
+        body: JSON.stringify({ email, name: email, password: PASSWORD }),
+        headers: { "content-type": "application/json", origin: AUTH_ORIGIN },
+        method: "POST",
+      }),
+    );
+    expect(signUp.status).toBe(200);
+  });
+
+  it("parses the allowlist with platform = admin (D102)", () => {
+    const origins = parseCanonicalOrigins(listed);
+    expect(origins.platform).toBe(ADMIN_ORIGIN);
+    expect(resetPageOrigins(origins)).toEqual([ADMIN_ORIGIN]);
+    expect(passwordResetCallbackUrl(origins)).toBe(ADMIN_PAGE);
+    expect(passwordResetCallbackUrl(origins, "platform")).toBe(ADMIN_PAGE);
+  });
+
+  it("mails a link that lands on the admin page, and the link redirects there", async () => {
+    const captured = captureQueue();
+    const listedEnv = envWith({ CANONICAL_ORIGINS: listed, EMAIL_QUEUE: captured.queue });
+    const response = await requestReset(
+      listedEnv,
+      { email, redirectTo: STOREFRONT_PAGE },
+      { origin: ADMIN_ORIGIN },
+    );
+    expect(response.status).toBe(200);
+    expect(captured.sent).toHaveLength(1);
+
+    const job = parseAuthEmailJob(captured.sent[0], env.AUTH_BASE_URL);
+    const link = new URL(job.actionUrl);
+    expect(link.origin).toBe(AUTH_ORIGIN);
+    expect(link.searchParams.get("callbackURL")).toBe(ADMIN_PAGE);
+    expect(job.actionUrl).not.toContain(encodeURIComponent(TEST_ORIGINS.web));
+
+    const followed = await worker.fetch(new Request(link.href, { redirect: "manual" }), listedEnv);
+    expect(followed.status).toBe(302);
+    const location = new URL(followed.headers.get("location") ?? "");
+    expect(`${location.origin}${location.pathname}`).toBe(ADMIN_PAGE);
+    expect(location.searchParams.get("token")).toBe(link.pathname.split("/").at(-1));
+  });
+
+  it("sends a pre-CP5 link (callback on the storefront) to the admin page", async () => {
+    const rebuilt = new URL(
+      canonicalResetLinkRequest(
+        new Request(
+          `${AUTH_ORIGIN}/api/auth/reset-password/abcdefghijklmnopqrstuvwx?callbackURL=${encodeURIComponent(STOREFRONT_PAGE)}`,
+        ),
+        parseCanonicalOrigins(listed),
+      ).url,
+    );
+    expect(rebuilt.searchParams.get("callbackURL")).toBe(ADMIN_PAGE);
+  });
+
+  it("trusts the admin origin as a reset page and no longer the storefront", async () => {
+    const context = await createAuth(envWith({ CANONICAL_ORIGINS: listed })).$context;
+    expect(context.trustedOrigins).toContain(ADMIN_ORIGIN);
+    expect(context.trustedOrigins).not.toContain(TEST_ORIGINS.web);
+  });
+
+  it.each([
+    ["platform without admin", { api: TEST_ORIGINS.api, web: TEST_ORIGINS.web, platform: ADMIN_ORIGIN }],
+    ["a malformed admin", { ...listed, admin: "http://admin.test.invalid" }],
+  ])("keeps every reset route dark with %s", async (_label, origins) => {
+    const response = await requestReset(
+      envWith({ CANONICAL_ORIGINS: origins, EMAIL_QUEUE: captureQueue().queue }),
+      { email },
+      { origin: ADMIN_ORIGIN },
+    );
+    expect(response.status).toBe(404);
   });
 });

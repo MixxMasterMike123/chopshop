@@ -27,9 +27,10 @@ function trustedOrigins(env: Env): string[] {
   }
 
   // The canonical reset pages are trusted by definition: the reset link's
-  // redirect lands on one of them (the WEB page for an ordinary reset, the
-  // admin or platform page for a CP3 invite once the allowlist lists those
-  // surfaces — until then they resolve to the web origin), and Better Auth
+  // redirect lands on one of them (CP5: the ADMIN page for an ordinary reset
+  // and a tenant admin's invite, the platform page for a platform user's;
+  // while the allowlist does not list `admin` they resolve to the web origin),
+  // and Better Auth
   // validates that redirect against this list. Adding them here rather than
   // relying on AUTH_TRUSTED_ORIGINS to repeat them keeps one source of truth for
   // "the web app's origins". A missing or malformed allowlist adds nothing —

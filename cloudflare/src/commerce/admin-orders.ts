@@ -2,6 +2,7 @@ import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import type { Payout, PayoutFacts } from "./payouts";
 import { computePayout, disputeBlocksRefund, netFeeMinor, PAYOUT_FACT_COLUMNS } from "./payouts";
 import type { RefundState } from "./refunds";
+import type { FulfilmentState } from "./fulfilment";
 
 /**
  * `GET /v1/admin/orders/:orderId` — the money facts of one order, for the
@@ -18,10 +19,57 @@ import type { RefundState } from "./refunds";
  * is never read into this projection, so no later field addition can leak it
  * by accident. The admin-orders suite walks the response against a denylist and
  * checks that neither half of the fee appears anywhere in the body.
+ *
+ * CP5-WB adds what the shop needs to deliver: the buyer's address of contact,
+ * the delivery method and country, the fulfilment state (0046), the
+ * cancellation time, and the lines. A line says what was bought at what price
+ * and, for a print-on-demand line, ONE seller-safe word of where the print is
+ * (`podState`, see POD_STATE_SQL) — never the line's production snapshot, the
+ * printer, its job reference, its cost or its error text.
  */
 
+/**
+ * The seller's word for a line's print (CP5-WB). Not named `production`: the
+ * one-number denylist refuses every key that names production.
+ *   none           not a print-on-demand line (no production snapshot)
+ *   sent           the printer has sent it
+ *   in_production  the printer has it (accepted), or it is being made
+ *   failed         the printer refused it; the platform is on it
+ *   cancelled      it was cancelled before it reached the printer
+ *   queued         not yet at the printer (or its answer is being checked)
+ */
+export type PodState = "cancelled" | "failed" | "in_production" | "none" | "queued" | "sent";
+
+const POD_STATE_SQL = `CASE
+    WHEN i.production_json IS NULL THEN 'none'
+    WHEN i.production_state = 'shipped' THEN 'sent'
+    WHEN i.production_state IN ('in_production', 'produced') THEN 'in_production'
+    WHEN i.dispatch_state = 'cancelled' THEN 'cancelled'
+    WHEN i.dispatch_state = 'failed' THEN 'failed'
+    WHEN i.dispatch_state = 'accepted' THEN 'in_production'
+    ELSE 'queued'
+  END`;
+
+export interface AdminOrderItem {
+  lineNo: number;
+  lineTotalMinor: number;
+  name: string;
+  podState: PodState;
+  quantity: number;
+  sku: string;
+  unitPriceMinor: number;
+  /** The variant's label as the catalogue holds it NOW (not frozen); null without a variant. */
+  variantLabel: string | null;
+}
+
 export interface AdminOrderView {
+  cancelledAt: string | null;
+  createdAt: string;
   currency: string;
+  customerEmail: string;
+  deliveryMethod: string;
+  fulfilment: FulfilmentState;
+  items: AdminOrderItem[];
   money: {
     chargedMinor: number;
     dispute: { amountMinor: number; status: string } | null;
@@ -42,6 +90,7 @@ export interface AdminOrderView {
     refundId: string;
     state: RefundState;
   }>;
+  shippingCountry: string | null;
   status: string;
   totals: {
     discountMinor: number;
@@ -53,7 +102,13 @@ export interface AdminOrderView {
 }
 
 interface AdminOrderRow extends PayoutFacts {
+  cancelled_at: string | null;
+  created_at: number;
   currency: string;
+  customer_email: string;
+  delivery_method: string;
+  fulfilment_status: FulfilmentState;
+  shipping_country: string | null;
   discount_minor: number;
   dispute_amount_minor: number;
   order_id: string;
@@ -69,6 +124,8 @@ interface AdminOrderRow extends PayoutFacts {
 
 /** Bounded: an order with more refund operations than this is not real. */
 const MAX_REFUNDS_LISTED = 100;
+/** Bounded: an order's lines are capped well below this at checkout. */
+const MAX_ITEMS_LISTED = 200;
 
 export async function readAdminOrder(
   db: D1Database,
@@ -81,7 +138,9 @@ export async function readAdminOrder(
       `SELECT o.order_id, o.order_number, o.status, o.currency,
               o.subtotal_minor, o.shipping_minor, o.discount_minor,
               o.vat_minor, o.total_minor, o.refund_reserved_minor,
-              o.dispute_amount_minor, ${PAYOUT_FACT_COLUMNS},
+              o.dispute_amount_minor, o.created_at, o.customer_email,
+              o.delivery_method, o.shipping_country, o.fulfilment_status,
+              o.cancelled_at, ${PAYOUT_FACT_COLUMNS},
               t.stripe_payouts_enabled
        FROM orders AS o
        JOIN tenants AS t ON t.tenant_id = o.tenant_id
@@ -112,13 +171,53 @@ export async function readAdminOrder(
       state: RefundState;
     }>();
 
+  // Named columns only; the production snapshot is read as "is there one".
+  const items = await db
+    .prepare(
+      `SELECT i.item_index, i.sku, i.name, i.quantity, i.unit_price_minor,
+              i.line_total_minor, v.label AS variant_label,
+              ${POD_STATE_SQL} AS pod_state
+       FROM order_items AS i
+       LEFT JOIN product_variants AS v
+         ON v.variant_id = i.variant_id AND v.tenant_id = i.tenant_id
+       WHERE i.tenant_id = ? AND i.order_id = ?
+       ORDER BY i.item_index
+       LIMIT ?`,
+    )
+    .bind(principal.tenantId, orderId, MAX_ITEMS_LISTED)
+    .all<{
+      item_index: number;
+      line_total_minor: number;
+      name: string;
+      pod_state: PodState;
+      quantity: number;
+      sku: string;
+      unit_price_minor: number;
+      variant_label: string | null;
+    }>();
+
   const remaining =
     order.charged_minor -
     order.refund_succeeded_minor -
     order.refund_reserved_minor;
 
   return {
+    cancelledAt: order.cancelled_at,
+    createdAt: new Date(order.created_at).toISOString(),
     currency: order.currency,
+    customerEmail: order.customer_email,
+    deliveryMethod: order.delivery_method,
+    fulfilment: order.fulfilment_status,
+    items: items.results.map((item) => ({
+      lineNo: item.item_index + 1,
+      lineTotalMinor: item.line_total_minor,
+      name: item.name,
+      podState: item.pod_state,
+      quantity: item.quantity,
+      sku: item.sku,
+      unitPriceMinor: item.unit_price_minor,
+      variantLabel: item.variant_label,
+    })),
     money: {
       chargedMinor: order.charged_minor,
       dispute:
@@ -149,6 +248,7 @@ export async function readAdminOrder(
       refundId: refund.id,
       state: refund.state,
     })),
+    shippingCountry: order.shipping_country,
     status: order.status,
     totals: {
       discountMinor: order.discount_minor,
