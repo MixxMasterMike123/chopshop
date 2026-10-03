@@ -97,19 +97,27 @@ export const tierEditorNote = (doc) => tierEditorNoteOf(doc);
 
 /**
  * Saves the tier editor: the changed fields only, fenced on the revision the
- * page was shown. → { doc, note }: the printer as the server now holds it,
- * and what the edit did to live products (paused mappings, products under
- * the floor), for the toast.
+ * page was shown. → { doc, note, resync }: the printer as the server now
+ * holds it, and what the edit did to live products (paused mappings, products
+ * under the floor), for the toast.
+ *
+ * `resync`: the next save is a diff against `doc`, so the form must show
+ * `doc` again. A save can change what a field projects to (removing one
+ * garment's tier makes a print price that differed between garments one
+ * value): a form left as it was would show that field empty and the next
+ * save would delete the price, untouched.
  */
 export async function savePrinterTier(row, payload, before) {
   const patch = printerPatchOf(before, payload);
   if (patch.problems) throw pageError(patch.problems.join(' '));
-  if (patch.body === null) return { doc: before, note: null };
+  if (patch.body === null) return { doc: before, note: null, resync: false };
   const result = await run(() => patchPrinter(row.id, patch.body));
-  return {
-    doc: result.printer ? printerDocOf(result.printer) : before,
-    note: saveNoteOf(result),
-  };
+  if (!result.printer) {
+    // The edit went through but its answer carries no printer: there is no
+    // baseline for another save from this page.
+    throw pageError('Ändringen sparades, men tryckeriet kunde inte läsas tillbaka. Ladda om sidan innan du sparar igen.');
+  }
+  return { doc: printerDocOf(result.printer), note: saveNoteOf(result), resync: true };
 }
 
 /** Saves the default printer. A rule per garment cannot be saved (there is none on the API). */

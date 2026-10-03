@@ -10,6 +10,7 @@ import { docToForm, formToPricing, formToPrintAreas } from '../../components/pla
 import { POD_GARMENTS } from '../../config/podGarments.js';
 import { createState, route } from '../dev/dev-api.mjs';
 import { setRequestShopId } from '../../api/admin/client.js';
+import { printerDocOf, printerPatchOf } from '../adapters/platformPrinters.js';
 import {
   CREATE_ACCOUNT,
   ROUTE_BY_GARMENT,
@@ -155,6 +156,45 @@ describe('the tier editor', () => {
     const frames = saved.doc.view.capabilities.models;
     assert.equal(frames['tee-classic'].printAreasMm.front.w, 250);
     assert.equal(frames['tee-fitted'].printAreasMm.front.w, 230);
+  });
+
+  it('after a save the form follows the stored printer: a second, untouched save sends nothing', async () => {
+    // Two garments whose front print prices differ: the field is mixed (empty).
+    const view = {
+      printerId: 'p1', name: 'P1', type: 'manual', status: 'active', tenantId: null, currency: 'SEK', revision: 3,
+      capabilities: {
+        models: {
+          m_tee: { garment: 'tee', printAreasMm: { front: { w: 250, h: 350 } } },
+          m_hood: { garment: 'hoodie', printAreasMm: { front: { w: 250, h: 300 } } },
+        },
+        skus: { T: { model: 'm_tee' }, H: { model: 'm_hood' } },
+      },
+      tiers: [
+        { sku: 'T', blankCostMinor: 5000, printCostsMinor: { front: 3000 } },
+        { sku: 'H', blankCostMinor: 20000, printCostsMinor: { front: 4000 } },
+      ],
+    };
+    const shown = printerDocOf(view);
+    assert.deepEqual(shown.mixed.print, ['front']);
+    const form = docToForm(shown);
+    form.blank.hoodie = ''; // the hoodie is no longer priced: its tier goes
+    const first = printerPatchOf(shown, payloadOf(form));
+    assert.deepEqual(first.body.tiers, { remove: ['H'] });
+
+    // The server's printer after that save: one tier, so the front price is one value.
+    const stored = printerDocOf({ ...view, revision: 4, tiers: [view.tiers[0]] });
+    assert.deepEqual(stored.mixed.print, []);
+    // The form the page shows after the save (resync): nothing to write.
+    assert.equal(printerPatchOf(stored, payloadOf(docToForm(stored))).body, null);
+    // The form left as it was would have deleted the tee's untouched front price: why the save asks for the resync.
+    const stale = printerPatchOf(stored, payloadOf(form));
+    assert.deepEqual(stale.body.tiers.upsert, [{ sku: 'T', blankCostMinor: 5000, printCostsMinor: {} }]);
+
+    const before = (await loadPrinters()).tiers['fake-printer'];
+    const edited = docToForm(before);
+    edited.blank.tee = '48';
+    assert.equal((await savePrinterTier({ id: 'fake-printer' }, payloadOf(edited), before)).resync, true);
+    assert.equal((await savePrinterTier({ id: 'fake-printer' }, payloadOf(docToForm(before)), before)).resync, false);
   });
 
   it('the editor\'s own refusals send nothing', async () => {

@@ -219,6 +219,9 @@ const PlatformPrinters = () => {
         .map((g) => g.label);
       setAreasChanged(changed);
       setTiers((t) => ({ ...t, [row.id]: saved.doc }));
+      // The data module may ask the form to follow what was stored (the admin
+      // build: its next save is a diff against saved.doc).
+      if (saved.resync) setForm(docToForm(saved.doc));
       toast.success(['Plagg, priser & tryckytor sparade.', saved.note].filter(Boolean).join(' '));
     } catch (e) {
       console.error('saveTier failed:', e);

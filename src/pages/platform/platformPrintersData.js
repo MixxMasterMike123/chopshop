@@ -85,7 +85,7 @@ export async function savePrinterTier(row, payload, before) {
   // whole; any other field on the doc (type, catalog, shippingSek from the
   // SnapWear seed) survives.
   await setDoc(doc(db, 'printers', row.id), full, { mergeFields: Object.keys(full) });
-  return { doc: { ...(before || {}), id: row.id, ...full }, note: null };
+  return { doc: { ...(before || {}), id: row.id, ...full }, note: null, resync: false };
 }
 
 /** Saves settings/printRouting ({ byGarment, defaultPrinterUid }). */
