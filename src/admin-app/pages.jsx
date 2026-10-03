@@ -13,8 +13,6 @@
 // in the build). The routers (AdminApp.jsx, PlatformApp.jsx) never change for
 // a swap. A page that left the build (CP5_GAP_ANALYSIS.md §1b) has no line.
 
-import { pending } from './Pending.jsx';
-
 // ── sign-in (no Firebase code once the alias list applies) ──
 export { default as LoginPage } from '../pages/LoginPage.jsx';
 export { default as ForgotPasswordPage } from '../pages/ForgotPasswordPage.jsx';
@@ -35,7 +33,7 @@ export { default as AdminSettings } from '../pages/admin/AdminSettings.jsx';
 export { default as AdminPayments } from '../pages/admin/AdminPayments.jsx';
 export { default as AdminUsers } from '../pages/admin/AdminUsers.jsx';
 export { default as AdminPlatformTerms } from '../pages/admin/AdminPlatformTerms.jsx';
-export const PodAdminPage = pending('PodAdminPage');
+export { default as PodAdminPage } from '../wagons/pod-wagon/components/PodAdminPage.jsx';
 
 // ── the platform console (PlatformLayout shell, always dark) ──
 export { default as PlatformShops } from '../pages/platform/PlatformShops.jsx';

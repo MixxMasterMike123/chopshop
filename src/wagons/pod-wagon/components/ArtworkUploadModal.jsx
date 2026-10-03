@@ -13,15 +13,13 @@
 import React, { useState, useEffect } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
-import { httpsCallable } from 'firebase/functions';
 import { Field, Input, Select, Button } from '../../../components/admin/ui';
 import StatusPill from '../../../components/admin/ui/StatusPill';
 import { loadPodProfiles, getProfileById } from '../../../config/podProfiles';
-import { readImageDimensions, uploadPodOriginal, extOf, sha256Hex } from '../../../utils/podUpload';
-import { gateArtwork, normalizeExt } from '../../../utils/podValidation';
-import { createArtwork, replaceArtworkFile } from '../../../utils/podArtwork';
-import { auth, functions } from '../../../firebase/config';
+import { readImageDimensions, extOf, sha256Hex } from '../../../utils/podUpload';
+import { normalizeExt } from '../../../utils/podValidation';
 import { tierTone, tierLabel } from './podTier';
+import { CREATED_NEXT_STEP, PENDING_NOTE, precheckArtwork, saveArtworkUpload } from './artworkUploadData';
 
 // Checkerboard behind the preview so all-white/light motifs read as motifs, not
 // as "empty" (spec §8 Färg) — and so transparency is visibly transparent.
@@ -50,6 +48,7 @@ const ArtworkUploadModal = ({ shopId, artwork = [], onClose, onCreated, onUseInS
   const [saving, setSaving] = useState(false);
   const [serverReject, setServerReject] = useState(null); // [{code,message}] from the authoritative gate
   const [notices, setNotices] = useState([]);             // server notices after PASS
+  const [storedIds, setStoredIds] = useState([]);          // artworks this modal stored (a kept rejection is no duplicate)
 
   // Successful uploads lead into Studio; product-specific mappings are created
   // automatically only when the design is published.
@@ -103,7 +102,7 @@ const ArtworkUploadModal = ({ shopId, artwork = [], onClose, onCreated, onUseInS
           previewObjUrl: probe.previewObjUrl,
           sha256,
         });
-        setClientGate(gateArtwork({
+        setClientGate(precheckArtwork({
           widthPx: dims.width, heightPx: dims.height,
           ext: extOf(file.name), fileSizeBytes: file.size,
         }, profile));
@@ -128,7 +127,7 @@ const ArtworkUploadModal = ({ shopId, artwork = [], onClose, onCreated, onUseInS
 
   // Duplicate: same bytes already in the library (INFORM, never block — spec §8).
   const duplicateOf = measured?.sha256
-    ? artwork.find((a) => a.sha256 === measured.sha256 && a.id !== replaceTarget?.id)
+    ? artwork.find((a) => a.sha256 === measured.sha256 && a.id !== replaceTarget?.id && !storedIds.includes(a.id))
     : null;
 
   // Client-side opaque hint (pre-upload). The server re-derives this authoritatively.
@@ -139,6 +138,9 @@ const ArtworkUploadModal = ({ shopId, artwork = [], onClose, onCreated, onUseInS
     );
 
   const dimsUnknown = !!file && measured && measured.widthPx == null;
+  // `deferred`: this build does not judge the file in the browser — the
+  // server's verdict (after the upload) is the only one.
+  const deferred = clientGate?.deferred === true;
   const blocked = !!clientGate && !clientGate.ok;
 
   const handleSave = async () => {
@@ -148,55 +150,44 @@ const ArtworkUploadModal = ({ shopId, artwork = [], onClose, onCreated, onUseInS
     setSaving(true);
     setServerReject(null);
     try {
-      const original = await uploadPodOriginal(file, shopId, profile);
-      // The AUTHORITATIVE gate + conversion (sharp). On reject the server has
-      // already deleted the uploaded original — nothing persists.
-      const call = httpsCallable(functions, 'processPodArtwork');
-      const { data: result } = await call({
-        shopId,
-        originalStoragePath: original.originalStoragePath,
-        profileId: profile.id,
+      // Upload → the AUTHORITATIVE gate + conversion on the server → the verdict.
+      const result = await saveArtworkUpload({
+        file, shopId, profile, label, sha256: measured?.sha256 || null,
+        rightsConfirmed: rightsOk, replaceTarget: isReplace ? replaceTarget : null,
+        // Accepted for processing: the library shows it ("Bearbetas…") while this waits.
+        onAccepted: (artworkId) => {
+          setStoredIds((ids) => [...ids, artworkId]);
+          onCreated?.();
+        },
       });
 
-      if (!result?.ok) {
-        setServerReject(result?.reasons || [{ code: 'unknown', message: 'Filen godkändes inte.' }]);
+      if (result.rejected) {
+        setServerReject(result.reasons);
         setSaving(false);
+        if (result.stored) onCreated?.(); // the rejected artwork is kept (and shown) in the library
         return;
       }
 
-      const fileFields = {
-        originalUrl: original.originalUrl,
-        originalStoragePath: original.originalStoragePath,
-        fileName: original.fileName,
-        fileSizeBytes: original.fileSizeBytes,
-        mimeType: original.mimeType,
-        ext: original.ext,
-        sha256: measured?.sha256 || null,
-        rightsConfirmed: true,
-        ...result.fields, // status/printUrl/printStoragePath/previewUrl/previewStoragePath/sourceWidthPx/sourceHeightPx/validation
-      };
+      // Still being processed when the modal stopped waiting: said as pending,
+      // never as done; the library shows it and its verdict when it lands.
+      if (result.pending) {
+        toast(PENDING_NOTE, { icon: '⏳' });
+        onCreated?.();
+        onClose?.();
+        return;
+      }
 
-      if (isReplace) {
-        await replaceArtworkFile(replaceTarget, {
-          ...fileFields,
-          ...(label.trim() ? { label: label.trim() } : {}),
-        });
+      if (result.replaced) {
         toast.success('Filen ersatt');
         onCreated?.();
         onClose?.();
         return;
       }
 
-      const newId = await createArtwork({
-        label: label.trim() || file.name,
-        purpose: profile.id,
-        ...fileFields,
-        createdBy: auth.currentUser?.uid || null,
-      }, shopId);
       toast.success('Tryckfil godkänd och sparad');
       setNotices(result.notices || []);
       onCreated?.();
-      setCreatedArtworkId(newId);
+      setCreatedArtworkId(result.artworkId);
       setSaving(false);
     } catch (err) {
       console.error('POD upload failed:', err);
@@ -233,7 +224,7 @@ const ArtworkUploadModal = ({ shopId, artwork = [], onClose, onCreated, onUseInS
               </ul>
             )}
             <p className="text-[13px] text-admin-text-muted">
-              Originalet finns nu i biblioteket. Välj det i Designstudion; motiv och placering kopplas automatiskt till produkten när du publicerar.
+              {CREATED_NEXT_STEP}
             </p>
             {profile && ['poster_large', 'sticker_diecut', 'mug_wrap'].includes(profile.id) && (
               <p className="text-[12px] text-admin-text-faint">
@@ -285,7 +276,7 @@ const ArtworkUploadModal = ({ shopId, artwork = [], onClose, onCreated, onUseInS
                   <>
                     <div className="mb-2 flex items-center gap-2">
                       <StatusPill tone={tierTone(blocked ? 'FAIL' : 'PASS')}>
-                        {blocked ? tierLabel('FAIL') : dimsUnknown ? 'Kontrolleras vid uppladdning' : tierLabel('PASS')}
+                        {blocked ? tierLabel('FAIL') : (dimsUnknown || deferred) ? 'Kontrolleras vid uppladdning' : tierLabel('PASS')}
                       </StatusPill>
                       {clientGate.effectiveDpi != null && !blocked && (
                         <span className="text-[12px] text-admin-text-muted">{clientGate.effectiveDpi} DPI i största tryckstorlek</span>

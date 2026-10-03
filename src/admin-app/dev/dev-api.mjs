@@ -34,6 +34,7 @@ import { PLATFORM_REST_ROUTES } from './platform-rest-dev.mjs';
 import { MEMBER_ROUTES } from './members-dev.mjs';
 import { PREVIEW_ADMIN_ROUTES, platformShopRoutes } from './platform-dev.mjs';
 import { PRINTER_ROUTES } from './printers-dev.mjs';
+import { POD_ROUTES } from './pod-dev.mjs';
 
 export const DEV_API_MARKER = 'admin-dev-api-invented-data';
 export const SESSION_COOKIE = 'admin_dev_session';
@@ -402,6 +403,7 @@ const ADMIN_ROUTES = [
   ...CONTENT_ROUTES,
   ...MEMBER_ROUTES, // unit FH
   ...PREVIEW_ADMIN_ROUTES, // unit FI
+  ...POD_ROUTES, // unit FM
 ];
 
 // Unit FB adds the platform rows (tenants, acting-as) here.

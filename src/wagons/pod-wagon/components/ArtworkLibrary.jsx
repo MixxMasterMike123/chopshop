@@ -6,14 +6,13 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { TrashIcon, PhotoIcon } from '@heroicons/react/24/outline';
-import { httpsCallable } from 'firebase/functions';
 import { CardSection, Button } from '../../../components/admin/ui';
 import StatusPill from '../../../components/admin/ui/StatusPill';
 import { deleteArtwork } from '../../../utils/podArtwork';
 import { getProfileById } from '../../../config/podProfiles';
 import { slotOf, slotLabel } from '../../../config/podSlots';
-import { functions } from '../../../firebase/config';
 import { tierTone, tierLabel } from './podTier';
+import { CAN_REPLACE, canRename, renameArtwork, revalidateArtwork, rowAction } from './artworkLibraryData';
 import ArtworkUploadModal from './ArtworkUploadModal';
 
 const formatBytes = (b) => (b ? `${(b / 1024 / 1024).toFixed(1)} MB` : '');
@@ -35,6 +34,7 @@ const ArtworkLibrary = ({
   const [replaceTarget, setReplaceTarget] = useState(null);
   const [revalidatingIds, setRevalidatingIds] = useState(() => new Set()); // artworkIds in flight
   const [bulkProgress, setBulkProgress] = useState(null); // { done, total } during Validera alla
+  const [renamingIds, setRenamingIds] = useState(() => new Set()); // artworkIds whose rename is in flight
   const items = artwork;
 
   const refresh = () => onChanged?.();
@@ -44,11 +44,7 @@ const ArtworkLibrary = ({
   // printer would get the raw original. "Validera om" runs them through the
   // server pipeline (trim + PNG + authoritative gate) and stamps ready/rejected.
   // Each row is independent — validating one never locks the others.
-  const revalidateOne = async (art) => {
-    const call = httpsCallable(functions, 'processPodArtwork');
-    const { data: result } = await call({ shopId, artworkId: art.id });
-    return result;
-  };
+  const revalidateOne = (art) => revalidateArtwork(shopId, art);
 
   const markRevalidating = (id, on) => {
     setRevalidatingIds((prev) => {
@@ -115,7 +111,7 @@ const ArtworkLibrary = ({
     mappings.forEach((mp) => {
       if (!mp.artworkId || !mp.sku) return;
       const arr = m.get(mp.artworkId) || [];
-      arr.push({ sku: mp.sku, slot: slotOf(mp), id: mp.id });
+      arr.push({ sku: mp.sku, slot: slotOf(mp), slots: mp.slotsLabel, id: mp.id });
       m.set(mp.artworkId, arr);
     });
     return m;
@@ -130,6 +126,31 @@ const ArtworkLibrary = ({
     } catch (e) {
       // Soft guard: mapped artwork can't be deleted until the mapping is removed.
       toast.error(e?.message || 'Kunde inte ta bort originalet.');
+    }
+  };
+
+  // Rename (the seller's internal name). Nothing is written when the name is
+  // unchanged or the prompt is cancelled; the row is locked while its save runs,
+  // and the library is read again after it, so the row shows what was stored.
+  const handleRename = async (art) => {
+    if (renamingIds.has(art.id)) return;
+    const typed = window.prompt('Nytt namn på originalet (lämna tomt för inget namn):', art.label || '');
+    if (typed === null) return;
+    setRenamingIds((prev) => new Set(prev).add(art.id));
+    try {
+      const saved = await renameArtwork(shopId, art, typed);
+      if (saved) {
+        toast.success('Namnet sparat');
+        refresh();
+      }
+    } catch (e) {
+      toast.error(e?.message || 'Kunde inte byta namn.');
+    } finally {
+      setRenamingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(art.id);
+        return next;
+      });
     }
   };
 
@@ -177,6 +198,12 @@ const ArtworkLibrary = ({
                     <StatusPill tone={tierTone('PASS')}>{tierLabel('PASS')}</StatusPill>
                   ) : art.status === 'rejected' ? (
                     <StatusPill tone={tierTone('FAIL')}>{tierLabel('FAIL')}</StatusPill>
+                  ) : art.status === 'processing' ? (
+                    <span className="inline-flex items-center rounded-full border border-admin-caution-dot/30 bg-admin-caution-bg px-2 py-0.5 text-[11px] font-medium text-admin-caution-text">
+                      Bearbetas…
+                    </span>
+                  ) : art.status === 'failed' ? (
+                    <StatusPill tone="danger">Misslyckades</StatusPill>
                   ) : (
                     <span className="inline-flex items-center rounded-full border border-admin-caution-dot/30 bg-admin-caution-bg px-2 py-0.5 text-[11px] font-medium text-admin-caution-text">
                       Ej omvaliderad
@@ -190,7 +217,7 @@ const ArtworkLibrary = ({
                   {isMapped && (
                     mappedPills.map((p) => (
                       <span key={p.id || `${p.sku}-${p.slot}`} className="inline-flex items-center rounded-full border border-admin-border-soft bg-admin-surface-2 px-2 py-0.5 text-[11px] text-admin-text-muted">
-                        Används av&nbsp;<span className="font-mono">{p.sku}</span>&nbsp;· {slotLabel(p.slot)}
+                        Används av&nbsp;<span className="font-mono">{p.sku}</span>&nbsp;· {p.slots || slotLabel(p.slot)}
                       </span>
                     ))
                   )}
@@ -205,8 +232,11 @@ const ArtworkLibrary = ({
                 {art.status === 'rejected' && art.validation?.reasons?.[0] && (
                   <p className="mt-0.5 text-[12px] text-admin-critical-text">{art.validation.reasons[0].message}</p>
                 )}
+                {art.status === 'failed' && (
+                  <p className="mt-0.5 text-[12px] text-admin-critical-text">Filen kunde inte bearbetas på servern — ladda upp den igen.</p>
+                )}
               </div>
-              {art.status !== 'ready' && (
+              {rowAction(art) === 'revalidate' && (
                 <button
                   onClick={() => handleRevalidate(art)}
                   disabled={revalidatingIds.has(art.id) || !!bulkProgress}
@@ -216,22 +246,45 @@ const ArtworkLibrary = ({
                   {revalidatingIds.has(art.id) ? 'Validerar…' : 'Validera om'}
                 </button>
               )}
-              <button
-                onClick={() => setReplaceTarget(art)}
-                className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2"
-                title="Byt ut filen men behåll alla kopplingar"
-              >
-                Ersätt fil
-              </button>
-              <a
-                href={art.printUrl || art.originalUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0 text-[12px] text-admin-text-muted underline hover:text-admin-text"
-                title={art.printUrl ? 'Den konverterade tryckfilen (PNG) som tryckeriet får' : 'Originalfilen (ingen tryckfil skapad ännu)'}
-              >
-                {art.printUrl ? 'Tryckfil' : 'Original'}
-              </a>
+              {rowAction(art) === 'reupload' && (
+                <button
+                  onClick={() => setUploadOpen(true)}
+                  className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2"
+                  title="Välj filen igen och skicka den till bearbetning"
+                >
+                  Ladda upp igen
+                </button>
+              )}
+              {canRename(art) && (
+                <button
+                  onClick={() => handleRename(art)}
+                  disabled={renamingIds.has(art.id)}
+                  className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2 disabled:opacity-50"
+                  title="Byt originalets interna namn"
+                >
+                  {renamingIds.has(art.id) ? 'Sparar…' : 'Byt namn'}
+                </button>
+              )}
+              {CAN_REPLACE && (
+                <button
+                  onClick={() => setReplaceTarget(art)}
+                  className="shrink-0 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-2.5 py-1 text-[12px] font-medium text-admin-text hover:bg-admin-surface-2"
+                  title="Byt ut filen men behåll alla kopplingar"
+                >
+                  Ersätt fil
+                </button>
+              )}
+              {(art.printUrl || art.originalUrl) && (
+                <a
+                  href={art.printUrl || art.originalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 text-[12px] text-admin-text-muted underline hover:text-admin-text"
+                  title={art.printUrl ? 'Den konverterade tryckfilen (PNG) som tryckeriet får' : 'Originalfilen (ingen tryckfil skapad ännu)'}
+                >
+                  {art.printUrl ? 'Tryckfil' : 'Original'}
+                </a>
+              )}
               <button
                 onClick={() => handleDelete(art)}
                 title="Ta bort"

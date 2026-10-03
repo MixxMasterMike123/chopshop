@@ -17,7 +17,7 @@ import { useShopId } from '../../../contexts/ShopContext';
 import { useShopFeatures } from '../../../contexts/ShopFeaturesContext';
 import ArtworkLibrary from './ArtworkLibrary';
 import ProductMapping from './ProductMapping';
-import DesignStudio from '../studio/DesignStudio';
+import { DesignStudio, STUDIO_AVAILABLE } from './podStudio';
 import usePodLibrary from './usePodLibrary';
 
 // Provisional-spec banner: the seeded print profiles are industry-typical
@@ -106,7 +106,7 @@ const PodAdminPage = () => {
             mappings={lib.mappings}
             loading={lib.loading}
             onChanged={lib.refresh}
-            onUseInStudio={() => setTab('studio')}
+            onUseInStudio={STUDIO_AVAILABLE ? () => setTab('studio') : undefined}
           />
         )}
         {tab === 'mapping' && (

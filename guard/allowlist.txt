@@ -298,9 +298,9 @@ src/wagons/dining-wagon/hooks/useDiningContacts.js
 src/wagons/dining-wagon/hooks/useMentionNotifications.js
 src/wagons/dining-wagon/utils/customerStatusAutomation.js
 src/wagons/dining-wagon/utils/mentionUtils.js
-src/wagons/pod-wagon/components/ArtworkLibrary.jsx
-src/wagons/pod-wagon/components/ArtworkUploadModal.jsx
-src/wagons/pod-wagon/components/ProductMapping.jsx
+src/wagons/pod-wagon/components/artworkLibraryData.js
+src/wagons/pod-wagon/components/artworkUploadData.js
+src/wagons/pod-wagon/components/productMappingData.js
 src/wagons/pod-wagon/studio/DesignStudio.jsx
 src/wagons/pod-wagon/studio/mockupUpload.js
 src/wagons/writers-wagon/WagonManifest.js

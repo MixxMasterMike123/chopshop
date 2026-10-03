@@ -158,6 +158,23 @@ const ADMIN_ALIASES = [
   // Unit FK: the platform console's printers (platform-only: prices, frames, the default printer).
   ['src/pages/platform/platformPrintersData.js', 'src/admin-app/replacements/platformPrintersData.js',
     'PlatformPrinters: GET /v1/platform/printers; status, garment prices and frames by PATCH …/:id (only the changed fields, fenced on the revision); the default printer by PUT …/default; no print-shop accounts (print portal PORT-LATER), no routing per garment (a mapping names its printer)'],
+  // Unit FM: the POD page (/admin/pod): the artwork library and the print mappings (D83).
+  ['src/wagons/pod-wagon/components/usePodLibrary.js', 'src/admin-app/replacements/podLibrary.js',
+    'PodAdminPage: the library, profiles, mappings and products from the POD and product routes, bound to the shop; a render still processing is asked again until its verdict; a failed render is said'],
+  ['src/wagons/pod-wagon/components/artworkLibraryData.js', 'src/admin-app/replacements/podArtworkLibraryData.js',
+    'ArtworkLibrary: rename by PATCH …/artwork/:id; a failed render offers "Ladda upp igen"; no "Validera om" (every artwork went through the server), no file replace and no file links (no route; the original is private)'],
+  ['src/wagons/pod-wagon/components/artworkUploadData.js', 'src/admin-app/replacements/podArtworkUploadData.js',
+    'ArtworkUploadModal: the original as a private object, POST …/pod/artwork with the rights confirmation, then the verdict polled; the browser judges nothing (the server\'s 300-DPI gate decides); still processing = said as pending'],
+  ['src/wagons/pod-wagon/components/productMappingData.js', 'src/admin-app/replacements/podProductMappingData.js',
+    'ProductMapping: product or variant → printer, article and slots; the server\'s Inköp and floor for the choice (GET …/pod/design-quote); POST/DELETE …/pod/mappings; no garment + free-text placement, no unpublishing from the browser'],
+  ['src/wagons/pod-wagon/components/podStudio.js', 'src/admin-app/replacements/podStudio.jsx',
+    'PodAdminPage\'s Studio tab: the design studio is not in this build yet (unit FN): a "kommer snart" card'],
+  ['src/utils/podArtwork.js', 'src/admin-app/replacements/podArtwork.js',
+    'the artwork library on the API; delete refused (409) while any mapping names the artwork; no in-place file replace'],
+  ['src/utils/podUpload.js', 'src/admin-app/replacements/podUpload.js',
+    'the original uploaded byte for byte as a private artwork_original object (uploads.js), not to Firebase Storage'],
+  ['src/config/podProfiles.js', 'src/admin-app/replacements/podProfiles.js',
+    'the print profiles from GET /v1/admin/pod/profiles, cached per shop, not settings/podProfiles'],
 ];
 
 function adminAliases(list) {

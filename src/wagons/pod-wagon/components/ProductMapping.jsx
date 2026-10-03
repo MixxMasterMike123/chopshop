@@ -8,14 +8,19 @@ import toast from 'react-hot-toast';
 import { TrashIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { CardSection, Button, Field, Input, Select } from '../../../components/admin/ui';
 import StatusPill from '../../../components/admin/ui/StatusPill';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../../../firebase/config';
-import { setMapping, deleteMapping } from '../../../utils/podMappings';
 import { getProfileById } from '../../../config/podProfiles';
 import { POD_SLOTS, slotOf, slotLabel } from '../../../config/podSlots';
 import { POD_GARMENTS, garmentLabel } from '../../../config/podGarments';
 import { tierTone, tierLabel } from './podTier';
 import PodProductPicker from './PodProductPicker';
+import {
+  MAPPING_INTRO,
+  PRINTER_ROUTED,
+  addMapping,
+  removeMapping,
+  selectableForMapping,
+  usePrinterChoice,
+} from './productMappingData';
 
 // Non-apparel print profiles. A poster/sticker/mug original mapped onto a garment
 // is a likely mistake — surfaced as an info chip (we can't know the product's type;
@@ -44,6 +49,9 @@ const ProductMapping = ({
   const [placement, setPlacement] = useState('');
   const [garment, setGarment] = useState(''); // print-routing key — required
   const [manualSku, setManualSku] = useState(false); // freetext escape hatch (variant SKUs)
+  // The printer, its article and the print slots (the build whose mappings
+  // name a printer article; null in the build that maps to a garment).
+  const choice = usePrinterChoice({ shopId, sku, products, mappings });
 
   const refresh = () => onChanged?.();
 
@@ -69,21 +77,16 @@ const ProductMapping = ({
     const cleanSku = sku.trim();
     if (!cleanSku) { toast.error('Ange en SKU.'); return; }
     if (!artworkId) { toast.error('Välj ett original.'); return; }
-    if (!garment) { toast.error('Välj plagg.'); return; }
+    if (!PRINTER_ROUTED && !garment) { toast.error('Välj plagg.'); return; }
     setSaving(true);
     try {
       const art = artworkById(artworkId);
-      const { replaced } = await setMapping({
-        shopId, sku: cleanSku, artworkId, profileId: art?.purpose || null, placement, placementSlot,
-        // The garment is the print-routing key. A hand-made mapping has no studio
-        // template to read it from, so the seller picks it. Since SnapWear A4 a
-        // mapping without one routes NOWHERE and checkout refuses the line — so
-        // the form requires it.
-        garment,
+      const { message } = await addMapping({
+        shopId, sku: cleanSku, artworkId, art, placement, placementSlot, garment, choice, products,
       });
-      // Same product+slot replaces that slot's artwork — say so explicitly.
-      toast.success(replaced ? `Ersatte tidigare koppling för ${slotLabel(placementSlot)}` : 'Koppling sparad');
+      toast.success(message);
       setSku(''); setArtworkId(''); setPlacement(''); setPlacementSlot('front'); setGarment('');
+      choice?.reset();
       refresh();
     } catch (e) {
       toast.error(e?.message || 'Kunde inte spara kopplingen.');
@@ -93,52 +96,24 @@ const ProductMapping = ({
   };
 
   const handleDelete = async (m) => {
-    if (!window.confirm(`Ta bort kopplingen för SKU "${m.sku}" (${slotLabel(slotOf(m))})?`)) return;
+    if (!window.confirm(`Ta bort kopplingen för SKU "${m.sku}" (${m.slotsLabel || slotLabel(slotOf(m))})?`)) return;
     try {
-      await deleteMapping(m.id);
-
-      // STRAND-GUARD (P1 2026-08-15): if this was the sku's LAST covering row,
-      // any live POD product it fed is now unprintable — unpublish it rather
-      // than let orders keep arriving for a file the printer will never get.
-      // Coverage mirrors ProductForm/the print pipeline: parent-sku mapping
-      // covers everything; otherwise every variant-group sku must be mapped.
-      const remaining = new Set(
-        mappings.filter((row) => row.id !== m.id && row.sku).map((row) => row.sku)
-      );
-      const covered = (prod) => {
-        if (prod.sku && remaining.has(prod.sku)) return true;
-        const groups = (prod.variants || []).map((v) => v?.sku).filter(Boolean);
-        return groups.length > 0 && groups.every((sku) => remaining.has(sku));
-      };
-      const stranded = products.filter((prod) =>
-        prod.isPodProduct === true
-        && prod.b2cAvailable !== false
-        && (prod.sku === m.sku || (prod.variants || []).some((v) => v?.sku === m.sku))
-        && !covered(prod)
-      );
-      for (const prod of stranded) {
-        await updateDoc(doc(db, 'products', prod.id), {
-          'availability.b2c': false,
-          updatedAt: serverTimestamp(),
-        });
-        toast(`"${prod.name || prod.sku}" avpublicerades — tryckkopplingen togs bort.`, { icon: '🔒' });
-      }
+      await removeMapping({ m, mappings, products, shopId });
 
       toast.success('Koppling borttagen');
       refresh();
     } catch (e) {
-      toast.error('Kunde inte ta bort kopplingen.');
+      toast.error(e?.userMessage || 'Kunde inte ta bort kopplingen.');
     }
   };
 
   // artwork eligible to attach: not FAIL (a seller can still pick, but we surface tier)
-  const selectableArtwork = artwork;
+  const selectableArtwork = artwork.filter(selectableForMapping);
 
   return (
     <CardSection title="Manuella tryckkopplingar">
       <p className="mb-3 text-[13px] text-admin-text-muted">
-        Designstudion kopplar motiv och placering automatiskt när en produkt skapas eller uppdateras.
-        Använd bara den här avancerade vyn för att reparera en äldre produkt eller koppla en produkt som inte skapats i Designstudion.
+        {MAPPING_INTRO}
       </p>
 
       {/* Add-row form. A product can carry SEVERAL originals — one per placering
@@ -165,29 +140,80 @@ const ProductMapping = ({
             ))}
           </Select>
         </Field>
-        <Field label="Plagg" htmlFor="map-garment">
-          <Select id="map-garment" value={garment} onChange={(e) => setGarment(e.target.value)}>
-            <option value="">Välj plagg…</option>
-            {POD_GARMENTS.map((g) => (
-              <option key={g.id} value={g.id}>{g.label}</option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Placering" htmlFor="map-slot">
-          <Select id="map-slot" value={placementSlot} onChange={(e) => setPlacementSlot(e.target.value)}>
-            {POD_SLOTS.map((s) => (
-              <option key={s.id} value={s.id}>{s.label}</option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Detalj (valfritt)" htmlFor="map-place">
-          <Input id="map-place" value={placement} onChange={(e) => setPlacement(e.target.value)} placeholder="t.ex. Centrerat på bröstet, 25 cm" />
-        </Field>
+        {PRINTER_ROUTED ? (
+          <>
+            {/* The mapping names the printer, its article (the physical blank)
+                and the print slots; the garment follows from the article. */}
+            <Field label="Tryckeri" htmlFor="map-printer">
+              <Select id="map-printer" value={choice.printerId} onChange={(e) => choice.setPrinterId(e.target.value)} disabled={saving}>
+                <option value="">{choice.printersLoading ? 'Hämtar tryckerier…' : 'Välj tryckeri…'}</option>
+                {choice.printers.map((p) => (
+                  <option key={p.printerId} value={p.printerId}>{p.name}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Artikel" htmlFor="map-article">
+              <Select id="map-article" value={choice.articleSku} onChange={(e) => choice.setArticleSku(e.target.value)} disabled={saving || !choice.printerId}>
+                <option value="">Välj artikel…</option>
+                {choice.articles.map((a) => (
+                  <option key={a.sku} value={a.sku}>{a.text}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Placering" htmlFor={choice.slotOptions[0] ? `map-slot-${choice.slotOptions[0].id}` : undefined}>
+              {choice.slotOptions.length === 0 ? (
+                <p className="py-1.5 text-[12px] text-admin-text-faint">Välj en artikel först.</p>
+              ) : (
+                <div className="space-y-1 py-0.5">
+                  {choice.slotOptions.map((s) => (
+                    <label key={s.id} htmlFor={`map-slot-${s.id}`} className="flex items-center gap-2 text-[13px] text-admin-text">
+                      <input
+                        id={`map-slot-${s.id}`}
+                        type="checkbox"
+                        checked={s.checked}
+                        onChange={() => choice.toggleSlot(s.id)}
+                        disabled={saving}
+                      />
+                      {s.label}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </Field>
+          </>
+        ) : (
+          <>
+            <Field label="Plagg" htmlFor="map-garment">
+              <Select id="map-garment" value={garment} onChange={(e) => setGarment(e.target.value)}>
+                <option value="">Välj plagg…</option>
+                {POD_GARMENTS.map((g) => (
+                  <option key={g.id} value={g.id}>{g.label}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Placering" htmlFor="map-slot">
+              <Select id="map-slot" value={placementSlot} onChange={(e) => setPlacementSlot(e.target.value)}>
+                {POD_SLOTS.map((s) => (
+                  <option key={s.id} value={s.id}>{s.label}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Detalj (valfritt)" htmlFor="map-place">
+              <Input id="map-place" value={placement} onChange={(e) => setPlacement(e.target.value)} placeholder="t.ex. Centrerat på bröstet, 25 cm" />
+            </Field>
+          </>
+        )}
         <div className="flex items-end">
           <Button variant="primary" onClick={handleAdd} disabled={saving} className="w-full">
             {saving ? 'Sparar…' : 'Lägg till'}
           </Button>
         </div>
+        {/* The server's ONE number for the choice (Inköp and the price floor), or why it has none. */}
+        {PRINTER_ROUTED && choice.note && (
+          <p className={`text-[12px] sm:col-span-6 ${choice.note.tone === 'caution' ? 'text-admin-caution-text' : 'text-admin-text-muted'}`}>
+            {choice.note.text}
+          </p>
+        )}
       </div>
 
       {loading ? (
@@ -213,7 +239,7 @@ const ProductMapping = ({
                     <span className="truncate font-mono text-[13px] font-medium text-admin-text">{m.sku}</span>
                     {/* Slot chip — which physical placement this coupling targets. */}
                     <span className="inline-flex items-center rounded-full border border-admin-border-soft bg-admin-surface-2 px-2 py-0.5 text-[11px] font-medium text-admin-text-muted">
-                      {slotLabel(slot)}
+                      {m.slotsLabel || slotLabel(slot)}
                     </span>
                     {art && <StatusPill tone={tierTone(art.validation?.tier)}>{tierLabel(art.validation?.tier)}</StatusPill>}
                     {isFail && (
@@ -236,8 +262,14 @@ const ProductMapping = ({
                         <ExclamationTriangleIcon className="h-3.5 w-3.5" /> Originalet saknas
                       </span>
                     )}
+                    {/* Why this mapping cannot be produced (paused, or its printer article is gone). */}
+                    {m.problem && (
+                      <span className="inline-flex items-center gap-1 text-[12px] text-admin-caution-text">
+                        <ExclamationTriangleIcon className="h-3.5 w-3.5" /> {m.problem}
+                      </span>
+                    )}
                     {/* No garment = no printer (SnapWear A4) — checkout refuses the line. */}
-                    {!m.garment && (
+                    {!m.garment && !m.problem && (
                       <span className="inline-flex items-center gap-1 text-[12px] text-admin-caution-text">
                         <ExclamationTriangleIcon className="h-3.5 w-3.5" /> Plagg saknas – lägg till kopplingen igen med plagg valt, annars kan den inte skickas till tryckeri
                       </span>

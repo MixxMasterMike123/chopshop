@@ -1,0 +1,339 @@
+{
+ "_note": "INVENTED DATA ONLY (CP5 unit FM): print profiles, one invented printer with its articles and frames, and each shop's artwork and mappings for the dev API (pod-dev.mjs). `hiddenPrices` never leaves pod-dev.mjs: the routes answer only inkopMinor and priceFloorMinor, as the Worker does.",
+ "profiles": [
+  {
+   "profileId": "apparel_dtg",
+   "label": "Textiltryck (t-shirt, hoodie)",
+   "acceptedFormats": [
+    {
+     "ext": "png"
+    },
+    {
+     "ext": "jpg"
+    },
+    {
+     "ext": "jpeg"
+    },
+    {
+     "ext": "tif"
+    },
+    {
+     "ext": "tiff"
+    },
+    {
+     "ext": "pdf"
+    }
+   ],
+   "maxFileMb": 100,
+   "minDpi": 300,
+   "printAreaMm": {
+    "w": 300,
+    "h": 400
+   },
+   "active": true,
+   "sortOrder": 1
+  },
+  {
+   "profileId": "poster_large",
+   "label": "Affisch (stor)",
+   "acceptedFormats": [
+    {
+     "ext": "png"
+    },
+    {
+     "ext": "jpg"
+    },
+    {
+     "ext": "pdf"
+    }
+   ],
+   "maxFileMb": 100,
+   "minDpi": 300,
+   "printAreaMm": {
+    "w": 500,
+    "h": 700
+   },
+   "active": true,
+   "sortOrder": 2
+  }
+ ],
+ "printers": [
+  {
+   "printerId": "dev-printer",
+   "name": "Testtryckeriet",
+   "status": "active",
+   "currency": "SEK",
+   "capabilities": {
+    "models": {
+     "tee-unisex": {
+      "garment": "tee",
+      "name": "Unisex t-shirt",
+      "printAreasMm": {
+       "front": {
+        "w": 250,
+        "h": 350
+       },
+       "back": {
+        "w": 300,
+        "h": 400
+       }
+      }
+     },
+     "hoodie-classic": {
+      "garment": "hoodie",
+      "name": "Klassisk hoodie",
+      "printAreasMm": {
+       "front": {
+        "w": 250,
+        "h": 300
+       },
+       "back": {
+        "w": 300,
+        "h": 400
+       }
+      },
+      "provisional": true
+     },
+     "cap-low": {
+      "garment": "cap",
+      "name": "Keps",
+      "printAreasMm": {
+       "front": {
+        "w": 100,
+        "h": 50
+       }
+      }
+     }
+    },
+    "skus": {
+     "DEV-TEE-BLK-S": {
+      "label": "Svart / S",
+      "model": "tee-unisex"
+     },
+     "DEV-TEE-BLK-M": {
+      "label": "Svart / M",
+      "model": "tee-unisex"
+     },
+     "DEV-TEE-BLK-L": {
+      "label": "Svart / L",
+      "model": "tee-unisex"
+     },
+     "DEV-TEE-WHT-S": {
+      "label": "Vit / S",
+      "model": "tee-unisex"
+     },
+     "DEV-TEE-WHT-M": {
+      "label": "Vit / M",
+      "model": "tee-unisex"
+     },
+     "DEV-TEE-SND-M": {
+      "label": "Sand / M",
+      "model": "tee-unisex"
+     },
+     "DEV-HOOD-BLK-M": {
+      "label": "Svart / M",
+      "model": "hoodie-classic"
+     },
+     "DEV-HOOD-BLK-L": {
+      "label": "Svart / L",
+      "model": "hoodie-classic"
+     },
+     "DEV-CAP-BLK": {
+      "label": "Svart",
+      "model": "cap-low"
+     }
+    }
+   },
+   "hiddenPrices": {
+    "DEV-TEE-BLK-S": {
+     "blank": 6000,
+     "slots": {
+      "front": 4000,
+      "back": 4000,
+      "pocket": 2000
+     }
+    },
+    "DEV-TEE-BLK-M": {
+     "blank": 6000,
+     "slots": {
+      "front": 4000,
+      "back": 4000,
+      "pocket": 2000
+     }
+    },
+    "DEV-TEE-BLK-L": {
+     "blank": 6000,
+     "slots": {
+      "front": 4000,
+      "back": 4000,
+      "pocket": 2000
+     }
+    },
+    "DEV-TEE-WHT-S": {
+     "blank": 6000,
+     "slots": {
+      "front": 4000,
+      "back": 4000,
+      "pocket": 2000
+     }
+    },
+    "DEV-TEE-WHT-M": {
+     "blank": 6000,
+     "slots": {
+      "front": 4000,
+      "back": 4000,
+      "pocket": 2000
+     }
+    },
+    "DEV-TEE-SND-M": {
+     "blank": 6500,
+     "slots": {
+      "front": 4000,
+      "back": 4000,
+      "pocket": 2000
+     }
+    },
+    "DEV-HOOD-BLK-M": {
+     "blank": 38000,
+     "slots": {
+      "front": 4000,
+      "back": 4000,
+      "pocket": 2000
+     }
+    },
+    "DEV-HOOD-BLK-L": {
+     "blank": 38000,
+     "slots": {
+      "front": 4000,
+      "back": 4000,
+      "pocket": 2000
+     }
+    }
+   }
+  }
+ ],
+ "shops": {
+  "test-shop-a": {
+   "artwork": [
+    {
+     "artworkId": "art-fjall",
+     "label": "Fjällogga – bröst",
+     "profileId": "apparel_dtg",
+     "status": "ready",
+     "widthPx": 3600,
+     "heightPx": 3600,
+     "effectiveDpi": 366,
+     "originalObjectId": "obj-art-fjall",
+     "createdAt": 1759312800000,
+     "rightsConfirmedAt": 1759312800000,
+     "createdBy": "user-tenant-admin",
+     "notices": [],
+     "reasons": [],
+     "preview": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNDAiIGhlaWdodD0iMjQwIiB2aWV3Qm94PSIwIDAgMjQwIDI0MCI+PHJlY3Qgd2lkdGg9IjI0MCIgaGVpZ2h0PSIyNDAiIGZpbGw9IiNmNGVmZTYiLz48Y2lyY2xlIGN4PSIxMjAiIGN5PSIxMDQiIHI9IjU2IiBmaWxsPSJub25lIiBzdHJva2U9IiMyZDRhM2UiIHN0cm9rZS13aWR0aD0iMTAiLz48cGF0aCBkPSJNNTIgMTk2IEwxMDQgMTIwIEwxMzYgMTY0IEwxNTYgMTQwIEwxOTYgMTk2IFoiIGZpbGw9IiMyZDRhM2UiLz48dGV4dCB4PSIxMjAiIHk9IjIyNiIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiMyZDRhM2UiPkZKw4RMTDwvdGV4dD48L3N2Zz4=",
+     "object": {
+      "contentType": "image/png",
+      "sizeBytes": 4194304,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+     }
+    },
+    {
+     "artworkId": "art-rygg",
+     "label": "Ryggtryck stort",
+     "profileId": "apparel_dtg",
+     "status": "ready",
+     "widthPx": 4200,
+     "heightPx": 5600,
+     "effectiveDpi": 355,
+     "originalObjectId": "obj-art-rygg",
+     "createdAt": 1759226400000,
+     "rightsConfirmedAt": 1759226400000,
+     "createdBy": "user-tenant-admin",
+     "notices": [
+      {
+       "code": "opaque",
+       "message": "Bilden saknar transparent bakgrund — hela rektangeln trycks, inklusive eventuell vit bakgrund."
+      }
+     ],
+     "reasons": [],
+     "preview": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNDAiIGhlaWdodD0iMjQwIiB2aWV3Qm94PSIwIDAgMjQwIDI0MCI+PHJlY3Qgd2lkdGg9IjI0MCIgaGVpZ2h0PSIyNDAiIGZpbGw9IiMxZjI5MzMiLz48Y2lyY2xlIGN4PSIxMjAiIGN5PSIxMDQiIHI9IjU2IiBmaWxsPSJub25lIiBzdHJva2U9IiNmNWM1NDIiIHN0cm9rZS13aWR0aD0iMTAiLz48cGF0aCBkPSJNNTIgMTk2IEwxMDQgMTIwIEwxMzYgMTY0IEwxNTYgMTQwIEwxOTYgMTk2IFoiIGZpbGw9IiNmNWM1NDIiLz48dGV4dCB4PSIxMjAiIHk9IjIyNiIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiNmNWM1NDIiPlJZR0c8L3RleHQ+PC9zdmc+",
+     "object": {
+      "contentType": "image/jpeg",
+      "sizeBytes": 7340032,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+     }
+    },
+    {
+     "artworkId": "art-skarm",
+     "label": "Skärmdump logga",
+     "profileId": "apparel_dtg",
+     "status": "rejected",
+     "widthPx": 800,
+     "heightPx": 600,
+     "effectiveDpi": 72,
+     "originalObjectId": "obj-art-skarm",
+     "createdAt": 1759140000000,
+     "rightsConfirmedAt": 1759140000000,
+     "createdBy": "user-other",
+     "notices": [],
+     "reasons": [
+      {
+       "code": "resolution_too_low",
+       "message": "Motivet håller bara 72 DPI i största tryckstorlek (minst 300 DPI krävs). Ladda upp originalfilen i full upplösning."
+      }
+     ],
+     "preview": null,
+     "object": {
+      "contentType": "image/png",
+      "sizeBytes": 245760,
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+     }
+    },
+    {
+     "artworkId": "art-gammal",
+     "label": null,
+     "profileId": "apparel_dtg",
+     "status": "ready",
+     "widthPx": 3000,
+     "heightPx": 3000,
+     "effectiveDpi": 305,
+     "originalObjectId": "obj-art-gammal",
+     "createdAt": 1758535200000,
+     "rightsConfirmedAt": null,
+     "createdBy": null,
+     "notices": [],
+     "reasons": [],
+     "preview": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNDAiIGhlaWdodD0iMjQwIiB2aWV3Qm94PSIwIDAgMjQwIDI0MCI+PHJlY3Qgd2lkdGg9IjI0MCIgaGVpZ2h0PSIyNDAiIGZpbGw9IiNmZmZmZmYiLz48Y2lyY2xlIGN4PSIxMjAiIGN5PSIxMDQiIHI9IjU2IiBmaWxsPSJub25lIiBzdHJva2U9IiM3YTNiMmUiIHN0cm9rZS13aWR0aD0iMTAiLz48cGF0aCBkPSJNNTIgMTk2IEwxMDQgMTIwIEwxMzYgMTY0IEwxNTYgMTQwIEwxOTYgMTk2IFoiIGZpbGw9IiM3YTNiMmUiLz48dGV4dCB4PSIxMjAiIHk9IjIyNiIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiM3YTNiMmUiPkxPR0dBPC90ZXh0Pjwvc3ZnPg==",
+     "object": null
+    }
+   ],
+   "mappings": [
+    {
+     "mappingId": "map-tee-svart-s",
+     "productId": "prod-tee",
+     "variantId": "var-tee-svart-s",
+     "artworkId": "art-fjall",
+     "printerId": "dev-printer",
+     "sku": "DEV-TEE-BLK-S",
+     "slots": [
+      "front"
+     ],
+     "status": "active",
+     "suspendedReason": null
+    },
+    {
+     "mappingId": "map-tee-svart-m",
+     "productId": "prod-tee",
+     "variantId": "var-tee-svart-m",
+     "artworkId": "art-fjall",
+     "printerId": "dev-printer",
+     "sku": "DEV-TEE-BLK-M",
+     "slots": [
+      "front"
+     ],
+     "status": "suspended",
+     "suspendedReason": "slot_not_printable"
+    }
+   ]
+  }
+ }
+}
