@@ -107,6 +107,25 @@ test('429 waits for Retry-After (bounded), then answers', async () => {
   }
 });
 
+test('a sign-in the rate limit answers is tried again after Retry-After, for both identities', async () => {
+  const api = await startFakeStagingApi({
+    faults: [{ method: 'POST', path: /^\/api\/auth\/sign-in\/email$/, retryAfter: 45, status: 429, times: 2 }],
+  });
+  try {
+    const sleeps = [];
+    const session = createApiSession({ apiOrigin: api.origin, sleep: async (ms) => sleeps.push(ms) });
+    const { email, password } = api.state.platformUser;
+    assert.equal((await session.signIn({ email, password })).userId, api.state.platformUser.id);
+    assert.deepEqual(sleeps, [45_000, 45_000]);
+    assert.equal(session.stats.rateLimitWaits, 2);
+    // A limit that never lifts is refused, not waited on for ever.
+    api.state.faults.push({ method: 'POST', path: /sign-in/, retryAfter: 1, status: 429, times: 99 });
+    await assert.rejects(session.signInAs({ email, password }), /sign-in failed: HTTP 429/);
+  } finally {
+    await api.close();
+  }
+});
+
 test('preflight: /health must say staging and /ready must be on the migration or later', async () => {
   const old = await startFakeStagingApi({ migration: '0036_old' });
   const fresh = await startFakeStagingApi({ migration: '0042_new' });

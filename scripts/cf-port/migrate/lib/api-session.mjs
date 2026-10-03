@@ -202,18 +202,25 @@ export function createApiSession({
 
   /** A sign-in whose cookie is handed back instead of kept (a second identity). */
   async function signInAs({ email, password }) {
-    stats.requests += 1;
     let response;
-    try {
-      response = await fetchImpl(`${apiOrigin}/api/auth/sign-in/email`, {
-        body: JSON.stringify({ email, password }),
-        headers: { 'content-type': 'application/json', origin: apiOrigin },
-        method: 'POST',
-        redirect: 'manual',
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error) {
-      throw new RefusedError(`sign-in: ${error?.name === 'TimeoutError' ? 'timeout' : 'network error'}`);
+    // The sign-in has a rate limit of its own: a 429 waits, as `request` does.
+    for (let wait = 0; ; wait += 1) {
+      stats.requests += 1;
+      try {
+        response = await fetchImpl(`${apiOrigin}/api/auth/sign-in/email`, {
+          body: JSON.stringify({ email, password }),
+          headers: { 'content-type': 'application/json', origin: apiOrigin },
+          method: 'POST',
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        throw new RefusedError(`sign-in: ${error?.name === 'TimeoutError' ? 'timeout' : 'network error'}`);
+      }
+      if (response.status !== 429 || wait >= MAX_RATE_LIMIT_WAITS) break;
+      stats.rateLimitWaits += 1;
+      await response.arrayBuffer().catch(() => undefined);
+      await sleep(retryAfterSeconds(response) * 1_000);
     }
     if (response.status !== 200) {
       await response.arrayBuffer().catch(() => undefined);
