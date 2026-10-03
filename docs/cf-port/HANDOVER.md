@@ -10,10 +10,25 @@ Mikael paused the work: 87 % of the week and 83 % of the week's Fable were used 
 
 **Codex runs detached from the session:** `~/chopshop-export/codex-2026-09-28/run.sh` waits for the quota (19:51) and reviews `dacad8d7`, `91b58ced`, `d3c48d9f`, `287c76c7` at medium effort. Its logs are `~/chopshop-export/codex-2026-09-28/codex-<sha>.log`, and `done.txt` holds one line per finished review. If `done.txt` has fewer than four lines, or a log ends in "usage limit", run that commit again.
 
+**Update 2026-10-03 16:45, just before the reset. Codex has now read all four commits** (the run of Monday lost three to its usage limit; a second run today finished them; logs in `~/chopshop-export/codex-2026-09-28/`). `dacad8d7` and `287c76c7`: no finding. **Six findings, all P2, all in the import TOOLS, none in Worker code or in what a visitor is served:**
+
+| Commit | Finding | Does it touch what is on staging? |
+|---|---|---|
+| S1 `91b58ced` | `copy-sources.mjs:235`: one source file used both as a product image and as a branding image is copied once, as a product image, which the store identity cannot name | No: the export holds no such file |
+| S1 | `staging-legal.mjs:333`: a run that set the placeholder return address and stopped before the adoption renders the next run's pages WITHOUT the address | No: for gif-sundsvall and melodie-mc the address and the adoption went through in one run; ninetone and sillmans had their own |
+| S1 | `staging-legal.mjs:406`: a publish whose answer is lost is not written to the journal, so `--unpublish-after-review` would not hide that shop | No: the three publishes answered and are in the journal |
+| S2 `d3c48d9f` | `verify-catalogue.mjs:177`: a product the screening blocks makes the projection check fail for a right import | No: the screening blocked none, the check passed |
+| S2 | `verify-catalogue.mjs:181`: a shop that held a published product before the import fails the projection check | No: the four shops held none |
+| S2 | `verify-catalogue.mjs:211`: a menu the plan writes is not compared afterwards | To check: ninetone's menu was already in the target, the other three wrote none (the plan's counts) |
+
+They are to be fixed before the tools run again (production, or a second staging run), in one commit with a test each, then Codex on the fix. **They do not hold back the deploy of the locale files,** but HEAD must be attested for it, so fix first.
+
+**The model roles from 2026-10-03 (Mikael):** Sonnet (5.5 is in his model list) for more subtasks: mechanical page swaps after the first of a kind, scripts, tests, inventories. Opus for money, tenancy, legal rules, schema, the product form, the design studio. **Fable orchestrates and audits ALL code before every deploy and before the next phase; Codex is the second reviewer.** Each Sonnet builder states its model id in the first line of its report. Note each builder's tokens and the review rounds it needed. Ask Mikael before starting any builder.
+
 **To resume, in this order:**
 
 1. `git status --short` (expect nothing), `git log --oneline -1` (expect the commit of this entry).
-2. Read Codex's four logs: the verdict is the text after the last line that reads `codex`. Fix what is real, one commit, Codex on the fix.
+2. Fix the six findings above (the table is the reading of Codex's logs; the full text is in the logs): the verdict is the text after the last line that reads `codex`. Fix what is real, one commit, Codex on the fix.
 3. The gate: `node --test "scripts/cf-port/migrate/test/*.test.mjs"` (430), `node --test src/api/*.test.mjs src/storefront/adapters/*.test.mjs src/storefront/dev/*.test.mjs` (120), `node cloudflare/web/check-storefront-build.mjs`, `npx vite build`, `node guard/guards.test.mjs`. The Worker's suite only if Worker code changed (90 files, 3893).
 4. Attest HEAD (`git notes --ref=reviews add -m "codex: PASS" -m "fable: PASS" HEAD`, `git push origin refs/notes/reviews`), then `scripts/cf-deploy.sh staging web`: it ships the locale files. No Worker code changed since `895c24d9`.
 5. Shoot the twelve pages again (`docs/cf-port/baseline/capture-storefront.sh <out> https://chopshop-web-stg.kent-ee2.workers.dev`) and compare; the texts of buttons and labels should then be the shop's own.
