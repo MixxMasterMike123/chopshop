@@ -1,9 +1,10 @@
 // The shop admin's router (CP5 brief FA.4): every address of the admin tree.
 // The routes and guards mirror src/App.jsx's admin branch for the launch-scope
 // pages (CP5_GAP_ANALYSIS.md §1a); a page that left the build (§1b: affiliate,
-// customers, marketing material, discount codes, reviews, content studio, tax
-// data, the wagons, the user editor, the landing page) has no route, and its
-// address goes back to the root as any unknown address did.
+// customers, marketing material, reviews, content studio, tax data, the
+// wagons, the user editor, the landing page) has no route, and its address
+// goes back to the root as any unknown address did. Discount codes came back
+// in CP8-DC (D81 reversed for that key only), gated by `features.discountCodes`.
 //
 // `/` → /login when signed out, the dashboard when signed in (D103). A
 // platform user reaches the admin tree only to work AS a shop: without an
@@ -46,6 +47,7 @@ export const ADMIN_ROUTES = [
   { path: '/admin/plattformsvillkor', page: 'AdminPlatformTerms', guard: 'admin' },
   { path: '/admin/payments', page: 'AdminPayments', guard: 'admin' },
   { path: '/admin/pod', page: 'PodAdminPage', guard: 'admin', feature: 'pod' },
+  { path: '/admin/discount-codes', page: 'AdminDiscountCodes', guard: 'admin', feature: 'discountCodes' }, // CP8-DC
   { path: '/admin/redirects', page: 'AdminRedirects', guard: 'admin' }, // CP5-FL: new page, no older page
 ];
 

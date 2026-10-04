@@ -1,22 +1,21 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { db } from '../../firebase/config';
-import {
-  collection,
-  getDocs,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  query,
-  where,
-  orderBy,
-  serverTimestamp,
-} from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import AppLayout from '../../components/layout/AppLayout';
 import { useShopId } from '../../contexts/ShopContext';
-import { withShopId } from '../../config/withShopId';
-import { normalizeAffiliateCode } from '../../utils/affiliateCalculations';
+// The page's data, one module per build (CP8-DC): Firebase in the older
+// build, the API in the admin build (vite.admin.config.js ADMIN_ALIASES).
+import {
+  SUPPORTS_DELETE,
+  deleteDiscountCode,
+  fmtDate,
+  inputToDate,
+  loadDiscountCodes,
+  loadDiscountProducts,
+  normalizeCode,
+  saveDiscountCode,
+  setDiscountCodeActive,
+  tsToInput,
+} from './adminDiscountCodesData';
 import {
   Page,
   MetricsBar,
@@ -63,27 +62,9 @@ const AdminDiscountCodes = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const codesQuery = query(
-        collection(db, 'discountCodes'),
-        where('shopId', '==', shopId),
-        orderBy('createdAt', 'desc')
-      );
-      const snap = await getDocs(codesQuery);
-      setCodes(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-
-      // Products for the scope='products' picker (active only, name-sorted) —
-      // same pattern as CampaignCreate.fetchProducts.
-      const productsQuery = query(
-        collection(db, 'products'),
-        where('shopId', '==', shopId),
-        orderBy('name', 'asc')
-      );
-      const pSnap = await getDocs(productsQuery);
-      setProducts(
-        pSnap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((p) => p.isActive !== false)
-      );
+      setCodes(await loadDiscountCodes(shopId));
+      // Products for the scope='products' picker.
+      setProducts(await loadDiscountProducts(shopId));
     } catch (error) {
       console.error('Error fetching discount codes:', error);
       toast.error('Kunde inte hämta rabattkoder.');
@@ -139,9 +120,14 @@ const AdminDiscountCodes = () => {
   const handleSave = async () => {
     // Codes are normalized UPPERCASE (trimmed) — matches the server lookup +
     // affiliate convention, so a lowercase entry still validates at checkout.
-    const normalizedCode = normalizeAffiliateCode(form.code);
+    const normalizedCode = normalizeCode(form.code);
     if (!normalizedCode) {
       toast.error('Ange en kod.');
+      return;
+    }
+    // A code with a space in it cannot be told to a buyer (the server refuses it).
+    if (/[\s\u0000-\u001f\u007f-\u009f]/.test(normalizedCode)) {
+      toast.error('Koden får inte innehålla mellanslag.');
       return;
     }
     const value = Number(form.value);
@@ -177,56 +163,34 @@ const AdminDiscountCodes = () => {
     setSaving(true);
     const toastId = toast.loading(editingId ? 'Sparar…' : 'Skapar kod…');
     try {
-      // Uniqueness (code, shopId) enforced app-layer: query before create.
-      // On edit, an identical code on the SAME doc is allowed.
-      const dupQuery = query(
-        collection(db, 'discountCodes'),
-        where('shopId', '==', shopId),
-        where('code', '==', normalizedCode)
-      );
-      const dupSnap = await getDocs(dupQuery);
-      const clash = dupSnap.docs.find((d) => d.id !== editingId);
-      if (clash) {
-        toast.error('En kod med detta namn finns redan.', { id: toastId });
-        setSaving(false);
-        return;
-      }
-
-      const payload = {
-        code: normalizedCode,
-        type: form.type,
-        value,
-        scope: form.scope,
-        productIds: form.scope === 'products' ? form.productIds : [],
-        minSpend,
-        startsAt: startsAt || null,
-        endsAt: endsAt || null,
-        maxUses,
-        active: !!form.active,
-      };
-
-      if (editingId) {
-        await updateDoc(doc(db, 'discountCodes', editingId), payload);
-        toast.success('Rabattkod uppdaterad.', { id: toastId });
-      } else {
-        await addDoc(
-          collection(db, 'discountCodes'),
-          withShopId(
-            {
-              ...payload,
-              usedCount: 0,
-              createdAt: serverTimestamp(),
-            },
-            shopId
-          )
-        );
-        toast.success('Rabattkod skapad.', { id: toastId });
-      }
+      await saveDiscountCode({
+        shopId,
+        id: editingId,
+        form: {
+          code: normalizedCode,
+          type: form.type,
+          value,
+          scope: form.scope,
+          productIds: form.productIds,
+          minSpend,
+          startsDay: form.startsAt,
+          endsDay: form.endsAt,
+          maxUses,
+          active: !!form.active,
+        },
+      });
+      toast.success(editingId ? 'Rabattkod uppdaterad.' : 'Rabattkod skapad.', { id: toastId });
       setModalOpen(false);
       fetchData();
     } catch (error) {
-      console.error('Error saving discount code:', error);
-      toast.error('Kunde inte spara rabattkoden.', { id: toastId });
+      if (error?.code === 'conflict') {
+        toast.error('En kod med detta namn finns redan.', { id: toastId });
+      } else if (error?.code === 'discount_code_in_use') {
+        toast.error('Koden har redan använts och kan inte byta namn. Skapa en ny kod i stället.', { id: toastId });
+      } else {
+        console.error('Error saving discount code:', error);
+        toast.error('Kunde inte spara rabattkoden.', { id: toastId });
+      }
     } finally {
       setSaving(false);
     }
@@ -234,7 +198,7 @@ const AdminDiscountCodes = () => {
 
   const handleToggleActive = async (c) => {
     try {
-      await updateDoc(doc(db, 'discountCodes', c.id), { active: !(c.active !== false) });
+      await setDiscountCodeActive(shopId, c, !(c.active !== false));
       setCodes((prev) =>
         prev.map((x) => (x.id === c.id ? { ...x, active: !(c.active !== false) } : x))
       );
@@ -248,7 +212,7 @@ const AdminDiscountCodes = () => {
     if (!window.confirm(`Radera rabattkoden "${c.code}"?`)) return;
     const toastId = toast.loading('Raderar…');
     try {
-      await deleteDoc(doc(db, 'discountCodes', c.id));
+      await deleteDiscountCode(shopId, c);
       toast.success('Rabattkod raderad.', { id: toastId });
       setCodes((prev) => prev.filter((x) => x.id !== c.id));
     } catch (error) {
@@ -309,6 +273,11 @@ const AdminDiscountCodes = () => {
         <span className="tabular-nums text-admin-text-muted">
           {(c.usedCount || 0).toLocaleString('sv-SE')}
           {c.maxUses != null ? ` / ${c.maxUses}` : ''}
+          {c.heldCount > 0 && (
+            <span className="block text-[12px] text-admin-text-faint">
+              ({c.heldCount.toLocaleString('sv-SE')} i kassan)
+            </span>
+          )}
         </span>
       ),
     },
@@ -339,15 +308,18 @@ const AdminDiscountCodes = () => {
           >
             <PencilIcon className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            onClick={() => handleDelete(c)}
-            title="Radera"
-            aria-label="Radera"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-admin-el)] text-admin-text-faint hover:bg-admin-surface-2 hover:text-red-600"
-          >
-            <TrashIcon className="h-4 w-4" />
-          </button>
+          {/* The admin build has no delete: a code is deactivated (CP8-DC). */}
+          {SUPPORTS_DELETE && (
+            <button
+              type="button"
+              onClick={() => handleDelete(c)}
+              title="Radera"
+              aria-label="Radera"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-admin-el)] text-admin-text-faint hover:bg-admin-surface-2 hover:text-red-600"
+            >
+              <TrashIcon className="h-4 w-4" />
+            </button>
+          )}
         </div>
       ),
     },
@@ -475,7 +447,7 @@ const AdminDiscountCodes = () => {
                     onChange={(e) => setForm((p) => ({ ...p, startsAt: e.target.value }))}
                   />
                 </Field>
-                <Field label="Slutdatum" help="Valfritt.">
+                <Field label="Slutdatum" help="Valfritt. Koden gäller till och med detta datum.">
                   <Input
                     type="date"
                     value={form.endsAt}
@@ -522,26 +494,5 @@ const AdminDiscountCodes = () => {
     </AppLayout>
   );
 };
-
-// Firestore Timestamp | Date | null → YYYY-MM-DD for <input type="date">.
-function tsToInput(ts) {
-  if (!ts) return '';
-  const d = ts.toDate ? ts.toDate() : ts instanceof Date ? ts : null;
-  if (!d) return '';
-  return d.toISOString().slice(0, 10);
-}
-// YYYY-MM-DD string → Date (local midnight) | null.
-function inputToDate(s) {
-  if (!s) return null;
-  const d = new Date(`${s}T00:00:00`);
-  return isNaN(d.getTime()) ? null : d;
-}
-// Firestore Timestamp | Date | null → localized display date.
-function fmtDate(ts) {
-  if (!ts) return '';
-  const d = ts.toDate ? ts.toDate() : ts instanceof Date ? ts : null;
-  if (!d) return '';
-  return d.toLocaleDateString('sv-SE');
-}
 
 export default AdminDiscountCodes;

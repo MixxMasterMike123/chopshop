@@ -489,7 +489,8 @@ describe("GET /v1/admin/shop", () => {
       "enable",
     );
     const on = (await expectJson<ShopBody>(await shop(shopB.adminCookie, shopB.tenantId), 200, "on")).shop.features;
-    expect(on).toMatchObject({ discountCodes: false, pod: true, productReviews: false });
+    // CP8-DC: discountCodes is ported now (D81 reversed for this key only).
+    expect(on).toMatchObject({ discountCodes: true, pod: true, productReviews: false });
 
     await expectJson(
       await platform(world, "PUT", `/v1/platform/tenants/${shopB.tenantId}/features`, {
@@ -513,7 +514,7 @@ describe("GET /v1/admin/shop", () => {
       { enabled: true, key: "affiliate" },
     ]);
     expect(features.pod).toBe(true);
-    expect(features.discountCodes).toBe(false);
+    expect(features.discountCodes).toBe(true);
     expect(features.affiliate).toBe(false);
     expect(features.pickup).toBe(true);
   });

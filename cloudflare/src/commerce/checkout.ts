@@ -24,12 +24,17 @@ import {
   sameRecipient,
 } from "./recipient";
 import { withholdMinorFor } from "../pod/pod-quote";
+import { isFeatureEnabled } from "../platform/tenant-config";
 import type { ResolvedDiscount } from "./discount-codes";
 import {
+  DISCOUNT_HOLD_TTL_MS,
+  isDiscountExhausted,
   isValidDiscountCode,
+  MIN_CHARGE_MINOR,
   normalizeDiscountCode,
   resolveDiscount,
 } from "./discount-codes";
+import { buildConnectCharge, readCheckoutCommissionBps, readWithholdMinor } from "./payment";
 import type {
   DeliveryMethod,
   ShippingRates,
@@ -95,7 +100,7 @@ export interface CheckoutLine {
  * the whole basket agrees on one; the delivery flags and weight likewise are
  * per-product facts that the basket-level decision is made from.
  */
-interface ResolvedLine extends CheckoutLine {
+export interface ResolvedLine extends CheckoutLine {
   allowPickup: boolean;
   allowShipping: boolean;
   currency: string;
@@ -333,6 +338,31 @@ function parseItem(value: unknown): CheckoutItemInput | null {
 }
 
 /**
+ * The basket's lines as a request states them: 1–50 strict items. Shared with
+ * the discount preview (discount-preview.ts), which must price exactly the
+ * lines this checkout would accept.
+ */
+export function parseCheckoutItems(value: unknown): CheckoutItemInput[] | null {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_CHECKOUT_ITEMS
+  ) {
+    return null;
+  }
+
+  const items: CheckoutItemInput[] = [];
+  for (const raw of value) {
+    const item = parseItem(raw);
+    if (item === null) {
+      return null;
+    }
+    items.push(item);
+  }
+  return items;
+}
+
+/**
  * Strict allowlist on both the envelope and every item. A body carrying
  * `price`, `unitPriceMinor`, `sku`, `name`, `currency`, `shippingMinor`, or any
  * other pricing field is rejected outright rather than ignored: silently
@@ -406,21 +436,9 @@ export function parseCreateCheckoutInput(
     return null;
   }
 
-  if (
-    !Array.isArray(body.items) ||
-    body.items.length === 0 ||
-    body.items.length > MAX_CHECKOUT_ITEMS
-  ) {
+  const items = parseCheckoutItems(body.items);
+  if (items === null) {
     return null;
-  }
-
-  const items: CheckoutItemInput[] = [];
-  for (const raw of body.items) {
-    const item = parseItem(raw);
-    if (item === null) {
-      return null;
-    }
-    items.push(item);
   }
 
   // Required (D98): a checkout that does not say who gets the order and where
@@ -463,6 +481,24 @@ export async function hashIdempotencyKey(
     await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(`${tenantId}:${idempotencyKey}`),
+    ),
+  );
+}
+
+/**
+ * The buyer of a discount hold (0055 buyer_key): sha256 hex of the tenant and
+ * the address as the parser lowercased it. One buyer's several checkouts are
+ * ONE hold for everyone else, and the hold carries no second copy of the
+ * address.
+ */
+export async function discountBuyerKey(
+  tenantId: string,
+  email: string,
+): Promise<string> {
+  return bytesToHex(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`${tenantId}:${email}`),
     ),
   );
 }
@@ -601,7 +637,7 @@ async function resolveLine(
  * checkout: a partially-priced cart is worse than a rejected one, because the
  * buyer would be charged for a basket they never assembled.
  */
-async function resolveLines(
+export async function resolveLines(
   db: D1Database,
   tenant: TenantContext,
   items: CheckoutItemInput[],
@@ -637,7 +673,7 @@ async function resolveLines(
  * A mixed-currency basket has no defensible single total, so it is rejected
  * rather than silently summed under whichever currency happened to come first.
  */
-function resolveCurrency(lines: ResolvedLine[]): string | null {
+export function resolveCurrency(lines: ResolvedLine[]): string | null {
   const first = lines[0];
   if (first === undefined) {
     return null;
@@ -1115,6 +1151,25 @@ async function freezeProductionSnapshot(
   return { json: JSON.stringify({ printer, lines: snapshotLines, totals }) };
 }
 
+/**
+ * One attempt's answer: a checkout result, or the capacity trigger's refusal
+ * of this attempt's hold (0055), which createCheckout answers by running once
+ * more with the discount off. Never leaves this module.
+ */
+type CheckoutAttempt = CreateCheckoutResult | { status: "discount_exhausted" };
+
+/**
+ * Creates a checkout (the quote frozen with its lines, recipient, consent,
+ * production snapshot and, CP8-DC, the hold on a capped code's use).
+ *
+ * THE RACE (design §2.3). Two buyers can both read a code's last use as free
+ * before either writes. The hold's capacity trigger decides at the INSERT:
+ * the batch that commits second is aborted whole, nothing of it is written,
+ * and the checkout is made ONCE more with the discount forced off. The buyer
+ * gets a checkout without the discount (its code echoed, discountMinor 0),
+ * never a 500 and never a use the cap does not have. Once: the second attempt
+ * holds nothing, so the trigger cannot refuse it.
+ */
 export async function createCheckout(
   db: D1Database,
   tenant: TenantContext,
@@ -1122,6 +1177,93 @@ export async function createCheckout(
   now: number,
   options: CheckoutOptions = {},
 ): Promise<CreateCheckoutResult> {
+  const first = await attemptCheckout(db, tenant, input, now, options, false);
+  if (first.status !== "discount_exhausted") {
+    return first;
+  }
+  const second = await attemptCheckout(db, tenant, input, now, options, true);
+  if (second.status === "discount_exhausted") {
+    // Unreachable: an attempt with the discount off inserts no hold.
+    throw new Error("a checkout without a discount hold was refused as exhausted");
+  }
+  return second;
+}
+
+/**
+ * May a resolved discount apply to this basket? The two money rules of the
+ * design's §3.4, evaluated at checkout once the production snapshot is
+ * frozen. Either failing means the code is worth nothing here (never a
+ * partial amount the seller did not offer):
+ *
+ *   R3 (DC6)  the charge S + H − D is at least MIN_CHARGE_MINOR;
+ *   R2 (DC5)  with a production withholding W > 0, the platform's fee on the
+ *             DISCOUNTED charge (commission + W, buildConnectCharge, the
+ *             payment route's own formula) does not exceed it. The payment
+ *             route keeps that check as its backstop; this one turns its
+ *             opaque refusal into a code that does not apply.
+ *
+ * A basket without POD (W = 0) cannot fail R2: the commission is clamped to
+ * the amount. `commissionBps` is the rate the payment will read
+ * (payment.ts readCheckoutCommissionBps); the commission stays a share of
+ * what the buyer pays (DC7). A zero discount is always viable.
+ */
+export function discountViable(input: {
+  commissionBps: number;
+  discountMinor: number;
+  shippingMinor: number;
+  subtotalMinor: number;
+  withholdMinor: number;
+}): boolean {
+  if (input.discountMinor <= 0) {
+    return true;
+  }
+  const totalMinor = input.subtotalMinor + input.shippingMinor - input.discountMinor;
+  if (totalMinor < MIN_CHARGE_MINOR) {
+    return false;
+  }
+  return (
+    input.withholdMinor <= 0 ||
+    !buildConnectCharge(totalMinor, input.commissionBps, input.withholdMinor).feeExceedsGross
+  );
+}
+
+/**
+ * Is a resolved discount still allowed once the basket's production is known?
+ * discountViable's two rules (R3 the minimum charge, R2 the fee on the
+ * discounted charge) against the snapshot just frozen. The commission is read
+ * only when there is a withholding, as only then can R2 bind.
+ */
+async function discountStillApplies(
+  db: D1Database,
+  tenant: TenantContext,
+  carriage: { shippingMinor: number; subtotalMinor: number },
+  discountMinor: number,
+  snapshotJson: string | null,
+): Promise<boolean> {
+  const withholdMinor = readWithholdMinor(snapshotJson);
+  // The snapshot was built a moment ago, so this cannot be null; were it, the
+  // discount would not apply (the payment route refuses such a row anyway).
+  if (withholdMinor === null) {
+    return false;
+  }
+  return discountViable({
+    commissionBps:
+      withholdMinor > 0 ? await readCheckoutCommissionBps(db, tenant.tenantId) : 0,
+    discountMinor,
+    shippingMinor: carriage.shippingMinor,
+    subtotalMinor: carriage.subtotalMinor,
+    withholdMinor,
+  });
+}
+
+async function attemptCheckout(
+  db: D1Database,
+  tenant: TenantContext,
+  input: CreateCheckoutInput,
+  now: number,
+  options: CheckoutOptions,
+  discountForcedOff: boolean,
+): Promise<CheckoutAttempt> {
   if (input.items.length === 0 || input.items.length > MAX_CHECKOUT_ITEMS) {
     return { status: "invalid_items" };
   }
@@ -1173,20 +1315,68 @@ export async function createCheckout(
     return { status: "invalid_items" };
   }
 
-  // At most ONE extra D1 read per request, and only when a code was presented.
-  // The base is computed from the line snapshots already resolved above, so no
-  // product is queried a second time.
-  const discount: ResolvedDiscount =
+  // The discount, only when a code was presented: the shop's switch (F1: the
+  // add-on is opt-in, DC2; off means the code is worth nothing), then ONE read
+  // of the code with the other buyers' live holds (resolveDiscount). The base
+  // is computed from the line snapshots already resolved above, so no product
+  // is queried a second time. A code that does not apply is echoed beside a
+  // discount of 0, whatever the reason (the oracle note on resolveDiscount).
+  const buyerKey =
+    input.discountCode === null
+      ? null
+      : await discountBuyerKey(tenant.tenantId, input.email);
+  const resolved: ResolvedDiscount =
     input.discountCode === null
       ? { code: "", discountCodeId: null, discountMinor: 0 }
-      : await resolveDiscount(
-          db,
-          tenant.tenantId,
-          input.discountCode,
-          lines,
-          carriage.subtotalMinor,
-          now,
-        );
+      : discountForcedOff ||
+          !(await isFeatureEnabled(db, tenant.tenantId, "discountCodes"))
+        ? { code: input.discountCode, discountCodeId: null, discountMinor: 0 }
+        : await resolveDiscount(
+            db,
+            tenant.tenantId,
+            input.discountCode,
+            lines,
+            carriage.subtotalMinor,
+            now,
+            buyerKey === null ? null : { buyerKey },
+          );
+
+  // Refused with the same opaque answer as any other unresolvable line: naming
+  // which POD line cannot be produced would be an oracle for a tenant's
+  // printer set-up. The ceiling is the UNDISCOUNTED total: a basket whose
+  // withholding its own price covers is purchasable, and whether a discount
+  // may come off it is decided by discountStillApplies below, which answers
+  // "the code does not apply" instead of refusing the basket. Without a code
+  // the two are the same number, so such a checkout is frozen as before.
+  const snapshot = await freezeProductionSnapshot(
+    db,
+    tenant,
+    lines,
+    currency,
+    carriage.subtotalMinor + carriage.shippingMinor,
+    options.dispatchTarget,
+    options.refuseStandInFrames === true,
+  );
+  if (snapshot === null) {
+    return { status: "invalid_items" };
+  }
+
+  // CP8-DC R3 and R2 (discountViable, DC5/DC6; F2 and F3): a discount that
+  // would leave less than Stripe's minimum to charge, or the platform's fee
+  // above what the buyer pays, does not apply. The buyer pays the full price
+  // and is told the code could not be used; the seller never gets a partial
+  // discount they did not offer, and the payment never meets its opaque 404.
+  const discount: ResolvedDiscount =
+    resolved.discountMinor > 0 &&
+    !(await discountStillApplies(
+      db,
+      tenant,
+      carriage,
+      resolved.discountMinor,
+      snapshot.json,
+    ))
+      ? { code: resolved.code, discountCodeId: null, discountMinor: 0 }
+      : resolved;
 
   const quote = closeQuote(
     carriage.subtotalMinor,
@@ -1195,22 +1385,6 @@ export async function createCheckout(
     vatRateBp,
   );
   if (quote === null) {
-    return { status: "invalid_items" };
-  }
-
-  // Refused with the same opaque answer as any other unresolvable line: naming
-  // which POD line cannot be produced would be an oracle for a tenant's
-  // printer set-up.
-  const snapshot = await freezeProductionSnapshot(
-    db,
-    tenant,
-    lines,
-    currency,
-    quote.totalMinor,
-    options.dispatchTarget,
-    options.refuseStandInFrames === true,
-  );
-  if (snapshot === null) {
     return { status: "invalid_items" };
   }
 
@@ -1308,6 +1482,34 @@ export async function createCheckout(
     );
   }
 
+  // The hold on the code's use (0055), in the checkout's own batch and only
+  // when a code id was frozen. Its capacity trigger is the cap: refused, the
+  // whole batch rolls back and createCheckout runs once more without the
+  // discount. An hour (DC3), never longer than the checkout. A code without a
+  // cap is held too (the seller's "i kassan"), and its trigger never refuses.
+  const holdsUse = discount.discountCodeId !== null && buyerKey !== null;
+  if (holdsUse) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO discount_code_holds (
+            hold_id, tenant_id, discount_code_id, checkout_id, buyer_key,
+            state, order_id, expires_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 'held', NULL, ?, ?, ?)`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          tenant.tenantId,
+          discount.discountCodeId,
+          checkoutId,
+          buyerKey,
+          Math.min(now + DISCOUNT_HOLD_TTL_MS, expiresAt),
+          now,
+          now,
+        ),
+    );
+  }
+
   statements.push(
     db
       .prepare(
@@ -1332,6 +1534,10 @@ export async function createCheckout(
   try {
     await db.batch(statements);
   } catch (error) {
+    // Another buyer took the code's last use first (see createCheckout).
+    if (holdsUse && isDiscountExhausted(error)) {
+      return { status: "discount_exhausted" };
+    }
     if (!isIdempotencyCollision(error)) {
       throw error;
     }

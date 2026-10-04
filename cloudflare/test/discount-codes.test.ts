@@ -2,11 +2,17 @@ import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { acceptTermsStatement, BUYER_CONSENT, withBuyerRecipient } from "./legal-fixtures";
+import { switchStatement } from "./discount-fixtures";
 
+import type { DiscountCodeRow } from "../src/commerce/discount-codes";
+import { discountViable } from "../src/commerce/checkout";
 import {
+  isEligible,
   MAX_DISCOUNT_PERCENT_BP,
+  MIN_CHARGE_MINOR,
   percentDiscountMinor,
 } from "../src/commerce/discount-codes";
+import { buildConnectCharge } from "../src/commerce/payment";
 
 const NOW = 1_787_200_000_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -75,6 +81,9 @@ async function seedTenant(tenantId: string, hostname: string): Promise<void> {
       ) VALUES (?, ?, ?, 'storefront', 'verified', ?, ?)`,
     ).bind(`domain-${tenantId}`, tenantId, hostname, NOW, NOW),
     acceptTermsStatement(env.DB, tenantId),
+    // CP8-DC (DC2): the add-on is opt-in, and the checkout reads the switch
+    // (F1). This suite is about the engine, so its shops have it on.
+    switchStatement(tenantId, true),
   ]);
 }
 
@@ -502,14 +511,32 @@ describe("checkout discount eligibility", () => {
 
 describe("checkout discount arithmetic", () => {
   it("clamps a fixed discount to the subtotal it discounts", async () => {
+    // Shipped, so the carriage keeps the charge above MIN_CHARGE_MINOR (CP8-DC
+    // R3): the clamp is what this case is about, not the minimum. Collected,
+    // the same code leaves 0 to pay and does not apply (the next case).
+    const response = await post(HOST_A, {
+      deliveryMethod: "shipping",
+      discountCode: "FIXEDHUGE",
+      items: [{ productId: "dc-a-one", quantity: 1 }],
+      shippingCountry: "SE",
+    });
+    expect(response.status).toBe(201);
+    const checkout = ((await response.json()) as CheckoutBody).checkout;
+
+    expect(checkout.subtotalMinor).toBe(1_000);
+    expect(checkout.discountMinor).toBe(1_000);
+    expect(checkout.totalMinor).toBe(checkout.shippingMinor);
+    expect(checkout.shippingMinor).toBeGreaterThanOrEqual(300);
+  });
+
+  it("does not apply the clamped code when collected, as it would leave 0 to pay", async () => {
     const checkout = await quote({
       discountCode: "FIXEDHUGE",
       items: [{ productId: "dc-a-one", quantity: 1 }],
     });
 
-    expect(checkout.subtotalMinor).toBe(1_000);
-    expect(checkout.discountMinor).toBe(1_000);
-    expect(checkout.totalMinor).toBe(0);
+    expect(checkout.discountMinor).toBe(0);
+    expect(checkout.totalMinor).toBe(1_000);
   });
 
   it("clamps a fixed discount to the SCOPED base, not the whole subtotal", async () => {
@@ -553,15 +580,21 @@ describe("checkout discount arithmetic", () => {
     expect(checkout.discountMinor).toBe(250);
   });
 
-  it("allows a full-value code to zero the basket", async () => {
+  it("does not apply a full-value code that would leave less than the minimum charge (CP8-DC R3, F3)", async () => {
+    // Until CP8-DC this checkout was 201 at 0 öre, and its PaymentIntent could
+    // never be created (the payment route answered 502). A discount that
+    // leaves less than MIN_CHARGE_MINOR to pay does not apply: the buyer pays
+    // the full price, the code is echoed, no id is frozen.
     const checkout = await quote({
       discountCode: "FULLHUNDRED",
       items: [{ productId: "dc-a-two", quantity: 1 }],
     });
 
-    expect(checkout.discountMinor).toBe(2_000);
-    expect(checkout.totalMinor).toBe(0);
-    expect(checkout.vatMinor).toBe(0);
+    expect(checkout.discountMinor).toBe(0);
+    expect(checkout.totalMinor).toBe(2_000);
+    expect(checkout.vatMinor).toBe(400);
+    expect(checkout.discountCode).toBe("FULLHUNDRED");
+    expect((await storedRow(checkout.checkoutId))?.discount_code_id).toBeNull();
   });
 
   it("sums only the matching lines for a products-scoped code", async () => {
@@ -963,6 +996,102 @@ describe("percentDiscountMinor exactness", () => {
     );
     expect(() => percentDiscountMinor(-1, 1)).toThrow(RangeError);
     expect(() => percentDiscountMinor(1_000, 10_001)).toThrow(RangeError);
+  });
+});
+
+describe("CP8-DC: the cap counts other buyers' live holds", () => {
+  const row: DiscountCodeRow = {
+    active: 1,
+    code: "CAP3",
+    discount_code_id: "dc-cap3",
+    ends_at: null,
+    max_uses: 3,
+    min_spend_minor: null,
+    percent_bp: 1_000,
+    product_ids_json: null,
+    scope: "all",
+    starts_at: null,
+    type: "percent",
+    used_count: 2,
+    value_minor: null,
+  };
+
+  it("is available while used + held by others stays under the cap (design §2.3's worked race)", () => {
+    expect(isEligible(row, 10_000, NOW, 0)).toBe(true);
+    expect(isEligible(row, 10_000, NOW, 1)).toBe(false);
+    expect(isEligible({ ...row, used_count: 3 }, 10_000, NOW, 0)).toBe(false);
+    // The default counts no holds: what the preview reads.
+    expect(isEligible(row, 10_000, NOW)).toBe(true);
+  });
+
+  it("never caps a code without max_uses, whatever is held", () => {
+    expect(isEligible({ ...row, max_uses: null, used_count: 900 }, 10_000, NOW, 900)).toBe(true);
+  });
+});
+
+describe("CP8-DC: discountViable, the design's worked examples (§3.3) to the öre", () => {
+  // Shop VAT 25 %, commission 500 bp, a tee whose withholding is 23 625
+  // (cost 14 000 + parcel 4 900, × 1.25) and whose D41 floor is 26 300.
+  const BPS = 500;
+  const W = 23_625;
+  const viable = (subtotalMinor: number, shippingMinor: number, discountMinor: number, withholdMinor: number) =>
+    discountViable({ commissionBps: BPS, discountMinor, shippingMinor, subtotalMinor, withholdMinor });
+
+  it("A, not POD: two mugs, parcel, 20 % applies", () => {
+    expect(percentDiscountMinor(40_000, 2_000)).toBe(8_000);
+    expect(viable(40_000, 4_900, 8_000, 0)).toBe(true);
+    expect(buildConnectCharge(36_900, BPS, 0).applicationFeeMinor).toBe(1_845);
+  });
+
+  it("B, POD: one tee, parcel, 20 % applies; 35 % does not", () => {
+    expect(percentDiscountMinor(29_900, 2_000)).toBe(5_980);
+    expect(viable(29_900, 4_900, 5_980, W)).toBe(true);
+    expect(buildConnectCharge(28_820, BPS, W)).toMatchObject({ applicationFeeMinor: 25_066, commissionMinor: 1_441, feeExceedsGross: false });
+
+    expect(percentDiscountMinor(29_900, 3_500)).toBe(10_465);
+    expect(viable(29_900, 4_900, 10_465, W)).toBe(false);
+    expect(buildConnectCharge(24_335, BPS, W)).toMatchObject({ applicationFeeMinor: 24_841, feeExceedsGross: true });
+  });
+
+  it("C, the tee at its floor, pickup: 5 % applies, 10 % and 20 % do not", () => {
+    expect(percentDiscountMinor(26_300, 500)).toBe(1_315);
+    expect(viable(26_300, 0, 1_315, W)).toBe(true);
+    expect(buildConnectCharge(24_985, BPS, W)).toMatchObject({ applicationFeeMinor: 24_874, feeExceedsGross: false });
+
+    expect(percentDiscountMinor(26_300, 1_000)).toBe(2_630);
+    expect(viable(26_300, 0, 2_630, W)).toBe(false);
+    expect(buildConnectCharge(23_670, BPS, W)).toMatchObject({ applicationFeeMinor: 24_808, feeExceedsGross: true });
+
+    expect(percentDiscountMinor(26_300, 2_000)).toBe(5_260);
+    expect(viable(26_300, 0, 5_260, W)).toBe(false);
+  });
+
+  it("D, a mixed basket at pickup: 20 % on the whole cart applies, and scoped to the tee", () => {
+    expect(percentDiscountMinor(46_300, 2_000)).toBe(9_260);
+    expect(viable(46_300, 0, 9_260, W)).toBe(true);
+    expect(buildConnectCharge(37_040, BPS, W).applicationFeeMinor).toBe(25_477);
+    expect(viable(46_300, 0, 5_260, W)).toBe(true);
+  });
+
+  it("E, the minimum charge: a code that leaves 0 does not apply; with the carriage it does", () => {
+    expect(viable(20_000, 0, 20_000, 0)).toBe(false);
+    expect(viable(20_000, 4_900, 20_000, 0)).toBe(true);
+    expect(MIN_CHARGE_MINOR).toBe(300);
+    expect(viable(10_299, 0, 10_000, 0)).toBe(false);
+    expect(viable(10_300, 0, 10_000, 0)).toBe(true);
+  });
+
+  it("a zero discount is always viable, even on a basket R2 would refuse", () => {
+    expect(viable(100, 0, 0, W)).toBe(true);
+  });
+
+  it("R2 uses the DISCOUNTED charge, and the commission the shop pays", () => {
+    // At 10 % on C the undiscounted 26 300 would pass (fee 24 940); the
+    // discounted 23 670 does not.
+    expect(buildConnectCharge(26_300, BPS, W).feeExceedsGross).toBe(false);
+    expect(viable(26_300, 0, 2_630, W)).toBe(false);
+    // A shop on 0 % commission: 10 % still leaves 23 670 ≥ 23 625, so it applies.
+    expect(discountViable({ commissionBps: 0, discountMinor: 2_630, shippingMinor: 0, subtotalMinor: 26_300, withholdMinor: W })).toBe(true);
   });
 });
 

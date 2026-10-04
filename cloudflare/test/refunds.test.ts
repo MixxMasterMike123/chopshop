@@ -853,6 +853,8 @@ describe("GET /v1/admin/orders/:orderId", () => {
         ],
         status: "partially_refunded",
         totals: {
+          // CP8-DC: the code's name, null without one.
+          discountCode: null,
           discountMinor: 0,
           shippingMinor: 0,
           subtotalMinor: 20_000,

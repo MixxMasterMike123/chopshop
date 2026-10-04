@@ -837,3 +837,172 @@ Steps, in order. Each ends with `cd cloudflare && npx tsc --noEmit && npx vitest
 | F11 | **The guard allowlist's rule and its practice differ.** The header says a line is never added; CP5 swapped page files out and data modules in. | `guard/allowlist.txt:3-7`; commit `19b0488e` | Process. The reviewer decides the wording. |
 
 Seen, outside scope: `isFeatureEnabled` having no caller also means no Worker path checks the `pod` switch (D62 says one will). Not investigated further.
+
+## Build log (phase 2)
+
+Built on branch `cf-port` from `414e1504` (CP6-PS4 committed), working tree only: no git write, no network beyond 127.0.0.1, no deploy, no wrangler call that reaches Cloudflare. The design above is the specification; where the code said otherwise the code won, and each such point is in "Deviations" below.
+
+CP6-PS4 against the design, verified: `resolveLine`/`resolveLines` take `refuseStandInFrames` (`checkout.ts`), the checkout route passes `printCanvasEnabled(env)`, and the preview route passes the same; `versionedJsonResponse`/`etagFor` take the storefront tenant (`public-routes.ts`). Nothing in the design needed more than that.
+
+| Step | What was done | Gate after the step |
+|---|---|---|
+| 1 Migration | `migrations/0055_discount_code_holds.sql` exactly as §2.2 (table, the seven triggers, two indexes). `REQUIRED_MIGRATION` → 0055; the two pins (`health.test.ts`, `public-catalog.test.ts`). New `test/discount-code-holds-schema.test.ts` (born held, match checkout incl. another tenant and a hold outliving its checkout, one hold per checkout, the column CHECKs, capacity at cap−1/cap, same buyer excluded, one buyer counted once, expired and released not counted, no cap, all 9 transitions, the frozen columns, no delete, the rename trigger incl. the burn on a held code). Shared fixtures `test/discount-fixtures.ts`. | `tsc` clean; vitest 3 files, 63 tests passed |
+| 2 Engine | `discount-codes.ts`: `DISCOUNT_HOLD_TTL_MS` (60 min), `MIN_CHARGE_MINOR` (300), `isEligible(…, heldByOthers = 0)`, `resolveDiscount(…, holds)` with the capacity predicate as a subquery in the one read, `isDiscountExhausted`. `payment.ts`: `resolveTenantCommissionBps` (the payment route's own resolution, now shared) and `readCheckoutCommissionBps`. `discountViable` (R2, R3) was first put in `discount-codes.ts` as designed and moved to `checkout.ts` at the end (Deviation 2). Engine tests for every example of §3.3 to the öre; the two tests that pinned a 0-öre checkout changed (F3). | vitest `discount-codes.test.ts` 79 passed |
+| 3 Checkout | `createCheckout` = one attempt, and on `discount code exhausted` one more with the discount forced off (private flag). Per attempt: the switch (F1), the buyer key, the read with holds, the snapshot frozen against the UNDISCOUNTED total, R3 then R2 (F2, F3), `closeQuote`, the hold in the checkout's own batch. `parseCheckoutItems`, `resolveLines`, `resolveCurrency`, `discountBuyerKey` exported. `app.ts`: `discount-attempt-ip`, 20 per 10 min per visitor, counted only for a body with a code. DC2 (opt-in) done here rather than at step 8, because the step's own tests need it. New `checkout-discount-holds.test.ts` (switch off and unset, the hold row, sequential, the race with a real competing commit, same buyer twice, replay, expired and live holds, C at 5/10/20 %, D, D scoped, a 0 % commission, E, B at 35 %, the attempt limit with one IPv6 /64) and `checkout-no-code-golden.test.ts` (below). | vitest 10 files (discount, checkout, payment, payment-connect, tenant-features, stand-in, snapshot, admin) 440 tests: 439 passed, 1 failed (the admin suite's shop had no switch row: fixed in step 6) |
+| 4 Lifecycle | `webhook.ts`: in the order batch, before the burn, the checkout's hold → `used` (from held or released), the same buyer's other live holds on the code → `released`. `stripe-events.ts`: `payment_intent.canceled` releases (guarded on the checkout being canceled), `payment_failed` does not; `releaseCanceledHoldStatement` shared with `crons.ts`, whose cancel update became a batch of two. New `discount-hold-lifecycle.test.ts`. | vitest 5 files (lifecycle, stripe-events, money-crons, webhook, webhook-money) 159 passed |
+| 5 Preview | `commerce/discount-preview.ts`, `routes/storefront-discount-preview.ts`, mounted in `app.ts` (POST only, inside `storefront(...)`). New `discount-preview.test.ts` (the ten misses byte for byte, holds ignored, R3 not applied, nothing written, 12 kinds of 400, 422, 404 ×4, 429 on the 31st with malformed bodies counted). The web Worker's allowlist row is NOT added (outside the paths I may touch: Unfinished 1). | vitest 21 passed |
+| 6 Admin | `admin-discount-codes.ts`: the list (newest first, 200, `truncated`), `heldCount` on every shape, the rename lock (409 `discount_code_in_use`, trigger as backstop), `valueMinor ≥ 1` (F7). `app.ts`: the switch gate after the session and same-origin gates (DC14), GET on the collection. The admin and admin-worker suites' shops get the switch row; the old "no list route" pin became "PUT/PATCH/DELETE on the collection are 404". New cases appended to `admin-discount-codes.test.ts` (list order, the bound, `heldCount`, all four routes 404 with the switch off, rename before/after use/after a hold, 0 öre refused, acting-as). | vitest admin-discount-codes 51 + admin-worker 30 passed |
+| 7 Views | `totals.discountCode` on the seller's order (`admin-orders.ts`) and the receipt (`receipts.ts`); both mails name it ("Rabatt (SOMMAR20): -10,00 kr"), the key ABSENT for an order without a code. New `discount-views.test.ts` (real webhook orders, the outbox effects run, both templates, HTML escaping, absence keeps the fingerprint keys). One exact-shape pin updated (`refunds.test.ts`, `discountCode: null`). | vitest 11 files (views, receipts, mails, outbox, admin orders, money suites, refunds) 299: 298 passed, 1 pin updated, then passed |
+| 8 D81 | `PORTED_FEATURE_KEYS = ["pod", "discountCodes"]`. F10: `STOREFRONT_BODY_REVISION = 1` in the `/v1/storefront` ETag (Deviation 4). Pins updated: `public-storefront.test.ts`, `admin-session.test.ts` (2), `stand-in-frames-seller-storefront.test.ts` (the storefront row of the ETag test), `web-worker.test.ts` (the ETag shape), `pod-publish.test.ts` (the storefront ETag), `tenant-features.test.ts` (DC2; its "default-on" example key moved to `abandonedCheckout`). New `discount-storefront.test.ts`. | vitest 4 suites 113 + 3 passed; full run 126 files, 4778 tests, 1 failed (`pod-publish` storefront ETag pin, then updated and passed) |
+| 9 Storefront | `src/api/discountCodes.js`, `storefront/adapters/discount.js` (the pure rules), `providers/Cart.jsx` (the stored code, the preview once per press, the re-preview 500 ms after the lines change, never twice for one press, the code dropped when the add-on is off), `pages/shop/ShoppingCart.jsx` (the box restored from `f26d616e`, gated, "Ta bort", the notice), `adapters/checkout.js` + `api/checkout.js` + `StripePaymentForm.jsx` (the cart's code, never the field's text, sent only when non-empty), `pages/shop/Checkout.jsx` (the not-applied notice, "Ta bort koden"), `adapters/order.js` + `OrderConfirmation.jsx` (F6), locales, the dev API (the preview, a discounted checkout and order, POST bodies read). One visual defect fixed in both pages: the discount amount broke under its minus sign. | node suites below |
+| 10 Admin frontend | `src/api/admin/discountCodes.js`, `admin-app/adapters/discountCode.js`, `admin-app/replacements/adminDiscountCodesData.js` (API), `pages/admin/adminDiscountCodesData.js` (the page's Firebase code moved), `AdminDiscountCodes.jsx` (imports the module only; no trash button in the admin build; "(N i kassan)"; the three new texts), `pages.jsx`, `AdminApp.jsx` route gated on `features.discountCodes`, the alias row in `vite.admin.config.js`, `OrderPaymentCard.jsx` + `admin-app/adapters/order.js` (F6), the dev API rows and fixtures, the dev opt-in mirrors (DC2). Guard allowlist: line swap (Deviation 6). | node 1079 passed |
+| 11 Docs | Not done: `DECISIONS.md`, `PLAN.md`, `CP5_GAP_ANALYSIS.md`, `MIGRATION_MANIFEST.md`, `HANDOVER.md` and the runbook line of §2.5 are outside the paths this unit may touch (Unfinished 3). | none |
+
+### The rule "a cart without a code is priced as before"
+
+`test/checkout-no-code-golden.test.ts` freezes four code-less carts (a mug collected, two mugs shipped, a POD tee shipped, a mug and two POD tees collected) through `createCheckout` and then the payment route (fake Stripe), and compares ONE string of every row column that is money or production (`subtotal/shipping/vat/discount/total`, `production_snapshot_json`, `application_fee_minor`, `withheld_minor`, the Connect account), every frozen line, the checkout response and the PaymentIntent's amount, fee, currency, metadata keys and destination. The pinned string was produced by running the same file, unchanged, against `git archive 414e1504 cloudflare` (a copy outside the repo, the same `node_modules`); it passes there and here. Figures in it: 20 000 / fee 1 000; 42 900 / 2 145; 32 800 / 25 265 (withheld 23 625); 79 800 / 45 115 (withheld 41 125).
+
+## Deviations, decisions and what is left (phase 2)
+
+### Contradictions between the design and the code, and what I did
+
+1. **The web Worker's allowlist row (§4.1)** lives in `cloudflare/web/src/api-allowlist.ts`, outside the paths this unit may touch. Not added. Until it is, a browser's preview through the web Worker gets the opaque 404 and the cart says "Koden kunde inte kontrolleras just nu. Försök igen."; the checkout itself (already allowed) still applies the code. The row: `{ methods: ["POST"], segments: ["v1", "discount-codes", "preview"] },` with its case in `cloudflare/test/web-routing.test.ts`.
+2. **`discountViable` cannot live in `discount-codes.ts`.** That module is reached by the email modules (`auth-email-job.ts`, `order-emails.ts`, which validate the code's name), and through them by the migration tooling's rule bundle (`catalog/collections → storefront/preview → auth/create-auth → email/auth-email-job`). Importing `payment.ts` there pulled the Stripe SDK into that bundle and broke `scripts/cf-port/migrate` (8 resolve errors). `discount-codes.ts` imports nothing again, as at HEAD; `discountViable` is exported from `checkout.ts`, beside the fee it reads. Same signature, same tests.
+3. **Mutations 6 and 9 of §9 cannot fail on the visible answer.** The read and the trigger use the same predicate, so a read that ignores holds is caught by the trigger and the one rerun gives the same 201 with 0; and a rerun that re-reads finds the competitor's hold and gives 0 too. The properties are "the read itself declines the code" (one attempt) and "the rerun reads no code". The tests assert those (a counting DB proxy), and both mutations are killed.
+4. **F10, the storefront ETag.** The orchestrator asked to fix F10, the design's lasting fix is a revision constant. `STOREFRONT_BODY_REVISION = 1` is named only by `GET /v1/storefront`: its ETag is `"<v>-r1"` (`"<v>-c-r1"` with the print canvas on); every other public read's ETag is byte for byte as before. A body a browser kept from before the deploy (`discountCodes: false`) now misses once instead of a stale 304, so the post-deploy `catalog_version` bump of §8.3 is no longer needed for this deploy (harmless if run). Raising the constant is the rule for the next code change to that body.
+5. **§4.4's LEFT JOIN** is a scalar subquery (`SELECT dc.code … WHERE dc.discount_code_id = o.discount_code_id AND dc.tenant_id = o.tenant_id`) in all three reads: the same result for a unique id, and no risk of an ambiguous column beside `PAYOUT_FACT_COLUMNS`.
+6. **The guard (F11).** The swap the design names was made: `src/pages/admin/AdminDiscountCodes.jsx` out (it no longer imports Firebase, so its line would be stale), `src/pages/admin/adminDiscountCodesData.js` in (it holds the moved Firebase imports). Count 294 = baseline. Because the guard scans tracked files only, it FAILS on this working tree ("1 stale entry: adminDiscountCodesData.js", the file is untracked) and passes once the file is added in the commit; a copy of the guard that also counts untracked, non-ignored files (scratch, baseline write removed) passes at 294. Not removing the old line and adding the new one at commit instead would have rewritten `allowlist.baseline` to 293 on this run and failed (c) at commit.
+7. **DC2 and the importer.** `scripts/cf-port/migrate/lib/transform-shops.mjs` restates the Worker's opt-in set, pinned by `tenant-config-keys-pin.test.mjs`. DC2 adds `discountCodes` to the Worker's set; the importer is outside my paths, so that one pin test fails (553 of 554). Effect if the importer stays as it is: a Firebase shop lands with `discountCodes` OFF after import whatever Firebase said (no row is written, and the Worker's default is now off): the conservative side for money. The fix for the owner: `OPT_IN_FEATURE_KEYS = new Set(['contentStudio', 'discountCodes', 'marketingMaterials', 'pod'])`, after which a Firebase shop that had it explicitly on keeps it on. Production has 0 codes either way.
+
+### Decisions beyond the design, for the owner to confirm
+
+| # | Decision | Why |
+|---|---|---|
+| B1 | The preview applies the checkout's legal gate: a shop that takes no checkout answers the opaque 404 to a preview too. | Parity with the checkout; nothing to preview where nothing can be bought. |
+| B2 | The preview reads at most 32 KiB of body (50 lines at the longest ids fit). | The withdrawal intake's bounded read; the checkout reads unbounded. |
+| B3 | The preview's body keys are alphabetical: `{ applies, code, discountMinor }`. | The repo's key order; the frontend reads by name. |
+| B4 | In both mails `discountCode` is ABSENT, not null, for an order without a code; a copy frozen before the deploy (no key) still validates. | Content, frozen copy and delivery fingerprint of every code-less mail stay byte for byte as before (a key with null would change the fingerprint of a mail in flight at the deploy). |
+| B5 | The attempt limit runs after the per-email limit. | A request the email limit refuses is not counted as a guess. |
+| B6 | The rename lock refuses after ANY hold (held, released, used, expired), as the trigger does. | The design's trigger; one rule for the route and the backstop. |
+| B7 | The cart's rules are a pure adapter (`storefront/adapters/discount.js`); the cart exposes `discountPreview` (the older cart lacks it, which reads as "no notice"). | Testable under Node; the shared pages keep one contract. |
+| B8 | Enter in the code field presses "Applicera"; the field has an `aria-label`. | The restored block had neither. |
+| B9 | The admin data module takes the form's raw days (`startsDay`, `endsDay`); each build converts them (the older build exactly as before). | The end day must be the END of the Stockholm day, which a start-of-day Date cannot carry. |
+| B10 | The storefront dev server now reads a POST's JSON body (64 KiB) and hands it to the dev handlers; dev codes are `{ percentBp }` or `{ valueMinor }` worked out as the server does. | The preview answers by the typed code; the shots show sensible amounts. |
+| B11 | The dev admin and platform mirrors of the opt-in set include `discountCodes`; dev shop `test-shop-a` and storefront `provbutiken` have the add-on on, `sportbutiken` off. | Dev mirrors the Worker; one shop of each kind to look at. |
+| B12 | The hold lifecycle tests are a new file (`discount-hold-lifecycle.test.ts`) on the money fixtures, not appended to `webhook.test.ts`. | That file's seeding has no hold-matching checkouts; the money fixtures have the fake Stripe the sweep needs. |
+| B13 | The sweep runs the release in its batch whatever Stripe answered; it matches nothing unless the update just wrote `canceled`. | One statement shape; a late success leaves the hold to the webhook (tested). |
+
+### New texts
+
+| Where | Key | sv-SE | en-US / en-GB |
+|---|---|---|---|
+| Cart | `discount_code_added` | Rabattkoden är tillagd. | The discount code has been added. |
+| Cart | `discount_code_not_applicable` | Koden kan inte användas för den här varukorgen. | The code cannot be used for this basket. |
+| Cart | `discount_code_invalid_format` | Ange koden utan mellanslag. | Enter the code without spaces. |
+| Cart | `discount_code_rate_limited` | För många försök. Vänta en stund och försök igen. | Too many attempts. Wait a while and try again. |
+| Cart | `discount_code_unavailable` | Koden kunde inte kontrolleras just nu. Försök igen. | The code could not be checked right now. Try again. |
+| Cart | `discount_code_remove` | Ta bort | Remove |
+| Payment step | `checkout_discount_not_applied` | Rabattkoden {{code}} kunde inte användas för den här beställningen. | The discount code {{code}} could not be used for this order. |
+| Payment step | `checkout_discount_remove` | Ta bort koden | Remove the code |
+| Confirmation | `order_confirmation_discount_code` | Rabatt ({{code}}) | Discount ({{code}}) |
+| Admin page (toast) | none (page text) | Koden får inte innehålla mellanslag. | |
+| Admin page (toast, 409 conflict) | none | En kod med detta namn finns redan. (existing text, now from the server's 409) | |
+| Admin page (toast, 409 in use) | none | Koden har redan använts och kan inte byta namn. Skapa en ny kod i stället. | |
+| Admin page (end date help) | none | Valfritt. Koden gäller till och med detta datum. | |
+| Admin list ("Använt") | none | ({N} i kassan) | |
+| Seller's order card | none | Rabatt ({code}) | |
+| Both mails | none | Rabatt (SOMMAR20): -59,80 kr | |
+
+No dash and no exclamation mark in any of them (an adapter test checks the cart's five). The payment step's existing "🎉 Rabatt aktiverad!" is now reachable for campaign codes; it is existing copy and was not changed.
+
+### Mutation table
+
+Each: the file copied aside, mutated, the named suites run, restored with `cp`, `cmp` equal. All killed.
+
+| # | Mutation | Killed by |
+|---|---|---|
+| 1 | The capacity trigger is a no-op | schema (5 failed with holds) |
+| 2 | The trigger counts the same buyer | schema |
+| 3 | `COUNT(*)` instead of distinct buyers | schema |
+| 4 | It counts expired holds | schema |
+| 5 | It counts released holds | schema |
+| 6 | The resolver ignores holds | checkout-discount-holds (one attempt) |
+| 7 | The resolver includes the buyer's own hold | checkout-discount-holds (2) |
+| 8 | The exhausted catch removed (the race throws) | checkout-discount-holds |
+| 9 | The retry keeps the discount | checkout-discount-holds (the rerun reads no code) |
+| 10 | The retry runs more than once | checkout-discount-holds |
+| 11 | The switch check removed (checkout) | checkout-discount-holds (2) |
+| 12 | R2 skipped | discount-codes + checkout-discount-holds (6) |
+| 13 | R2 on the undiscounted total | discount-codes + checkout-discount-holds (6) |
+| 14 | R3 skipped | discount-codes + checkout-discount-holds (4) |
+| 15 | The snapshot ceiling uses the discounted total | checkout-discount-holds (2) |
+| 16 | The webhook's `used` update removed | lifecycle (6) |
+| 17 | The same-buyer release removed | lifecycle |
+| 18 | `used` without `released` | lifecycle |
+| 19 | The cancel release removed (event) | lifecycle |
+| 19b | The cancel release removed (sweep) | lifecycle |
+| 20 | A `payment_failed` release added (unguarded) | lifecycle (2) |
+| 21 | The preview reveals a reason (switch off) | preview |
+| 22 | The preview limit removed | preview |
+| 23 | The attempt limit counts code-less checkouts | checkout-discount-holds |
+| 24 | The rename lock removed (route and trigger) | admin-discount-codes |
+| 24b | The rename trigger alone removed | schema |
+| 25 | `valueMinor: 0` accepted | admin-discount-codes |
+| 26 | The admin switch gate removed | admin-discount-codes |
+| 27 | `PORTED_FEATURE_KEYS` without `discountCodes` | discount-storefront |
+| 28 | `buildCheckoutRequest` sends an empty code | node checkout adapter |
+| X1 | DC2 undone (default on again) | checkout-discount-holds + tenant-features (4) |
+| X2 | F10 undone (`STOREFRONT_BODY_REVISION = 0`) | discount-storefront |
+| X3 | The hold is not inserted | checkout-discount-holds (6) |
+| X4 | The hold lives as long as the checkout | checkout-discount-holds |
+
+### Screens looked at
+
+Rendered in the dev servers (invented data; every request off 127.0.0.1 aborted, so Stripe.js and Google Fonts did not load), at 1440 and 390 px, full page. Files outside the repo, in the session scratchpad `…/scratchpad/shots/`: `sf-cart-box-*`, `sf-cart-not-applicable-*`, `sf-cart-applied-*`, `sf-cart-stored-not-applying-*`, `sf-payment-applied-*`, `sf-payment-not-applied-*`, `sf-confirmation-*`, `admin-codes-list-*`, `admin-codes-edit-*`, `admin-codes-rename-refused-*` (`*` = 1440, 390). Seen: the storefront's own look (NORD tokens of the restored block), the neutral admin look (`AppLayout`, `Page`, `DataTable`, `StatusPill`); on a phone the admin table scrolls inside its card as every admin list does. Not rendered: the seller's order card with a discount, the mails, the older build.
+
+### Unfinished, said plainly
+
+1. The web Worker's allowlist row for the preview (Contradiction 1). Without it the staging cart cannot preview a code.
+2. The importer's opt-in set (Contradiction 7): one migrate pin test fails until it is changed.
+3. Step 11's docs and §2.5's runbook line ("if the freeze count of `discountCodes` is above 0, stop: the transform does not exist"), and the new numbered decision recording D81's reversal for this key.
+4. `vite.storefront.config.js`'s alias note for `Cart.jsx` still says "the cart without discount or affiliate (D81)": a stale comment in a file outside my paths.
+5. The guard passes only once the new files are tracked (Deviation 6).
+6. The preview's stand-in-frame path is not tested with the print canvas on (it passes `printCanvasEnabled(env)` exactly as the checkout route does).
+7. No test proves the cap under two truly concurrent Workers; the race test commits a competing hold between the read and the batch, which is the same interleaving D1 serialises.
+
+### Seen, outside this unit
+
+- F4 (the rounding comment's unit), F5 (the older page's dates), F8 (the old callable) and F11 (the allowlist's wording) are left as listed; F9 is handled by the data module.
+- No Worker path checks the `pod` switch (the design's note).
+- In the older build the Firebase cart's `discountCode` (affiliate or campaign) is now sent to the API's checkout, where only a campaign code of the shop resolves; the older build is not a deploy target on this branch.
+- Two Vite dev servers run side by side invalidate each other's dependency cache (504 "Outdated Optimize Dep"); run one at a time.
+- Prices on the storefront cart and checkout print as "498.00 kr" (a dot), the confirmation as "498,00 kr": existing formatting.
+
+### Staging smoke plan (after the reviewer's yes; production never)
+
+0. Prerequisites: the allowlist row of Unfinished 1 is in the web Worker; the commit tracks the new files.
+1. `scripts/cf-preflight.sh staging`; bookmark; apply 0055 to staging D1; deploy API, web, admin. `GET /ready` names `0055_discount_code_holds.sql`. The §8.3 bump is not needed (F10); `GET /v1/storefront` answers `ETag: "<v>-r1"`.
+2. `SELECT tenant_id, enabled FROM tenant_features WHERE feature_key = 'discountCodes'`: shops without a row now read off (DC2). Check the storefront of a shop without a row shows no "Rabattkod" box, and `GET /v1/admin/discount-codes` answers 404 there.
+3. In "Tillägg", turn "Rabattkoder" on for the test shop. Its admin menu shows "Rabattkoder", its cart shows the box.
+4. Acting as the shop, create `SMOKE20` (20 %, whole cart, max 2), `FIXED50` (50 kr), `POD10` (10 % on a POD product priced at its floor, if one exists: not verified), `POD5` (5 % on it). Try a fixed code of 0 kr: refused. The list shows newest first.
+5. Cart: "smoke20 " → "Rabattkoden är tillagd.", a "Rabatt" row of 20 % of the lines; "NOPE" → "Koden kan inte användas för den här varukorgen."; 31 presses within 10 minutes → "För många försök…".
+6. Pay `SMOKE20` with card 4242: the payment step shows "Rabatt" and "Kod: SMOKE20"; the confirmation reads "Rabatt (SMOKE20)"; the seller's order reads "Rabatt (SMOKE20)", one fee, the payout; D1: the hold is `used` with the order id and `used_count` is 1. Try renaming `SMOKE20`: "Koden har redan använts…".
+7. The race: browser A reaches the payment step with `SMOKE20` (1 use left, "(1 i kassan)" in the admin), then browser B with another email: B's payment step says "Rabattkoden SMOKE20 kunde inte användas…" and B's total has no discount. A pays: `used_count` 2.
+8. `POD10` on the floor-priced product: 201, `discountMinor 0`, the notice; `POD5` applies. A 200 kr fixed code on a 200 kr product collected: the notice (R3).
+9. Refund 10 kr, then the rest: payout = charged − refunds − fee; a third refund is refused.
+10. Cancel an open test PaymentIntent in the Stripe test dashboard: its hold is `released`. Decline a card (4000 0000 0000 0002) on another: its hold stays `held`.
+11. If Resend is configured on staging (not verified): both mails carry "Rabatt (SMOKE20): -… kr".
+12. Turn "Rabattkoder" off: the box leaves the cart, the admin page 404s, a checkout sent with the code by hand answers `discountMinor 0`.
+
+### Gates (after the last edit)
+
+| Gate | Result | Baseline |
+|---|---|---|
+| `npx tsc --noEmit`, `-p web`, `-p admin` | exit 0, 0, 0 | clean |
+| `npx vitest run` | Test Files 126 passed (126); Tests 4778 passed (4778); the two known "Network connection lost" lines | 119 / 4663 (7 files and 115 tests added; no test failed once and passed on a re-run) |
+| `npm run types:check` | "Types at worker-configuration.d.ts are up to date", exit 0 | clean |
+| `node --test` storefront + admin suites | tests 1079, pass 1079, fail 0 | 1034 (45 added) |
+| `npx vite build --config vite.admin.config.js` + `check-admin-build.mjs` | exit 0; "28 files (22 text) checked, no Firebase code, no source map, no secret, every file servable" | pass |
+| `npx vite build` + `check-storefront-build.mjs` | exit 0; "storefront build: 11 files (7 text) checked, no Firebase code, every file servable" | pass |
+| `node guard/guards.test.mjs` | FAIL (b) 1 stale entry `src/pages/admin/adminDiscountCodesData.js` (untracked until the commit); allowlist 294 = baseline 294; the same guard counting untracked files: PASS; `allowlist.baseline` unchanged | PASS 294 |
+| `node --test "scripts/cf-port/migrate/test/*.test.mjs"` | tests 554, pass 553, fail 1: `OPT_IN_FEATURE_KEYS matches the live Worker source's OPT_IN_KEYS Set literal` (DC2; Contradiction 7). Nothing changed under `scripts/`; 0055 applies cleanly to node:sqlite there. | 554 |

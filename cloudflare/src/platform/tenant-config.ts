@@ -143,9 +143,14 @@ export const NOT_PORTED_FEATURE_KEYS = ["affiliate", "b2b"] as const;
  * Firebase OPT_IN_KEYS (addons.js, shopFeatures.ts): enabled only by an
  * explicit true. Every other allowed key is default-ON: enabled unless
  * explicitly false. A refused key (deleted or not ported) is never enabled.
+ *
+ * CP8-DC (DC2): `discountCodes` is opt-in here, unlike Firebase's default-ON
+ * (D62): the code box appears, and a code applies, only on a shop the
+ * platform turned it on for.
  */
 const OPT_IN_KEYS: ReadonlySet<FeatureKey> = new Set<FeatureKey>([
   "contentStudio",
+  "discountCodes",
   "marketingMaterials",
   "pod",
 ]);

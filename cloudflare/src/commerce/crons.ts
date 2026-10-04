@@ -4,7 +4,7 @@ import { disabledReasonFrom, requirementsFrom, resolveConnectGateway } from "./c
 import { pendingPrinterCancellationIds, releaseDispatchHolds } from "./dispatch-hold";
 import { raiseAlert } from "./money-alerts";
 import { DAY_MS, refreshPayoutStates } from "./payouts";
-import { replayDeferredPaymentEvents } from "./stripe-events";
+import { releaseCanceledHoldStatement, replayDeferredPaymentEvents } from "./stripe-events";
 import {
   applyRefundFact,
   refundFactFrom,
@@ -167,21 +167,26 @@ export async function runRetentionSweep(
       // succeeded (the late-success race: the webhook will make the order), or
       // still live (processing, requires_capture). Only canceled marks the
       // checkout abandoned. Guarded so a webhook that completed the checkout in
-      // the meantime is never overwritten.
-      await db
-        .prepare(
-          `UPDATE checkouts
-           SET payment_intent_status = ?,
-               payment_intent_status_at = ?,
-               status = CASE WHEN ? = 'canceled' THEN 'abandoned' ELSE status END,
-               updated_at = MAX(updated_at, ?)
-           WHERE checkout_id = ?
-             AND status IN ('open', 'expired')
-             AND (payment_intent_status IS NULL
-                  OR payment_intent_status NOT IN ('succeeded', 'canceled'))`,
-        )
-        .bind(status, now, status, now, checkout.checkout_id)
-        .run();
+      // the meantime is never overwritten. CP8-DC: a confirmed cancel also
+      // releases the checkout's discount hold (0055), in the same batch; the
+      // release reads the status this update wrote, so it matches nothing
+      // otherwise (a late success leaves the hold to the webhook).
+      await db.batch([
+        db
+          .prepare(
+            `UPDATE checkouts
+             SET payment_intent_status = ?,
+                 payment_intent_status_at = ?,
+                 status = CASE WHEN ? = 'canceled' THEN 'abandoned' ELSE status END,
+                 updated_at = MAX(updated_at, ?)
+             WHERE checkout_id = ?
+               AND status IN ('open', 'expired')
+               AND (payment_intent_status IS NULL
+                    OR payment_intent_status NOT IN ('succeeded', 'canceled'))`,
+          )
+          .bind(status, now, status, now, checkout.checkout_id),
+        releaseCanceledHoldStatement(db, checkout.checkout_id, now),
+      ]);
 
       if (status === "canceled") {
         summary.canceled += 1;

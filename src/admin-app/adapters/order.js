@@ -232,6 +232,9 @@ export function orderFromDetail(order) {
     subtotal: kr(totals.subtotalMinor),
     shipping: kr(totals.shippingMinor),
     discountAmount: kr(totals.discountMinor),
+    // CP8-DC: the campaign code by its current name, or null (F6: the card
+    // names it instead of an affiliate's).
+    discountCode: typeof totals.discountCode === 'string' && totals.discountCode !== '' ? totals.discountCode : null,
     vat: kr(totals.vatMinor),
     total: kr(totals.totalMinor),
     payment: {

@@ -8,7 +8,8 @@
 // `recipient` (D98, cloudflare/src/commerce/recipient.ts RecipientView): the
 // name and the postal address of a parcel, or the name and the pickup place
 // (its name and address as they were at checkout) and date of a collected
-// order; null for an order made before it existed. It carries no image, no
+// order; null for an order made before it existed. The totals name the
+// campaign code (`totals.discountCode`, CP8-DC) or null. It carries no image, no
 // variant label and no marketing choice: the page renders those parts as it
 // renders them today for an order without them.
 
@@ -47,6 +48,9 @@ export function toPageOrder(order) {
     subtotal: minorToKronor(totals.subtotalMinor),
     shipping: minorToKronor(totals.shippingMinor),
     discountAmount: minorToKronor(totals.discountMinor) ?? 0,
+    // CP8-DC: the campaign code by its current name, or null (F6: the page
+    // names it instead of an affiliate's).
+    discountCode: typeof totals.discountCode === 'string' && totals.discountCode !== '' ? totals.discountCode : null,
     vat: minorToKronor(totals.vatMinor),
     total: minorToKronor(totals.totalMinor),
     withdrawal: { waived: order.withdrawal?.waived === true },

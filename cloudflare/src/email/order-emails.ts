@@ -1,3 +1,4 @@
+import { isValidDiscountCode } from "../commerce/discount-codes";
 import type { AuthEmailMessage } from "./auth-email-job";
 import { COUNTRY_NAMES_SV, formatOrderMoney } from "./auth-email-job";
 
@@ -68,6 +69,12 @@ export interface OrderNoticeContent {
   adminUrl: string | null;
   currency: string;
   deliveryMethod: "pickup" | "shipping";
+  /**
+   * CP8-DC: the campaign code the discount came from, by its current name.
+   * ABSENT (never null) on an order without one, so such a mail's content and
+   * fingerprint are what they were before the code was named.
+   */
+  discountCode?: string;
   discountMinor: number;
   items: OrderNoticeLine[];
   orderNumber: string;
@@ -300,6 +307,9 @@ function validatedNotice(value: Record<string, unknown>, tenantId: string): Orde
     // The order's own arithmetic (0011): VAT is contained in the total.
     value.totalMinor !== value.subtotalMinor + value.shippingMinor - value.discountMinor ||
     value.vatMinor > value.totalMinor ||
+    // Absent on a copy frozen before CP8-DC and on an order without a code.
+    (value.discountCode !== undefined &&
+      (typeof value.discountCode !== "string" || !isValidDiscountCode(value.discountCode))) ||
     !Array.isArray(items) ||
     items.length === 0 ||
     items.length > MAX_ORDER_MAIL_LINES
@@ -324,6 +334,7 @@ function validatedNotice(value: Record<string, unknown>, tenantId: string): Orde
     adminUrl: value.adminUrl as string | null,
     currency: value.currency as string,
     deliveryMethod: value.deliveryMethod as "pickup" | "shipping",
+    ...(typeof value.discountCode === "string" ? { discountCode: value.discountCode } : {}),
     discountMinor: value.discountMinor as number,
     items: lines,
     orderNumber: value.orderNumber as string,
@@ -461,6 +472,9 @@ export function canonicalOrderEmailContent(job: OrderEmailJob): Record<string, u
         adminUrl: c.adminUrl,
         currency: c.currency,
         deliveryMethod: c.deliveryMethod,
+        // Only when there is one: an order without a code keeps its
+        // fingerprint byte for byte (CP8-DC).
+        ...(c.discountCode === undefined ? {} : { discountCode: c.discountCode }),
         discountMinor: c.discountMinor,
         items: c.items.map((item) => ({
           lineTotalMinor: item.lineTotalMinor,
@@ -617,6 +631,11 @@ function statusCopy(content: OrderStatusContent): Copy {
   };
 }
 
+/** "Rabatt (SOMMAR20)", or "Rabatt" without a named code (CP8-DC). */
+export function discountLabel(code: string | undefined): string {
+  return code === undefined ? "Rabatt" : `Rabatt (${code})`;
+}
+
 function noticeCopy(content: OrderNoticeContent): Copy {
   const money = (minor: number) => formatOrderMoney(minor, content.currency);
   const delivery =
@@ -651,7 +670,9 @@ function noticeCopy(content: OrderNoticeContent): Copy {
         lines: [
           `Delsumma: ${money(content.subtotalMinor)}`,
           `${content.deliveryMethod === "pickup" ? "Upphämtning" : "Frakt"}: ${money(content.shippingMinor)}`,
-          ...(content.discountMinor > 0 ? [`Rabatt: -${money(content.discountMinor)}`] : []),
+          ...(content.discountMinor > 0
+            ? [`${discountLabel(content.discountCode)}: -${money(content.discountMinor)}`]
+            : []),
           `Totalt: ${money(content.totalMinor)}`,
           `varav moms: ${money(content.vatMinor)}`,
         ],

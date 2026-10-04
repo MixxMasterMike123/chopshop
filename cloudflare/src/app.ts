@@ -43,6 +43,7 @@ import type { AdminDiscountCodeResult } from "./commerce/admin-discount-codes";
 import {
   createAdminDiscountCode,
   getAdminDiscountCode,
+  listAdminDiscountCodes,
   parseCreateDiscountCodeInput,
   parseUpdateDiscountCodeInput,
   updateAdminDiscountCode,
@@ -94,7 +95,7 @@ import {
   rateLimitedResponse,
   readJsonBody,
 } from "./lib/responses";
-import { clientIp, enforceRateLimit } from "./lib/rate-limit";
+import { clientIp, enforceRateLimit, visitorRateKey } from "./lib/rate-limit";
 import {
   authorizePlatformRequest,
   authorizeTenantAdminRequest,
@@ -102,6 +103,7 @@ import {
 import { handleAuthRoute } from "./auth/auth-routes";
 import { dispatchTargetOf } from "./pod/printers";
 import { printCanvasEnabled } from "./dispatch/print-canvas";
+import { isFeatureEnabled } from "./platform/tenant-config";
 import { handlePublicStorefrontRequest } from "./storefront/public-routes";
 import { isSameOriginRequest } from "./lib/same-origin";
 import { resolveRequestTenant } from "./tenancy/resolve-tenant";
@@ -368,6 +370,12 @@ import {
   STOREFRONT_WITHDRAWALS_PATH,
 } from "./routes/storefront-withdrawals";
 // CP4-IMPORTS-G — end
+// CP8-DC (imports) — begin
+import {
+  handleStorefrontDiscountPreviewRoute,
+  STOREFRONT_DISCOUNT_PREVIEW_PATH,
+} from "./routes/storefront-discount-preview";
+// CP8-DC (imports) — end
 // CP4-D2 (imports) — begin
 import { ADMIN_PREVIEW_PATH, handleAdminPreviewRoute } from "./routes/admin-preview";
 // CP4-D2 (imports) — end
@@ -481,7 +489,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0054_printer_exception.sql";
+const REQUIRED_MIGRATION = "0055_discount_code_holds.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -495,6 +503,13 @@ export const CHECKOUT_IP_WINDOW_MS = MINUTE_MS;
 export const CHECKOUT_EMAIL_SCOPE = "checkout-email";
 export const CHECKOUT_EMAIL_LIMIT = 30;
 export const CHECKOUT_EMAIL_WINDOW_MS = 60 * MINUTE_MS;
+// CP8-DC (DC16): a checkout that carries a discount code is also counted per
+// visitor (an IPv6 address by its /64), so the checkout is no faster an oracle
+// for guessing codes than the preview (30 per 10 minutes). A checkout without
+// a code is never counted here.
+export const DISCOUNT_ATTEMPT_SCOPE = "discount-attempt-ip";
+export const DISCOUNT_ATTEMPT_LIMIT = 20;
+export const DISCOUNT_ATTEMPT_WINDOW_MS = 10 * MINUTE_MS;
 
 // The payment route's per-IP shield. Deliberately TWICE the checkout limit
 // rather than equal to it: one buyer legitimately creates one checkout and then
@@ -1014,6 +1029,19 @@ function discountCodeResultResponse(
   if (result.status === "conflict") {
     return discountCodeConflictResponse();
   }
+  // DC13: a used or held code keeps its name. Its own code, so the page can
+  // say so in words of its own.
+  if (result.status === "in_use") {
+    return jsonResponse(
+      {
+        error: {
+          code: "discount_code_in_use",
+          message: "The discount code has been used and keeps its name",
+        },
+      },
+      409,
+    );
+  }
   if (result.status === "invalid") {
     return invalidRequestResponse();
   }
@@ -1054,6 +1082,11 @@ function discountCodeIdFromPath(pathname: string): string | null {
  * products surface uses POST .../publish because publishing writes a separate
  * projection row; here it is one boolean on one row, and a dedicated verb would
  * mean two paths writing the same column.
+ *
+ * CP8-DC: the routes follow the shop's `discountCodes` switch (DC14, F1):
+ * while it is off every method answers the opaque 404, after the session and
+ * same-origin gates and before any body. GET on the collection lists the
+ * codes; there is no DELETE (DC12: a code is deactivated, never deleted).
  */
 async function handleAdminDiscountCodeRoute(
   env: Env,
@@ -1069,9 +1102,16 @@ async function handleAdminDiscountCodeRoute(
     return adminNotFoundResponse();
   }
 
+  if (!(await isFeatureEnabled(env.DB, principal.tenantId, "discountCodes"))) {
+    return adminNotFoundResponse();
+  }
+
   const now = Date.now();
 
   if (url.pathname === ADMIN_DISCOUNT_CODES_PATH) {
+    if (request.method === "GET") {
+      return jsonResponse(await listAdminDiscountCodes(env.DB, principal, now));
+    }
     if (request.method !== "POST") {
       return adminNotFoundResponse();
     }
@@ -1094,7 +1134,7 @@ async function handleAdminDiscountCodeRoute(
 
   if (request.method === "GET") {
     return discountCodeResultResponse(
-      await getAdminDiscountCode(env.DB, principal, discountCodeId),
+      await getAdminDiscountCode(env.DB, principal, discountCodeId, now),
       200,
     );
   }
@@ -1155,6 +1195,10 @@ function unprocessableResponse(): Response {
  * provoke. The per-email limit can only run after parsing — the address is what
  * it keys on — and catches the distributed case the IP limit cannot: one buyer
  * address driven from many addresses.
+ *
+ * CP8-DC: a body that carries a discount code is counted a third time, per
+ * visitor (DISCOUNT_ATTEMPT_*), so guessing codes through checkouts is no
+ * faster than through the preview. A body without one is never counted there.
  */
 async function handleCheckoutRoute(
   env: Env,
@@ -1198,6 +1242,19 @@ async function handleCheckoutRoute(
   });
   if (!byEmail.allowed) {
     return rateLimitedResponse(byEmail.retryAfterSeconds);
+  }
+
+  if (input.discountCode !== null) {
+    const byAttempt = await enforceRateLimit(env.DB, {
+      key: visitorRateKey(clientIp(request)),
+      limit: DISCOUNT_ATTEMPT_LIMIT,
+      now,
+      scope: DISCOUNT_ATTEMPT_SCOPE,
+      windowMs: DISCOUNT_ATTEMPT_WINDOW_MS,
+    });
+    if (!byAttempt.allowed) {
+      return rateLimitedResponse(byAttempt.retryAfterSeconds);
+    }
   }
 
   const result = await createCheckout(env.DB, tenant, input, now, {
@@ -2355,6 +2412,13 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     onMethods(["POST"], storefront((c) => handleStorefrontWithdrawalRoute(c.env, c.req.raw))),
   );
   // CP4-ROUTES-G — end
+  // CP8-DC (the discount preview) — begin
+  // A storefront route: tenant by hostname, the same public-entrypoint rule.
+  app.all(
+    STOREFRONT_DISCOUNT_PREVIEW_PATH,
+    onMethods(["POST"], storefront((c) => handleStorefrontDiscountPreviewRoute(c.env, c.req.raw))),
+  );
+  // CP8-DC (the discount preview) — end
   // CP4-D2 — begin
   // The preview grant of an unpublished shop (D57): the shop's admin
   // (acting-as admitted), POST only, same origin; the handler answers the

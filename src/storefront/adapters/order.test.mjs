@@ -53,10 +53,23 @@ describe('toPageOrder', () => {
       subtotal: 497.5,
       shipping: 58,
       discountAmount: 0,
+      discountCode: null,
       vat: 111.1,
       total: 555.5,
       withdrawal: { waived: false },
     });
+  });
+
+  it('names the campaign code of a discounted order (CP8-DC), and only a non-empty string', () => {
+    const coded = toPageOrder({
+      ...BUYER_ORDER,
+      totals: { ...BUYER_ORDER.totals, discountCode: 'SOMMAR20', discountMinor: 9_950, totalMinor: 45_600 },
+    });
+    assert.equal(coded.discountCode, 'SOMMAR20');
+    assert.equal(coded.discountAmount, 99.5);
+    for (const discountCode of ['', 7, undefined, null]) {
+      assert.equal(toPageOrder({ ...BUYER_ORDER, totals: { ...BUYER_ORDER.totals, discountCode } }).discountCode, null);
+    }
   });
 
   it('a line total the page prints (price × quantity) is the server\'s line total', () => {

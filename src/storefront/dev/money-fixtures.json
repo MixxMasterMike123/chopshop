@@ -1,8 +1,9 @@
 {
-  "_comment": "Invented data only (CP4 brief F2). The money answers of the dev API, per shop of fixtures.json. `refusals` names a refusal per route (money-api.mjs).",
+  "_comment": "Invented data only (CP4 brief F2). The money answers of the dev API, per shop of fixtures.json. `refusals` names a refusal per route (money-api.mjs). `discountCodes` (CP8-DC): the codes the preview and the checkout apply, each with its percent (basis points) or its amount (öre).",
   "shops": {
     "provbutiken": {
       "refusals": {},
+      "discountCodes": { "SOMMAR20": { "percentBp": 2000 }, "VINTER100": { "valueMinor": 10000 } },
       "checkout": {
         "checkoutId": "5d0c1b2a-3e4f-4a5b-8c6d-7e8f9a0b1c2d",
         "currency": "SEK",

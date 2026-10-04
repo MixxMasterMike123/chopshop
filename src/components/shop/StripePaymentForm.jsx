@@ -285,8 +285,8 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, withdrawa
 
   // What the server prices (POST /v1/checkout): products, variants and
   // quantities, the buyer's e-mail address, the delivery, the recipient
-  // (name, address or pickup occasion) and the consents. Never a price, a
-  // total, a carriage or a VAT figure.
+  // (name, address or pickup occasion), the consents and the cart's discount
+  // code. Never a price, a total, a carriage or a VAT figure.
   const checkoutRequest = buildCheckoutRequest({
     items: checkoutItems(),
     email: customerInfo?.email,
@@ -297,6 +297,8 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, withdrawa
     pickupDate: deliveryInfo?.pickupDate,
     marketing: customerInfo?.marketing,
     withdrawal: withdrawalGate,
+    // CP8-DC: the code the cart holds, never the field's text.
+    discountCode: cart.discountCode,
   });
 
   // Recreation fingerprint (2026-08-15 verifier + 07-25 audit fixes).

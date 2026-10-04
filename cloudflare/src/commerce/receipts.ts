@@ -204,6 +204,11 @@ export interface BuyerOrder {
   recipient: RecipientView | null;
   status: string;
   totals: {
+    /**
+     * CP8-DC: the code the buyer typed, as the shop names it now, or null
+     * without one. The receipt is token-bound (PLAN §2.1).
+     */
+    discountCode: string | null;
     discountMinor: number;
     shippingMinor: number;
     subtotalMinor: number;
@@ -223,6 +228,7 @@ interface BuyerOrderRow {
   currency: string;
   customer_email: string;
   delivery_method: string;
+  discount_code: string | null;
   discount_minor: number;
   is_personalized: number;
   order_id: string;
@@ -271,14 +277,17 @@ export async function readBuyerOrder(
   const order = await db
     .prepare(
       `SELECT
-         order_id, order_number, status, customer_email, currency,
-         delivery_method, shipping_country, subtotal_minor, shipping_minor,
-         vat_minor, discount_minor, total_minor, created_at, is_personalized
-       FROM orders
-       WHERE tenant_id = ?
-         AND order_id = ?
-         AND receipt_token_hash = ?
-         AND receipt_token_expires_at > ?
+         o.order_id, o.order_number, o.status, o.customer_email, o.currency,
+         o.delivery_method, o.shipping_country, o.subtotal_minor, o.shipping_minor,
+         o.vat_minor, o.discount_minor, o.total_minor, o.created_at, o.is_personalized,
+         (SELECT dc.code FROM discount_codes AS dc
+          WHERE dc.discount_code_id = o.discount_code_id
+            AND dc.tenant_id = o.tenant_id) AS discount_code
+       FROM orders AS o
+       WHERE o.tenant_id = ?
+         AND o.order_id = ?
+         AND o.receipt_token_hash = ?
+         AND o.receipt_token_expires_at > ?
        LIMIT 1`,
     )
     .bind(tenantId, orderId, tokenHash, new Date(now).toISOString())
@@ -317,6 +326,7 @@ export async function readBuyerOrder(
     recipient: await readOrderRecipient(db, tenantId, order.order_id),
     status: order.status,
     totals: {
+      discountCode: order.discount_code,
       discountMinor: order.discount_minor,
       shippingMinor: order.shipping_minor,
       subtotalMinor: order.subtotal_minor,

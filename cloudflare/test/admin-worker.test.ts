@@ -6,6 +6,7 @@ import { handleRequest } from "../admin/src/index";
 import { createApp } from "../src/app";
 import { createAuth } from "../src/auth/create-auth";
 import { stripTenantHeaders } from "../src/lib/tenant-headers";
+import { switchStatement } from "./discount-fixtures";
 import { acceptTermsStatement } from "./legal-fixtures";
 
 /**
@@ -145,6 +146,9 @@ beforeAll(async () => {
        VALUES (?, ?, ?, 'admin', 'active', ?, ?)`,
     ).bind(`membership-wx-${userId}`, TENANT, userId, NOW, NOW),
     acceptTermsStatement(env.DB, TENANT),
+    // The admin write below is a discount code, whose routes follow the
+    // shop's opt-in switch (CP8-DC DC2, DC14).
+    switchStatement(TENANT, true),
   ]);
 });
 

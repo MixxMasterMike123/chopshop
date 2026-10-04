@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../../contexts/CartContext';
 import { SHIPPING_COSTS } from '../../contexts/CartContext';
+import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
+import toast from 'react-hot-toast';
 import ShopNavigation from '../../components/shop/ShopNavigation';
 import ShopFooter from '../../components/shop/ShopFooter';
 import SeoHreflang from '../../components/shop/SeoHreflang';
@@ -13,10 +15,13 @@ import { Helmet } from 'react-helmet-async';
 import { STORE } from '../../config/store';
 
 const ShoppingCart = () => {
-  const { cart, updateQuantity, removeFromCart, updateShippingCountry, calculateTotals } = useCart();
+  const { cart, updateQuantity, removeFromCart, updateShippingCountry, calculateTotals, applyDiscountCode, removeDiscount, discountPreview } = useCart();
+  const { isEnabled } = useShopFeatures();
   const { t } = useTranslation();
   const { getContentValue } = useContentTranslation();
   const navigate = useNavigate();
+  const [discountCodeInput, setDiscountCodeInput] = useState('');
+  const [isApplyingDiscount, setIsApplyingDiscount] = useState(false);
 
   console.log('[ShoppingCart] Rendering with cart items:', cart.items);
 
@@ -24,8 +29,20 @@ const ShoppingCart = () => {
   // (`subtotal`), and nothing else: the carriage, the total and the VAT are the
   // server's, priced at checkout from the product's own carriage table and
   // weight, which no public read carries (the cart's estimate could differ
-  // from what the server charges). No discount code exists (D81).
-  const { subtotal, discountAmount, discountPercentage, discountSource } = calculateTotals();
+  // from what the server charges). A discount code (CP8-DC) shows the
+  // preview's amount; the payment step shows what the server applied.
+  const { subtotal, discountAmount, discountCode, discountPercentage, discountSource } = calculateTotals();
+  // The stored code no longer applies to these lines (the last preview said so).
+  const discountNotApplying = Boolean(discountCode) && discountPreview?.code === discountCode && discountPreview?.applies === false;
+
+  // Pre-fill discount input if a code is applied to the cart from context
+  useEffect(() => {
+    if (discountCode) {
+      setDiscountCodeInput(discountCode);
+    } else {
+      setDiscountCodeInput('');
+    }
+  }, [discountCode]);
 
   const getCountryName = (countryCode) => {
     switch(countryCode) {
@@ -55,6 +72,26 @@ const ShoppingCart = () => {
 
   const handleCountryChange = (event) => {
     updateShippingCountry(event.target.value);
+  };
+
+  const handleApplyDiscount = async () => {
+    if (!discountCodeInput.trim() || isApplyingDiscount) return;
+
+    setIsApplyingDiscount(true);
+    try {
+      const result = await applyDiscountCode(discountCodeInput.trim());
+      if (result?.success) {
+        toast.success(result.message || t('discount_code_added', 'Rabattkoden är tillagd.'));
+        setDiscountCodeInput('');
+      } else if (result?.message) {
+        toast.error(result.message);
+      }
+    } catch (error) {
+      console.error('Error applying discount code:', error);
+      toast.error(t('discount_code_unavailable', 'Koden kunde inte kontrolleras just nu. Försök igen.'));
+    } finally {
+      setIsApplyingDiscount(false);
+    }
   };
 
   const handleCheckout = () => {
@@ -213,6 +250,48 @@ const ShoppingCart = () => {
                   </select>
                 </div>
 
+                {/* Discount Code Section (CP8-DC: only while the shop's add-on is on) */}
+                {isEnabled('discountCodes') && (
+                  <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile">
+                    <h3 className="font-display text-base sm:text-lg font-bold text-ink mb-3 sm:mb-4">{t('discount_code', 'Rabattkod')}</h3>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        value={discountCodeInput}
+                        onChange={(e) => setDiscountCodeInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleApplyDiscount();
+                        }}
+                        placeholder={t('enter_your_code', 'Ange din kod')}
+                        aria-label={t('discount_code', 'Rabattkod')}
+                        className="w-full px-3 sm:px-4 py-3 border border-ink/15 bg-white rounded-el focus:outline-hidden focus:ring-4 focus:ring-accent/10 focus:border-accent text-sm sm:text-base transition-colors"
+                        disabled={!!discountCode}
+                      />
+                      <button
+                        onClick={handleApplyDiscount}
+                        disabled={!!discountCode || isApplyingDiscount}
+                        className="px-4 sm:px-6 py-3 bg-ink text-white font-bold rounded-el hover:opacity-90 disabled:bg-ink-faint disabled:cursor-not-allowed transition-opacity text-sm sm:text-base whitespace-nowrap"
+                      >
+                        {t('apply_button', 'Applicera')}
+                      </button>
+                    </div>
+                    {discountCode && (
+                      <div className="mt-3 flex items-start justify-between gap-3">
+                        <p role="status" className="text-sm text-ink-muted">
+                          {discountNotApplying ? t('discount_code_not_applicable', 'Koden kan inte användas för den här varukorgen.') : null}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={removeDiscount}
+                          className="shrink-0 text-sm text-ink-muted hover:text-ink underline underline-offset-4 transition-colors"
+                        >
+                          {t('discount_code_remove', 'Ta bort')}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Order Summary */}
                 <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile">
                   <h3 className="font-display text-base sm:text-lg font-bold text-ink mb-3 sm:mb-4">{t('order_summary', 'Ordersammanfattning')}</h3>
@@ -236,7 +315,7 @@ const ShoppingCart = () => {
                                  : t('discount_label', 'Rabatt'))
                              : t('affiliate_discount_label', 'Affiliate rabatt, {{percentage}}%', { percentage: discountPercentage })}
                          </span>
-                         <span className="text-green-600 font-semibold text-sm sm:text-base">
+                         <span className="inline-flex items-baseline gap-1 whitespace-nowrap text-green-600 font-semibold text-sm sm:text-base">
                            - <SmartPrice 
                              sekPrice={discountAmount} 
                              variant="compact"

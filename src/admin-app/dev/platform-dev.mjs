@@ -37,7 +37,8 @@ const serverError = () => json(500, { error: { code: 'internal_error', message: 
 const TENANT_ID = /^[a-z0-9][a-z0-9-]*$/;
 const HOST_LABEL = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const FEATURE_KEYS = ['abandonedCheckout', 'contentStudio', 'discountCodes', 'marketingMaterials', 'pod', 'productReviews'];
-const OPT_IN = new Set(['contentStudio', 'marketingMaterials', 'pod']);
+// The Worker's opt-in keys (cloudflare/src/platform/tenant-config.ts OPT_IN_KEYS; CP8-DC DC2: discountCodes).
+const OPT_IN = new Set(['contentStudio', 'discountCodes', 'marketingMaterials', 'pod']);
 /** D45: the commission cap (MAX_DEFAULT_COMMISSION_BPS). */
 const COMMISSION_CAP_BPS = 800;
 

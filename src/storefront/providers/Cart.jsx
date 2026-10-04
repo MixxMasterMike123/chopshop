@@ -1,10 +1,14 @@
 // The cart of the Cloudflare storefront. `useCart()` returns the same value as
 // CartContext.jsx, with two changes:
 //
-//  1. NO DISCOUNT (D81: discount codes and the affiliate program are not
-//     ported). `applyDiscountCode` answers what the Firebase cart answered
-//     when both add-ons were off and applies nothing; `calculateTotals` never
-//     subtracts one. No code is sent to the API.
+//  1. CAMPAIGN CODES ONLY (CP8-DC; the affiliate program is not ported, D81).
+//     `applyDiscountCode(raw)` asks the API's preview (POST
+//     /v1/discount-codes/preview) once per call and answers `{ success,
+//     message }`, the contract the shared pages read. An applying code is
+//     kept with the cart (`cart.discountCode`) and sent with the checkout;
+//     the preview's amount is what the cart shows, and it is asked again
+//     500 ms after the lines change. The payment step shows the server's
+//     checkout, whose answer counts. A shop with the add-on off keeps no code.
 //  2. A line carries the API's ids: `productId` and `variantId` (money is keyed
 //     on the variant's sku, the line id stays `productId::variantSku`).
 //     `checkoutItems()` gives the lines as POST /v1/checkout takes them.
@@ -19,7 +23,19 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { STORE } from '../../config/store';
+import { previewDiscountCode } from '../../api/discountCodes.js';
+import {
+  DISCOUNT_MESSAGES,
+  isDiscountCodeShape,
+  normalizeDiscountCode,
+  previewedDiscountMinor,
+  previewOutcome,
+  storedDiscountCode,
+} from '../adapters/discount.js';
+import { useShopFeatures } from './ShopFeatures.jsx';
+import { useStorefront } from './Storefront.jsx';
 import { useStorefrontRoot } from './ShopRoot.jsx';
+import { useTranslation } from './Translation.jsx';
 
 // Shipping constants, as CartContext.jsx exports them (pages import them).
 export const SHIPPING_COSTS = {
@@ -36,17 +52,22 @@ export const SHIPPING_COSTS = {
 
 const EU_COUNTRIES = ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES'];
 
-const NO_DISCOUNT_MESSAGE = 'Rabattkoder är inte tillgängliga.';
+/** How long the lines must stay still before the stored code is previewed again. */
+const REPREVIEW_DELAY_MS = 500;
 
 export const cartStorageKey = (root) => `storefront-cart:${root ?? ''}`;
 
-const emptyCart = () => ({ items: [], shippingCountry: 'SE' });
+const emptyCart = () => ({ items: [], shippingCountry: 'SE', discountCode: null });
 
 export const loadStoredCart = (root) => {
   try {
     const saved = JSON.parse(localStorage.getItem(cartStorageKey(root)) || 'null');
     return saved && Array.isArray(saved.items)
-      ? { items: saved.items, shippingCountry: saved.shippingCountry || 'SE' }
+      ? {
+          items: saved.items,
+          shippingCountry: saved.shippingCountry || 'SE',
+          discountCode: storedDiscountCode(saved.discountCode),
+        }
       : emptyCart();
   } catch {
     return emptyCart();
@@ -92,8 +113,18 @@ export const useCart = () => {
 
 export const CartProvider = ({ children }) => {
   const root = useStorefrontRoot();
+  const { t } = useTranslation();
+  const { status: storefrontStatus } = useStorefront();
+  const { isEnabled } = useShopFeatures();
+  const discountsOn = isEnabled('discountCodes');
   const [cart, setCart] = useState(() => loadStoredCart(root));
   const cartRootRef = useRef(root);
+  // The last preview of the stored code: { code, applies, discountMinor }, or
+  // null while there is none (no code, not asked yet, or no answer).
+  const [discountPreview, setDiscountPreview] = useState(null);
+  // The code and lines the last preview answered for, so a press of
+  // "Applicera" is not asked a second time by the effect below.
+  const previewedFor = useRef(null);
 
   const [isAddedToCartModalVisible, setIsAddedToCartModalVisible] = useState(false);
   const [lastAddedItem, setLastAddedItem] = useState(null);
@@ -197,22 +228,107 @@ export const CartProvider = ({ children }) => {
   const calculateTotals = () => {
     const subtotal = cart.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const shipping = deliveryMethod === 'pickup' ? 0 : getShippingCost(cart.shippingCountry);
-    const total = subtotal + shipping;
+    // The preview's amount for the code the cart holds; the server prices the order.
+    const discountAmount = previewedDiscountMinor(discountPreview, cart.discountCode) / 100;
+    const total = subtotal + shipping - discountAmount;
     const vat = total - total / (1 + STORE.vatRate);
     return {
       subtotal,
       vat,
       shipping,
       total,
-      discountAmount: 0,
-      discountCode: null,
+      discountAmount,
+      discountCode: cart.discountCode,
+      // A preview names no percentage: the label is "Rabatt".
       discountPercentage: 0,
-      discountSource: null,
+      discountSource: discountAmount > 0 ? 'campaign' : null,
     };
   };
 
-  const applyDiscountCode = async () => ({ success: false, message: NO_DISCOUNT_MESSAGE });
-  const removeDiscount = () => {};
+  const messageOf = (outcome) => {
+    const [key, fallback] = DISCOUNT_MESSAGES[outcome];
+    return t(key, fallback);
+  };
+
+  /** The lines as POST /v1/checkout and the preview take them. */
+  const checkoutItems = () =>
+    cart.items.map(({ productId, quantity, variantId }) =>
+      variantId ? { productId, quantity, variantId } : { productId, quantity },
+    );
+
+  // One preview per press of "Applicera", never per keystroke: the page keeps
+  // the field's text and hands only the pressed value here.
+  const applyDiscountCode = async (raw) => {
+    const code = normalizeDiscountCode(raw);
+    if (!discountsOn || cart.items.length === 0) {
+      return { success: false, message: messageOf('not_applicable') };
+    }
+    if (!isDiscountCodeShape(code)) {
+      return { success: false, message: messageOf('invalid_format') };
+    }
+    let outcome;
+    let discount = null;
+    try {
+      discount = await previewDiscountCode({ code, items: checkoutItems() });
+      outcome = previewOutcome({ discount });
+    } catch (error) {
+      if (error?.name === 'AbortError') return { success: false };
+      outcome = previewOutcome({ error });
+    }
+    if (outcome === 'applies') {
+      previewedFor.current = `${discount.code}\n${JSON.stringify(checkoutItems())}`;
+      setCart((prev) => ({ ...prev, discountCode: discount.code }));
+      setDiscountPreview({ applies: true, code: discount.code, discountMinor: discount.discountMinor });
+      return { success: true, message: messageOf('applies') };
+    }
+    return { success: false, message: messageOf(outcome) };
+  };
+
+  const removeDiscount = useCallback(() => {
+    previewedFor.current = null;
+    setCart((prev) => (prev.discountCode === null ? prev : { ...prev, discountCode: null }));
+    setDiscountPreview(null);
+  }, []);
+
+  // A shop with the add-on off keeps no code, once its storefront has said so.
+  useEffect(() => {
+    if (storefrontStatus === 'ready' && !discountsOn && cart.discountCode !== null) removeDiscount();
+  }, [storefrontStatus, discountsOn, cart.discountCode, removeDiscount]);
+
+  // The stored code against the lines as they are now: asked again once the
+  // lines (or the code) have stayed the same for REPREVIEW_DELAY_MS. A code
+  // that stops applying stays stored (the buyer may add to reach a minimum);
+  // the cart then shows no discount and says so.
+  const linesKey = JSON.stringify(checkoutItems());
+  useEffect(() => {
+    const code = cart.discountCode;
+    if (code === null || !discountsOn || cart.items.length === 0) {
+      previewedFor.current = null;
+      setDiscountPreview(null);
+      return undefined;
+    }
+    const askedFor = `${code}\n${linesKey}`;
+    if (previewedFor.current === askedFor) return undefined;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const discount = await previewDiscountCode({ code, items: JSON.parse(linesKey) }, { signal: controller.signal });
+        previewedFor.current = askedFor;
+        setDiscountPreview({
+          applies: previewOutcome({ discount }) === 'applies',
+          code,
+          discountMinor: discount.discountMinor,
+        });
+      } catch (error) {
+        if (error?.name !== 'AbortError') setDiscountPreview(null);
+      }
+    }, REPREVIEW_DELAY_MS);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linesKey, cart.discountCode, discountsOn]);
 
   const addToCart = (product, quantity = 1, variant = null) => {
     const productId = product.productId ?? product.id;
@@ -334,12 +450,6 @@ export const CartProvider = ({ children }) => {
     setPickupDate('');
   };
 
-  /** The lines as POST /v1/checkout takes them. */
-  const checkoutItems = () =>
-    cart.items.map(({ productId, quantity, variantId }) =>
-      variantId ? { productId, quantity, variantId } : { productId, quantity },
-    );
-
   const value = {
     cart,
     addToCart,
@@ -352,6 +462,7 @@ export const CartProvider = ({ children }) => {
     checkoutItems,
     applyDiscountCode,
     removeDiscount,
+    discountPreview,
     getTotalItems,
     getShippingRegion,
     getShippingTierInfo,

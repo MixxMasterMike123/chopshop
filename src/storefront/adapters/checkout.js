@@ -75,6 +75,11 @@ export function toApiRecipient({ deliveryMethod, shippingCountry, shippingInfo, 
  * godkänner butikens köpvillkor", printed under the payment form). This body is
  * sent on the payment step, where that sentence is on the screen, and a
  * checkout becomes an order only when the buyer pays.
+ *
+ * `discountCode` (CP8-DC): the code the CART holds (`cart.discountCode`), never
+ * the text of a field; sent only when it is a non-empty string, so a request
+ * without one is the same request as before, and the payment is made again
+ * only when a code is added or removed.
  */
 export function buildCheckoutRequest({
   items,
@@ -86,6 +91,7 @@ export function buildCheckoutRequest({
   pickupDate,
   marketing,
   withdrawal,
+  discountCode,
 }) {
   const method = toApiDeliveryMethod(deliveryMethod);
   const consent = { terms: true, marketing: marketing === true };
@@ -106,6 +112,9 @@ export function buildCheckoutRequest({
     request.shippingCountry = String(shippingCountry || '').toUpperCase();
   }
   request.recipient = toApiRecipient({ deliveryMethod: method, shippingCountry, shippingInfo, pickupLocationId, pickupDate });
+  if (typeof discountCode === 'string' && discountCode.trim() !== '') {
+    request.discountCode = discountCode.trim();
+  }
   return request;
 }
 
@@ -121,8 +130,9 @@ export function minorToKronor(minor) {
  * its "no price" state). `vatRate` is the server's rate once priced, else the
  * page's own default (only the label of the VAT line reads it).
  *
- * The discount keys keep the names the page reads; nothing sends a code (D81),
- * so the server answers 0 and the discount rows stay closed.
+ * The discount keys keep the names the page reads. The server echoes the code
+ * the request sent (`discountCode`) and answers 0 when it did not apply
+ * (CP8-DC); the discount rows open only for an amount above 0.
  */
 export function toCheckoutTotals(checkout, fallbackVatRate) {
   if (!checkout || typeof checkout !== 'object') {

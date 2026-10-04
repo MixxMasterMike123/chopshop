@@ -62,7 +62,13 @@ const OrderPaymentCard = ({ order, subtotal, vat, total, paid, isB2C, affiliateC
         <SummaryRow label="Delsumma" value={formatSek(subtotal)} />
         {isB2C && order.discountAmount > 0 && (
           <SummaryRow
-            label={`Affiliate-rabatt (${affiliateCode || 'AFFILIATE'}), ${affiliatePct}%`}
+            label={
+              // CP8-DC (F6): a campaign code is named as it is; an order of
+              // the older build keeps the affiliate wording.
+              order.discountCode
+                ? `Rabatt (${order.discountCode})`
+                : `Affiliate-rabatt (${affiliateCode || 'AFFILIATE'}), ${affiliatePct}%`
+            }
             value={`- ${formatSek(order.discountAmount)}`}
             accent
           />

@@ -33,6 +33,7 @@ export { default as AdminSettings } from '../pages/admin/AdminSettings.jsx';
 export { default as AdminPayments } from '../pages/admin/AdminPayments.jsx';
 export { default as AdminUsers } from '../pages/admin/AdminUsers.jsx';
 export { default as AdminPlatformTerms } from '../pages/admin/AdminPlatformTerms.jsx';
+export { default as AdminDiscountCodes } from '../pages/admin/AdminDiscountCodes.jsx'; // CP8-DC
 export { default as PodAdminPage } from '../wagons/pod-wagon/components/PodAdminPage.jsx';
 export { default as AdminRedirects } from './pages/new/AdminRedirects.jsx'; // CP5-FL: new, admin build only
 

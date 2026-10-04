@@ -87,6 +87,35 @@ export function resolveCommissionBps(
 }
 
 /**
+ * The commission rate a payment of this shop is charged at: the shop's own
+ * `tenants.commission_bps`, else platform_settings' default (CP3-D), else
+ * DEFAULT_COMMISSION_BPS. ONE resolution, which createCheckoutPayment
+ * freezes with the intent and the checkout's discount rule (CP8-DC R2) reads
+ * ahead of it.
+ */
+export async function resolveTenantCommissionBps(
+  db: D1Database,
+  shopCommissionBps: unknown,
+): Promise<number> {
+  return resolveCommissionBps(
+    shopCommissionBps,
+    (await readDefaultCommissionBps(db)) ?? DEFAULT_COMMISSION_BPS,
+  );
+}
+
+/** resolveTenantCommissionBps for a tenant id (one read of its row). */
+export async function readCheckoutCommissionBps(
+  db: D1Database,
+  tenantId: string,
+): Promise<number> {
+  const row = await db
+    .prepare("SELECT commission_bps FROM tenants WHERE tenant_id = ? LIMIT 1")
+    .bind(tenantId)
+    .first<{ commission_bps: number | null }>();
+  return resolveTenantCommissionBps(db, row?.commission_bps ?? null);
+}
+
+/**
  * Firebase computeApplicationFeeOre: floor(amount × bps / 10000), clamped to
  * [0, amount]. Integer in, integer out; the floor rounds to the öre in the
  * shop's favour, as production does.
@@ -523,10 +552,7 @@ export async function createCheckoutPayment(
       checkout.total_minor,
       // CP3-D: the platform default comes from platform_settings (constant
       // only when the row is absent); the shop's own value still wins.
-      resolveCommissionBps(
-        account.commission_bps,
-        (await readDefaultCommissionBps(db)) ?? DEFAULT_COMMISSION_BPS,
-      ),
+      await resolveTenantCommissionBps(db, account.commission_bps),
       withheldMinor,
     );
     if (charge.feeExceedsGross) {

@@ -46,6 +46,7 @@ export const STOREFRONT_API_ROUTES: readonly ApiRoute[] = [
   { methods: ["POST"], segments: ["v1", "checkout"] },
   { methods: ["POST"], segments: ["v1", "checkout", ID, "payment"] },
   { methods: ["POST"], segments: ["v1", "checkout", ID, "receipt"] },
+  { methods: ["POST"], segments: ["v1", "discount-codes", "preview"] },
   { methods: ["GET"], segments: ["v1", "orders", ID] },
   { methods: ["POST"], segments: ["v1", "reports"] },
   { methods: ["POST"], segments: ["v1", "withdrawals"] },

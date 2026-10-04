@@ -152,6 +152,8 @@ interface OrderFacts {
   currency: string;
   customer_email: string;
   delivery_method: "pickup" | "shipping";
+  /** CP8-DC: the code's current name, or null (no code, or none found). */
+  discount_code: string | null;
   discount_minor: number;
   order_number: string;
   shipping_country: string | null;
@@ -167,7 +169,10 @@ function readOrder(env: Env, orderId: string, tenantId: string): Promise<OrderFa
   return env.DB.prepare(
     `SELECT o.order_number, o.customer_email, o.currency, o.delivery_method,
             o.shipping_country, o.subtotal_minor, o.shipping_minor,
-            o.discount_minor, o.vat_minor, o.total_minor, t.shop_name, t.support_email
+            o.discount_minor, o.vat_minor, o.total_minor, t.shop_name, t.support_email,
+            (SELECT dc.code FROM discount_codes AS dc
+             WHERE dc.discount_code_id = o.discount_code_id
+               AND dc.tenant_id = o.tenant_id) AS discount_code
      FROM orders AS o JOIN tenants AS t ON t.tenant_id = o.tenant_id
      WHERE o.order_id = ? AND o.tenant_id = ?
      LIMIT 1`,
@@ -294,6 +299,7 @@ async function buildConfirmation(ctx: EffectContext, orderId: string, tenantId: 
       order: frozen !== undefined ? (frozen as OrderConfirmationEmailJob["order"]) : {
         currency: order.currency,
         deliveryMethod: order.delivery_method,
+        ...(order.discount_code === null ? {} : { discountCode: order.discount_code }),
         discountMinor: order.discount_minor,
         items: items.results.map((item) => ({
           lineTotalMinor: item.line_total_minor,
@@ -393,6 +399,7 @@ function buildShopNotice(ctx: EffectContext, orderId: string, tenantId: string):
           adminUrl: adminOrderUrl(env, orderId, tenantId),
           currency: order.currency,
           deliveryMethod: order.delivery_method,
+          ...(order.discount_code === null ? {} : { discountCode: order.discount_code }),
           discountMinor: order.discount_minor,
           items: items.results.map((item) => ({
             lineTotalMinor: item.line_total_minor,

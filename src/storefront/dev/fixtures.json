@@ -42,7 +42,7 @@
         "features": {
           "abandonedCheckout": false,
           "contentStudio": false,
-          "discountCodes": false,
+          "discountCodes": true,
           "marketingMaterials": false,
           "pod": true,
           "productReviews": false
@@ -1013,6 +1013,14 @@
             "url": "https://example.test/"
           }
         ],
+        "features": {
+          "abandonedCheckout": false,
+          "contentStudio": false,
+          "discountCodes": false,
+          "marketingMaterials": false,
+          "pod": true,
+          "productReviews": false
+        },
         "templateId": "sport"
       }
     }

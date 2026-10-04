@@ -3,6 +3,15 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/auth/create-auth";
 import { acceptTermsStatement, BUYER_CONSENT, BUYER_RECIPIENT_PICKUP } from "./legal-fixtures";
+import {
+  buyerKeyOf,
+  holdStatement,
+  MINUTE_MS,
+  seedDiscountedCheckout,
+  setDiscountSwitch,
+  switchStatement,
+} from "./discount-fixtures";
+import { expectNoCostKeys, grantActingAs } from "./pod-fixtures";
 
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
 const HOST_A = "https://admin-a.dcadmin.test";
@@ -115,6 +124,9 @@ async function seedTenant(tenantId: string, hostname: string): Promise<void> {
       ) VALUES (?, ?, ?, 'admin', 'verified', ?, ?)`,
     ).bind(`domain-${tenantId}`, tenantId, hostname, NOW, NOW),
     acceptTermsStatement(env.DB, tenantId),
+    // CP8-DC (DC2, DC14): the add-on is opt-in and its admin routes follow
+    // the switch; this suite's shops have it on.
+    switchStatement(tenantId, true),
   ]);
 }
 
@@ -798,15 +810,20 @@ describe("discount code admin authorization", () => {
         )
       ).status,
     ).toBe(404);
-    expect(
-      (
-        await exports.default.fetch(
-          adminRequest(`${HOST_A}/v1/admin/discount-codes`, "GET", {
-            cookie: adminA.cookie,
-          }),
-        )
-      ).status,
-    ).toBe(404);
+    // CP8-DC: GET on the collection is the list now; any other method but
+    // POST stays the opaque 404, and there is no DELETE (DC12).
+    for (const method of ["PUT", "PATCH", "DELETE"]) {
+      expect(
+        (
+          await exports.default.fetch(
+            adminRequest(`${HOST_A}/v1/admin/discount-codes`, method, {
+              cookie: adminA.cookie,
+            }),
+          )
+        ).status,
+        method,
+      ).toBe(404);
+    }
   });
 });
 
@@ -879,4 +896,151 @@ describe("admin-created codes price a real checkout", () => {
       ).bind(TENANT_A, NOW, NOW),
     ]);
   }
+});
+
+describe("CP8-DC: the list, heldCount, the switch, the rename lock, a value of at least 1 öre", () => {
+  interface ListBody {
+    discountCodes: Array<DiscountCodeBody["discountCode"] & { heldCount: number }>;
+    truncated: boolean;
+  }
+
+  async function list(host: string, cookie: string, shopId?: string): Promise<Response> {
+    return exports.default.fetch(
+      adminRequest(`${host}/v1/admin/discount-codes`, "GET", {
+        cookie,
+        ...(shopId === undefined ? {} : { shopId }),
+      }),
+    );
+  }
+
+  async function created(body: Record<string, unknown>): Promise<string> {
+    const response = await createCode(HOST_A, adminA.cookie, body);
+    expect(response.status).toBe(201);
+    const json = (await response.json()) as DiscountCodeBody & { discountCode: { heldCount: number } };
+    expect(json.discountCode.heldCount).toBe(0);
+    return json.discountCode.discountCodeId;
+  }
+
+  /** A checkout on shop A that froze `codeId`, and its hold. */
+  async function hold(codeId: string, email: string, createdAt?: number): Promise<void> {
+    const checkout = await seedDiscountedCheckout({ discountCodeId: codeId, email, tenantId: TENANT_A });
+    await holdStatement({
+      buyerKey: await buyerKeyOf(TENANT_A, email),
+      checkoutId: checkout.checkoutId,
+      ...(createdAt === undefined ? {} : { createdAt }),
+      discountCodeId: codeId,
+      tenantId: TENANT_A,
+    }).run();
+  }
+
+  it("lists the shop's own codes newest first, with their counts and no cost key", async () => {
+    const older = await created({ code: nextCode(), percentBp: 1_000, scope: "all", type: "percent" });
+    const newer = await created({ code: nextCode(), scope: "all", type: "fixed", valueMinor: 500 });
+    const response = await list(HOST_A, adminA.cookie);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as ListBody;
+    expectNoCostKeys(body);
+    const ids = body.discountCodes.map((code) => code.discountCodeId);
+    expect(ids.indexOf(newer)).toBeLessThan(ids.indexOf(older));
+    expect(body.truncated).toBe(false);
+    expect(body.discountCodes.every((code) => code.code.length > 0 && typeof code.heldCount === "number")).toBe(true);
+    // Shop B's admin lists none of A's codes.
+    const other = (await (await list(HOST_B, adminB.cookie)).json()) as ListBody;
+    expect(other.discountCodes.map((code) => code.discountCodeId)).not.toContain(newer);
+  });
+
+  it("bounds the list at 200 and says truncated", async () => {
+    const base = Date.now() + 60 * MINUTE_MS;
+    const statements = Array.from({ length: 201 }, (_, index) =>
+      env.DB.prepare(
+        `INSERT INTO discount_codes (
+          discount_code_id, tenant_id, code, active, type, value_minor, scope, created_at, updated_at
+        ) VALUES (?, ?, ?, 1, 'fixed', 100, 'all', ?, ?)`,
+      ).bind(`dc-bound-${index}`, TENANT_B, `BOUND${index}`, base + index, base + index),
+    );
+    await env.DB.batch(statements);
+    const body = (await (await list(HOST_B, adminB.cookie)).json()) as ListBody;
+    expect(body.discountCodes).toHaveLength(200);
+    expect(body.truncated).toBe(true);
+    expect(body.discountCodes[0]?.discountCodeId).toBe("dc-bound-200");
+    expect(body.discountCodes[199]?.discountCodeId).toBe("dc-bound-1");
+  });
+
+  it("counts the buyers holding a live use: each buyer once, expired holds not at all", async () => {
+    const codeId = await created({ code: nextCode(), maxUses: 10, scope: "all", type: "fixed", valueMinor: 500 });
+    await hold(codeId, "held-one@buyer.test");
+    await hold(codeId, "held-one@buyer.test");
+    await hold(codeId, "held-two@buyer.test");
+    await hold(codeId, "held-old@buyer.test", Date.now() - 3 * 60 * MINUTE_MS);
+    const one = (await (await getCode(HOST_A, adminA.cookie, codeId)).json()) as DiscountCodeBody & {
+      discountCode: { heldCount: number };
+    };
+    expect(one.discountCode.heldCount).toBe(2);
+    const listed = (await (await list(HOST_A, adminA.cookie)).json()) as ListBody;
+    expect(listed.discountCodes.find((code) => code.discountCodeId === codeId)?.heldCount).toBe(2);
+  });
+
+  it("answers the opaque 404 on every route while the shop's switch is off", async () => {
+    const codeId = await created({ code: nextCode(), scope: "all", type: "fixed", valueMinor: 500 });
+    await setDiscountSwitch(TENANT_A, false);
+    try {
+      const answers = [
+        await list(HOST_A, adminA.cookie),
+        await createCode(HOST_A, adminA.cookie, { code: nextCode(), scope: "all", type: "fixed", valueMinor: 500 }),
+        await getCode(HOST_A, adminA.cookie, codeId),
+        await patchCode(HOST_A, adminA.cookie, codeId, { active: false }),
+      ];
+      for (const answer of answers) {
+        expect(answer.status).toBe(404);
+        expect(await answer.json()).toEqual({ error: { code: "not_found", message: "Route not found" } });
+      }
+      expect((await storedRow(codeId))?.active).toBe(1);
+    } finally {
+      await setDiscountSwitch(TENANT_A, true);
+    }
+    expect((await list(HOST_A, adminA.cookie)).status).toBe(200);
+  });
+
+  it("renames a code nobody has used or held, and refuses once it is used or held", async () => {
+    const fresh = await created({ code: nextCode(), scope: "all", type: "fixed", valueMinor: 500 });
+    const renamed = nextCode();
+    expect((await patchCode(HOST_A, adminA.cookie, fresh, { code: renamed.toLowerCase() })).status).toBe(200);
+    expect((await storedRow(fresh))?.code).toBe(renamed);
+
+    const used = await created({ code: nextCode(), scope: "all", type: "fixed", valueMinor: 500 });
+    await env.DB.prepare("UPDATE discount_codes SET used_count = 1 WHERE discount_code_id = ?").bind(used).run();
+    const usedName = (await storedRow(used))?.code as string;
+    const refused = await patchCode(HOST_A, adminA.cookie, used, { code: nextCode() });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: { code: "discount_code_in_use", message: "The discount code has been used and keeps its name" },
+    });
+    expect((await storedRow(used))?.code).toBe(usedName);
+    // The same name, and every other field, may still be edited.
+    const sameName = await patchCode(HOST_A, adminA.cookie, used, { active: false, code: usedName.toLowerCase(), maxUses: 9 });
+    expect(sameName.status).toBe(200);
+    expectNoCostKeys(await sameName.json());
+
+    const held = await created({ code: nextCode(), scope: "all", type: "fixed", valueMinor: 500 });
+    await hold(held, "renamer@buyer.test", Date.now() - 3 * 60 * MINUTE_MS);
+    expect((await patchCode(HOST_A, adminA.cookie, held, { code: nextCode() })).status).toBe(409);
+  });
+
+  it("refuses a fixed code worth 0 on create and on edit (F7)", async () => {
+    expect((await createCode(HOST_A, adminA.cookie, { code: nextCode(), scope: "all", type: "fixed", valueMinor: 0 })).status).toBe(400);
+    const codeId = await created({ code: nextCode(), scope: "all", type: "fixed", valueMinor: 1 });
+    expect((await patchCode(HOST_A, adminA.cookie, codeId, { valueMinor: 0 })).status).toBe(400);
+    expect((await storedRow(codeId))?.value_minor).toBe(1);
+  });
+
+  it("admits a platform user acting as the shop", async () => {
+    const platformUser = await signUp("dcadmin-platform@example.test");
+    await seedAccess(platformUser.userId, "platform_admin");
+    await grantActingAs(platformUser.userId, TENANT_A);
+    const response = await list(HOST_A, platformUser.cookie, TENANT_A);
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as ListBody).discountCodes.length).toBeGreaterThan(0);
+    // Without the grant's shop, nothing.
+    expect((await list(HOST_B, platformUser.cookie, TENANT_B)).status).toBe(404);
+  });
 });

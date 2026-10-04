@@ -15,7 +15,7 @@
           "pod": true,
           "pickup": true,
           "affiliate": false,
-          "discountCodes": false,
+          "discountCodes": true,
           "productReviews": false,
           "abandonedCheckout": false,
           "contentStudio": false,

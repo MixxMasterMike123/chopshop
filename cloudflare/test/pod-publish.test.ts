@@ -23,7 +23,7 @@ import {
   handlePublicProductListRoute,
   handlePublicProductRefRoute,
 } from "../src/routes/public-products";
-import { handlePublicStorefrontRequest } from "../src/storefront/public-routes";
+import { handlePublicStorefrontRequest, STOREFRONT_BODY_REVISION } from "../src/storefront/public-routes";
 import type { TenantContext } from "../src/tenancy/resolve-tenant";
 import {
   adminOf,
@@ -229,12 +229,16 @@ describe("public eligibility, POD fields, previews and catalog_version", () => {
     expect(again.status).toBe(304);
     expect(await again.text()).toBe("");
 
-    for (const response of [
-      await handlePublicProductListRoute(env, new Request(`${ORIGIN}/v1/products`)),
-      await handlePublicStorefrontRequest(env, new Request(`${ORIGIN}/v1/storefront`)),
-    ]) {
+    for (const [response, etag] of [
+      [await handlePublicProductListRoute(env, new Request(`${ORIGIN}/v1/products`)), `"${version}"`],
+      // CP8-DC (F10): the storefront body names its code revision as well.
+      [
+        await handlePublicStorefrontRequest(env, new Request(`${ORIGIN}/v1/storefront`)),
+        `"${version}-r${STOREFRONT_BODY_REVISION}"`,
+      ],
+    ] as const) {
       expect(response.status).toBe(200);
-      expect(response.headers.get("etag")).toBe(`"${version}"`);
+      expect(response.headers.get("etag")).toBe(etag);
       expectNoCostKeys(await response.json());
     }
   });

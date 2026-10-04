@@ -390,6 +390,11 @@ const OrderConfirmation = () => {
                     <div className="flex justify-between text-sm text-green-600">
                       <span className="font-medium">
                         {(() => {
+                          // CP8-DC (F6): a campaign code is named as it is,
+                          // with no percentage (the order stores none).
+                          if (order.discountCode) {
+                            return t('order_confirmation_discount_code', 'Rabatt ({{code}})', { code: order.discountCode });
+                          }
                           // Handle different affiliate data structures
                           const affiliateCode = order.affiliateCode || order.affiliate?.code || 'AFFILIATE';
                           const discountPercentage = order.discountPercentage || order.affiliate?.discountPercentage || order.affiliateDiscount?.percentage || 0;

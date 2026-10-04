@@ -173,7 +173,8 @@ describe("the storefront response's members", () => {
     }
     expect(on.pod).toBe(true);
     expect(on.productReviews).toBe(false);
-    expect(on.discountCodes).toBe(false);
+    // CP8-DC: ported (D81 reversed for this key only), opt-in per shop (DC2).
+    expect(on.discountCodes).toBe(true);
     expect(on.abandonedCheckout).toBe(false);
 
     await setFeature(shop.tenantId, "pod", false);

@@ -9,7 +9,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { createDevApi, DEV_API_MARKER, loadShops, route } from './dev-api.mjs';
+import { EventEmitter } from 'node:events';
+
+import { createDevApi, DEV_API_MARKER, loadShops, readJsonBody, route } from './dev-api.mjs';
 import { toPageProduct, toPageProducts } from '../adapters/products.js';
 
 const shops = loadShops();
@@ -123,6 +125,80 @@ describe('the dev API answers the storefront routes in the API\'s shapes', () =>
     let passed = false;
     api({ method: 'GET', url: '/provbutiken/' }, res, () => { passed = true; });
     assert.equal(passed, true);
+  });
+});
+
+describe('the discount code in the dev API (CP8-DC)', () => {
+  const post = (path, body) => route(shops, 'POST', new URL(path, 'http://dev.invalid'), { body });
+  const ITEMS = [{ productId: 'p-linnetroja', quantity: 1 }];
+
+  it('one invented shop has the add-on on, the other off', () => {
+    assert.equal(get('/_api/provbutiken/v1/storefront').body.storefront.features.discountCodes, true);
+    assert.equal(get('/_api/sportbutiken/v1/storefront').body.storefront.features.discountCodes, false);
+  });
+
+  it('the preview applies a code of the shop\'s table, normalised, and answers every other with the one body', () => {
+    // 20 % of one Linnetröja (399 kr), as the server rounds: up to the öre.
+    assert.deepEqual(post('/_api/provbutiken/v1/discount-codes/preview', { code: ' sommar20 ', items: ITEMS }), {
+      body: { discount: { applies: true, code: 'SOMMAR20', discountMinor: 7_980 } },
+      headers: undefined,
+      status: 200,
+    });
+    // A fixed amount is clamped to the lines.
+    assert.equal(post('/_api/provbutiken/v1/discount-codes/preview', { code: 'VINTER100', items: [{ productId: 'p-randstrumpor', quantity: 1 }] }).body.discount.discountMinor, 8_900);
+    assert.deepEqual(post('/_api/provbutiken/v1/discount-codes/preview', { code: 'NOPE', items: ITEMS }).body, {
+      discount: { applies: false, code: 'NOPE', discountMinor: 0 },
+    });
+    for (const body of [{ code: 'SOM MAR', items: ITEMS }, { code: 'SOMMAR20', items: [] }, undefined]) {
+      assert.equal(post('/_api/provbutiken/v1/discount-codes/preview', body).status, 400);
+    }
+  });
+
+  it('the checkout applies the code it is sent, and echoes one it does not know with 0', () => {
+    const plain = post('/_api/provbutiken/v1/checkout', {}).body.checkout;
+    assert.equal(plain.discountMinor, 0);
+    const coded = post('/_api/provbutiken/v1/checkout', { discountCode: 'SOMMAR20' }).body.checkout;
+    // 20 % of the fixture's 847 kr.
+    assert.deepEqual(
+      [coded.discountCode, coded.discountMinor, coded.totalMinor, coded.vatMinor],
+      ['SOMMAR20', 16_940, plain.subtotalMinor + plain.shippingMinor - 16_940, 14_712],
+    );
+    const unknown = post('/_api/provbutiken/v1/checkout', { discountCode: 'nope' }).body.checkout;
+    assert.deepEqual([unknown.discountCode, unknown.discountMinor, unknown.totalMinor], ['NOPE', 0, plain.totalMinor]);
+  });
+
+  it('the buyer\'s order carries totals.discountCode, null without a code', () => {
+    const { body } = get('/_api/provbutiken/v1/orders/8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d');
+    assert.equal(body.order.totals.discountCode, null);
+  });
+
+  it('the middleware reads a write\'s JSON body and hands it on', async () => {
+    const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/_api/provbutiken/v1/discount-codes/preview' });
+    const headers = {};
+    let ended;
+    const done = new Promise((resolve) => {
+      ended = resolve;
+    });
+    const res = { setHeader: (k, v) => { headers[k] = v; }, end: (text) => ended(text) };
+    createDevApi()(req, res, () => assert.fail('handled'));
+    req.emit('data', Buffer.from(JSON.stringify({ code: 'vinter100', items: [{ productId: 'p', quantity: 1 }] })));
+    req.emit('end');
+    // An id the dev catalogue does not know prices at 0: nothing to discount.
+    assert.deepEqual(JSON.parse(await done), { discount: { applies: false, code: 'VINTER100', discountMinor: 0 } });
+    assert.equal(headers['X-Storefront-Dev'], DEV_API_MARKER);
+  });
+
+  it('a body that is not JSON, or too large, is no body', async () => {
+    const read = async (chunks) => {
+      const req = new EventEmitter();
+      const body = readJsonBody(req);
+      for (const chunk of chunks) req.emit('data', Buffer.from(chunk));
+      req.emit('end');
+      return body;
+    };
+    assert.equal(await read(['{not json']), undefined);
+    assert.equal(await read(['x'.repeat(70_000)]), undefined);
+    assert.deepEqual(await read(['{"a":', '1}']), { a: 1 });
   });
 });
 

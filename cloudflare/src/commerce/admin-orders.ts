@@ -97,6 +97,12 @@ export interface AdminOrderView {
   shippingCountry: string | null;
   status: string;
   totals: {
+    /**
+     * CP8-DC: the campaign code that paid for the discount, by its current
+     * name (a used code keeps its name and is never deleted, DC12/DC13), or
+     * null without one. The seller's own campaign, not a platform figure.
+     */
+    discountCode: string | null;
     discountMinor: number;
     shippingMinor: number;
     subtotalMinor: number;
@@ -113,6 +119,7 @@ interface AdminOrderRow extends PayoutFacts {
   delivery_method: string;
   fulfilment_status: FulfilmentState;
   shipping_country: string | null;
+  discount_code: string | null;
   discount_minor: number;
   dispute_amount_minor: number;
   order_id: string;
@@ -145,7 +152,10 @@ export async function readAdminOrder(
               o.dispute_amount_minor, o.created_at, o.customer_email,
               o.delivery_method, o.shipping_country, o.fulfilment_status,
               o.cancelled_at, ${PAYOUT_FACT_COLUMNS},
-              t.stripe_payouts_enabled
+              t.stripe_payouts_enabled,
+              (SELECT dc.code FROM discount_codes AS dc
+               WHERE dc.discount_code_id = o.discount_code_id
+                 AND dc.tenant_id = o.tenant_id) AS discount_code
        FROM orders AS o
        JOIN tenants AS t ON t.tenant_id = o.tenant_id
        WHERE o.order_id = ? AND o.tenant_id = ?
@@ -255,6 +265,7 @@ export async function readAdminOrder(
     shippingCountry: order.shipping_country,
     status: order.status,
     totals: {
+      discountCode: order.discount_code,
       discountMinor: order.discount_minor,
       shippingMinor: order.shipping_minor,
       subtotalMinor: order.subtotal_minor,

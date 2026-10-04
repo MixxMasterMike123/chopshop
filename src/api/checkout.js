@@ -15,8 +15,9 @@ export function newIdempotencyKey() {
  * (ISO alpha-2) only for 'shipping'. `consent`: `{ terms: true, marketing?,
  * withdrawalWaiver?, disclosureVersion? }` (disclosureVersion only with a
  * ticked waiver). `recipient` (D98): who gets the order and where, as
- * storefront/adapters/checkout.js toApiRecipient builds it. No discount code
- * is sent: discount codes are not ported (D81).
+ * storefront/adapters/checkout.js toApiRecipient builds it. `discountCode`
+ * (CP8-DC): the cart's campaign code, sent only when there is one; a code
+ * that does not apply is echoed back with `discountMinor` 0.
  *
  * Resolves `{ checkout, replayed }`: the priced checkout (`checkoutId`,
  * `items`, `subtotalMinor`, `shippingMinor`, `vatMinor`, `vatRateBp`,
@@ -28,7 +29,7 @@ export function newIdempotencyKey() {
  * `unprocessable` (a line cannot be bought), 429 `rate_limited`.
  */
 export async function createCheckout(
-  { items, email, deliveryMethod, shippingCountry, consent, idempotencyKey, recipient },
+  { items, email, deliveryMethod, shippingCountry, consent, idempotencyKey, recipient, discountCode },
   { signal } = {},
 ) {
   const body = {
@@ -44,6 +45,7 @@ export async function createCheckout(
   // D98: who gets the order and where (storefront/adapters/checkout.js
   // toApiRecipient). The server refuses a checkout without one.
   if (recipient !== undefined) body.recipient = recipient;
+  if (typeof discountCode === 'string' && discountCode !== '') body.discountCode = discountCode;
 
   const { status, data } = await request('/v1/checkout', { method: 'POST', body, signal });
   return { checkout: data.checkout, replayed: status === 200 };

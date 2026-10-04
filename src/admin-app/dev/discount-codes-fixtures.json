@@ -1,0 +1,73 @@
+{
+  "_note": "INVENTED discount codes for the admin dev API (discount-codes-dev.mjs, CP8-DC). No real shop or campaign. Instants are ms epoch, the end inclusive (the last millisecond of a Stockholm day).",
+  "test-shop-a": [
+    {
+      "active": true,
+      "code": "SOMMAR20",
+      "createdAt": 1790000000000,
+      "discountCodeId": "dc-dev-sommar20",
+      "endsAt": 1793487599999,
+      "heldCount": 1,
+      "maxUses": 10,
+      "minSpendMinor": null,
+      "percentBp": 2000,
+      "productIds": null,
+      "scope": "all",
+      "startsAt": 1790805600000,
+      "type": "percent",
+      "usedCount": 3,
+      "valueMinor": null
+    },
+    {
+      "active": true,
+      "code": "VINTER100",
+      "createdAt": 1789900000000,
+      "discountCodeId": "dc-dev-vinter100",
+      "endsAt": null,
+      "heldCount": 0,
+      "maxUses": null,
+      "minSpendMinor": 50000,
+      "percentBp": null,
+      "productIds": null,
+      "scope": "all",
+      "startsAt": null,
+      "type": "fixed",
+      "usedCount": 0,
+      "valueMinor": 10000
+    },
+    {
+      "active": true,
+      "code": "TROJA15",
+      "createdAt": 1789800000000,
+      "discountCodeId": "dc-dev-troja15",
+      "endsAt": null,
+      "heldCount": 0,
+      "maxUses": 50,
+      "minSpendMinor": null,
+      "percentBp": 1500,
+      "productIds": ["prod-dev-1", "prod-dev-2"],
+      "scope": "products",
+      "startsAt": null,
+      "type": "percent",
+      "usedCount": 12,
+      "valueMinor": null
+    },
+    {
+      "active": false,
+      "code": "VAR10",
+      "createdAt": 1789700000000,
+      "discountCodeId": "dc-dev-var10",
+      "endsAt": 1782856799999,
+      "heldCount": 0,
+      "maxUses": null,
+      "minSpendMinor": null,
+      "percentBp": 1000,
+      "productIds": null,
+      "scope": "all",
+      "startsAt": 1780264800000,
+      "type": "percent",
+      "usedCount": 41,
+      "valueMinor": null
+    }
+  ]
+}

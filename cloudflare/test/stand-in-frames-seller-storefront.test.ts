@@ -19,6 +19,7 @@ import {
   podRefusalMessage,
 } from "../src/pod/pod-mappings";
 import { isStandInSku, replacePrinters } from "../src/pod/printers";
+import { STOREFRONT_BODY_REVISION } from "../src/storefront/public-routes";
 import {
   eligibilityPredicate,
   PREVIEW_CANVAS_ELIGIBILITY_PREDICATE,
@@ -342,20 +343,22 @@ describe("the ETag names the switch", () => {
   it("off \"<v>\", on \"<v>-c\": a body kept from before a flip is answered in full, never a 304", async () => {
     const version = await catalogVersion(TENANT);
     for (const path of VERSIONED_PATHS) {
+      // CP8-DC (F10): the storefront body names its code revision as well.
+      const r = path === "/v1/storefront" ? `-r${STOREFRONT_BODY_REVISION}` : "";
       const off = await get(path, undefined);
       const on = await get(path, ON);
       expect([off.status, on.status], path).toEqual([200, 200]);
-      expect(off.headers.get("etag"), path).toBe(`"${version}"`);
-      expect(on.headers.get("etag"), path).toBe(`"${version}-c"`);
+      expect(off.headers.get("etag"), path).toBe(`"${version}${r}"`);
+      expect(on.headers.get("etag"), path).toBe(`"${version}-c${r}"`);
 
-      const flippedOn = await get(path, ON, { "if-none-match": `"${version}"` });
+      const flippedOn = await get(path, ON, { "if-none-match": `"${version}${r}"` });
       expect(flippedOn.status, path).toBe(200);
       expect(await flippedOn.text(), path).toBe(await on.text());
-      expect((await get(path, ON, { "if-none-match": `"${version}-c"` })).status, path).toBe(304);
+      expect((await get(path, ON, { "if-none-match": `"${version}-c${r}"` })).status, path).toBe(304);
 
-      const flippedOff = await get(path, "false", { "if-none-match": `"${version}-c"` });
+      const flippedOff = await get(path, "false", { "if-none-match": `"${version}-c${r}"` });
       expect(flippedOff.status, path).toBe(200);
-      expect((await get(path, "false", { "if-none-match": `"${version}"` })).status, path).toBe(304);
+      expect((await get(path, "false", { "if-none-match": `"${version}${r}"` })).status, path).toBe(304);
     }
   });
 });

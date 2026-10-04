@@ -99,7 +99,7 @@ export const REFUSED_LEGAL_KEYS = ['acceptance'];
 /** Must equal cloudflare/src/platform/tenant-config.ts FEATURE_KEYS. */
 export const FEATURE_KEYS = ['abandonedCheckout', 'contentStudio', 'discountCodes', 'marketingMaterials', 'pod', 'productReviews'];
 /** Must equal cloudflare/src/platform/tenant-config.ts OPT_IN_KEYS (module-private there; restated here, pinned by the same test). */
-export const OPT_IN_FEATURE_KEYS = new Set(['contentStudio', 'marketingMaterials', 'pod']);
+export const OPT_IN_FEATURE_KEYS = new Set(['contentStudio', 'discountCodes', 'marketingMaterials', 'pod']);
 export const FEATURE_DEFAULTS = Object.fromEntries(FEATURE_KEYS.map((k) => [k, !OPT_IN_FEATURE_KEYS.has(k)]));
 
 function isPlainObject(v) {

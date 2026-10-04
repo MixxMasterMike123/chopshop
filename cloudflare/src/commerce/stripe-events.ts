@@ -219,26 +219,53 @@ async function handleIntentStatus(
 
   // Never regress a terminal state: a late payment_failed after the intent
   // succeeded or was canceled changes nothing (0019 also refuses it).
-  return commitWithLedger(
-    db,
-    event,
-    [
-      db
-        .prepare(
-          `UPDATE checkouts
-           SET payment_intent_status = ?,
-               payment_intent_status_at = ?,
-               updated_at = MAX(updated_at, ?)
-           WHERE checkout_id = ?
-             AND (payment_intent_status IS NULL
-                  OR payment_intent_status NOT IN ('succeeded', 'canceled'))`,
-        )
-        .bind(status, now, now, checkout.checkout_id),
-    ],
-    checkout.tenant_id,
-    intentId,
-    now,
-  );
+  const effects = [
+    db
+      .prepare(
+        `UPDATE checkouts
+         SET payment_intent_status = ?,
+             payment_intent_status_at = ?,
+             updated_at = MAX(updated_at, ?)
+         WHERE checkout_id = ?
+           AND (payment_intent_status IS NULL
+                OR payment_intent_status NOT IN ('succeeded', 'canceled'))`,
+      )
+      .bind(status, now, now, checkout.checkout_id),
+  ];
+  // CP8-DC (0055, DC4): a canceled intent can never pay, so its checkout's
+  // hold on a discount use is released, in the same batch and only when the
+  // update above left the checkout canceled (never after a success). A
+  // declined card is NOT a release: the buyer may try another card on the
+  // same intent, and the hold runs out by itself.
+  if (status === "canceled") {
+    effects.push(releaseCanceledHoldStatement(db, checkout.checkout_id, now));
+  }
+  return commitWithLedger(db, event, effects, checkout.tenant_id, intentId, now);
+}
+
+/**
+ * Releases the live discount hold (0055) of a checkout whose intent is
+ * recorded as canceled. Shared with the retention sweep's cancel (crons.ts),
+ * which runs it after its own checkout update in one batch. Matches nothing
+ * for a checkout without a hold, or whose intent is not canceled.
+ */
+export function releaseCanceledHoldStatement(
+  db: D1Database,
+  checkoutId: string,
+  now: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE discount_code_holds
+       SET state = 'released', updated_at = MAX(updated_at, ?)
+       WHERE checkout_id = ?
+         AND state = 'held'
+         AND EXISTS (
+           SELECT 1 FROM checkouts
+           WHERE checkout_id = ? AND payment_intent_status = 'canceled'
+         )`,
+    )
+    .bind(now, checkoutId, checkoutId);
 }
 
 // ── refunds ─────────────────────────────────────────────────────────────────

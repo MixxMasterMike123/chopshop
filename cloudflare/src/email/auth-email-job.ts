@@ -1,4 +1,6 @@
+import { isValidDiscountCode } from "../commerce/discount-codes";
 import {
+  discountLabel,
   isOrderEmailJob,
   isOrderEmailKind,
   type OrderEmailJob,
@@ -83,6 +85,12 @@ export interface OrderConfirmationLine {
 export interface OrderConfirmationContent {
   currency: string;
   deliveryMethod: "pickup" | "shipping";
+  /**
+   * CP8-DC: the campaign code the discount came from, by its current name.
+   * ABSENT (never null) on an order without one, so such a confirmation's
+   * content, frozen copy and fingerprint are what they were before.
+   */
+  discountCode?: string;
   discountMinor: number;
   items: OrderConfirmationLine[];
   orderNumber: string;
@@ -513,6 +521,9 @@ function validatedOrderContent(value: unknown): OrderConfirmationContent {
     // The order's own arithmetic (0011): VAT is contained in the total.
     value.totalMinor !== value.subtotalMinor + value.shippingMinor - value.discountMinor ||
     value.vatMinor > value.totalMinor ||
+    // Absent on a copy frozen before CP8-DC and on an order without a code.
+    (value.discountCode !== undefined &&
+      (typeof value.discountCode !== "string" || !isValidDiscountCode(value.discountCode))) ||
     !Array.isArray(items) ||
     items.length === 0 ||
     items.length > MAX_ORDER_LINES
@@ -542,6 +553,7 @@ function validatedOrderContent(value: unknown): OrderConfirmationContent {
   return {
     currency: value.currency,
     deliveryMethod: value.deliveryMethod,
+    ...(typeof value.discountCode === "string" ? { discountCode: value.discountCode } : {}),
     discountMinor: value.discountMinor,
     items: lines,
     orderNumber: value.orderNumber,
@@ -650,6 +662,9 @@ export function canonicalOrderContent(order: OrderConfirmationContent) {
   return {
     currency: order.currency,
     deliveryMethod: order.deliveryMethod,
+    // Only when there is one: an order without a code keeps its fingerprint
+    // byte for byte (CP8-DC).
+    ...(order.discountCode === undefined ? {} : { discountCode: order.discountCode }),
     discountMinor: order.discountMinor,
     items: order.items.map((item) => ({
       lineTotalMinor: item.lineTotalMinor,
@@ -702,7 +717,7 @@ function renderOrderConfirmationEmail(job: OrderConfirmationEmailJob): AuthEmail
       value: money(order.shippingMinor),
     },
     ...(order.discountMinor > 0
-      ? [{ label: "Rabatt", value: `-${money(order.discountMinor)}` }]
+      ? [{ label: discountLabel(order.discountCode), value: `-${money(order.discountMinor)}` }]
       : []),
     { label: "Totalt", value: money(order.totalMinor) },
     { label: "varav moms", value: money(order.vatMinor) },

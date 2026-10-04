@@ -9,7 +9,31 @@
  *
  * Everything here is pure integer arithmetic. `resolveDiscount` performs one D1
  * read, and only when the request actually carried a code.
+ *
+ * CP8-DC (docs/cf-port/CP8_DC_REPORT.md): a use is HELD while a buyer pays
+ * (migration 0055) and counted when the payment succeeds; the read below
+ * counts other buyers' live holds against the cap, by the same predicate as
+ * the hold's capacity trigger. The money rule that keeps a discount from
+ * leaving the charge under MIN_CHARGE_MINOR or the platform's fee above what
+ * the buyer pays is checkout.ts `discountViable`, beside the fee it reads.
+ *
+ * This module imports nothing: the email templates and the migration
+ * tooling's rule bundle (scripts/cf-port/migrate/lib/worker-rules.mjs, by way
+ * of the email modules) reach it, and neither may pull the payment client in.
  */
+
+/**
+ * How long a checkout holds a use of a capped code (DC3): an hour from the
+ * moment the buyer reached payment, never longer than the checkout itself.
+ */
+export const DISCOUNT_HOLD_TTL_MS = 60 * 60 * 1_000;
+
+/**
+ * The least a discounted checkout may charge (DC6): Stripe's minimum charge
+ * for SEK, 3,00 kr. One value for every currency, which is conservative for
+ * SEK, NOK, DKK and EUR. A discount that would leave less does not apply.
+ */
+export const MIN_CHARGE_MINOR = 300;
 
 /**
  * The wire form of a code as the buyer typed it, normalized.
@@ -223,11 +247,17 @@ export function discountBaseMinor(
  * Production checks the same five things in `computeOrderTotalsSek`, and checks
  * them AGAIN there after the validate callable already did — deliberately, so a
  * code that expired, was deactivated, or filled up between display and payment
- * yields no discount. This is that authoritative check; there is no display-only
- * counterpart on this side yet.
+ * yields no discount. This is that authoritative check; the storefront's
+ * preview (discount-preview.ts) is the display-only counterpart and calls it
+ * with no holds.
  *
  * The window bounds are INCLUSIVE on both ends, matching production's
  * `now >= startsAt` and `now <= endsAt`.
+ *
+ * The cap counts the uses already paid AND `heldByOthers`, the distinct other
+ * buyers holding a live use (0055): the same sum the capacity trigger refuses
+ * at, so a read that says "available" and an insert that says "exhausted"
+ * can disagree only when another buyer's batch committed in between.
  *
  * min_spend is compared against the FULL basket subtotal, never the scoped
  * base. Production does this even for a products-scoped code, and the client
@@ -238,6 +268,7 @@ export function isEligible(
   row: DiscountCodeRow,
   subtotalMinor: number,
   now: number,
+  heldByOthers = 0,
 ): boolean {
   if (row.active !== 1) {
     return false;
@@ -248,7 +279,7 @@ export function isEligible(
   if (row.ends_at !== null && now > row.ends_at) {
     return false;
   }
-  if (row.max_uses !== null && row.used_count >= row.max_uses) {
+  if (row.max_uses !== null && row.used_count + heldByOthers >= row.max_uses) {
     return false;
   }
   if (row.min_spend_minor !== null && subtotalMinor < row.min_spend_minor) {
@@ -296,6 +327,12 @@ export function discountAmountMinor(
  * instead would also turn this route into an oracle: a 4xx would confirm which
  * code strings exist on a tenant, and a timing or status difference between
  * "unknown" and "expired" would leak the rest.
+ *
+ * `holds`: the checkout passes its buyer's key (sha256 of tenant and email),
+ * and the cap then counts every OTHER buyer's live hold, each buyer once, in
+ * the same single read (a subquery). The buyer's own holds never count
+ * against them, so a reloaded payment page or a ticked box (a new checkout)
+ * still gets the code. The preview passes null: it counts paid uses only.
  */
 export async function resolveDiscount(
   db: D1Database,
@@ -304,6 +341,7 @@ export async function resolveDiscount(
   lines: readonly DiscountableLine[],
   subtotalMinor: number,
   now: number,
+  holds: { buyerKey: string } | null,
 ): Promise<ResolvedDiscount> {
   const none: ResolvedDiscount = {
     code,
@@ -313,21 +351,33 @@ export async function resolveDiscount(
 
   // --- AFFILIATE BRANCH BELONGS HERE (see the seam note above) ---
 
-  const row = await db
-    .prepare(
-      `SELECT
-         discount_code_id, code, active, type, value_minor, percent_bp,
-         starts_at, ends_at, max_uses, used_count, min_spend_minor,
-         scope, product_ids_json
-       FROM discount_codes
-       WHERE tenant_id = ?
-         AND code = ?
-       LIMIT 1`,
-    )
-    .bind(tenantId, code)
-    .first<DiscountCodeRow>();
+  // The hold count is the capacity trigger's predicate (0055), word for word.
+  const heldByOthers =
+    holds === null
+      ? "0"
+      : `(SELECT COUNT(DISTINCT h.buyer_key)
+          FROM discount_code_holds AS h
+          WHERE h.discount_code_id = d.discount_code_id
+            AND h.state = 'held'
+            AND h.expires_at > ?3
+            AND h.buyer_key <> ?4)`;
+  const statement = db.prepare(
+    `SELECT
+       d.discount_code_id, d.code, d.active, d.type, d.value_minor,
+       d.percent_bp, d.starts_at, d.ends_at, d.max_uses, d.used_count,
+       d.min_spend_minor, d.scope, d.product_ids_json,
+       ${heldByOthers} AS held_by_others
+     FROM discount_codes AS d
+     WHERE d.tenant_id = ?1
+       AND d.code = ?2
+     LIMIT 1`,
+  );
+  const row = await (holds === null
+    ? statement.bind(tenantId, code)
+    : statement.bind(tenantId, code, now, holds.buyerKey)
+  ).first<DiscountCodeRow & { held_by_others: number }>();
 
-  if (row === null || !isEligible(row, subtotalMinor, now)) {
+  if (row === null || !isEligible(row, subtotalMinor, now, row.held_by_others)) {
     return none;
   }
 
@@ -353,4 +403,13 @@ export async function resolveDiscount(
     discountCodeId: row.discount_code_id,
     discountMinor: bounded,
   };
+}
+
+/**
+ * The capacity trigger's refusal (0055 discount_code_holds_capacity): another
+ * buyer's batch took the last use between this checkout's read and its write.
+ */
+export function isDiscountExhausted(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("discount code exhausted");
 }

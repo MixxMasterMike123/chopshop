@@ -201,6 +201,13 @@ describe('the detail', () => {
     assert.deepEqual(o.withdrawal, { required: true, consent: true, noticeVersion: 'v1', consentAt: '2026-10-01T17:59:00.000Z' });
     assert.equal(orderFromDetail({ ...DETAIL, consent: null }).withdrawal, null);
   });
+  it('names the campaign code of the discount (CP8-DC), null without one', () => {
+    assert.equal(o.discountCode, null);
+    const coded = orderFromDetail({ ...DETAIL, totals: { ...DETAIL.totals, discountCode: 'SOMMAR20', discountMinor: 5980, totalMinor: 58720 } });
+    assert.equal(coded.discountCode, 'SOMMAR20');
+    assert.equal(coded.discountAmount, 59.8);
+    assert.equal(orderFromDetail({ ...DETAIL, totals: { ...DETAIL.totals, discountCode: '' } }).discountCode, null);
+  });
   it('carries no field the seller must not see', () => {
     const text = JSON.stringify(o).toLowerCase();
     for (const word of ['commission', 'printer', 'supplier', 'jobref', 'production']) assert.ok(!text.includes(word), word);

@@ -34,6 +34,13 @@ import {
  * webhook, once, after the order row is created). A checkout is not a sale, so
  * nothing in checkout touches it either. An admin who could edit it could
  * resurrect a filled-up code without any record that the cap was ever reached.
+ *
+ * CP8-DC: the list (newest first, bounded), `heldCount` (the distinct buyers
+ * holding a live use in a checkout, 0055), a code is never deleted (DC12) and
+ * keeps its name once it has been used or held (DC13: the order views show
+ * the code's current name, so a rename would rewrite history), and a fixed
+ * code is worth at least 1 öre (F7). The routes follow the shop's switch
+ * (DC14, app.ts).
  */
 
 export interface AdminDiscountCode {
@@ -48,6 +55,11 @@ export interface AdminDiscountCode {
   scope: DiscountScope;
   startsAt: number | null;
   type: DiscountType;
+  /**
+   * Read-only, like usedCount: how many buyers hold a use in a checkout right
+   * now (distinct buyers, live holds). The seller's "i kassan".
+   */
+  heldCount: number;
   // Read-only here and read-only everywhere in this file. Exposed because a
   // merchant needs to see how much of a cap is spent; never accepted on a write.
   usedCount: number;
@@ -56,7 +68,16 @@ export interface AdminDiscountCode {
 
 export type AdminDiscountCodeResult =
   | { discountCode: AdminDiscountCode; status: "ok" }
-  | { status: "conflict" | "invalid" | "not_found" };
+  /** in_use: a new name for a code that has been used or held (DC13). */
+  | { status: "conflict" | "in_use" | "invalid" | "not_found" };
+
+export interface AdminDiscountCodeList {
+  discountCodes: AdminDiscountCode[];
+  truncated: boolean;
+}
+
+/** The list's bound: a shop with more live campaigns than this is not real. */
+export const MAX_DISCOUNT_CODES_LISTED = 200;
 
 export interface CreateDiscountCodeInput {
   active?: boolean;
@@ -91,6 +112,7 @@ interface DiscountCodeRow {
   code: string;
   discount_code_id: string;
   ends_at: number | null;
+  held_count: number;
   max_uses: number | null;
   min_spend_minor: number | null;
   percent_bp: number | null;
@@ -129,9 +151,16 @@ const UPDATE_KEYS = CREATE_KEYS;
 const MIN_TIMESTAMP_MS = 0;
 const MAX_TIMESTAMP_MS = 253_402_300_799_000;
 
-const SELECT_COLUMNS = `discount_code_id, code, active, type, value_minor,
-     percent_bp, starts_at, ends_at, max_uses, used_count, min_spend_minor,
-     scope, product_ids_json`;
+/**
+ * Every column of a code (alias `d`) and its live holds, counted by buyer as
+ * the capacity trigger counts them (0055). One bind: `now`.
+ */
+const SELECT_COLUMNS = `d.discount_code_id, d.code, d.active, d.type, d.value_minor,
+     d.percent_bp, d.starts_at, d.ends_at, d.max_uses, d.used_count,
+     d.min_spend_minor, d.scope, d.product_ids_json,
+     (SELECT COUNT(DISTINCT h.buyer_key) FROM discount_code_holds AS h
+      WHERE h.discount_code_id = d.discount_code_id
+        AND h.state = 'held' AND h.expires_at > ?) AS held_count`;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -305,9 +334,11 @@ export function parseCreateDiscountCodeInput(
   const input: CreateDiscountCodeInput = { code, scope, type };
 
   if (body.valueMinor !== undefined) {
+    // At least 1 öre (F7): a fixed code worth 0 discounts nothing while
+    // looking configured. The old form refused it too.
     const valueMinor = parseBoundedInteger(
       body.valueMinor,
-      0,
+      1,
       MAX_DISCOUNT_VALUE_MINOR,
     );
     if (valueMinor === null) {
@@ -441,9 +472,11 @@ export function parseUpdateDiscountCodeInput(
   }
 
   if (body.valueMinor !== undefined) {
+    // At least 1 öre (F7): a fixed code worth 0 discounts nothing while
+    // looking configured. The old form refused it too.
     const valueMinor = parseBoundedInteger(
       body.valueMinor,
-      0,
+      1,
       MAX_DISCOUNT_VALUE_MINOR,
     );
     if (valueMinor === null) {
@@ -550,6 +583,7 @@ function toAdminDiscountCode(row: DiscountCodeRow): AdminDiscountCode {
     code: row.code,
     discountCodeId: row.discount_code_id,
     endsAt: row.ends_at,
+    heldCount: row.held_count,
     maxUses: row.max_uses,
     minSpendMinor: row.min_spend_minor,
     percentBp: row.percent_bp,
@@ -565,6 +599,12 @@ function toAdminDiscountCode(row: DiscountCodeRow): AdminDiscountCode {
 function isUniqueConstraintFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("UNIQUE constraint failed");
+}
+
+/** 0055's backstop (discount_codes_code_frozen_once_used). */
+function isCodeInUse(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("discount code in use");
 }
 
 function auditStatement(
@@ -601,25 +641,52 @@ async function loadDiscountCode(
   db: D1Database,
   tenantId: string,
   discountCodeId: string,
+  now: number,
 ): Promise<DiscountCodeRow | null> {
   return db
     .prepare(
       `SELECT ${SELECT_COLUMNS}
-       FROM discount_codes
-       WHERE tenant_id = ?
-         AND discount_code_id = ?
+       FROM discount_codes AS d
+       WHERE d.tenant_id = ?
+         AND d.discount_code_id = ?
        LIMIT 1`,
     )
-    .bind(tenantId, discountCodeId)
+    .bind(now, tenantId, discountCodeId)
     .first<DiscountCodeRow>();
+}
+
+/**
+ * The shop's codes, newest first, at most MAX_DISCOUNT_CODES_LISTED (one more
+ * is read to say `truncated`), on discount_codes_tenant_created_idx (0010).
+ */
+export async function listAdminDiscountCodes(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  now: number,
+): Promise<AdminDiscountCodeList> {
+  const rows = await db
+    .prepare(
+      `SELECT ${SELECT_COLUMNS}
+       FROM discount_codes AS d
+       WHERE d.tenant_id = ?
+       ORDER BY d.created_at DESC, d.discount_code_id DESC
+       LIMIT ?`,
+    )
+    .bind(now, principal.tenantId, MAX_DISCOUNT_CODES_LISTED + 1)
+    .all<DiscountCodeRow>();
+  return {
+    discountCodes: rows.results.slice(0, MAX_DISCOUNT_CODES_LISTED).map(toAdminDiscountCode),
+    truncated: rows.results.length > MAX_DISCOUNT_CODES_LISTED,
+  };
 }
 
 export async function getAdminDiscountCode(
   db: D1Database,
   principal: TenantAdminPrincipal,
   discountCodeId: string,
+  now: number,
 ): Promise<AdminDiscountCodeResult> {
-  const row = await loadDiscountCode(db, principal.tenantId, discountCodeId);
+  const row = await loadDiscountCode(db, principal.tenantId, discountCodeId, now);
   return row === null
     ? { status: "not_found" }
     : { discountCode: toAdminDiscountCode(row), status: "ok" };
@@ -638,6 +705,8 @@ export async function createAdminDiscountCode(
     code: input.code,
     discountCodeId,
     endsAt: input.endsAt ?? null,
+    // A new code is in no checkout yet.
+    heldCount: 0,
     maxUses: input.maxUses ?? null,
     minSpendMinor: input.minSpendMinor ?? null,
     percentBp: input.percentBp ?? null,
@@ -708,12 +777,27 @@ export async function updateAdminDiscountCode(
     db,
     principal.tenantId,
     discountCodeId,
+    now,
   );
   if (existing === null) {
     return { status: "not_found" };
   }
 
   const current = toAdminDiscountCode(existing);
+
+  // DC13: a code that has been used, or is or was held in a checkout, keeps
+  // its name: orders show the code by its current name. Decided here first
+  // (before any write); 0055's trigger is the backstop for a hold that
+  // lands between this read and the UPDATE.
+  if (input.code !== undefined && input.code !== current.code) {
+    const held = await db
+      .prepare("SELECT 1 AS held FROM discount_code_holds WHERE discount_code_id = ? AND tenant_id = ? LIMIT 1")
+      .bind(discountCodeId, principal.tenantId)
+      .first<{ held: number }>();
+    if (current.usedCount > 0 || held !== null) {
+      return { status: "in_use" };
+    }
+  }
 
   // Switching type or scope must clear the field belonging to the other branch,
   // or the merged row would carry both and fail the schema's XOR. Clearing is
@@ -728,6 +812,8 @@ export async function updateAdminDiscountCode(
     code: input.code ?? current.code,
     discountCodeId,
     endsAt: input.endsAt === undefined ? current.endsAt : input.endsAt,
+    // Read with the row, as usedCount: an edit does not move it.
+    heldCount: current.heldCount,
     maxUses: input.maxUses === undefined ? current.maxUses : input.maxUses,
     minSpendMinor:
       input.minSpendMinor === undefined
@@ -800,6 +886,9 @@ export async function updateAdminDiscountCode(
   } catch (error) {
     if (isUniqueConstraintFailure(error)) {
       return { status: "conflict" };
+    }
+    if (isCodeInUse(error)) {
+      return { status: "in_use" };
     }
     throw error;
   }

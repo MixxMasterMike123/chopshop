@@ -38,7 +38,7 @@ const STOREFRONT_ALIASES = [
   // The five contexts → the storefront's providers (brief E): the same hooks
   // with the same values, fed by the API.
   ['src/contexts/CartContext.jsx', 'src/storefront/providers/Cart.jsx',
-    'the cart without discount or affiliate (D81); lines carry the API ids'],
+    'the cart with a campaign code while the shop has the add-on (CP8-DC), never an affiliate one (D81); lines carry the API ids'],
   ['src/contexts/TranslationContext.jsx', 'src/storefront/providers/Translation.jsx',
     'translations from a static file per language (D16), not Firestore'],
   ['src/contexts/StoreSettingsContext.jsx', 'src/storefront/providers/StoreSettings.jsx',

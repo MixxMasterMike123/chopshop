@@ -40,9 +40,11 @@ export interface PublicStorefront {
  * THE features that are ported (D81). A feature whose code is not on
  * Cloudflare reads `false` in the public response whatever the shop's row or
  * default says, so no button of it appears and fails. Porting a feature is
- * adding its key here.
+ * adding its key here (CP8-DC: `discountCodes`, opt-in per shop, DC1/DC2).
+ * A change here changes the storefront body without a catalog bump: raise
+ * STOREFRONT_BODY_REVISION (public-routes.ts) with it.
  */
-export const PORTED_FEATURE_KEYS: readonly FeatureKey[] = ["pod"];
+export const PORTED_FEATURE_KEYS: readonly FeatureKey[] = ["pod", "discountCodes"];
 
 /**
  * `GET /v1/storefront` → `{ storefront: PublicStorefrontResponse }`: one read

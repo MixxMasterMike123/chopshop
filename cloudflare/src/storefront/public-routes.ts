@@ -34,10 +34,21 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
  * with it off (byte for byte as before), `"<catalog_version>-c"` with it on.
  * A body kept from before a flip never matches after it: a full answer, never
  * a stale 304.
+ *
+ * CP8-DC (F10): a DEPLOY can change a body too, without bumping the version
+ * (porting `discountCodes` turned its `features` member on). So a read may
+ * name a body REVISION, a constant in the code: `"<catalog_version>-r<n>"`
+ * (`"<v>-c-r<n>"` with the switch on). Raising it makes every ETag kept from
+ * before the deploy miss once. Only `GET /v1/storefront` names one today;
+ * every other read's ETag is as before.
  */
 
-function etagFor(catalogVersion: number, tenant: StorefrontTenant): string {
-  return hidesStandInFrames(tenant) ? `"${catalogVersion}-c"` : `"${catalogVersion}"`;
+/** Raise with any code change to the storefront body (PORTED_FEATURE_KEYS). */
+export const STOREFRONT_BODY_REVISION = 1;
+
+function etagFor(catalogVersion: number, tenant: StorefrontTenant, revision: number): string {
+  const base = hidesStandInFrames(tenant) ? `${catalogVersion}-c` : `${catalogVersion}`;
+  return revision === 0 ? `"${base}"` : `"${base}-r${revision}"`;
 }
 
 /** RFC 9110 §13.1.2: a list of entity tags, or `*`; weak comparison. */
@@ -52,17 +63,21 @@ function matchesIfNoneMatch(request: Request, etag: string): boolean {
     .some((candidate) => candidate === "*" || candidate === etag);
 }
 
-/** `tenant`: the read's (resolveStorefrontTenant), which says preview and the switch. */
+/**
+ * `tenant`: the read's (resolveStorefrontTenant), which says preview and the
+ * switch. `revision`: the body's code revision (0, the default, names none).
+ */
 export function versionedJsonResponse(
   request: Request,
   catalogVersion: number,
   body: unknown,
   tenant: StorefrontTenant,
+  revision = 0,
 ): Response {
   if (isPreview(tenant)) {
     return previewJsonResponse(body);
   }
-  const etag = etagFor(catalogVersion, tenant);
+  const etag = etagFor(catalogVersion, tenant, revision);
   const headers = {
     "Cache-Control": "no-cache",
     ETag: etag,
@@ -93,5 +108,11 @@ export async function handlePublicStorefrontRequest(
     tenant === null ? null : await getPublicStorefrontVersioned(env, env.DB, tenant);
   return tenant === null || storefront === null
     ? notFoundResponse("Storefront not found")
-    : versionedJsonResponse(request, storefront.catalogVersion, { storefront: storefront.value }, tenant);
+    : versionedJsonResponse(
+        request,
+        storefront.catalogVersion,
+        { storefront: storefront.value },
+        tenant,
+        STOREFRONT_BODY_REVISION,
+      );
 }

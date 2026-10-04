@@ -224,7 +224,8 @@ function legalDetail(shop, named) {
 
 // ── the route table ─────────────────────────────────────────────────────────
 
-// [method, path pattern with :segments, handler(shop, url, segments, options)]
+// [method, path pattern with :segments, handler(shop, url, segments, options)];
+// `options.body` is a write's parsed JSON body (createDevApi reads it).
 export const ROUTES = [
   ['GET', '/v1/storefront', (shop) => json(200, { storefront: shop.storefront })],
   ['GET', '/v1/products', (shop, url, _s, options) => productsList(shop, url, options.pageSize)],
@@ -275,7 +276,7 @@ function match(pattern, path) {
  * The answer to one request: `{ status, body }` (JSON) or `{ status, svg }`.
  * `url` is the request's URL; the shared-host grammar `/_api/<shop>/v1/…`.
  */
-export function route(shops, method, url, { pageSize = 100 } = {}) {
+export function route(shops, method, url, { body, pageSize = 100 } = {}) {
   const m = /^\/_api\/([a-z0-9][a-z0-9-]{0,62})(\/v1\/.*)$/.exec(url.pathname);
   if (!m) return notFound();
   const shop = shops[m[1]];
@@ -285,7 +286,7 @@ export function route(shops, method, url, { pageSize = 100 } = {}) {
     if (verb !== method) continue;
     // An unknown shop: the API's one 404 (unknown, suspended or unpublished).
     if (!shop) return notFound();
-    return handler(shop, url, segments, { pageSize });
+    return handler(shop, url, segments, { body, pageSize });
   }
   return notFound();
 }
@@ -318,6 +319,30 @@ export function drawImage(name) {
 
 // ── the middleware ──────────────────────────────────────────────────────────
 
+/** The largest write body the dev API reads; a bigger one is no body. */
+const MAX_DEV_BODY_BYTES = 65_536;
+
+/** A write's JSON body, or undefined (none, too large, not JSON). */
+export function readJsonBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size <= MAX_DEV_BODY_BYTES) chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (size > MAX_DEV_BODY_BYTES) return resolve(undefined);
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        resolve(undefined);
+      }
+    });
+    req.on('error', () => resolve(undefined));
+  });
+}
+
 /** A Connect middleware for Vite's dev server. */
 export function createDevApi({ fixtures = FIXTURES, pageSize = 100 } = {}) {
   return function devApi(req, res, next) {
@@ -328,7 +353,12 @@ export function createDevApi({ fixtures = FIXTURES, pageSize = 100 } = {}) {
     }
     if (!url.pathname.startsWith('/_api/')) return next();
     // Fixtures are re-read on every request, so an edit shows on reload.
-    return send(res, route(loadShops(fixtures), req.method, url, { pageSize }));
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      return send(res, route(loadShops(fixtures), req.method, url, { pageSize }));
+    }
+    // A write: its body is read first (the discount preview and the checkout
+    // answer by the code it names, CP8-DC).
+    return readJsonBody(req).then((body) => send(res, route(loadShops(fixtures), req.method, url, { body, pageSize })));
   };
 }
 

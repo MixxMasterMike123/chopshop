@@ -769,8 +769,46 @@ export async function handleStripeWebhookEvent(
   // over-redemption property, for the same reason, and it is the correct
   // trade — an over-redeemed campaign is a merchant's problem, a paid order that
   // silently failed to record its redemption is an accounting one.
+  //
+  // CP8-DC (0055): the checkout's HOLD on that use becomes the order's, and
+  // the same buyer's other live holds on the code are released, ahead of the
+  // burn and in this same batch. Neither can trip a trigger: (1) moves a hold
+  // from held or released to used and sets its order once (a payment that
+  // succeeded after its hold was released or expired still counts, so a paid
+  // order is never refused), (2) moves only held to released. A checkout
+  // made before 0055 has no hold, and both match nothing.
   if (checkout.discount_code_id !== null) {
     statements.push(
+      db
+        .prepare(
+          `UPDATE discount_code_holds
+           SET state = 'used', order_id = ?, updated_at = MAX(updated_at, ?)
+           WHERE checkout_id = ?
+             AND tenant_id = ?
+             AND state IN ('held', 'released')`,
+        )
+        .bind(orderId, now, checkout.checkout_id, checkout.tenant_id),
+      db
+        .prepare(
+          `UPDATE discount_code_holds
+           SET state = 'released', updated_at = MAX(updated_at, ?)
+           WHERE tenant_id = ?
+             AND discount_code_id = ?
+             AND state = 'held'
+             AND checkout_id <> ?
+             AND buyer_key = (
+               SELECT buyer_key FROM discount_code_holds
+               WHERE checkout_id = ? AND tenant_id = ?
+             )`,
+        )
+        .bind(
+          now,
+          checkout.tenant_id,
+          checkout.discount_code_id,
+          checkout.checkout_id,
+          checkout.checkout_id,
+          checkout.tenant_id,
+        ),
       db
         .prepare(
           `UPDATE discount_codes

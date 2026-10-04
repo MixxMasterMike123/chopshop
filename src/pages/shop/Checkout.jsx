@@ -24,7 +24,7 @@ import { requiresWithdrawalGate, resolveWithdrawalNotice } from '../../utils/wit
 
 const Checkout = () => {
   const {
-    cart, clearCart, updateShippingCountry, reconcileCart,
+    cart, clearCart, updateShippingCountry, reconcileCart, removeDiscount,
     deliveryMethod, pickupLocation, pickupDate, setPickupDate, selectHomeDelivery, selectPickup,
     cartAllowsHome, cartAllowsPickup, hasDeliveryConflict,
   } = useCart();
@@ -157,6 +157,10 @@ const Checkout = () => {
   // taxes or ships anything.
   const { subtotal, vat, shipping, total, vatRate, discountAmount, discountCode, discountPercentage, discountSource } =
     toCheckoutTotals(step === 'payment' ? quote : null, store.vatRate);
+  // CP8-DC: the cart sent a code and the server did not apply it (a race for
+  // the last use, the fee rule, the minimum charge, the shop's switch). The
+  // buyer is told, and may take it away: that is a new checkout without it.
+  const discountNotApplied = step === 'payment' && quote !== null && typeof quote?.discountCode === 'string' && quote.discountMinor === 0;
   // A quote belongs to the visit of the payment step that asked for it: the
   // buyer may change the delivery before coming back.
   useEffect(() => {
@@ -901,7 +905,7 @@ const Checkout = () => {
                               : t('checkout_discount', 'Rabatt'))
                           : t('checkout_affiliate_discount', 'Affiliate rabatt, {{discountPercentage}}%', { discountPercentage })}
                       </span>
-                      <span className="font-medium text-green-600">
+                      <span className="inline-flex items-baseline gap-1 whitespace-nowrap font-medium text-green-600">
                         - <SmartPrice 
                           sekPrice={discountAmount} 
                           variant="compact"
@@ -941,6 +945,21 @@ const Checkout = () => {
                       </span>
                   </div>
                 </div>
+
+                {discountNotApplied && (
+                  <div className="mt-3 sm:mt-4 p-3 bg-ink/5 border border-ink/15 rounded-lg" role="status">
+                    <p className="text-xs sm:text-sm text-ink">
+                      {t('checkout_discount_not_applied', 'Rabattkoden {{code}} kunde inte användas för den här beställningen.', { code: quote.discountCode })}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={removeDiscount}
+                      className="mt-2 text-xs sm:text-sm text-ink-muted hover:text-ink underline underline-offset-4 transition-colors"
+                    >
+                      {t('checkout_discount_remove', 'Ta bort koden')}
+                    </button>
+                  </div>
+                )}
 
                 {/* Applied-discount confirmation. Source-aware: a campaign
                     ("Rabattkoder") code shows a generic "Rabatt aktiverad"

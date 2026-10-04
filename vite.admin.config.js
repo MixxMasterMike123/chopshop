@@ -137,6 +137,9 @@ const ADMIN_ALIASES = [
     'the storefront links of AdminStorefront, AdminPages, AdminPageEdit and AdminCollectionEdit: the storefront\'s origin + the shop, not a path of the admin\'s origin; an unpublished shop opens its preview (POST /v1/admin/preview) (CP5-FX)'],
   ['src/utils/shopPayout.js', 'src/admin-app/replacements/shopPayout.js',
     'the payout is the server\'s (the seller sees ONE number); a browser computation fails loudly'],
+  // CP8-DC: the discount codes.
+  ['src/pages/admin/adminDiscountCodesData.js', 'src/admin-app/replacements/adminDiscountCodesData.js',
+    'AdminDiscountCodes: the codes by /v1/admin/discount-codes; deactivate, never delete; dates as Stockholm days, the end day inclusive'],
   // Unit FH: the shop's own admins.
   ['src/pages/admin/adminUsersData.js', 'src/admin-app/replacements/adminUsersData.js',
     'AdminUsers: the shop\'s own admins by GET/POST /v1/admin/members (invite, revoke); no roles, no trade margin, no user create/edit pages'],

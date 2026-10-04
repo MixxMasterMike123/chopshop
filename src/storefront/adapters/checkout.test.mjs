@@ -168,6 +168,44 @@ describe('buildCheckoutRequest', () => {
   });
 });
 
+describe('buildCheckoutRequest: the cart\'s discount code (CP8-DC)', () => {
+  const base = { items: LINES, email: 'kund@example.test', deliveryMethod: 'pickup', shippingCountry: 'SE' };
+
+  it('sends the code the cart holds, trimmed, as the one key the server takes for it', () => {
+    const request = buildCheckoutRequest({ ...base, discountCode: ' SOMMAR20 ' });
+    assert.equal(request.discountCode, 'SOMMAR20');
+    for (const key of Object.keys(request)) assert.ok(CHECKOUT_KEYS.includes(key), key);
+  });
+
+  it('sends no code, and the same request as before, without one', () => {
+    const without = buildCheckoutRequest(base);
+    for (const discountCode of [undefined, null, '', '   ', 20, { code: 'X' }]) {
+      const request = buildCheckoutRequest({ ...base, discountCode });
+      assert.equal('discountCode' in request, false, String(discountCode));
+      assert.equal(JSON.stringify(request), JSON.stringify(without));
+    }
+  });
+
+  it('the client sends it, and leaves it out when there is none', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.location = { pathname: '/testbutik/checkout' };
+    const bodies = [];
+    globalThis.fetch = async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ checkout: { ...PRICED, discountCode: 'SOMMAR20' } }), { status: 201 });
+    };
+    try {
+      await createCheckout({ ...buildCheckoutRequest({ ...base, discountCode: 'SOMMAR20' }), idempotencyKey: 'key-0002' });
+      await createCheckout({ ...buildCheckoutRequest(base), idempotencyKey: 'key-0003' });
+      assert.equal(bodies[0].discountCode, 'SOMMAR20');
+      assert.equal('discountCode' in bodies[1], false);
+    } finally {
+      globalThis.fetch = realFetch;
+      delete globalThis.location;
+    }
+  });
+});
+
 describe('toApiRecipient (D98)', () => {
   it('a parcel: the name is first + last name, the texts trimmed, an empty second line left out, the country the shipping country', () => {
     assert.deepEqual(
