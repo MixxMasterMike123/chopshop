@@ -611,12 +611,31 @@ async function ensurePrintShop() {
         "set SLICE_ALLOW_PRINTER_REPLACE=1 to proceed",
     );
   }
-  const printers = expectStatus(
-    await api("PUT", "/v1/platform/printers", { json: { printers: [document] }, session: true }),
-    [200],
-    "PUT printers",
-  );
-  info("printer", `${PRINTER_ID} (${printers.json.printers[0]?.skuCount} SKUs, suspended mappings ${printers.json.suspendedMappings})`);
+  // The PUT is replace-all for the printer's own SKUs too. Since 2026-10-04 the fake printer may
+  // hold SnapWear's whole offer (applied through the catalogue routes), with other shops' mappings
+  // on it: this document would cut it back to the slice's SKUs and SUSPEND every mapping on a SKU
+  // it drops (it did, once: 250 mappings of another shop). A printer that already holds the slice's
+  // SKUs and more is left exactly as it is.
+  const existing = await api("GET", `/v1/platform/printers/${PRINTER_ID}`, { session: true });
+  const existingSkus = existing.status === 200 ? Object.keys(existing.json?.printer?.capabilities?.skus ?? {}) : [];
+  if (existingSkus.length > SLICE_SKUS.length && process.env.SLICE_ALLOW_PRINTER_REPLACE !== "1") {
+    const missing = SLICE_SKUS.filter((sku) => !existingSkus.includes(sku));
+    if (missing.length > 0 || existing.json?.printer?.status !== "active") {
+      die(
+        `${PRINTER_ID} holds ${existingSkus.length} SKUs but ${missing.length > 0 ? `not the slice's ${missing.join(", ")}` : "is not active"}; ` +
+          "PUT /v1/platform/printers would replace its SKUs and suspend the mappings on the dropped ones: " +
+          "set SLICE_ALLOW_PRINTER_REPLACE=1 to proceed",
+      );
+    }
+    info("printer", `${PRINTER_ID} (kept as it is: ${existingSkus.length} SKUs, the slice's among them)`);
+  } else {
+    const printers = expectStatus(
+      await api("PUT", "/v1/platform/printers", { json: { printers: [document] }, session: true }),
+      [200],
+      "PUT printers",
+    );
+    info("printer", `${PRINTER_ID} (${printers.json.printers[0]?.skuCount} SKUs, suspended mappings ${printers.json.suspendedMappings})`);
+  }
 
   const profiles = expectStatus(
     await api("GET", "/v1/admin/pod/profiles", { session: true, shop: true }),
