@@ -26,6 +26,9 @@ export const PLATFORM_ROUTES = [
   { path: '/models', page: 'PlatformModels' },
   { path: '/reports', page: 'PlatformReports' },
   { path: '/users', page: 'PlatformUsers' },
+  { path: '/settings', page: 'PlatformSettings' }, // CP5-FL: new pages, no older page
+  { path: '/screening', page: 'PlatformScreening' },
+  { path: '/terms', page: 'PlatformTermsVersions' },
 ];
 
 /** /platform/login → the one sign-in page, a full load out of this tree. */

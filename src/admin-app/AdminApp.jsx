@@ -46,6 +46,7 @@ export const ADMIN_ROUTES = [
   { path: '/admin/plattformsvillkor', page: 'AdminPlatformTerms', guard: 'admin' },
   { path: '/admin/payments', page: 'AdminPayments', guard: 'admin' },
   { path: '/admin/pod', page: 'PodAdminPage', guard: 'admin', feature: 'pod' },
+  { path: '/admin/redirects', page: 'AdminRedirects', guard: 'admin' }, // CP5-FL: new page, no older page
 ];
 
 /** `/`: the login for a visitor, the dashboard for a signed-in user (D103). */

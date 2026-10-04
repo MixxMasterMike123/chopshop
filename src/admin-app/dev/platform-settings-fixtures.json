@@ -1,0 +1,28 @@
+{
+  "_note": "INVENTED data for the admin dev API (unit CP5-FL): the platform settings, a brand filter and the platform terms' versions. No real shop, person, brand or text.",
+  "settings": {
+    "defaultCommissionBps": 500,
+    "refundApplicationFee": false,
+    "reverseDisputeOnCreated": true,
+    "reviewFirstProducts": 2,
+    "screeningHardBlock": false,
+    "screeningTermsVersion": 14,
+    "updatedAt": "2026-10-02T13:41:09.000Z",
+    "updatedBy": "user-platform-admin"
+  },
+  "terms": [
+    { "term": "glimmerkraft", "kind": "band", "hardBlock": false, "note": "Påhittat band, exempeldata", "createdAt": "2026-09-12T08:00:00.000Z" },
+    { "term": "nordvind orkester", "kind": "band", "hardBlock": false, "note": null, "createdAt": "2026-09-12T08:01:00.000Z" },
+    { "term": "kalla kometen", "kind": "band", "hardBlock": true, "note": "Rättighetshavaren har begärt spärr (påhittat)", "createdAt": "2026-09-13T10:20:00.000Z" },
+    { "term": "polarlo", "kind": "brand", "hardBlock": true, "note": null, "createdAt": "2026-09-14T09:00:00.000Z" },
+    { "term": "skogsrav sport", "kind": "brand", "hardBlock": false, "note": "Flagga för koll av licens", "createdAt": "2026-09-14T09:05:00.000Z" },
+    { "term": "ik exempelstad", "kind": "club", "hardBlock": false, "note": null, "createdAt": "2026-09-15T11:00:00.000Z" },
+    { "term": "fiktiva fc", "kind": "club", "hardBlock": false, "note": null, "createdAt": "2026-09-15T11:02:00.000Z" },
+    { "term": "™", "kind": "other", "hardBlock": false, "note": "Symbol: flagga produkter som använder varumärkestecknet", "createdAt": "2026-09-16T07:30:00.000Z" }
+  ],
+  "rescreen": { "pending": 37, "unverified": 2 },
+  "versions": [
+    { "version": "2026-06-01", "publishedAt": "2026-06-01T00:00:00.000Z", "text": { "terms": "## 1. Inledning\n\nDetta är **påhittade** plattformsvillkor för utvecklingsmiljön, version 1. De gäller mellan {{platform_legal_name}}{{platform_org_suffix}} och säljaren.\n\n## 2. Avgifter\n\nPlattformen tar en avgift per order. Senast uppdaterad {{last_updated}}.", "dpa": "## 1. Bakgrund\n\nDetta är ett **påhittat** personuppgiftsbiträdesavtal för utvecklingsmiljön.\n\n## 2. Behandling\n\nBiträdet behandlar personuppgifter för säljarens räkning." } },
+    { "version": "2026-09-07", "publishedAt": "2026-09-07T00:00:00.000Z", "seed": true }
+  ]
+}

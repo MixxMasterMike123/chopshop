@@ -21,13 +21,17 @@ const PLATFORM_NAV = ['/shops', '/addons', '/models', '/dac7', '/printers', '/le
   .map((path) => ({ path, name: path }));
 
 describe('the admin shell\'s scope', () => {
-  it('B2C Kunder and Mina skatteuppgifter leave; the rest stays in order', () => {
+  it('B2C Kunder and Mina skatteuppgifter leave; Omdirigeringar comes after Sidor (CP5-FL); the rest stays in order', () => {
     assert.deepEqual(Object.keys(LEFT_ADMIN_PATHS).sort(), ['/admin/b2c-customers', '/admin/skatteuppgifter']);
+    const scoped = scopeAdminNav(ADMIN_NAV);
     assert.deepEqual(
-      scopeAdminNav(ADMIN_NAV).map((l) => l.path),
+      scoped.map((l) => l.path),
       ['/admin', '/admin/users', '/admin/orders', '/admin/products', '/admin/collections', '/admin/menu',
-        '/admin/storefront', '/admin/pages', '/admin/payments', '/admin/settings'],
+        '/admin/storefront', '/admin/pages', '/admin/redirects', '/admin/payments', '/admin/settings'],
     );
+    const added = scoped.find((l) => l.path === '/admin/redirects');
+    assert.equal(added.name, 'Omdirigeringar');
+    assert.equal(typeof added.icon, 'object'); // a heroicon (forwardRef), drawn by AppLayout as <item.icon />
   });
 
   it('the older build keeps every entry and its platform-only switching', () => {
@@ -62,10 +66,15 @@ describe('the admin shell\'s scope', () => {
 });
 
 describe('the console shell\'s scope', () => {
-  it('DAC7 and Leads leave; 3D-modeller stays (CP5-FO); the "snart" placeholders stay', () => {
+  it('DAC7 and Leads leave; 3D-modeller stays (CP5-FO); Inställningar is live (CP5-FL), Betalningar stays "snart"', () => {
     assert.deepEqual(Object.keys(LEFT_PLATFORM_PATHS).sort(), ['/dac7', '/leads']);
-    assert.deepEqual(scopePlatformNav(PLATFORM_NAV).map((i) => i.path),
+    const nav = PLATFORM_NAV.map((i) => ({ ...i, live: !['/payments', '/settings'].includes(i.path) }));
+    const scoped = scopePlatformNav(nav);
+    assert.deepEqual(scoped.map((i) => i.path),
       ['/shops', '/addons', '/models', '/printers', '/reports', '/users', '/payments', '/settings']);
+    assert.equal(scoped.find((i) => i.path === '/settings').live, true);
+    assert.equal(scoped.find((i) => i.path === '/payments').live, false);
+    assert.equal(nav.find((i) => i.path === '/settings').live, false); // the shell's own list is not changed
   });
 
   it('the badge: newCount when it is a count, else no badge', () => {

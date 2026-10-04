@@ -367,3 +367,108 @@ export async function uploadStudioFile(blob, contentType = blob?.type) {
 }
 
 // ═══ end CP5-FO ═════════════════════════════════════════════════════════════
+
+// ═══ CP5-FL ═════════════════════════════════════════════════════════════════
+// The platform's settings, the brand filter's terms and the platform terms'
+// versions (cloudflare/src/routes/platform-settings.ts, legal-platform.ts;
+// CP3_D_REPORT.md §3, §4, §7; CP3_E_REPORT.md §2). PLATFORM-ONLY: only the
+// console's settings pages import this section. The Worker answers the opaque
+// 404 to any request that names a shop.
+//
+//   GET    /v1/platform/settings                    { settings }
+//   PATCH  /v1/platform/settings                    { defaultCommissionBps?, reviewFirstProducts?, screeningHardBlock? }
+//                                                   → { settings, rescreen: { blockedNow, pending, unverified } | null }
+//                                                   400 setting_not_editable | invalid_request (+ field) · 409 conflict
+//   GET    /v1/platform/screening-terms[?cursor&limit≤500]   { terms, nextCursor, termsVersion }
+//   POST   /v1/platform/screening-terms             { term, kind?, hardBlock?, note? } → 201 { term, rescreen }
+//                                                   409 duplicate_term | term_limit | conflict · 400
+//   PATCH  /v1/platform/screening-terms/:termKey    { kind?, hardBlock?, note? } → { term, rescreen } · 404
+//   DELETE /v1/platform/screening-terms/:termKey    → { deleted: true, rescreen } · 404
+//   POST   /v1/platform/screening-terms/rescreen    → { rescreened, pending, unverified }   (≤ 25 products a call)
+//   GET    /v1/platform/legal/terms-versions        { versions: [{ version, publishedAt, sha256, textArchived, current }] }
+//   POST   /v1/platform/legal/terms-versions        { version, text, publishedAt? } → 201 { version }
+//                                                   409 terms_version_exists | terms_version_not_latest · 400 · 413
+//   GET    /v1/platform/legal/terms-versions/:version/text   { version, publishedAt, sha256, textArchived, text }
+//   PUT    /v1/platform/legal/terms-versions/:version/text   { text } → 201 (archived now) | 200 (already) { version }
+//                                                   409 terms_text_hash_mismatch · 400 · 413
+
+const TERMS_PAGE = 500; // the Worker's TERMS_MAX_LIMIT
+const TERMS_MAX_PAGES = 10; // 2 000 terms at most (MAX_SCREENING_TERMS)
+
+/** The platform's settings, every value as the Worker stores it. */
+export async function getPlatformSettings({ signal } = {}) {
+  const { data } = await platformRequest('GET', '/v1/platform/settings', { signal });
+  return data?.settings ?? null;
+}
+
+/** Changes the named settings only. → { settings, rescreen }. */
+export async function patchPlatformSettings(patch) {
+  const { data } = await platformRequest('PATCH', '/v1/platform/settings', { json: patch });
+  return { settings: data?.settings ?? null, rescreen: data?.rescreen ?? null };
+}
+
+/** Every term of the brand filter, read to the end: { terms, termsVersion }. */
+export async function readAllScreeningTerms({ signal } = {}) {
+  const terms = [];
+  let cursor = null;
+  let termsVersion = null;
+  for (let page = 0; page < TERMS_MAX_PAGES; page += 1) {
+    const { data } = await platformRequest('GET', withQuery('/v1/platform/screening-terms', { limit: TERMS_PAGE, cursor }), { signal });
+    if (Array.isArray(data?.terms)) terms.push(...data.terms);
+    if (page === 0) termsVersion = Number.isInteger(data?.termsVersion) ? data.termsVersion : null;
+    cursor = typeof data?.nextCursor === 'string' && data.nextCursor !== '' ? data.nextCursor : null;
+    if (cursor === null) break;
+  }
+  return { terms, termsVersion };
+}
+
+/** Adds a term. → { term (as stored), rescreen }. */
+export async function addScreeningTerm({ term, kind, hardBlock, note }) {
+  const json = { term, kind, hardBlock, ...(note ? { note } : {}) };
+  const { data } = await platformRequest('POST', '/v1/platform/screening-terms', { json });
+  return { term: data?.term ?? null, rescreen: data?.rescreen ?? null };
+}
+
+/** Changes the named fields of one term (no rename). → { term, rescreen }. */
+export async function updateScreeningTerm(termKey, fields) {
+  const { data } = await platformRequest('PATCH', `/v1/platform/screening-terms/${segment(termKey)}`, { json: fields });
+  return { term: data?.term ?? null, rescreen: data?.rescreen ?? null };
+}
+
+/** Removes one term. → { deleted, rescreen }. */
+export async function deleteScreeningTerm(termKey) {
+  const { data } = await platformRequest('DELETE', `/v1/platform/screening-terms/${segment(termKey)}`);
+  return { deleted: data?.deleted === true, rescreen: data?.rescreen ?? null };
+}
+
+/** One bounded re-screen run. → { rescreened, pending, unverified }. */
+export async function rescreenStale() {
+  const { data } = await platformRequest('POST', '/v1/platform/screening-terms/rescreen');
+  return data ?? null;
+}
+
+/** Every published or scheduled version of the platform terms, newest first. */
+export async function listTermsVersions({ signal } = {}) {
+  const { data } = await platformRequest('GET', '/v1/platform/legal/terms-versions', { signal });
+  return Array.isArray(data?.versions) ? data.versions : [];
+}
+
+/** Publishes a new version with its text (now: no `publishedAt`). → the version. */
+export async function publishTermsVersion({ version, text }) {
+  const { data } = await platformRequest('POST', '/v1/platform/legal/terms-versions', { json: { version, text } });
+  return data?.version ?? null;
+}
+
+/** One version's archived text: { version, publishedAt, sha256, textArchived, text }. */
+export async function getTermsVersionText(version, { signal } = {}) {
+  const { data } = await platformRequest('GET', `/v1/platform/legal/terms-versions/${segment(version)}/text`, { signal });
+  return data ?? null;
+}
+
+/** Archives the text of a version that has none (its hash must match). → { version, created }. */
+export async function archiveTermsVersionText(version, text) {
+  const { status, data } = await platformRequest('PUT', `/v1/platform/legal/terms-versions/${segment(version)}/text`, { json: { text } });
+  return { version: data?.version ?? null, created: status === 201 };
+}
+
+// ═══ end CP5-FL ═════════════════════════════════════════════════════════════

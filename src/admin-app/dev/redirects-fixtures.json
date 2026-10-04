@@ -1,0 +1,13 @@
+{
+  "_note": "INVENTED forwards for the admin dev API (unit CP5-FL): a shop that moved from another shop system. No real shop or address.",
+  "test-shop-a": [
+    { "fromPath": "/blogs/nyheter/hostens-kollektion", "toPath": "/hostens-kollektion", "createdAt": "2026-09-20T10:00:00.000Z", "createdBy": "user-tenant-admin" },
+    { "fromPath": "/blogs/nyheter/turnen-2026", "toPath": "/turnen-2026", "createdAt": "2026-09-20T10:00:00.000Z", "createdBy": "user-tenant-admin" },
+    { "fromPath": "/collections/all", "toPath": "/produkter", "createdAt": "2026-09-20T10:00:00.000Z", "createdBy": "user-tenant-admin" },
+    { "fromPath": "/collections/merch", "toPath": "/samling/merch", "createdAt": "2026-09-20T10:00:00.000Z", "createdBy": "user-tenant-admin" },
+    { "fromPath": "/pages/om-oss", "toPath": "/om-oss", "createdAt": "2026-09-21T08:30:00.000Z", "createdBy": "user-tenant-admin" },
+    { "fromPath": "/products/exempeltroja-svart", "toPath": "/product/exempeltroja", "createdAt": "2026-09-21T08:30:00.000Z", "createdBy": "user-tenant-admin" },
+    { "fromPath": "/products/huvtroja-grå", "toPath": "/product/huvtroja", "createdAt": "2026-09-21T08:31:00.000Z", "createdBy": "user-tenant-admin" },
+    { "fromPath": "/products/😀-tee", "toPath": "/product/smiley-tee", "createdAt": "2026-09-22T12:00:00.000Z", "createdBy": "user-tenant-admin" }
+  ]
+}

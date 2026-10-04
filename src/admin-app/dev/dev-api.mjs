@@ -37,6 +37,8 @@ import { PRINTER_ROUTES } from './printers-dev.mjs';
 import { MODEL_ROUTES } from './models-dev.mjs';
 import { POD_ROUTES } from './pod-dev.mjs';
 import { STUDIO_ROUTES } from './studio-dev.mjs';
+import { FL_PLATFORM_ROUTES } from './platform-settings-dev.mjs';
+import { REDIRECT_ROUTES } from './redirects-dev.mjs';
 
 export const DEV_API_MARKER = 'admin-dev-api-invented-data';
 export const SESSION_COOKIE = 'admin_dev_session';
@@ -407,6 +409,7 @@ const ADMIN_ROUTES = [
   ...PREVIEW_ADMIN_ROUTES, // unit FI
   ...POD_ROUTES, // unit FM
   ...STUDIO_ROUTES, // unit FN1
+  ...REDIRECT_ROUTES, // unit FL
 ];
 
 // Unit FB adds the platform rows (tenants, acting-as) here.
@@ -417,6 +420,7 @@ const PLATFORM_ROUTES = [
   ...PLATFORM_CONNECT_ROUTES,
   ...PRINTER_ROUTES, // unit FK
   ...MODEL_ROUTES, // unit FO
+  ...FL_PLATFORM_ROUTES, // unit FL
 ];
 
 function match(pattern, path) {

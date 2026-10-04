@@ -4,7 +4,9 @@
 //   the menu      the launch scope (CP5_GAP_ANALYSIS.md §1b, D103): the DAC7
 //                 and leads pages left the build, so their entries leave; the
 //                 "snart" placeholders stay as they were. 3D-modeller is back
-//                 (unit CP5-FO: the page on the Worker's 3D-model routes)
+//                 (unit CP5-FO: the page on the Worker's 3D-model routes).
+//                 Inställningar is live (unit CP5-FL: the settings, the brand
+//                 filter and the terms versions); Betalningar stays "snart"
 //   the badge     GET /v1/platform/reports?status=new → `newCount` (every
 //                 shop's unhandled reports), per mount and on the badge event
 //   the notices   an acting-as session that ended in this tab (ran out, or
@@ -21,8 +23,13 @@ export const LEFT_PLATFORM_PATHS = Object.freeze({
   '/leads': 'the leads page leaves (D103)',
 });
 
+/** Console paths the shell marks "snart" whose page this build has (unit CP5-FL). */
+export const LIVE_PLATFORM_PATHS = Object.freeze(['/settings']);
+
 export function scopePlatformNav(nav) {
-  return nav.filter((item) => !Object.hasOwn(LEFT_PLATFORM_PATHS, item.path));
+  return nav
+    .filter((item) => !Object.hasOwn(LEFT_PLATFORM_PATHS, item.path))
+    .map((item) => (LIVE_PLATFORM_PATHS.includes(item.path) ? { ...item, live: true } : item));
 }
 
 /** The badge counts of a `GET /v1/platform/reports` answer (pure). */
