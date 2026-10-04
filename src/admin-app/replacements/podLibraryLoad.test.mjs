@@ -279,6 +279,32 @@ describe('the mapping form', () => {
     assert.equal(selectableForMapping({ status: 'processing' }), false);
   });
 
+  it('one SKU on several products or variants is refused, never resolved to the first', async () => {
+    const tee = { id: 'p1', sku: 'tee', name: 'Tee', hasSku: true, priceMinor: 20000, variants: [{ sku: 'tee-s', label: 'S', variantId: 'v1', priceMinor: 21000 }, { sku: 'shared', label: 'M', variantId: 'v2', priceMinor: 22000 }] };
+    const bag = { id: 'p2', sku: 'shared', name: 'Bag', hasSku: true, priceMinor: 9000, variants: [] };
+    const cap = { id: 'p3', sku: 'cap', name: 'Cap', hasSku: true, priceMinor: 15000, variants: [{ sku: 'cap', label: 'One size', variantId: 'v9', priceMinor: 15000 }] };
+    const two = { id: 'p4', sku: 'mug', name: 'Mug', hasSku: true, priceMinor: 8000, variants: [{ sku: 'mug', label: 'Vit', variantId: 'v5', priceMinor: 8000 }, { sku: 'mug-svart', label: 'Svart', variantId: 'v6', priceMinor: 8000 }] };
+    const products = [tee, bag, cap, two];
+
+    // A product's SKU that is also another product's variant: which one was meant is not known.
+    const shared = targetOf(products, 'shared');
+    assert.equal(shared.ambiguous, true);
+    assert.deepEqual(shared.names, ['Tee — M', 'Bag']);
+    // A product's own SKU on its ONLY variant: the same thing to print → the whole product.
+    assert.deepEqual(targetOf(products, 'cap'), { productId: 'p3', variantId: null, priceMinor: 15000 });
+    // … but with a second variant it is a choice between all variants and one: refused.
+    assert.equal(targetOf(products, 'mug').ambiguous, true);
+    assert.deepEqual(targetOf(products, 'tee-s'), { productId: 'p1', variantId: 'v1', priceMinor: 21000 });
+    assert.equal(targetOf(products, 'nothing'), null);
+
+    const before = sent.length;
+    await assert.rejects(
+      addMapping({ shopId: 'test-shop-a', sku: 'shared', artworkId: 'art-fjall', choice: choiceOf(), products }),
+      (error) => /finns på flera ställen \(Tee — M; Bag\)/.test(error.userMessage),
+    );
+    assert.equal(sent.length, before); // nothing was sent
+  });
+
   it('a variant mapped: printer, article, slots; the server\'s numbers in the message; the list reads it back', async () => {
     const { products } = await loadPodLibrary('test-shop-a');
     assert.deepEqual(targetOf(products, 'tshirt-fjall-vit-s'), { productId: 'prod-tee', variantId: 'var-tee-vit-s', priceMinor: 29900 });

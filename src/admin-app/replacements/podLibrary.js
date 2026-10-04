@@ -32,16 +32,19 @@ export default function usePodLibrary(shopId) {
     if (!quiet) setLoading(true);
     try {
       const next = await loadPodLibrary(shopId);
-      if (!alive.current || seq !== loadSeq.current) return; // a newer load is under way
+      if (!alive.current || seq !== loadSeq.current) return false; // a newer load is under way
       setMappings(next.mappings);
       setArtwork(next.artwork);
       setProfiles(next.profiles);
       setProducts(next.products);
       setProductSkus(next.productSkus);
+      return true;
     } catch (e) {
-      if (!alive.current || seq !== loadSeq.current) return;
+      if (!alive.current || seq !== loadSeq.current) return false;
       console.error('usePodLibrary load failed:', e);
-      toast.error(e?.code === 'unauthenticated' ? 'Sessionen har gått ut. Logga in igen.' : 'Kunde inte ladda POD-data.');
+      // A quiet reload (the poll's) is tried again by the poll: it says nothing.
+      if (!quiet) toast.error(e?.code === 'unauthenticated' ? 'Sessionen har gått ut. Logga in igen.' : 'Kunde inte ladda POD-data.');
+      return false;
     } finally {
       if (alive.current && seq === loadSeq.current) setLoading(false);
     }
@@ -73,10 +76,12 @@ export default function usePodLibrary(shopId) {
         news = false;
       }
       if (stopped) return;
-      if (news) {
-        load({ quiet: true });
-        return;
-      }
+      // A verdict: the whole library is read again. The poll goes on either
+      // way — a reload that failed, or one that still lists these renders as
+      // processing, would otherwise leave "Bearbetas…" for good. A reload that
+      // changed the processing set restarts this effect, which stops this poll.
+      if (news) await load({ quiet: true });
+      if (stopped) return;
       attempt += 1;
       timer = setTimeout(tick, pollDelay(attempt));
     };

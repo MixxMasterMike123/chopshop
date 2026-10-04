@@ -51,18 +51,49 @@ function pageError(message, cause) {
 /**
  * A picked or typed SKU → { productId, variantId, priceMinor } from the
  * picker's products (exact match: the product's own SKU maps the whole
- * product, a variant's only that variant), or null.
+ * product, a variant's only that variant), or null when nothing has it.
+ *
+ * A SKU is unique among a shop's products and among its variants, NOT across
+ * the two: when one SKU names several things the form cannot know which was
+ * meant, and → { ambiguous: true, names } (nothing is quoted or saved). One
+ * case is not a choice: a product's own SKU on its ONLY active variant — the
+ * whole product and that variant are the same thing to print, so it resolves
+ * to the whole product.
  */
 export function targetOf(products, sku) {
   const key = String(sku ?? '').trim();
   if (!key) return null;
+  const hits = [];
   for (const p of products ?? []) {
-    if (p.hasSku && p.sku === key) return { productId: p.id, variantId: null, priceMinor: p.priceMinor ?? null };
-    const v = (p.variants ?? []).find((x) => x.sku === key);
-    if (v?.variantId) return { productId: p.id, variantId: v.variantId, priceMinor: v.priceMinor ?? p.priceMinor ?? null };
+    if (p.hasSku && p.sku === key) {
+      hits.push({ productId: p.id, variantId: null, priceMinor: p.priceMinor ?? null, name: p.name || p.sku, product: p });
+    }
+    for (const v of p.variants ?? []) {
+      if (v.sku === key && v.variantId) {
+        hits.push({
+          productId: p.id, variantId: v.variantId, priceMinor: v.priceMinor ?? p.priceMinor ?? null,
+          name: `${p.name || p.sku} — ${v.label}`, product: p,
+        });
+      }
+    }
   }
-  return null;
+  const plain = ({ productId, variantId, priceMinor }) => ({ productId, variantId, priceMinor });
+  if (hits.length === 0) return null;
+  if (hits.length === 1) return plain(hits[0]);
+  const whole = hits.find((hit) => hit.variantId === null);
+  if (
+    hits.length === 2 && whole &&
+    hits.every((hit) => hit.productId === whole.productId) &&
+    (whole.product.variants ?? []).length === 1
+  ) {
+    return plain(whole);
+  }
+  return { ambiguous: true, names: hits.map((hit) => hit.name) };
 }
+
+/** What the form says when one SKU names several products or variants. */
+export const ambiguousSkuMessage = (sku, names) =>
+  `SKU:n ”${String(sku).trim()}” finns på flera ställen (${names.join('; ')}). Ge dem olika SKU under Produkter, så kan var och en kopplas.`;
 
 /** The list rows → the mapping shape scopeSlots reads. */
 const asMappings = (rows) =>
@@ -121,7 +152,9 @@ export function usePrinterChoice({ shopId, sku, products, mappings }) {
   const article = articles.find((a) => a.sku === articleSku) ?? null;
   const chosenSlots = (article?.slots ?? []).filter((s) => slots.has(s));
   const slotKey = chosenSlots.join(',');
-  const target = targetOf(products, sku);
+  const resolved = targetOf(products, sku);
+  const ambiguous = resolved?.ambiguous === true ? resolved : null;
+  const target = ambiguous ? null : resolved;
   const targetKey = target ? `${target.productId}\n${target.variantId ?? ''}` : '';
 
   const setPrinterId = useCallback((id) => {
@@ -183,6 +216,7 @@ export function usePrinterChoice({ shopId, sku, products, mappings }) {
   let note = null;
   if (printersFailed) note = { tone: 'caution', text: 'Tryckerierna kunde inte hämtas. Ladda om sidan.' };
   else if (!printersLoading && printers.length === 0) note = { tone: 'caution', text: 'Inga tryckerier är tillgängliga för butiken ännu. Kontakta plattformen.' };
+  else if (ambiguous) note = { tone: 'caution', text: ambiguousSkuMessage(sku, ambiguous.names) };
   else if (quote.state === 'idle') note = { tone: 'muted', text: 'Välj tryckeri, artikel och placering så visas inköpspris och prisgolv.' };
   else if (quote.state === 'loading') note = { tone: 'muted', text: 'Hämtar inköpspris…' };
   else if (quote.state === 'refused') note = { tone: 'caution', text: quote.message };
@@ -219,6 +253,7 @@ export function usePrinterChoice({ shopId, sku, products, mappings }) {
 export async function addMapping({ shopId, sku, artworkId, choice, products }) {
   const target = targetOf(products, sku);
   if (!target) throw pageError(`Ingen produkt eller variant i butiken har SKU:n ”${String(sku).trim()}”.`);
+  if (target.ambiguous) throw pageError(ambiguousSkuMessage(sku, target.names));
   if (!choice?.printerId) throw pageError('Välj tryckeri.');
   if (!choice.articleSku) throw pageError('Välj artikel.');
   if (!choice.chosenSlots?.length) throw pageError('Välj minst en placering.');
