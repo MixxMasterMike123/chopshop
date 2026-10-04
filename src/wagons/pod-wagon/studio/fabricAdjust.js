@@ -19,11 +19,17 @@
 //   { base: { displacementScale?, displacementContrast? },
 //     perColorway: { [colorwayId]: { blend?, alpha? } } }
 
-/** The sliders' ranges: the 3D view's (Studio3DSection.jsx). */
+/**
+ * The sliders' ranges: the 3D view's (Studio3DSection.jsx), except that the
+ * opacity has a FLOOR. These knobs decide the product images, and a motif made
+ * invisible is not a product image: the renderer reads "no visible motif" as a
+ * failed WebGL render (displacementCompositor.js hasVisibleArtwork) and falls
+ * back to the flat one, so the export would contradict the preview.
+ */
 export const FABRIC_KNOBS = Object.freeze({
   displacementScale: Object.freeze({ min: 0, max: 100, step: 1 }),
   displacementContrast: Object.freeze({ min: 0.5, max: 4, step: 0.1 }),
-  alpha: Object.freeze({ min: 0, max: 1, step: 0.05 }),
+  alpha: Object.freeze({ min: 0.3, max: 1, step: 0.05 }),
 });
 
 export const FABRIC_BLENDS = Object.freeze(['multiply', 'screen', 'overlay', 'normal', 'add']);
@@ -51,7 +57,10 @@ export const setFabricKnob = (adjust, colorwayId, key, value) => {
   if (BASE_KNOBS.includes(key)) {
     base[key] = value;
   } else if (COLORWAY_KNOBS.includes(key) && colorwayId) {
-    perColorway[colorwayId] = { ...(perColorway[colorwayId] || {}), [key]: value };
+    const kept = key === 'alpha'
+      ? Math.min(FABRIC_KNOBS.alpha.max, Math.max(FABRIC_KNOBS.alpha.min, Number(value)))
+      : value;
+    perColorway[colorwayId] = { ...(perColorway[colorwayId] || {}), [key]: kept };
   } else {
     return adjust ?? null;
   }

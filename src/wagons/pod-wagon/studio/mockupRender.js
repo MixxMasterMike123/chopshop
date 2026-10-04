@@ -207,6 +207,10 @@ export const renderMockup = async ({
 
   if (p) {
     const artImg = await loadImage(artwork.previewUrl);
+    // The flat renderer has no fabric and no blend, but it keeps the opacity of
+    // THIS colourway (its seed, or the seller's fine-tuning), as the warped
+    // render it stands in for would have.
+    const artAlpha = displacement ? (displacementTuningFor(displacement, colorway?.id)?.alpha ?? 1) : 1;
     const x = (areaRect.x + p.xMm * ppm.x) * scale;
     const y = (areaRect.y + p.yMm * ppm.y) * scale;
     const w = p.wMm * ppm.x * scale;
@@ -221,10 +225,10 @@ export const renderMockup = async ({
     if (deg) {
       ctx.translate(x + w / 2, y + h / 2);
       ctx.rotate((deg * Math.PI) / 180);
-      ctx.globalAlpha = displacement ? (displacement.alpha ?? 1) : 1;
+      ctx.globalAlpha = artAlpha;
       ctx.drawImage(artImg, -w / 2, -h / 2, w, h);
     } else {
-      ctx.globalAlpha = displacement ? (displacement.alpha ?? 1) : 1;
+      ctx.globalAlpha = artAlpha;
       ctx.drawImage(artImg, x, y, w, h);
     }
     ctx.restore();

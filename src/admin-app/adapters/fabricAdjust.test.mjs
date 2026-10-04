@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  FABRIC_KNOBS,
   hasFabricAdjust,
   hasFabricMap,
   setFabricKnob,
@@ -99,6 +100,14 @@ describe('setFabricKnob', () => {
       perColorway: { white: { alpha: 0.5 }, black: { blend: 'screen' } },
     });
     assert.equal(hasFabricAdjust(adjust), true);
+  });
+
+  it('never lets the opacity make the motif invisible (the export would fall back and disagree)', () => {
+    assert.ok(FABRIC_KNOBS.alpha.min >= 0.3);
+    assert.equal(setFabricKnob(null, 'white', 'alpha', 0).perColorway.white.alpha, FABRIC_KNOBS.alpha.min);
+    assert.equal(setFabricKnob(null, 'white', 'alpha', 0.05).perColorway.white.alpha, FABRIC_KNOBS.alpha.min);
+    assert.equal(setFabricKnob(null, 'white', 'alpha', 7).perColorway.white.alpha, 1);
+    assert.equal(setFabricKnob(null, 'white', 'alpha', 0.65).perColorway.white.alpha, 0.65);
   });
 
   it('does not change the adjustment it was given, and ignores an unknown knob', () => {
