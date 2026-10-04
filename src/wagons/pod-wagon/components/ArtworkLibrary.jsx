@@ -12,7 +12,7 @@ import { deleteArtwork } from '../../../utils/podArtwork';
 import { getProfileById } from '../../../config/podProfiles';
 import { slotOf, slotLabel } from '../../../config/podSlots';
 import { tierTone, tierLabel } from './podTier';
-import { CAN_REPLACE, canRename, renameArtwork, revalidateArtwork, rowAction } from './artworkLibraryData';
+import { CAN_REPLACE, canRename, renameArtwork, revalidateArtwork, rowAction, usagePills } from './artworkLibraryData';
 import ArtworkUploadModal from './ArtworkUploadModal';
 
 const formatBytes = (b) => (b ? `${(b / 1024 / 1024).toFixed(1)} MB` : '');
@@ -103,19 +103,10 @@ const ArtworkLibrary = ({
     else toast(`${ok} godkända · ${failed} underkända — se raderna för orsak`, { icon: '⚠️' });
   };
 
-  // Map artworkId → the SKU+slot pills that reference it (built once from the shared
-  // mappings). MULTI-PLACEMENT: a SKU may appear per slot, so the pill carries the
-  // slot too ("north-01 · Rygg"). Missing placementSlot → 'front' (Bröst).
-  const pillsByArtwork = React.useMemo(() => {
-    const m = new Map();
-    mappings.forEach((mp) => {
-      if (!mp.artworkId || !mp.sku) return;
-      const arr = m.get(mp.artworkId) || [];
-      arr.push({ sku: mp.sku, slot: slotOf(mp), slots: mp.slotsLabel, id: mp.id });
-      m.set(mp.artworkId, arr);
-    });
-    return m;
-  }, [mappings]);
+  // Map artworkId → the "Används av" pills (built once from the shared mappings;
+  // what one pill stands for is the data layer's: a SKU + slot in the older
+  // build, a product with its variant count in the admin build).
+  const pillsByArtwork = React.useMemo(() => usagePills(mappings, slotLabel, slotOf), [mappings]);
 
   const handleDelete = async (art) => {
     if (!window.confirm(`Ta bort "${art.label || art.fileName}"?`)) return;
@@ -216,8 +207,10 @@ const ArtworkLibrary = ({
                   )}
                   {isMapped && (
                     mappedPills.map((p) => (
-                      <span key={p.id || `${p.sku}-${p.slot}`} className="inline-flex items-center rounded-full border border-admin-border-soft bg-admin-surface-2 px-2 py-0.5 text-[11px] text-admin-text-muted">
-                        Används av&nbsp;<span className="font-mono">{p.sku}</span>&nbsp;· {p.slots || slotLabel(p.slot)}
+                      <span key={p.key} className="inline-flex items-center rounded-full border border-admin-border-soft bg-admin-surface-2 px-2 py-0.5 text-[11px] text-admin-text-muted">
+                        Används av&nbsp;<span className={p.mono ? 'font-mono' : undefined}>{p.text}</span>
+                        {p.variants > 1 && <>&nbsp;· {p.variants} varianter</>}
+                        {p.slots && <>&nbsp;· {p.slots}</>}
                       </span>
                     ))
                   )}

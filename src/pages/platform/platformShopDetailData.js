@@ -15,6 +15,13 @@ import { APP_URLS } from '../../config/urls';
 /** The per-shop counts (products, orders, customers) have a read here. */
 export const SHOW_COUNTS = true;
 
+/** The count columns: { label, key (of the counts), title }. */
+export const COUNT_COLUMNS = [
+  { label: 'Produkter', key: 'products' },
+  { label: 'Ordrar', key: 'orders' },
+  { label: 'Kunder', key: 'b2cCustomers' },
+];
+
 /** The Shopify and WooCommerce migrators exist in this build. */
 export const MIGRATORS = true;
 

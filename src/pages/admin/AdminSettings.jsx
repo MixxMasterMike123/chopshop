@@ -45,10 +45,18 @@ import {
   CheckIcon,
 } from '@heroicons/react/24/outline';
 
+// The form from saved settings: the static defaults under every non-empty saved value.
+const formFromSaved = (saved) => ({ ...STORE, ...Object.fromEntries(
+  Object.entries(saved || {}).filter(([, v]) => v !== undefined && v !== null && v !== '')
+) });
+
 const AdminSettings = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [storeForm, setStoreForm] = useState(STORE);
+  // The form as rendered last, for an answer that arrives while it is edited.
+  const storeFormRef = useRef(storeForm);
+  storeFormRef.current = storeForm;
   // The shop this admin manages (impersonation > shop-admin's own shop > path).
   // Config MUST read/write THIS shop, not the default — else a non-default shop
   // (e.g. 'sillmans') would save to the default shop and the storefront, which reads
@@ -94,9 +102,7 @@ const AdminSettings = () => {
         console.warn('AdminSettings: could not load the legal state:', e?.message);
       }
       if (cancelled) return;
-      const form = { ...STORE, ...Object.fromEntries(
-        Object.entries(saved).filter(([, v]) => v !== undefined && v !== null && v !== '')
-      ) };
+      const form = formFromSaved(saved);
       if (legal?.acceptance) form.legal = { ...(form.legal || {}), acceptance: legal.acceptance };
       savedLegalTextsRef.current = { ...(form.legal?.customTexts || {}) };
       setLegalState(legal);
@@ -105,6 +111,27 @@ const AdminSettings = () => {
     })();
     return () => { cancelled = true; };
   }, [shopId]);
+
+  // Where the build's save answers what is stored (the admin build's fenced
+  // write: `follow`), the form follows it, keeping what was typed in fields
+  // the write did not change. The older build's save answers nothing.
+  const followSaved = useCallback((outcome) => {
+    if (typeof outcome?.follow !== 'function') return;
+    setStoreForm((prev) => outcome.follow(prev, formFromSaved).value);
+  }, []);
+
+  // A save refused because someone else changed the settings since this page
+  // read them (the admin build only): nothing was saved; the form follows what
+  // is stored now, keeping the edits the other change did not touch, and the
+  // seller is told which were lost. → true when it was such a refusal.
+  const followConflict = useCallback((error) => {
+    if (typeof error?.follow !== 'function') return false;
+    const { value, message } = error.follow(storeFormRef.current, formFromSaved);
+    savedLegalTextsRef.current = { ...(error.saved?.legal?.customTexts || {}) };
+    setStoreForm(value);
+    toast.error(message, { duration: 12000 });
+    return true;
+  }, []);
 
   // Re-read the server's legal state after a write that changes it.
   const refreshLegalState = useCallback(async () => {
@@ -192,16 +219,17 @@ const AdminSettings = () => {
       const patch = legal && typeof legal.noWithdrawalNotice === 'string'
         ? { ...rest, legal: { noWithdrawalNotice: legal.noWithdrawalNotice } }
         : rest;
-      await saveShopConfig(patch, shopId);
+      followSaved(await saveShopConfig(patch, shopId));
       await refreshLegalState();
       toast.success('Butiksinställningar sparade. Ladda om butiken för att se ändringarna.');
     } catch (error) {
+      if (followConflict(error)) return;
       console.error('Error saving store identity:', error);
-      toast.error('Fel vid sparande av butiksinställningar');
+      toast.error(error?.userMessage || 'Fel vid sparande av butiksinställningar');
     } finally {
       setSaving(false);
     }
-  }, [storeForm, shopId, refreshLegalState]);
+  }, [storeForm, shopId, refreshLegalState, followSaved, followConflict]);
 
   // ── Juridiska sidor: copy-on-write + seller acceptance ────────────────────
   // A legal page is either the PLATFORM TEMPLATE (default) or the SELLER's own
@@ -228,7 +256,7 @@ const AdminSettings = () => {
   // state would silently revert whatever those other writers changed (e.g. push
   // customUpdatedAt back in time and make a real re-acceptance notice vanish).
   const persistLegal = useCallback(async (patch) => {
-    await saveShopConfig({ legal: patch }, shopId);
+    followSaved(await saveShopConfig({ legal: patch }, shopId));
     if (patch.customTexts) Object.assign(savedLegalTextsRef.current, patch.customTexts);
     setStoreForm(prev => ({
       ...prev,
@@ -241,7 +269,7 @@ const AdminSettings = () => {
         ...(patch.customTexts ? { customTexts: { ...(prev.legal?.customTexts || {}), ...patch.customTexts } } : {}),
       },
     }));
-  }, [shopId]);
+  }, [shopId, followSaved]);
 
   // "Redigera texten själv" — copy-on-write. Renders the template as it stands
   // today, hands it to the data layer as the seller's own text (never
@@ -273,12 +301,13 @@ const AdminSettings = () => {
       if (navigateTo) navigate(navigateTo);
       else setLegalOpenKey(key);
     } catch (error) {
+      if (followConflict(error)) return;
       console.error('Error taking over legal page:', error);
       toast.error(error?.message || 'Kunde inte ta över texten');
     } finally {
       setLegalBusyKey('');
     }
-  }, [storeForm, isEnabled, currentUser, shopId, persistLegal, navigate]);
+  }, [storeForm, isEnabled, currentUser, shopId, persistLegal, navigate, followConflict]);
 
   // Open the seller's own text in its editor.
   const editLegalPage = useCallback(async (slug) => {
@@ -312,12 +341,13 @@ const AdminSettings = () => {
       await persistLegal(patch);
       toast.success('Plattformens mall visas igen.');
     } catch (error) {
+      if (followConflict(error)) return;
       console.error('Error reverting legal page:', error);
-      toast.error('Kunde inte återgå till mallen');
+      toast.error(error?.userMessage || 'Kunde inte återgå till mallen');
     } finally {
       setLegalBusyKey('');
     }
-  }, [shopId, currentUser, persistLegal]);
+  }, [shopId, currentUser, persistLegal, followConflict]);
 
   // The seller's own text, edited on this page (LEGAL_TEXTS_IN_SETTINGS).
   const changeLegalText = useCallback((key, value) => {
@@ -334,10 +364,11 @@ const AdminSettings = () => {
     try {
       await persistLegal({ customTexts: { [key]: value }, customUpdatedAt: new Date().toISOString() });
     } catch (error) {
+      if (followConflict(error)) return;
       console.error('Error saving legal text:', error);
-      toast.error('Kunde inte spara texten');
+      toast.error(error?.userMessage || 'Kunde inte spara texten');
     }
-  }, [persistLegal]);
+  }, [persistLegal, followConflict]);
 
   // The texts as this page SHOWS them (LEGAL_TEXTS_IN_SETTINGS): the template
   // rendered from the form, or the seller's own HTML as DOMPurify leaves it.
@@ -402,7 +433,7 @@ const AdminSettings = () => {
       // a customUpdatedAt bumped elsewhere and silently clear a legitimate
       // "needs re-acceptance" state. The merge write skips what we omit.
       const { legal: _legal, ...identityWithoutLegal } = storeForm;
-      await saveShopConfig(identityWithoutLegal, shopId);
+      followSaved(await saveShopConfig(identityWithoutLegal, shopId));
 
       // The seller's own HTML for every key they took over, so the evidence
       // snapshot holds the text the STOREFRONT actually serves (the data
@@ -435,6 +466,7 @@ const AdminSettings = () => {
       await refreshLegalState();
       toast.success('Villkoren är godkända. Kassan är nu öppen.');
     } catch (error) {
+      if (followConflict(error)) return;
       console.error('Error accepting legal terms:', error);
       if (Array.isArray(error?.refusedKeys) && error.refusedKeys.length > 0) {
         setLegalRefused(Object.fromEntries(error.refusedKeys.map((key) => [key, true])));
@@ -444,7 +476,7 @@ const AdminSettings = () => {
     } finally {
       setAcceptingLegal(false);
     }
-  }, [storeForm, shopId, shownCustomHtml, shownTexts, currentUser, isEnabled, refreshLegalState]);
+  }, [storeForm, shopId, shownCustomHtml, shownTexts, currentUser, isEnabled, refreshLegalState, followSaved, followConflict]);
 
   // Live legal-page readiness, recomputed from the in-progress form so the
   // banner updates as the seller fills in the return address / VAT status.

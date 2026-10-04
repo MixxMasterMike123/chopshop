@@ -219,7 +219,15 @@ const PlatformPrinters = () => {
         printAreasMm,
         provisionalAreas: garments.filter((g) => form.provisional.has(g)),
       };
-      const saved = await savePrinterTier(row, payload, tiers[row.id]);
+      // The admin build first previews the save (a dry run) and asks here
+      // when it would pause mappings or leave products under their floor.
+      const saved = await savePrinterTier(row, payload, tiers[row.id], {
+        confirmPreview: (text) => window.confirm(text),
+      });
+      if (saved.cancelled) {
+        toast('Ingenting sparades.');
+        return;
+      }
       const before = tiers[row.id]?.printAreasMm || {};
       const changed = POD_GARMENTS
         .filter((g) => stable(before[g.id]) !== stable(printAreasMm[g.id]))

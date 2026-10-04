@@ -321,6 +321,9 @@ export function mappingRows(mappings, { byScope = new Map(), printers = [], artw
         mappingId: m.mappingId,
         sku: scope?.sku || m.productId,
         productName: scope?.name ?? null,
+        // The product's own name and SKU (a variant's row names the variant above).
+        productTitle: byScope.get(scopeKey(m.productId, null))?.name || null,
+        productSku: byScope.get(scopeKey(m.productId, null))?.sku || null,
         placementSlot: slotIds[0] ?? null,
         slotIds,
         slotsLabel: slotsText(slotIds, slotLabel),
@@ -337,6 +340,43 @@ export function mappingRows(mappings, { byScope = new Map(), printers = [], artw
         printerSku: m.sku,
       };
     });
+}
+
+/**
+ * The "Används av" pills of the artwork library, per artwork (unit CP5-FP):
+ * ONE pill per PRODUCT, however many of its variants print the artwork (a
+ * studio product maps every variant, e.g. 65 on one row), with the count of
+ * its variant mappings when there are several and every slot any of them
+ * prints. → Map artworkId → [{ key, text, mono, variants, slots }]: `text` is
+ * the product's name (else its SKU, in mono), `variants` the number of
+ * variant mappings (0 when the product is mapped whole). `rows` are
+ * mappingRows' rows; `slotLabel` is config/podSlots.js's.
+ */
+export function usagePillsByArtwork(rows, slotLabel = (s) => s) {
+  const byArtwork = new Map();
+  for (const row of list(rows)) {
+    if (!isObj(row) || typeof row.artworkId !== 'string' || typeof row.productId !== 'string') continue;
+    if (!byArtwork.has(row.artworkId)) byArtwork.set(row.artworkId, new Map());
+    const products = byArtwork.get(row.artworkId);
+    if (!products.has(row.productId)) {
+      const name = row.productTitle || null;
+      products.set(row.productId, {
+        key: `${row.artworkId}\n${row.productId}`,
+        text: name || row.productSku || row.sku || row.productId,
+        mono: !name,
+        variants: 0,
+        slotIds: [],
+      });
+    }
+    const pill = products.get(row.productId);
+    if (row.variantId) pill.variants += 1;
+    for (const slot of list(row.slotIds)) if (!pill.slotIds.includes(slot)) pill.slotIds.push(slot);
+  }
+  const out = new Map();
+  for (const [artworkId, products] of byArtwork) {
+    out.set(artworkId, [...products.values()].map(({ slotIds, ...pill }) => ({ ...pill, slots: slotsText(slotIds, slotLabel) })));
+  }
+  return out;
 }
 
 /**

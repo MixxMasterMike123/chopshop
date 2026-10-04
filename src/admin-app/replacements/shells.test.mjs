@@ -66,12 +66,13 @@ describe('the admin shell\'s scope', () => {
 });
 
 describe('the console shell\'s scope', () => {
-  it('DAC7 and Leads leave; 3D-modeller stays (CP5-FO); Inställningar is live (CP5-FL), Betalningar stays "snart"', () => {
+  it('DAC7 and Leads leave; 3D-modeller stays (CP5-FO); Inställningar is live (CP5-FL), Betalningar stays "snart"; Tryckjobb follows Tryckerier (CP5-FP)', () => {
     assert.deepEqual(Object.keys(LEFT_PLATFORM_PATHS).sort(), ['/dac7', '/leads']);
     const nav = PLATFORM_NAV.map((i) => ({ ...i, live: !['/payments', '/settings'].includes(i.path) }));
     const scoped = scopePlatformNav(nav);
     assert.deepEqual(scoped.map((i) => i.path),
-      ['/shops', '/addons', '/models', '/printers', '/reports', '/users', '/payments', '/settings']);
+      ['/shops', '/addons', '/models', '/printers', '/print-jobs', '/reports', '/users', '/payments', '/settings']);
+    assert.deepEqual(['name', 'live'].map((k) => scoped.find((i) => i.path === '/print-jobs')[k]), ['Tryckjobb', true]);
     assert.equal(scoped.find((i) => i.path === '/settings').live, true);
     assert.equal(scoped.find((i) => i.path === '/payments').live, false);
     assert.equal(nav.find((i) => i.path === '/settings').live, false); // the shell's own list is not changed

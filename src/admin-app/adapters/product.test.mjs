@@ -336,6 +336,25 @@ describe('the images', () => {
     assert.equal(sameImageList(list, list.slice(1)), false);
     assert.deepEqual(droppedObjectIds([{ objectId: 'a' }, { objectId: 'z' }], list), ['z']);
   });
+
+  it('a re-saved list keeps each object\'s alt text: same owner first, else the same object (CP5-FP)', () => {
+    const before = [
+      { objectId: 'a', variantId: null, alt: null },
+      { objectId: 'm1', variantId: 'v-old', alt: 'Svart – baksida' },
+      { objectId: 'm2', variantId: 'v1', alt: 'Vit – framsida' },
+      { objectId: 'm2', variantId: null, alt: 'Vit (huvudbild)' },
+    ];
+    const list = imageList(['a', 'm2'], [{ objectIds: ['m2'], variantId: 'v1' }, { objectIds: ['m1'], variantId: 'v-new' }], before);
+    assert.deepEqual(list, [
+      { objectId: 'a', variantId: null },
+      { objectId: 'm2', variantId: null, alt: 'Vit (huvudbild)' },
+      { objectId: 'm2', variantId: 'v1', alt: 'Vit – framsida' },
+      { objectId: 'm1', variantId: 'v-new', alt: 'Svart – baksida' },
+    ]);
+    const same = imageList(['a', 'm2'], [{ objectIds: ['m2'], variantId: 'v1' }], before.filter((r) => r.objectId !== 'm1'));
+    assert.equal(sameImageList(same, [before[0], before[3], before[2]]), true);
+    assert.equal(sameImageList(same, [before[0], { ...before[3], alt: null }, before[2]]), false);
+  });
 });
 
 describe('the server\'s numbers', () => {

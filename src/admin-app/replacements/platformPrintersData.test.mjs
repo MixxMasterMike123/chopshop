@@ -1,6 +1,7 @@
-// PlatformPrinters' admin-build data module (unit FK), end to end against the
-// dev API under Node: fetch is routed into dev-api.mjs's route(), and the
-// payloads are built by the page's own form code (printerTierForm.js).
+// PlatformPrinters' admin-build data module (unit FK; the save's dry run, unit
+// CP5-FP), end to end against the dev API under Node: fetch is routed into
+// dev-api.mjs's route(), and the payloads are built by the page's own form
+// code (printerTierForm.js).
 //   node --test src/admin-app/replacements/platformPrintersData.test.mjs
 
 import assert from 'node:assert/strict';
@@ -102,10 +103,12 @@ describe('the tier editor', () => {
 
     const form = docToForm(before);
     form.blank.tee = '49';
-    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before);
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].method, 'PATCH');
-    assert.equal(sent[0].body.expectedRevision, 3);
+    const asked = [];
+    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before, { confirmPreview: (text) => asked.push(text) });
+    // The dry run first, then the write fenced on its revision; nothing to warn about, so nothing is asked.
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent.map((r) => [r.method, r.body.dryRun, r.body.expectedRevision]), [['PATCH', true, 3], ['PATCH', undefined, 3]]);
+    assert.deepEqual(asked, []);
     assert.equal(saved.doc.revision, 4);
     assert.equal(saved.doc.pricing.blankCostSek.tee, 49);
     assert.equal(saved.note, null);
@@ -118,31 +121,95 @@ describe('the tier editor', () => {
     assert.equal(again.doc.revision, 5);
   });
 
-  it('a save from a stale page is refused in Swedish (409 revision_mismatch)', async () => {
+  it('a save from a stale page is laid over the printer as stored now, and says so (409 revision_mismatch)', async () => {
     const { tiers } = await loadPrinters();
     const stale = tiers['fake-printer'];
-    await setPrinterActive({ id: 'fake-printer', active: true }); // someone else's edit: revision 4
+    await setPrinterActive({ id: 'fake-printer', active: true }); // someone else's edit: revision 4, inactive
     const form = docToForm(stale);
     form.blank.tee = '49';
-    await assert.rejects(savePrinterTier({ id: 'fake-printer' }, payloadOf(form), stale), (e) => /Ladda om sidan/.test(e.userMessage));
+    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), stale, { confirmPreview: () => true });
+    assert.equal(saved.doc.revision, 5);
+    assert.equal(saved.doc.active, false, 'the other edit stays');
+    assert.equal(saved.doc.pricing.blankCostSek.tee, 49);
+    assert.match(saved.note, /ändrats av någon annan; din ändring sparades ovanpå/);
   });
 
-  it('removing a frame says how many product mappings were paused', async () => {
+  it('a field both changed stops the save, naming the field; nothing is written', async () => {
+    const stale = (await loadPrinters()).tiers['fake-printer'];
+    const other = docToForm(stale);
+    other.blank.tee = '51';
+    await savePrinterTier({ id: 'fake-printer' }, payloadOf(other), stale, { confirmPreview: () => true });
+    const form = docToForm(stale);
+    form.blank.tee = '49';
+    sent = [];
+    await assert.rejects(savePrinterTier({ id: 'fake-printer' }, payloadOf(form), stale, { confirmPreview: () => true }),
+      (e) => /samma uppgifter.*T-shirt \(blankpris\).*Ingenting sparades/.test(e.userMessage));
+    assert.equal(sent.filter((r) => r.method === 'PATCH' && r.body.dryRun !== true).length, 0);
+    assert.equal((await loadPrinters()).tiers['fake-printer'].pricing.blankCostSek.tee, 51);
+  });
+
+  it('removing a frame: the preview names the mapping it pauses before anything is written; no → nothing is', async () => {
     const before = (await loadPrinters()).tiers['fake-printer'];
     const form = docToForm(before);
     form.areas.tee.back = { w: '', h: '', top: '' };
-    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before);
+    sent = [];
+    const cancelled = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before, { confirmPreview: () => false });
+    assert.deepEqual(cancelled, { cancelled: true });
+    assert.deepEqual(sent.map((r) => r.body.dryRun), [true]);
+    assert.equal((await loadPrinters()).tiers['fake-printer'].revision, 3);
+
+    const asked = [];
+    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before, { confirmPreview: (text) => { asked.push(text); return true; } });
+    assert.equal(asked.length, 1);
+    assert.match(asked[0], /1 produktkoppling pausas/);
+    assert.match(asked[0], /test-shop-a · produkt prod-dev-1 · artikel DEV-TEE-M: en tryckyta som kopplingen trycker på finns inte längre/);
     assert.match(saved.note, /^1 produktkoppling pausades/);
     assert.deepEqual(Object.keys(saved.doc.printAreasMm.tee), ['front']);
   });
 
-  it('the floor report reaches the note', async () => {
+  it('without a confirm a save that would pause mappings is not made', async () => {
+    const before = (await loadPrinters()).tiers['fake-printer'];
+    const form = docToForm(before);
+    form.areas.tee.back = { w: '', h: '', top: '' };
+    assert.deepEqual(await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before), { cancelled: true });
+  });
+
+  it('the floor: the preview lists the products and their new floor; the report reaches the note', async () => {
     useDevApi('admin_dev_fk=floor');
     const before = (await loadPrinters()).tiers['fake-printer'];
     const form = docToForm(before);
     form.print.front = '40';
-    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before);
+    const asked = [];
+    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before, { confirmPreview: (text) => asked.push(text) });
+    assert.match(asked[0], /2 produkter hamnar under prisgolvet/);
+    assert.match(asked[0], /produkt prod-dev-1: pris 249,00 kr, nytt golv 279,00 kr, till salu nu/);
     assert.equal(saved.note, '2 produkter ligger nu under prisgolvet.');
+  });
+
+  it('the printer moves after the preview: read again, the preview asked again, then saved', async () => {
+    useDevApi('admin_dev_fp=moved');
+    const before = (await loadPrinters()).tiers['fake-printer'];
+    const form = docToForm(before);
+    form.areas.tee.back = { w: '', h: '', top: '' };
+    const asked = [];
+    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before, { confirmPreview: (text) => asked.push(text) });
+    assert.equal(asked.length, 2);
+    assert.doesNotMatch(asked[0], /ändrades av någon annan/);
+    assert.match(asked[1], /ändrades av någon annan medan du arbetade/);
+    assert.deepEqual(sent.filter((r) => r.method === 'PATCH').map((r) => [r.body.dryRun === true, r.body.expectedRevision]),
+      [[true, 3], [false, 3], [true, 4], [false, 4]]);
+    assert.equal(saved.doc.revision, 5);
+  });
+
+  it('a write whose answer is lost is read back: saved', async () => {
+    useDevApi('admin_dev_fp=lost');
+    const before = (await loadPrinters()).tiers['fake-printer'];
+    const form = docToForm(before);
+    form.blank.tee = '53';
+    const saved = await savePrinterTier({ id: 'fake-printer' }, payloadOf(form), before, { confirmPreview: () => true });
+    assert.match(saved.note, /Svaret kom aldrig fram, men ändringen är sparad/);
+    assert.equal(saved.doc.pricing.blankCostSek.tee, 53);
+    assert.equal(saved.resync, true);
   });
 
   it('a mixed printer: an untouched mixed field is kept per SKU', async () => {

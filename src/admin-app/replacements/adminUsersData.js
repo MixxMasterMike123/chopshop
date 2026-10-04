@@ -4,13 +4,15 @@
 // names, so the page is one file in both builds.
 //
 // The page lists THIS SHOP's admins: GET /v1/admin/members, an invitation
-// (POST) and a removal (POST …/revoke). Roles, a trade margin and the user
-// create/edit pages do not exist here.
+// (POST), a removal (POST …/revoke) and a new invite link for someone who has
+// not set a password yet (POST …/resend-invite, unit CP5-FP). Roles, a trade
+// margin and the user create/edit pages do not exist here.
 
 import { useMemo } from 'react';
 import { useShopId } from '../../contexts/ShopContext';
 import { inviteMember, listMembers, revokeMember } from '../../api/admin/members.js';
 import { REVOKE_BLOCK, isInviteMailFailure, memberActionMessage, memberRowsOf } from '../adapters/member.js';
+import { resendInvite } from './memberResendData.js';
 
 /** The page shows the shop's own admins, with invite and remove. */
 export const MEMBER_ADMINS = true;
@@ -45,5 +47,6 @@ export function useUsersData() {
     updateUserMarginal: async () => { throw new Error('Marginal finns inte här.'); },
     inviteAdmin: ({ email, name }) => guarded(() => inviteMember({ shopId, email, name })),
     removeAdmin: (userId) => guarded(() => revokeMember({ shopId, userId })),
+    resendInvite: (user) => resendInvite(shopId, user),
   }), [shopId]);
 }

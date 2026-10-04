@@ -36,6 +36,14 @@ describe('the directory and the detail', () => {
     assert.equal(list.status, 200);
     assert.deepEqual(list.body.tenants.map((t) => t.tenantId), ['test-shop-a', 'test-shop-b', 'test-shop-c']);
     assert.deepEqual(Object.keys(list.body.tenants[0]).sort(), ['domainCount', 'domains', 'published', 'shopName', 'status', 'tenantId']);
+    // CP5-FP: ?counts=1 adds the counts; another value is a 400.
+    const counted = call(state, 'GET', '/_api/v1/platform/tenants?limit=100&counts=1', { headers: { cookie } }).body.tenants;
+    assert.deepEqual(counted.map((t) => t.counts), [
+      { orders: 57, products: 24, publishedProducts: 18 },
+      { orders: 0, products: 3, publishedProducts: 0 }, // suspended and unpublished: none visible
+      { orders: 2, products: 6, publishedProducts: 0 }, // unpublished
+    ]);
+    assert.equal(call(state, 'GET', '/_api/v1/platform/tenants?counts=true', { headers: { cookie } }).status, 400);
     assert.equal(call(state, 'GET', '/_api/v1/platform/tenants', { headers: { cookie: `${cookie}; admin_dev_fi=empty` } }).body.tenants.length, 0);
     assert.equal(call(state, 'GET', '/_api/v1/platform/tenants', { headers: { cookie: `${cookie}; admin_dev_fi=error` } }).status, 500);
   });
@@ -43,7 +51,8 @@ describe('the directory and the detail', () => {
     const { state, cookie } = platform();
     const d = call(state, 'GET', '/_api/v1/platform/tenants/test-shop-a', { headers: { cookie } });
     assert.equal(d.status, 200);
-    assert.deepEqual(Object.keys(d.body).sort(), ['domains', 'domainsTruncated', 'features', 'legal', 'settings', 'tenant']);
+    assert.deepEqual(Object.keys(d.body).sort(), ['counts', 'domains', 'domainsTruncated', 'features', 'legal', 'settings', 'tenant']);
+    assert.deepEqual(d.body.counts, { orders: 57, products: 24, publishedProducts: 18 });
     assert.equal(d.body.tenant.commissionBps, 400);
     assert.deepEqual(Object.keys(d.body.tenant.connect).sort(), ['accountId', 'chargesEnabled', 'detailsSubmitted', 'payoutsEnabled', 'syncedAt']);
     assert.equal(d.body.features.length, 6);

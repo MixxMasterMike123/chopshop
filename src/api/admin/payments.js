@@ -7,6 +7,8 @@
 //   POST /v1/admin/payments/connect/onboarding-link  { onboarding: { url, expiresAt } }
 //   POST /v1/admin/payments/connect/refresh          { connect }
 //   POST /v1/admin/payments/connect/login-link       { dashboard: { url } }   (404 while acting-as)
+//   GET  /v1/admin/payments/connect/balance          { balance: { available, pending, payoutSchedule, retrievedAt } }
+//                                                    409 connect_account_missing · 429 · 502 · 404 (CP5-FP)
 //   GET  /v1/platform/tenants/:id/connect            { connect: PlatformConnectView, operations }
 //   PUT  /v1/platform/tenants/:id/connect/payout-delay  { delayDays: 0..365 | 'minimum' } → { connect }
 //
@@ -77,4 +79,16 @@ export async function setPlatformPayoutDelay(tenantId, delayDays) {
     json: { delayDays },
   });
   return data?.connect ?? null;
+}
+
+/**
+ * The connected account's balance and payout schedule, read at Stripe now
+ * (CP5-WK, unit WF): `{ available, pending, payoutSchedule, retrievedAt }`.
+ * Rejects with the AdminApiError: 409 connect_account_missing, 429
+ * rate_limited (`retryAfterSeconds`; the limiter the four POSTs share), 502
+ * connect_unavailable, 404 (Connect not enabled for the shop).
+ */
+export async function getConnectBalance({ shopId, signal } = {}) {
+  const { data } = await adminRequest('GET', `${CONNECT_PATH}/balance`, { shopId, signal });
+  return data?.balance ?? null;
 }

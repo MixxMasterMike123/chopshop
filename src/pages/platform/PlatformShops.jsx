@@ -4,7 +4,7 @@
 // audited-impersonation slice P4.3). Platform-only. (docs/PLATFORM_ARCHITECTURE.md)
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { PUBLISH_COPY, SHOW_COUNTS, loadShops as readShops, openStorefront, setShopStatus } from './platformShopsData';
+import { COUNT_COLUMNS, PUBLISH_COPY, SHOW_COUNTS, loadShops as readShops, openStorefront, setShopStatus } from './platformShopsData';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import ProvisionShopModal from '../../components/platform/ProvisionShopModal';
 import ImpersonateShopModal from '../../components/platform/ImpersonateShopModal';
@@ -90,9 +90,7 @@ const PlatformShops = () => {
                   <th className="px-4 py-3">Butik</th>
                   <th className="px-4 py-3">{PUBLISH_COPY.column}</th>
                   <th className="px-4 py-3">Status</th>
-                  {SHOW_COUNTS && <th className="px-3 py-3 text-right">Produkter</th>}
-                  {SHOW_COUNTS && <th className="px-3 py-3 text-right">Ordrar</th>}
-                  {SHOW_COUNTS && <th className="px-3 py-3 text-right">Kunder</th>}
+                  {SHOW_COUNTS && COUNT_COLUMNS.map((c) => <th key={c.key} title={c.title} className="px-3 py-3 text-right">{c.label}</th>)}
                   <th className="px-4 py-3 text-right">Åtgärder</th>
                 </tr>
               </thead>
@@ -130,9 +128,7 @@ const PlatformShops = () => {
                           {disabled ? 'Inaktiverad' : 'Aktiv'}
                         </span>
                       </td>
-                      {SHOW_COUNTS && <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.products ?? '–'}</td>}
-                      {SHOW_COUNTS && <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.orders ?? '–'}</td>}
-                      {SHOW_COUNTS && <td className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.b2cCustomers ?? '–'}</td>}
+                      {SHOW_COUNTS && COUNT_COLUMNS.map((c) => <td key={c.key} className="px-3 py-3 text-right tabular-nums text-gray-300">{shop.counts?.[c.key] ?? '–'}</td>)}
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                           <button

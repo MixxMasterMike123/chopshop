@@ -116,7 +116,10 @@ const AdminStorefront = () => {
       toast.success('Butikens utseende sparat. Ladda om butiken för att se ändringarna.');
     } catch (error) {
       console.error('Error saving storefront branding:', error);
-      toast.error(error?.userMessage || 'Kunde inte spara. Försök igen.');
+      // Refused because the settings changed meanwhile (the admin build): the
+      // form follows what is stored, with the edits the other change left alone.
+      if (error?.branding) setForm({ ...pickBranding(STORE), ...pickBranding(error.branding) });
+      toast.error(error?.userMessage || 'Kunde inte spara. Försök igen.', error?.branding ? { duration: 12000 } : undefined);
     } finally {
       setSaving(false);
     }

@@ -39,6 +39,7 @@ import { POD_ROUTES } from './pod-dev.mjs';
 import { STUDIO_ROUTES } from './studio-dev.mjs';
 import { FL_PLATFORM_ROUTES } from './platform-settings-dev.mjs';
 import { REDIRECT_ROUTES } from './redirects-dev.mjs';
+import { PRINT_JOB_ROUTES, balanceRoute, settingsPatchRoute, settingsReadRoute } from './fp-dev.mjs';
 
 export const DEV_API_MARKER = 'admin-dev-api-invented-data';
 export const SESSION_COOKIE = 'admin_dev_session';
@@ -395,7 +396,21 @@ const SETTINGS_LEGAL_ROUTES = [
   }],
 ];
 
+// Unit CP5-FP: the settings' fenced PATCH over FE's held settings (and its
+// read for the `unclear` scenario), the Connect balance over the payments
+// state. First, so the read row stands before FE's.
+const FP_ADMIN_ROUTES = [
+  settingsReadRoute(SETTINGS_LEGAL_ROUTES.find(([m, p]) => m === 'GET' && p === '/v1/admin/settings')[2]),
+  settingsPatchRoute({
+    read: (state, shop, shopId) => feSettings(state, shop, shopId),
+    write: (state, shopId, settings) => { feHeld(state, shopId).settings = structuredClone(settings); },
+    refusedKeys: FE_REFUSED_IDENTITY_KEYS,
+  }),
+  balanceRoute(connectOf),
+];
+
 const ADMIN_ROUTES = [
+  ...FP_ADMIN_ROUTES,
   // Unit FB: the terms rows first; its status keeps the legal-pages readiness of the row below.
   ...shellAdminRoutes(SETTINGS_LEGAL_ROUTES.find(([m, p]) => m === 'GET' && p === '/v1/admin/legal/status')?.[2]),
   ...SETTINGS_LEGAL_ROUTES,
@@ -421,6 +436,7 @@ const PLATFORM_ROUTES = [
   ...PRINTER_ROUTES, // unit FK
   ...MODEL_ROUTES, // unit FO
   ...FL_PLATFORM_ROUTES, // unit FL
+  ...PRINT_JOB_ROUTES, // unit CP5-FP
 ];
 
 function match(pattern, path) {
@@ -506,6 +522,7 @@ export function createDevApi({ fixtures = FIXTURES } = {}) {
     res.statusCode = answer.status;
     res.setHeader('X-Admin-Dev', DEV_API_MARKER);
     res.setHeader('Cache-Control', 'no-store');
+    for (const [name, value] of Object.entries(answer.headers ?? {})) res.setHeader(name, value);
     if (answer.setCookie) res.setHeader('Set-Cookie', answer.setCookie);
     if (answer.location) {
       res.setHeader('Location', answer.location);

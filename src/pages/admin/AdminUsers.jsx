@@ -19,11 +19,13 @@ import {
 // admin NOT impersonating sees everyone. (Fixed a cross-shop leak: this page used
 // to show every shop's admins while impersonating — see getAllUsers.)
 const AdminUsers = () => {
-  const { getAllUsers, updateUserRole, updateUserMarginal, inviteAdmin, removeAdmin } = useUsersData();
-  // The shop's own admins (the Cloudflare admin build): invite and remove, no
-  // roles or margin. The older build keeps its table and its links.
+  const { getAllUsers, updateUserRole, updateUserMarginal, inviteAdmin, removeAdmin, resendInvite } = useUsersData();
+  // The shop's own admins (the Cloudflare admin build): invite, a new invite
+  // link, and remove; no roles or margin. The older build keeps its table and
+  // its links.
   const [inviteOpen, setInviteOpen] = useState(false);
   const [removingId, setRemovingId] = useState(null);
+  const [resendingId, setResendingId] = useState(null);
 
   const [users, setUsers] = useState([]);
   const [filteredUsers, setFilteredUsers] = useState([]);
@@ -136,6 +138,24 @@ const AdminUsers = () => {
       toast.error(error?.message || 'Kunde inte ta bort administratören');
     } finally {
       setRemovingId(null);
+    }
+  };
+
+  // A new invite link for someone who has not chosen a password yet (the
+  // admin build); the old link stops working. The data layer says what
+  // happened, and whether the list must be read again.
+  const handleResend = async (user) => {
+    if (resendingId) return;
+    try {
+      setResendingId(user.id);
+      const done = await resendInvite(user);
+      toast.success(done.message, { duration: 8000 });
+    } catch (error) {
+      console.error('Error resending the invite:', error);
+      toast.error(error?.message || 'Inbjudan kunde inte skickas igen.', { duration: 10000 });
+      if (error?.reload) await fetchUsers();
+    } finally {
+      setResendingId(null);
     }
   };
 
@@ -290,6 +310,17 @@ const AdminUsers = () => {
         <div onClick={(e) => e.stopPropagation()} className="flex items-center justify-end gap-2">
           {MEMBER_ADMINS ? (
             <div className="flex flex-col items-end gap-1">
+              {user.invited && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => handleResend(user)}
+                  disabled={Boolean(resendingId)}
+                  title="Skickar en ny länk för att välja lösenord. Den tidigare länken slutar fungera."
+                >
+                  {resendingId === user.id ? 'Skickar…' : 'Skicka inbjudan igen'}
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 size="sm"

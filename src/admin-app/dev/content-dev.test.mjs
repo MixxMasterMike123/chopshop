@@ -239,6 +239,7 @@ describe('the storefront\'s look', () => {
   });
 
   it('images whose reads fail are kept by a save of another field (CP5-FX, finding 7)', async () => {
+    await storefront.loadBranding('test-shop-a'); // the page loads before it saves (the fenced write's baseline, CP5-FP)
     const png = (n) => new File([Buffer.from([0x89, 0x50, 0x4e, 0x47, n, n, n])], `i${n}.png`, { type: 'image/png' });
     const hero = await storefront.uploadBrandImage(png(1), 'hero', 'test-shop-a');
     const favicon = await storefront.uploadBrandImage(png(2), 'favicon', 'test-shop-a');

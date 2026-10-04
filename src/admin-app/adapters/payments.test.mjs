@@ -11,6 +11,10 @@ import {
   notEnabledPayments,
   payoutDelayOf,
   toPagePayments,
+  balanceFailure,
+  balanceView,
+  moneyText,
+  payoutScheduleText,
 } from './payments.js';
 
 const VIEW = {
@@ -102,5 +106,53 @@ describe('connectErrorMessage', () => {
   it('falls back to the message, then a generic line', () => {
     assert.equal(connectErrorMessage({ code: 'other', message: 'Servern kunde inte nås' }), 'Servern kunde inte nås');
     assert.equal(connectErrorMessage(null), 'Något gick fel.');
+  });
+});
+
+describe('the balance panel (CP5-FP)', () => {
+  // AdminPayments' own formatter for öre, which the panel's must match for SEK.
+  const pageSek = (ore) => `${(ore / 100).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr`;
+
+  it('money per currency: the page\'s formatter for SEK; a currency\'s own minor unit', () => {
+    assert.equal(moneyText(1284050, 'sek'), pageSek(1284050));
+    assert.equal(moneyText(-500, 'SEK'), pageSek(-500));
+    assert.match(moneyText(4200, 'eur'), /^42,00\s€$/);
+    assert.match(moneyText(500, 'jpy'), /500/);
+    assert.equal(moneyText(1.5, 'sek'), '');
+    assert.equal(moneyText(100, 'sekk'), '');
+  });
+
+  it('the payout schedule in plain Swedish', () => {
+    assert.equal(payoutScheduleText({ interval: 'daily', delayDays: 7 }), 'Stripe betalar ut till ditt bankkonto varje dag. Pengar från en betalning hålls i 7 dagar innan de kan betalas ut.');
+    assert.match(payoutScheduleText({ interval: 'weekly', weeklyAnchor: 'friday', delayDays: 1 }), /varje vecka, på fredagar\. .*1 dag innan/);
+    assert.match(payoutScheduleText({ interval: 'monthly', monthlyAnchor: 15, delayDays: null }), /den 15 varje månad\.$/);
+    assert.match(payoutScheduleText({ interval: 'manual', delayDays: 7 }), /^Utbetalningarna är manuella[^]*automatiskt\.$/);
+    assert.match(payoutScheduleText(null), /inget utbetalningsschema/);
+  });
+
+  it('the view: SEK first, sums per currency, a negative available amount flagged', () => {
+    const view = balanceView({
+      available: [{ currency: 'eur', amountMinor: 4200 }, { currency: 'sek', amountMinor: -1500 }],
+      pending: [{ currency: 'sek', amountMinor: 1000 }, { currency: 'sek', amountMinor: 500 }],
+      payoutSchedule: null,
+      retrievedAt: '2026-10-04T12:03:00.000Z',
+    });
+    assert.deepEqual(view.rows.map((r) => [r.currency, r.available, r.pending, r.negative]), [
+      ['sek', pageSek(-1500), pageSek(1500), true],
+      ['eur', moneyText(4200, 'eur'), moneyText(0, 'eur'), false],
+    ]);
+    assert.equal(view.negative, true);
+    assert.ok(view.readAt.length > 0);
+    assert.equal(balanceView({ available: 'x' }), null);
+  });
+
+  it('a failed read: no panel, quiet limits, Stripe down, other errors', () => {
+    assert.equal(balanceFailure({ status: 404, code: 'not_found' }).state, 'none');
+    assert.equal(balanceFailure({ status: 409, code: 'connect_account_missing' }).state, 'none');
+    const limited = balanceFailure({ status: 429, code: 'rate_limited', retryAfterSeconds: 60 });
+    assert.equal(limited.state, 'limited');
+    assert.match(limited.message, /kan inte uppdateras just nu.*om 60 sekunder/);
+    assert.match(balanceFailure({ status: 502, code: 'connect_unavailable' }).message, /kunde inte hämtas från Stripe just nu/);
+    assert.equal(balanceFailure({ status: 0, code: 'network_error' }).state, 'error');
   });
 });

@@ -19,5 +19,6 @@ export function useUsersData() {
     updateUserMarginal,
     inviteAdmin: async () => { throw new Error('Inbjudan finns inte i den här versionen.'); },
     removeAdmin: async () => { throw new Error('Borttagning finns inte i den här versionen.'); },
+    resendInvite: async () => { throw new Error('Inbjudan finns inte i den här versionen.'); },
   };
 }

@@ -29,6 +29,7 @@ export const PLATFORM_ROUTES = [
   { path: '/settings', page: 'PlatformSettings' }, // CP5-FL: new pages, no older page
   { path: '/screening', page: 'PlatformScreening' },
   { path: '/terms', page: 'PlatformTermsVersions' },
+  { path: '/print-jobs', page: 'PlatformPrintJobs' }, // CP5-FP: new page, no older page
 ];
 
 /** /platform/login → the one sign-in page, a full load out of this tree. */

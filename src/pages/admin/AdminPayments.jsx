@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   BALANCE_READ,
+  CONNECT_BALANCE,
   callConnect,
   connectEnabledFor,
   getConnectBalance,
@@ -9,6 +10,7 @@ import {
   refreshOnReturn,
   setPayoutDelay,
   subscribeConnect,
+  useConnectBalance,
   useLoginLinkRefusal,
 } from './adminPaymentsData';
 import { useShopId } from '../../contexts/ShopContext';
@@ -116,6 +118,9 @@ const AdminPayments = () => {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [noticeTone, setNoticeTone] = useState('info'); // 'info' | 'success'
+  // The per-currency balance, where the build reads it: once per visit, once
+  // the account can take payments (useConnectBalance; the older build: never).
+  const balance = useConnectBalance(shopId, CONNECT_BALANCE && !!pay?.stripeAccountId && pay?.chargesEnabled === true);
 
   // Live subscription to the shop's payments map.
   useEffect(() => {
@@ -342,11 +347,13 @@ const AdminPayments = () => {
             <BalancePanel shopId={shopId} isPlatform={isPlatform} />
           </CardSection>
         )}
-        {/* Without a balance read, the payout-delay control stands alone,
-            for the platform only. */}
-        {hasAccount && chargesEnabled && !BALANCE_READ && isPlatform && (
+        {/* The per-currency balance where the build reads it (no panel when
+            the read says there is none to show), and the platform's
+            payout-delay control beside it or alone. */}
+        {hasAccount && chargesEnabled && !BALANCE_READ && ((CONNECT_BALANCE && balance.state !== 'none') || isPlatform) && (
           <CardSection title="Saldo & utbetalningsrisk">
-            <PayoutDelayPanel shopId={shopId} />
+            {CONNECT_BALANCE && balance.state !== 'none' && <ConnectBalance balance={balance} />}
+            {isPlatform && <PayoutDelayPanel shopId={shopId} standalone={!(CONNECT_BALANCE && balance.state !== 'none')} />}
           </CardSection>
         )}
       </div>
@@ -414,9 +421,61 @@ const BalancePanel = ({ shopId, isPlatform }) => {
   );
 };
 
-// Platform-only, where no balance read exists: the payout-delay control with
-// the current delay as the platform reads it.
-const PayoutDelayPanel = ({ shopId }) => {
+// The connected account's balance per currency as Stripe holds it now, the
+// payout schedule and when it was read (useConnectBalance: read once per
+// visit; "Uppdatera" reads again). A read that is refused says so here and
+// blocks nothing else on the page.
+const ConnectBalance = ({ balance }) => {
+  const { state, view, message, refreshing, refresh } = balance;
+  if (state === 'loading') return <p className="text-[13px] text-admin-text-muted">Hämtar saldo…</p>;
+  if (!view) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <p className={`text-[13px] ${state === 'error' ? 'text-red-700' : 'text-admin-text-muted'}`}>{message}</p>
+        <Button variant="plain" disabled={refreshing} onClick={refresh}>{refreshing ? 'Hämtar…' : 'Försök igen'}</Button>
+      </div>
+    );
+  }
+  const negatives = view.rows.filter((row) => row.negative).map((row) => row.available).join(', ');
+  return (
+    <div className="space-y-3">
+      {view.negative && (
+        <div className="rounded-md bg-red-50 border-l-4 border-red-400 p-3 text-[13px] text-red-700">
+          ⚠️ Negativt saldo på det anslutna kontot ({negatives}). Stripe drar inte automatiskt
+          från säljarens bankkonto i SE/EU — saldot kan ligga kvar tills det regleras.
+        </div>
+      )}
+      {view.rows.length === 0 ? (
+        <p className="text-[13px] text-admin-text-muted">Inget saldo ännu.</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 text-[13px]">
+          <div>
+            <div className="text-[12px] text-admin-text-muted">Tillgängligt</div>
+            {view.rows.map((row) => (
+              <div key={row.currency} className={`tabular-nums ${row.negative ? 'text-red-700 font-semibold' : 'text-admin-text'}`}>{row.available}</div>
+            ))}
+          </div>
+          <div>
+            <div className="text-[12px] text-admin-text-muted">Väntande</div>
+            {view.rows.map((row) => (
+              <div key={row.currency} className="tabular-nums text-admin-text">{row.pending}</div>
+            ))}
+          </div>
+        </div>
+      )}
+      <p className="text-[13px] text-admin-text-muted">{view.schedule}</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="plain" disabled={refreshing} onClick={refresh}>{refreshing ? 'Uppdaterar…' : 'Uppdatera'}</Button>
+        {view.readAt && <span className="text-[12px] text-admin-text-faint">Hämtat från Stripe {view.readAt}</span>}
+      </div>
+      {message && <p className="text-[12px] text-admin-text-muted">{message}</p>}
+    </div>
+  );
+};
+
+// Platform-only: the payout-delay control with the current delay as the
+// platform reads it, alone or under the balance (`standalone`: no divider).
+const PayoutDelayPanel = ({ shopId, standalone = true }) => {
   const [current, setCurrent] = useState(undefined);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -436,7 +495,7 @@ const PayoutDelayPanel = ({ shopId }) => {
 
   if (loading) return null;
   if (err) return <p className="text-[13px] text-red-700">{err}</p>;
-  return <PayoutDelayEditor shopId={shopId} current={current} onSaved={load} standalone />;
+  return <PayoutDelayEditor shopId={shopId} current={current} onSaved={load} standalone={standalone} />;
 };
 
 // Platform-only: hold a SPECIFIC seller's payouts longer (targeted risk control,

@@ -47,3 +47,4 @@ export { default as PlatformReports } from '../pages/platform/PlatformReports.js
 export { default as PlatformSettings } from './pages/new/PlatformSettings.jsx'; // CP5-FL: new, admin build only
 export { default as PlatformScreening } from './pages/new/PlatformScreening.jsx'; // CP5-FL
 export { default as PlatformTermsVersions } from './pages/new/PlatformTermsVersions.jsx'; // CP5-FL
+export { default as PlatformPrintJobs } from './pages/new/PlatformPrintJobs.jsx'; // CP5-FP: new, admin build only

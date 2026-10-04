@@ -277,8 +277,9 @@ async function saveProduct(args) {
       const variantId = firstRow ? variantIdBySku.get(lower(firstRow.sku)) : null;
       if (variantId) groupImages.push({ objectIds: objectIds.filter(Boolean), variantId });
     }
-    const list = imageList(own.filter(Boolean), groupImages);
     const before = server?.imageRows ?? [];
+    // Each row keeps the alt text its object has on the server (the PUT replaces the list whole).
+    const list = imageList(own.filter(Boolean), groupImages, before);
     const variantsWritten = plan.deletes.length + plan.updates.length + plan.creates.length > 0;
     if (!product || variantsWritten || !sameImageList(list, before)) {
       if (product || list.length > 0) {

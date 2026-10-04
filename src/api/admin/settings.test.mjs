@@ -1,5 +1,5 @@
 // node --test src/api/admin/settings.test.mjs — the settings and legal-pages
-// calls, and saveShopConfig's read-modify-write, against a stubbed fetch.
+// calls, and saveShopConfig's fenced partial write, against a stubbed fetch.
 
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { setRequestShopId } from './client.js';
 import { getSettings, putSettings } from './settings.js';
 import { acceptLegalPages, getLegalPagesAcceptance, getLegalPagesStatus } from './legal.js';
-import { saveShopConfig } from '../../admin-app/replacements/shopConfig.js';
+import { loadShopConfig, saveShopConfig } from '../../admin-app/replacements/shopConfig.js';
+import { STORE } from '../../config/store.js';
 
 const realFetch = globalThis.fetch;
 let calls;
@@ -50,40 +51,76 @@ describe('settings calls', () => {
   });
 });
 
-describe('saveShopConfig: read-modify-write', () => {
-  it('reads, merges the patch into the stored identity, PUTs the whole identity', async () => {
-    stubFetch((_url, init) => init.method === 'GET'
-      ? answer(200, { settings: { storeIdentity: { menu: [1], legal: { custom: { kopvillkor: true } } }, returnAddress: null } })
-      : answer(200, { settings: { storeIdentity: bodyOf({ init }).storeIdentity } }));
-    await saveShopConfig({ tagline: 't', shopName: 'never', returnAddress: 'R', legal: { customTexts: { kopvillkor: '<p>x</p>' } } }, 'test-shop-a');
-    assert.deepEqual(calls.map((c) => c.init.method), ['GET', 'PUT']);
-    assert.deepEqual(bodyOf(calls[1]), {
-      storeIdentity: { menu: [1], tagline: 't', legal: { custom: { kopvillkor: true }, customTexts: { kopvillkor: '<p>x</p>' } } },
-      returnAddress: 'R',
-    });
+describe('saveShopConfig: the fenced partial write (CP5-FP)', () => {
+  const T1 = '2026-10-01T09:00:00.000Z';
+  const T2 = '2026-10-01T09:00:05.000Z';
+  const stored = () => ({
+    storeIdentity: { menu: [1], tagline: 'same', legal: { custom: { kopvillkor: true } } },
+    returnAddress: null, vatRegistered: null, vatNumber: null, sellerType: null, updatedAt: T1,
   });
 
-  it('two saves in a row: the second reads what the first wrote', async () => {
-    let stored = { storeIdentity: {} };
-    stubFetch(async (_url, init) => {
-      if (init.method === 'GET') return answer(200, { settings: structuredClone(stored) });
-      await new Promise((r) => setTimeout(r, 5));
-      stored = { ...stored, ...bodyOf({ init }) };
-      return answer(200, { settings: stored });
+  /** The shop's settings and shop reads, then `onWrite` for the PATCH. */
+  function serve(onWrite, settings = stored()) {
+    stubFetch((url, init, n) => {
+      if (init.method === 'PATCH') return onWrite(bodyOf({ init }), n);
+      return answer(200, url.endsWith('/shop') ? { shop: { tenantId: 'test-shop-a', shopName: 'A' } } : { settings });
     });
+  }
+
+  it('loads, then PATCHes only what the patch changes, merged into the stored object, fenced on the read', async () => {
+    serve((body) => answer(200, { settings: { ...stored(), storeIdentity: { ...stored().storeIdentity, ...body.storeIdentity }, returnAddress: body.returnAddress, updatedAt: T2 } }));
+    await loadShopConfig('test-shop-a');
+    const outcome = await saveShopConfig({
+      tagline: 'same', shopName: 'never', logoUrl: '/images/logo.svg', returnAddress: ' R ', vatRegistered: null,
+      legal: { customTexts: { kopvillkor: '<p>x</p>' } },
+    }, 'test-shop-a');
+    const patches = calls.filter((c) => c.init.method === 'PATCH');
+    assert.equal(patches.length, 1);
+    assert.equal(headerOf(patches[0], 'x-shop-id'), 'test-shop-a');
+    assert.deepEqual(bodyOf(patches[0]), {
+      expectedUpdatedAt: T1,
+      storeIdentity: { legal: { custom: { kopvillkor: true }, customTexts: { kopvillkor: '<p>x</p>' } } },
+      returnAddress: 'R',
+    });
+    assert.equal(outcome.readBack, false);
+    assert.equal(outcome.saved.returnAddress, 'R');
+  });
+
+  it('the second save is fenced on the first one\'s answer', async () => {
+    serve((body, n) => answer(200, { settings: { ...stored(), storeIdentity: { ...stored().storeIdentity, ...body.storeIdentity }, updatedAt: `2026-10-01T09:00:0${n}.000Z` } }));
+    await loadShopConfig('test-shop-a');
     await Promise.all([
       saveShopConfig({ legal: { customTexts: { kopvillkor: 'a' } } }, 'test-shop-a'),
       saveShopConfig({ tagline: 'b' }, 'test-shop-a'),
     ]);
-    assert.deepEqual(calls.map((c) => c.init.method), ['GET', 'PUT', 'GET', 'PUT']);
-    assert.deepEqual(stored.storeIdentity, { legal: { customTexts: { kopvillkor: 'a' } }, tagline: 'b' });
+    const patches = calls.filter((c) => c.init.method === 'PATCH').map(bodyOf);
+    assert.equal(patches.length, 2);
+    assert.equal(patches[0].expectedUpdatedAt, T1);
+    assert.notEqual(patches[1].expectedUpdatedAt, T1);
+    assert.deepEqual(Object.keys(patches[1].storeIdentity), ['tagline']);
   });
 
-  it('a failed save does not stop the next one', async () => {
-    stubFetch((_url, init, n) => (n === 1 ? answer(500, {}) : answer(200, { settings: { storeIdentity: {} }, m: init.method })));
-    await assert.rejects(saveShopConfig({ a: 1 }, 'test-shop-a'));
+  it('nothing changed: no request', async () => {
+    serve(() => answer(500, {}));
+    await loadShopConfig('test-shop-a');
+    await saveShopConfig({ tagline: 'same', menu: [1], social: STORE.social }, 'test-shop-a');
+    assert.equal(calls.filter((c) => c.init.method === 'PATCH').length, 0);
+  });
+
+  it('a page whose load failed saves nothing', async () => {
+    setRequestShopId('test-shop-b');
+    stubFetch(() => answer(500, {}));
+    await assert.rejects(loadShopConfig('test-shop-b'));
+    await assert.rejects(saveShopConfig({ tagline: 'x' }, 'test-shop-b'), (e) => /kunde inte läsas när sidan öppnades/.test(e.userMessage));
+    assert.equal(calls.filter((c) => c.init.method === 'PATCH').length, 0);
+  });
+
+  it('a refusal does not stop the next save', async () => {
+    serve((_body, n) => (n === 3 ? answer(400, { error: { code: 'invalid_request' } }) : answer(200, { settings: { ...stored(), updatedAt: T2 } })));
+    await loadShopConfig('test-shop-a');
+    await assert.rejects(saveShopConfig({ a: 1 }, 'test-shop-a'), (e) => e.code === 'invalid_request');
     await saveShopConfig({ a: 2 }, 'test-shop-a');
-    assert.deepEqual(calls.map((c) => c.init.method), ['GET', 'GET', 'PUT']);
+    assert.equal(calls.filter((c) => c.init.method === 'PATCH').length, 2);
   });
 });
 

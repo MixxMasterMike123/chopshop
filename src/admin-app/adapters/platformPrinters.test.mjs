@@ -17,6 +17,10 @@ import {
   printerPatchOf,
   saveNoteOf,
   tierEditorNoteOf,
+  editorFieldLabel,
+  editorFieldsOf,
+  previewConfirmText,
+  previewNeedsConfirm,
 } from './platformPrinters.js';
 
 // An invented printer in the Worker's PlatformPrinterView shape: one model per
@@ -295,5 +299,35 @@ describe('the server\'s answers', () => {
     assert.equal(printerErrorMessage({ status: 400, code: 'invalid_tiers', details: { problems: ['tier X: no'] } }), 'Servern godtog inte ändringen: tier X: no');
     assert.match(printerErrorMessage({ status: 422, code: 'printer_inactive' }), /aktivt/);
     assert.equal(printerErrorMessage({ status: 500, code: 'internal_error' }), null);
+  });
+});
+
+describe('the save\'s dry run (CP5-FP)', () => {
+  const quiet = { diff: { suspensions: [], belowFloor: { count: 0, products: [] } }, revision: 3, suspendedMappings: 0 };
+
+  it('asks only when the save would pause mappings or leave products under their floor', () => {
+    assert.equal(previewNeedsConfirm(quiet), false);
+    assert.equal(previewNeedsConfirm({ ...quiet, suspendedMappings: 1 }), true);
+    assert.equal(previewNeedsConfirm({ ...quiet, diff: { ...quiet.diff, belowFloor: { count: 2, products: [] } } }), true);
+    assert.equal(previewNeedsConfirm({ ...quiet, diff: { ...quiet.diff, belowFloor: { count: null, tooManyToCheck: true } } }), true);
+  });
+
+  it('lists what the route gives, at most eight, then how many more', () => {
+    const suspensions = Array.from({ length: 10 }, (_, i) => ({ mappingId: `m${i}`, productId: `p${i}`, reason: 'unpriced', sku: `S${i}`, tenantId: 'shop' }));
+    const text = previewConfirmText({ diff: { suspensions, belowFloor: { count: 1, products: [{ tenantId: 'shop', productId: 'p1', variantId: null, priceMinor: 19900, newFloorMinor: 21900, live: true }] } }, suspendedMappings: 10 }, { printerName: 'Fake' });
+    assert.match(text, /^Spara ändringen av Fake\?/);
+    assert.match(text, /10 produktkopplingar pausas/);
+    assert.equal((text.match(/artikeln saknar pris/g) || []).length, 8);
+    assert.match(text, /· och 2 till/);
+    assert.match(text, /1 produkt hamnar under prisgolvet.*\n· shop · produkt p1: pris 199,00 kr, nytt golv 219,00 kr, till salu nu/);
+    assert.match(previewConfirmText(quiet, { rebased: true }), /ändrades av någon annan/);
+  });
+
+  it('the editor\'s fields and their names, for a merge', () => {
+    const fields = editorFieldsOf({ garments: ['hoodie', 'tee'], pricing: { blankCostSek: { tee: 50 } }, printAreasMm: {}, provisionalAreas: [] });
+    assert.deepEqual(fields.garments, ['hoodie', 'tee']);
+    assert.deepEqual(fields.pricing.printCostSek, {});
+    assert.match(editorFieldLabel(['pricing', 'blankCostSek', 'tee']), /\(blankpris\)$/);
+    assert.match(editorFieldLabel(['printAreasMm', 'tee', 'front']), /\(tryckyta\)$/);
   });
 });

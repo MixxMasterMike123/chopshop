@@ -1,0 +1,87 @@
+{
+  "_note": "INVENTED data for the dev API's print-job rows (unit CP5-FP, fp-dev.mjs). No real order, buyer or printer reference. `printer: false` marks an order line that is not a printer line (it is never listed). delivery: parcel | pickup; fulfilment: the order's fulfilment state; status: the order's (payment) status.",
+  "orders": [
+    {
+      "orderId": "1a2b3c4d-0000-4000-8000-000000001042", "tenantId": "test-shop-a", "orderNumber": "1042",
+      "status": "paid", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-02T08:00:00.000Z",
+      "lines": [
+        { "name": "T-shirt med eget tryck", "sku": "POD-TEE-BLK-M", "variantLabel": "Svart · M", "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1042-1", "dispatchedAt": "2026-10-02T08:10:00.000Z", "state": null },
+        { "name": "Keps med tryck", "sku": "POD-CAP-01", "variantLabel": null, "quantity": 2, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1042-2", "dispatchedAt": "2026-10-02T08:10:00.000Z", "state": "in_production" }
+      ]
+    },
+    {
+      "orderId": "2b3c4d5e-0000-4000-8000-000000001043", "tenantId": "test-shop-a", "orderNumber": "1043",
+      "status": "paid", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-02T09:30:00.000Z",
+      "lines": [
+        { "name": "Tygkasse", "sku": "TOTE-01", "variantLabel": null, "quantity": 1, "printer": false },
+        { "name": "Hoodie med eget tryck", "sku": "POD-HOOD-GRY-L", "variantLabel": "Grå · L", "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1043-2", "dispatchedAt": "2026-10-02T09:40:00.000Z", "state": "produced" }
+      ]
+    },
+    {
+      "orderId": "3c4d5e6f-0000-4000-8000-000000001044", "tenantId": "test-shop-a", "orderNumber": "1044",
+      "status": "cancelled", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-02T10:00:00.000Z",
+      "lines": [
+        { "name": "T-shirt med eget tryck", "sku": "POD-TEE-WHT-S", "variantLabel": "Vit · S", "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1044-1", "dispatchedAt": "2026-10-02T10:05:00.000Z", "state": null }
+      ]
+    },
+    {
+      "orderId": "4d5e6f70-0000-4000-8000-000000001045", "tenantId": "test-shop-a", "orderNumber": "1045",
+      "status": "refunded", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-02T11:00:00.000Z",
+      "lines": [
+        { "name": "Hoodie med eget tryck", "sku": "POD-HOOD-BLK-M", "variantLabel": "Svart · M", "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1045-1", "dispatchedAt": "2026-10-02T11:04:00.000Z", "state": "in_production" }
+      ]
+    },
+    {
+      "orderId": "5e6f7081-0000-4000-8000-000000001046", "tenantId": "test-shop-a", "orderNumber": "1046",
+      "status": "paid", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-03T07:00:00.000Z",
+      "lines": [
+        { "name": "T-shirt med eget tryck", "sku": "POD-TEE-BLK-L", "variantLabel": "Svart · L", "quantity": 1, "printer": true, "dispatchState": "unknown", "printerJobRef": null, "dispatchedAt": "2026-10-03T07:02:00.000Z", "state": null }
+      ]
+    },
+    {
+      "orderId": "6f708192-0000-4000-8000-000000001047", "tenantId": "test-shop-a", "orderNumber": "1047",
+      "status": "paid", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-03T08:00:00.000Z",
+      "lines": [
+        { "name": "Keps med tryck", "sku": "POD-CAP-01", "variantLabel": null, "quantity": 1, "printer": true, "dispatchState": null, "printerJobRef": null, "dispatchedAt": null, "state": null }
+      ]
+    },
+    {
+      "orderId": "708192a3-0000-4000-8000-000000001048", "tenantId": "test-shop-a", "orderNumber": "1048",
+      "status": "paid", "delivery": "parcel", "fulfilment": "shipped", "printerId": "fake-printer",
+      "createdAt": "2026-09-30T12:00:00.000Z",
+      "lines": [
+        { "name": "T-shirt med eget tryck", "sku": "POD-TEE-BLK-M", "variantLabel": "Svart · M", "quantity": 3, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1048-1", "dispatchedAt": "2026-09-30T12:05:00.000Z", "state": "shipped", "trackingNumber": "DEV000123456SE", "trackingUrl": "https://tracking.example.com/DEV000123456SE", "carrier": "Exempelfrakt" }
+      ]
+    },
+    {
+      "orderId": "8192a3b4-0000-4000-8000-000000002001", "tenantId": "test-shop-c", "orderNumber": "2001",
+      "status": "paid", "delivery": "pickup", "fulfilment": "unfulfilled", "printerId": "handtryck-exempel",
+      "createdAt": "2026-10-03T09:00:00.000Z",
+      "lines": [
+        { "name": "Poster med eget motiv", "sku": "POD-POSTER-A3", "variantLabel": null, "quantity": 2, "printer": true, "dispatchState": "accepted", "printerJobRef": "hand-2001-1", "dispatchedAt": "2026-10-03T09:30:00.000Z", "state": null }
+      ]
+    },
+    {
+      "orderId": "92a3b4c5-0000-4000-8000-000000001049", "tenantId": "test-shop-a", "orderNumber": "1049",
+      "status": "partially_refunded", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-03T10:00:00.000Z",
+      "lines": [
+        { "name": "T-shirt med eget tryck", "sku": "POD-TEE-WHT-M", "variantLabel": "Vit · M", "quantity": 2, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1049-1", "dispatchedAt": "2026-10-03T10:03:00.000Z", "state": null }
+      ]
+    },
+    {
+      "orderId": "a3b4c5d6-0000-4000-8000-000000001050", "tenantId": "test-shop-a", "orderNumber": "1050",
+      "status": "paid", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-03T11:00:00.000Z",
+      "lines": [
+        { "name": "Hoodie med eget tryck", "sku": "POD-HOOD-GRY-S", "variantLabel": "Grå · S", "quantity": 1, "printer": true, "dispatchState": "failed", "printerJobRef": null, "dispatchedAt": "2026-10-03T11:01:00.000Z", "state": null }
+      ]
+    }
+  ]
+}

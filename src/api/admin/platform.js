@@ -9,7 +9,7 @@ import { AdminApiError, adminRequest } from './client.js'; // CP5-FI (its own li
 // ═══ CP5-FJ ═════════════════════════════════════════════════════════════════
 // Add-ons (features), users, infringement reports, the screening queue.
 //
-//   GET  /v1/platform/tenants[?cursor&limit]           { tenants: [{tenantId, shopName, status, …}], nextCursor }
+//   GET  /v1/platform/tenants[?cursor&limit&counts=1]  { tenants: [{tenantId, shopName, status, …, counts?}], nextCursor }
 //   GET  /v1/platform/tenants/:id/features             { features: [{key, enabled, defaultEnabled, source}], tenantId }
 //   PUT  /v1/platform/tenants/:id/features             { features: {key: boolean} } → the same
 //   GET  /v1/platform/users[?accountType&tenantId&cursor&limit]   { users: [DirectoryUser], nextCursor }
@@ -43,9 +43,13 @@ async function readPages(path, params, listKey, { signal } = {}) {
 
 // ── shops and their add-ons ─────────────────────────────────────────────────
 
-/** Every shop: [{ tenantId, shopName, status, published, … }]. */
-export function readAllTenants({ signal } = {}) {
-  return readPages('/v1/platform/tenants', {}, 'tenants', { signal });
+/**
+ * Every shop: [{ tenantId, shopName, status, published, … }]. `counts`: each
+ * row also carries `counts: { products, publishedProducts, orders }`
+ * (?counts=1, CP5-WK; unit CP5-FP).
+ */
+export function readAllTenants({ signal, counts = false } = {}) {
+  return readPages('/v1/platform/tenants', counts ? { counts: 1 } : {}, 'tenants', { signal });
 }
 
 /** One shop's add-ons: [{ key, enabled, defaultEnabled, source }]. */
@@ -268,8 +272,9 @@ export async function requestStorefrontPreview(shopId) {
 // The printers (cloudflare/src/routes/pod-platform.ts, "CP3: the platform
 // printer surface"; CP3_C_REPORT.md §3). PLATFORM-ONLY: these answers carry
 // every price and print frame the platform holds (the seller sees ONE
-// number). Only the platform console's printer page imports this section; no
-// module of the admin tree may. The Worker refuses each of these routes with
+// number). Only the platform console's pages import this section (the
+// printers page; the print-jobs page reads the printers' ids and names for
+// its filter, unit CP5-FP); no module of the admin tree may. The Worker refuses each of these routes with
 // the opaque 404 when the request names a shop, and the whole surface is dark
 // (404) in an environment without a dispatch target.
 //
@@ -280,11 +285,14 @@ export async function requestStorefrontPreview(shopId) {
 //                                                   → { printer, diff, suspendedMappings }
 //                                                   400 invalid_request | invalid_tiers | invalid_capabilities | printer_not_allowed (+ problems)
 //                                                   409 revision_mismatch | concurrent_edit | tenant_printer | too_many_mappings
+//   PATCH /v1/platform/printers/:id  { …, dryRun: true }   → { dryRun: true, diff, revision, suspendedMappings }
+//                                                   nothing written (CP5-WK; the save's preview, unit CP5-FP)
+//   GET   /v1/platform/printers/:id                 { printer }   (the read-back of a save, CP5-FP)
 //   PUT   /v1/platform/printers/default             { printerId: id | null } → { defaultPrinter: { printerId, printerActive, … } } · 422 printer_not_found | printer_inactive | tenant_printer
-// The page needs no other call: the list carries every printer whole and the
-// default's id. The single read (GET …/:id, GET …/default) and the supplier
-// catalogue (GET/PUT …/:id/catalog, POST …/catalog/apply) have no control on
-// the page and no call here.
+// The list carries every printer whole and the default's id; the single read
+// serves the save's read-back after a revision moved or an answer was lost.
+// GET …/default and the supplier catalogue (GET/PUT …/:id/catalog, POST
+// …/catalog/apply) have no control on the page and no call here.
 
 const PRINTER_PAGE = 50; // the Worker's PLATFORM_PRINTER_PAGE_MAX
 
@@ -311,6 +319,32 @@ export async function patchPrinter(printerId, body) {
     diff: data?.diff ?? null,
     suspendedMappings: Number.isInteger(data?.suspendedMappings) ? data.suspendedMappings : 0,
   };
+}
+
+/**
+ * The same edit as a DRY RUN (CP5-WK; unit CP5-FP): nothing is written. →
+ * { diff, revision, suspendedMappings }: what the save would do, computed on
+ * the printer at `revision` (send it back as `expectedRevision`). Refusals
+ * are the write's (400 …, 409 revision_mismatch …, 404).
+ */
+export async function previewPrinterPatch(printerId, body) {
+  const { data } = await platformRequest('PATCH', `/v1/platform/printers/${segment(printerId)}`, { json: { ...body, dryRun: true } });
+  return {
+    diff: data?.diff ?? null,
+    revision: Number.isSafeInteger(data?.revision) ? data.revision : null,
+    suspendedMappings: Number.isInteger(data?.suspendedMappings) ? data.suspendedMappings : 0,
+  };
+}
+
+/** One printer as stored now (PlatformPrinterView), or null when the API answers the opaque 404 (unit CP5-FP). */
+export async function getPrinter(printerId, { signal } = {}) {
+  try {
+    const { data } = await platformRequest('GET', `/v1/platform/printers/${segment(printerId)}`, { signal });
+    return data?.printer ?? null;
+  } catch (error) {
+    if (error instanceof AdminApiError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 /** Sets (an id) or clears (null) the default printer. → { printerId, printerActive, updatedAt, updatedBy }. */
@@ -472,3 +506,44 @@ export async function archiveTermsVersionText(version, text) {
 }
 
 // ═══ end CP5-FL ═════════════════════════════════════════════════════════════
+
+// ═══ CP5-FP ═════════════════════════════════════════════════════════════════
+// The print jobs (cloudflare/src/routes/print-jobs-platform.ts,
+// src/dispatch/print-job-list.ts, src/dispatch/production-status.ts;
+// CP5_WK_REPORT.md, CP6_PS1_REPORT.md). PLATFORM-ONLY: only the console's
+// print-jobs page imports this section. A row carries no cost and no buyer.
+//
+//   GET  /v1/platform/print-jobs[?state&dispatchState&tenantId&printerId&cursor&limit≤100]
+//        { jobs: [{ jobId, tenantId, shopName, orderId, orderNumber, orderStatus, lineNo,
+//                   name, sku, variantLabel, quantity, printerId, printerJobRef,
+//                   dispatchState, dispatchedAt, state, trackingNumber, trackingUrl,
+//                   carrier, createdAt, updatedAt }], nextCursor }
+//        ONE value per filter (`none` = no state recorded); ordered by job id
+//        (order id, line), the cursor the last job id of the page before
+//   POST /v1/platform/print-jobs/:jobId/status  { state, trackingNumber?, trackingUrl?, carrier? }
+//        → 200 { job, changed, orderShipped }
+//        409 print_job_status_not_allowed { reason: not_accepted | cancelled | refunded |
+//        backwards | tracking_differs } · 409 conflict · 400 invalid_request · 404
+
+/** One page of print jobs. → { jobs, nextCursor }. */
+export async function listPrintJobs({ state, dispatchState, tenantId, printerId, cursor, limit, signal } = {}) {
+  const { data } = await platformRequest('GET', withQuery('/v1/platform/print-jobs', {
+    state, dispatchState, tenantId, printerId, cursor, limit,
+  }), { signal });
+  return {
+    jobs: Array.isArray(data?.jobs) ? data.jobs : [],
+    nextCursor: typeof data?.nextCursor === 'string' && data.nextCursor !== '' ? data.nextCursor : null,
+  };
+}
+
+/** Records the printer's production status of one job. → { job, changed, orderShipped }. */
+export async function setPrintJobStatus(jobId, body) {
+  const { data } = await platformRequest('POST', `/v1/platform/print-jobs/${segment(jobId)}/status`, { json: body });
+  return {
+    job: data?.job ?? null,
+    changed: data?.changed === true,
+    orderShipped: data?.orderShipped === true,
+  };
+}
+
+// ═══ end CP5-FP ═════════════════════════════════════════════════════════════

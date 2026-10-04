@@ -15,6 +15,13 @@ import { APP_URLS } from '../../config/urls';
 /** The per-shop counts (products, orders, customers) have a read here. */
 export const SHOW_COUNTS = true;
 
+/** The count columns: { label, key (of the counts), title }. */
+export const COUNT_COLUMNS = [
+  { label: 'Produkter', key: 'products' },
+  { label: 'Ordrar', key: 'orders' },
+  { label: 'Kunder', key: 'b2cCustomers' },
+];
+
 /** The publication column's words: here unpublishing only hides the shop from search engines. */
 export { SHOP_LIST_PUBLISH_COPY as PUBLISH_COPY } from './publishCopy.js';
 

@@ -175,7 +175,10 @@ const AdminMenu = () => {
       toast.success('Menyn sparad. Ladda om butiken för att se ändringarna.');
     } catch (e) {
       console.error('Error saving menu:', e);
-      toast.error(e?.userMessage || 'Kunde inte spara menyn');
+      // Refused because the settings changed meanwhile (the admin build): the
+      // menu shown follows what is stored, unless only other settings moved.
+      if (Array.isArray(e?.menu)) setMenu(e.menu);
+      toast.error(e?.userMessage || 'Kunde inte spara menyn', Array.isArray(e?.menu) ? { duration: 12000 } : undefined);
     } finally {
       setSaving(false);
     }

@@ -15,9 +15,10 @@
 //   storefront    as the list (platformStorefront.js): the preview of an
 //                 unpublished shop when an acting-as grant on it is open
 //
-// Not here: the counts (no route; the "Översikt" card is not shown) and the
-// Shopify / WooCommerce migrators (PORT-LATER; their buttons are not shown and
-// their modals are aliased to nothing).
+//   counts        the detail's `counts` (products, those visible in the
+//                 storefront, orders: unit CP5-FP); no customer count
+// Not here: the Shopify / WooCommerce migrators (PORT-LATER; their buttons
+// are not shown and their modals are aliased to nothing).
 
 import {
   getTenantConnect,
@@ -26,18 +27,21 @@ import {
   setTenantPublished,
   setTenantStatus,
 } from '../../api/admin/platform.js';
-import { toDetailShop } from '../adapters/platformShops.js';
+import { SHOP_COUNT_COLUMNS, countsOf, toDetailShop } from '../adapters/platformShops.js';
 import { noteCurrentTermsVersion } from './shopCellsData.js';
 import { openStorefrontOf } from './platformStorefront.js';
 import { APP_URLS } from './urls.js';
 
-export const SHOW_COUNTS = false;
+export const SHOW_COUNTS = true;
 export const MIGRATORS = false;
+
+/** The counts card's three: { label, key (of counts), title }. */
+export const COUNT_COLUMNS = SHOP_COUNT_COLUMNS;
 
 /** The publication card's words: here unpublishing CLOSES the storefront (D57). */
 export { SHOP_DETAIL_PUBLISH_COPY as PUBLISH_COPY } from './publishCopy.js';
 
-/** { shop, counts: null }, or null when the API answers the opaque 404. */
+/** { shop, counts }, or null when the API answers the opaque 404. */
 export async function loadShop(shopId) {
   const detail = await getTenantDetail(shopId);
   if (!detail) return null;
@@ -49,7 +53,7 @@ export async function loadShop(shopId) {
     console.warn('Connect view not available:', error?.code || error?.message);
   }
   noteCurrentTermsVersion(detail.legal?.terms?.currentVersion);
-  return { shop: toDetailShop(detail, connect), counts: null };
+  return { shop: toDetailShop(detail, connect), counts: countsOf(detail.counts) };
 }
 
 export async function setShopPublished(shop, next) {

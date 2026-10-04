@@ -355,6 +355,91 @@ export function saveNoteOf({ diff, suspendedMappings } = {}) {
   return lines.length ? lines.join(' ') : null;
 }
 
+// ── the save's dry run (unit CP5-FP) ────────────────────────────────────────
+// PATCH …/:id with `dryRun: true` answers what the save WOULD do, writing
+// nothing: { diff, revision, suspendedMappings }. A platform page: the diff is
+// shown as the route gives it (shops, products, prices and floors included).
+
+const SUSPEND_REASONS = {
+  slot_not_printable: 'en tryckyta som kopplingen trycker på finns inte längre',
+  sku_unavailable: 'artikeln finns inte längre i tryckeriets katalog',
+  unpriced: 'artikeln saknar pris',
+};
+const LISTED = 8;
+
+const kr = (minor) => (Number.isSafeInteger(minor)
+  ? `${(minor / 100).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr`
+  : '—');
+
+/** Whether a dry run's answer has something to say before the save: paused mappings or products under the floor. */
+export function previewNeedsConfirm(preview) {
+  const floor = preview?.diff?.belowFloor;
+  const suspensions = Array.isArray(preview?.diff?.suspensions) ? preview.diff.suspensions.length : 0;
+  return suspensions > 0 || (Number.isInteger(preview?.suspendedMappings) && preview.suspendedMappings > 0)
+    || floor?.tooManyToCheck === true || (Number.isInteger(floor?.count) && floor.count > 0);
+}
+
+/**
+ * The confirm of a save whose dry run warns: what it would pause and which
+ * products it would leave under their floor, each listed as the route names
+ * it (at most eight, then "och N till"). `rebased`: the printer changed after
+ * the page (or an earlier preview) read it, and this preview is on its
+ * current state.
+ */
+export function previewConfirmText(preview, { printerName, rebased = false } = {}) {
+  const diff = preview?.diff ?? {};
+  const lines = [`Spara ändringen av ${printerName || 'tryckeriet'}?`];
+  if (rebased) lines.push('Tryckeriet ändrades av någon annan medan du arbetade. Det här är vad din ändring gör nu, ovanpå den ändringen.');
+  const suspensions = Array.isArray(diff.suspensions) ? diff.suspensions : [];
+  const paused = Math.max(suspensions.length, Number.isInteger(preview?.suspendedMappings) ? preview.suspendedMappings : 0);
+  if (paused > 0) {
+    lines.push('', `${plural(paused, 'produktkoppling', 'produktkopplingar')} pausas: tryckeriet kan inte längre göra ${paused === 1 ? 'den' : 'dem'}.`);
+    for (const s of suspensions.slice(0, LISTED)) {
+      lines.push(`· ${s.tenantId} · produkt ${s.productId} · artikel ${s.sku}: ${SUSPEND_REASONS[s.reason] ?? s.reason}`);
+    }
+    if (paused > LISTED) lines.push(`· och ${paused - Math.min(LISTED, suspensions.length)} till`);
+  }
+  const floor = diff.belowFloor;
+  if (floor?.tooManyToCheck === true) {
+    lines.push('', 'Prisgolvet kan inte kontrolleras för alla produkter (för många): produkter kan hamna under golvet utan att listas här.');
+  } else if (Number.isInteger(floor?.count) && floor.count > 0) {
+    lines.push('', `${plural(floor.count, 'produkt', 'produkter')} hamnar under prisgolvet. Priserna ändras inte; säljaren får höja dem.`);
+    const products = Array.isArray(floor.products) ? floor.products : [];
+    for (const p of products.slice(0, LISTED)) {
+      const variant = p.variantId ? ` (variant ${p.variantId})` : '';
+      lines.push(`· ${p.tenantId} · produkt ${p.productId}${variant}: pris ${kr(p.priceMinor)}, nytt golv ${kr(p.newFloorMinor)}${p.live ? ', till salu nu' : ''}`);
+    }
+    if (floor.count > Math.min(LISTED, products.length)) lines.push(`· och ${floor.count - Math.min(LISTED, products.length)} till`);
+  }
+  lines.push('', 'OK sparar ändringen. Avbryt sparar ingenting.');
+  return lines.join('\n');
+}
+
+/** The editor's fields a three-way merge compares (the payload's and the doc's shared shape). */
+export function editorFieldsOf(source) {
+  return {
+    garments: [...(source?.garments ?? [])].sort(),
+    pricing: {
+      blankCostSek: { ...(source?.pricing?.blankCostSek ?? {}) },
+      printCostSek: { ...(source?.pricing?.printCostSek ?? {}) },
+    },
+    printAreasMm: structuredClone(source?.printAreasMm ?? {}),
+    provisionalAreas: [...(source?.provisionalAreas ?? [])].sort(),
+  };
+}
+
+/** A merged field's path (mergeThree) as the operator reads it: "T-shirt (blankpris)". */
+export function editorFieldLabel(path) {
+  const [top, a, b] = path;
+  if (top === 'pricing' && a === 'blankCostSek' && b) return `${garmentLabel(b)} (blankpris)`;
+  if (top === 'pricing' && a === 'printCostSek' && b) return `${SLOT_LABEL[b] ?? b} (tryckpris)`;
+  if (top === 'printAreasMm' && a && b) return `${garmentLabel(a)} ${(SLOT_LABEL[b] ?? b).toLowerCase()} (tryckyta)`;
+  if (top === 'printAreasMm' && a) return `${garmentLabel(a)} (tryckytor)`;
+  if (top === 'provisionalAreas') return 'Preliminära mått';
+  if (top === 'garments') return 'Plagg';
+  return path.join('.');
+}
+
 /** An API error of the printer routes → a line in the page's language, or null (the page's own text). */
 export function printerErrorMessage(error) {
   const problems = Array.isArray(error?.details?.problems) ? error.details.problems.filter((p) => typeof p === 'string') : [];

@@ -499,24 +499,40 @@ export function repricedMixedGroups(plan, desired, railPriceOf) {
  * group's FIRST variant (the group rule shows it on every size of the group).
  * `own`: objectIds in order. `groups`: [{ objectIds, variantId }].
  * No object twice for one owner (the server refuses that list).
+ *
+ * `before`: the rows the server holds (`_server.imageRows`). The PUT replaces
+ * the list whole and the form edits no alt text, so each row keeps the alt
+ * its object had (unit CP5-FP; the studio marks its images by their alt,
+ * CP5_FN2_REPORT.md): the same object for the same owner first, else the
+ * same object anywhere in the list. A row without one sends none.
  */
-export function imageList(own, groups) {
+export function imageList(own, groups, before = []) {
+  const altByRow = new Map();
+  const altByObject = new Map();
+  for (const row of Array.isArray(before) ? before : []) {
+    if (!row || typeof row.alt !== 'string' || row.alt === '') continue;
+    altByRow.set(`${row.variantId ?? ''}\n${row.objectId}`, row.alt);
+    if (!altByObject.has(row.objectId)) altByObject.set(row.objectId, row.alt);
+  }
   const list = [];
   const seen = new Set();
   const push = (objectId, variantId) => {
     const key = `${variantId ?? ''}\n${objectId}`;
     if (!objectId || seen.has(key)) return;
     seen.add(key);
-    list.push({ objectId, variantId: variantId ?? null });
+    const alt = altByRow.get(key) ?? altByObject.get(objectId);
+    list.push(alt === undefined ? { objectId, variantId: variantId ?? null } : { objectId, variantId: variantId ?? null, alt });
   };
   for (const objectId of own) push(objectId, null);
   for (const group of groups) for (const objectId of group.objectIds) push(objectId, group.variantId);
   return list;
 }
 
-/** True when two image lists hold the same rows in the same order. */
+/** True when two image lists hold the same rows in the same order (an alt text the list carries counts too). */
 export function sameImageList(a, b) {
-  return a.length === b.length && a.every((row, i) => row.objectId === b[i].objectId && (row.variantId ?? null) === (b[i].variantId ?? null));
+  return a.length === b.length && a.every((row, i) => row.objectId === b[i].objectId
+    && (row.variantId ?? null) === (b[i].variantId ?? null)
+    && (row.alt === undefined || row.alt === (b[i].alt ?? null)));
 }
 
 /** The objects of `before` that `after` no longer names (removed from the product). */

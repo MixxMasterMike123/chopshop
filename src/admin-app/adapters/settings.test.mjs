@@ -12,7 +12,12 @@ import {
   mergeLikeFirestore,
   readinessFromStatus,
   pageNamesOf,
+  patchHolds,
+  patchedKeys,
   refusedTextKeys,
+  settingsAfterPatch,
+  settingsConflictMessage,
+  settingsPatchBody,
   settingsPutBody,
   textsChangedSince,
 } from './settings.js';
@@ -182,5 +187,64 @@ describe('textsChangedSince', () => {
   it('an imported summary-only adoption', () => {
     assert.equal(textsChangedSince({ version: 'v', custom: true, customPages: null, pageSha256: {} }, { templateVersion: 'v', customPages: NONE }), true);
     assert.equal(textsChangedSince({ version: 'v', custom: false, customPages: null }, { templateVersion: 'v', customPages: NONE }), false);
+  });
+});
+
+describe('settingsPatchBody (the fenced partial write, CP5-FP)', () => {
+  const base = {
+    storeIdentity: { tagline: 't', social: { facebook: 'f' }, legal: { custom: { kopvillkor: true }, acceptance: { x: 1 } }, menu: [1] },
+    returnAddress: 'R', vatRegistered: false, vatNumber: null, sellerType: null, updatedAt: '2026-10-01T09:00:00.000Z',
+  };
+  const DEFAULTS = { tagline: 'Quality', logoUrl: '/images/logo.svg', social: { facebook: '', instagram: '' }, address: 'Street' };
+
+  it('only the keys the patch changes, fenced on the read', () => {
+    const body = settingsPatchBody(base, { tagline: 't2', menu: [1], returnAddress: 'R', vatRegistered: false }, DEFAULTS);
+    assert.deepEqual(body, { expectedUpdatedAt: '2026-10-01T09:00:00.000Z', storeIdentity: { tagline: 't2' } });
+  });
+
+  it('an object patch is merged into the stored object and sent whole, without legal.acceptance', () => {
+    const body = settingsPatchBody(base, { legal: { customTexts: { kopvillkor: 'x' } }, social: { instagram: 'i' } }, DEFAULTS);
+    assert.deepEqual(body.storeIdentity, {
+      legal: { custom: { kopvillkor: true }, customTexts: { kopvillkor: 'x' } },
+      social: { facebook: 'f', instagram: 'i' },
+    });
+  });
+
+  it('a default the page showed for an unstored key is no change; a changed one is', () => {
+    assert.equal(settingsPatchBody(base, { logoUrl: '/images/logo.svg', address: 'Street', shopName: 'never', vatRate: 0.25 }, DEFAULTS), null);
+    assert.deepEqual(settingsPatchBody(base, { address: 'Other' }, DEFAULTS).storeIdentity, { address: 'Other' });
+    // A stored value cleared on the page is a change (the default is not compared then).
+    assert.deepEqual(settingsPatchBody(base, { tagline: '' }, DEFAULTS).storeIdentity, { tagline: '' });
+  });
+
+  it('gate fields as the Worker stores them: trimmed, empty is null; unchanged ones are left out', () => {
+    const body = settingsPatchBody(base, { returnAddress: '  R  ', vatNumber: ' SE1 ', sellerType: '', vatRegistered: true }, DEFAULTS);
+    assert.deepEqual(body, { expectedUpdatedAt: base.updatedAt, vatNumber: 'SE1', vatRegistered: true });
+  });
+
+  it('no settings yet: fenced on null', () => {
+    assert.equal(settingsPatchBody({ storeIdentity: {}, updatedAt: null }, { tagline: 'x' }).expectedUpdatedAt, null);
+  });
+
+  it('patchHolds: every written value is stored; patchedKeys and settingsAfterPatch name and apply them', () => {
+    const body = { expectedUpdatedAt: 'x', storeIdentity: { tagline: 't2', social: { b: 2, a: 1 } }, returnAddress: 'R2' };
+    const after = settingsAfterPatch(base, body);
+    assert.equal(after.storeIdentity.tagline, 't2');
+    assert.deepEqual(after.storeIdentity.menu, [1]);
+    assert.equal(after.returnAddress, 'R2');
+    assert.equal(patchHolds({ ...after, storeIdentity: { ...after.storeIdentity, social: { a: 1, b: 2 } } }, body), true);
+    assert.equal(patchHolds(base, body), false);
+    assert.equal(patchHolds({ ...after, returnAddress: 'R' }, body), false);
+    assert.deepEqual(patchedKeys(body), ['tagline', 'social', 'returnAddress']);
+  });
+});
+
+describe('settingsConflictMessage', () => {
+  it('says nothing was saved, and names the edits the other change took', () => {
+    assert.match(settingsConflictMessage([]), /sparades inte.*finns kvar/);
+    const lost = settingsConflictMessage([['tagline'], ['social', 'facebook'], ['address']]);
+    assert.match(lost, /Din ändring av Slogan, Sociala länkar och Adress gick förlorad/);
+    assert.match(settingsConflictMessage([['someNewKey']]), /ändring av ett av fälten/);
+    assert.match(settingsConflictMessage([['menu']], { lostAnswer: true }), /^Anslutningen bröts.*Menyn/);
   });
 });

@@ -15,6 +15,14 @@ import { db, functions } from '../../firebase/config';
 /** The balance panel has a read here (getConnectBalance). */
 export const BALANCE_READ = true;
 
+/** No per-currency balance panel here (the admin build's, useConnectBalance). */
+export const CONNECT_BALANCE = false;
+
+/** Never read here (CONNECT_BALANCE is false): the panel stays hidden. */
+export function useConnectBalance() {
+  return { state: 'none', view: null, message: '', refreshing: false, refresh: () => {} };
+}
+
 /**
  * Live subscription to the shop's payments map (shops/{id}.payments).
  * Returns the unsubscribe function.

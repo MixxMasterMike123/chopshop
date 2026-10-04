@@ -16,11 +16,21 @@
 //   error       every read answers 500
 //   noinvite    the invite answers 503 email_unavailable (the person is added)
 //   ratelimit   the invite answers 429 rate_limited
+//
+// The resend of an invite (POST /v1/admin/members/:userId/resend-invite, unit
+// CP5-FP; routes/admin-members.ts, platform/tenant-members.ts): 202 for a
+// listed member who has not set a password, 409 not_invited for one who has,
+// the opaque 404 for anyone not listed. Its scenarios are fp-dev.mjs's cookie
+// `admin_dev_fp`: dark (404: no invite mail here, as on staging today),
+// limited (429, Retry-After 900), password (the person sets a password just
+// before: 409 not_invited, and the row stops being invited), suspended (409
+// not_invitable), nomail (503 email_unavailable), lost (sent, answered 502).
 
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fpScenario } from './fp-dev.mjs';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'members-fixtures.json');
 const CAP = 20;
@@ -82,6 +92,21 @@ export const MEMBER_ROUTES = [
     list.push(known ? { ...member, name: known.user.name, invited: false } : member);
     if (mode === 'noinvite') return refused(503, 'email_unavailable', 'The invite email could not be queued');
     return json(201, { member: viewOf({ ...member, userId: member.userId }, entry) });
+  }],
+
+  ['POST', /^\/v1\/admin\/members\/([^/]+)\/resend-invite$/, (state, { shop, headers, segments }) => {
+    const mode = fpScenario(headers);
+    if (mode === 'dark') return notFound();
+    const list = held(state, shopIdOf(shop));
+    const member = list.find((m) => m.userId === decodeURIComponent(segments[0]));
+    if (!member) return notFound();
+    if (mode === 'limited') return { status: 429, body: { error: { code: 'rate_limited', message: 'Too many requests' } }, headers: { 'retry-after': '900' } };
+    if (mode === 'password') member.invited = false;
+    if (member.invited !== true) return refused(409, 'not_invited', 'The admin has already set a password');
+    if (mode === 'suspended') return refused(409, 'not_invitable', 'The identity cannot be invited');
+    if (mode === 'nomail') return refused(503, 'email_unavailable', 'The invite email could not be queued');
+    if (mode === 'lost') return json(502, { error: { code: 'bad_gateway', message: 'The answer was lost on the way (dev scenario)' } });
+    return json(202, { invite: { userId: member.userId, surface: 'admin', expiresAt: new Date(Date.now() + 72 * 3600_000).toISOString() } });
   }],
 
   ['POST', /^\/v1\/admin\/members\/([^/]+)\/revoke$/, (state, { shop, entry, segments }) => {

@@ -6,7 +6,9 @@
 //                 "snart" placeholders stay as they were. 3D-modeller is back
 //                 (unit CP5-FO: the page on the Worker's 3D-model routes).
 //                 Inställningar is live (unit CP5-FL: the settings, the brand
-//                 filter and the terms versions); Betalningar stays "snart"
+//                 filter and the terms versions); Betalningar stays "snart".
+//                 Tryckjobb is added after Tryckerier (unit CP5-FP: the print
+//                 jobs and their production status)
 //   the badge     GET /v1/platform/reports?status=new → `newCount` (every
 //                 shop's unhandled reports), per mount and on the badge event
 //   the notices   an acting-as session that ended in this tab (ran out, or
@@ -14,6 +16,7 @@
 
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import { QueueListIcon } from '@heroicons/react/24/outline';
 import { platformRequest } from '../../api/admin/client.js';
 import { actingAsNoticeText, takeActingAsNotice } from './impersonationAudit.js';
 
@@ -26,10 +29,16 @@ export const LEFT_PLATFORM_PATHS = Object.freeze({
 /** Console paths the shell marks "snart" whose page this build has (unit CP5-FL). */
 export const LIVE_PLATFORM_PATHS = Object.freeze(['/settings']);
 
+/** Console entries this build adds, each after the entry it follows (unit CP5-FP). */
+export const ADDED_PLATFORM_LINKS = Object.freeze([
+  { after: '/printers', link: { name: 'Tryckjobb', path: '/print-jobs', icon: QueueListIcon, live: true } },
+]);
+
 export function scopePlatformNav(nav) {
   return nav
     .filter((item) => !Object.hasOwn(LEFT_PLATFORM_PATHS, item.path))
-    .map((item) => (LIVE_PLATFORM_PATHS.includes(item.path) ? { ...item, live: true } : item));
+    .map((item) => (LIVE_PLATFORM_PATHS.includes(item.path) ? { ...item, live: true } : item))
+    .flatMap((item) => [item, ...ADDED_PLATFORM_LINKS.filter((a) => a.after === item.path).map((a) => a.link)]);
 }
 
 /** The badge counts of a `GET /v1/platform/reports` answer (pure). */

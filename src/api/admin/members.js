@@ -4,8 +4,10 @@
 //   GET  /v1/admin/members                    { members: [{ userId, email, name, status, invited, joinedAt, self }] }
 //   POST /v1/admin/members {email, name}      201 { member }
 //   POST /v1/admin/members/:userId/revoke     200 { revoked: { userId } }
+//   POST /v1/admin/members/:userId/resend-invite  202 { invite: { userId, surface, expiresAt } }
+//        409 not_invited | not_invitable · 429 · 503 email_unavailable · 404 (CP5-FP)
 //
-// All three carry X-Shop-Id (adminRequest). Acting-as is admitted by the
+// All of them carry X-Shop-Id (adminRequest). Acting-as is admitted by the
 // Worker; nothing here differs for it.
 
 import { adminRequest, segment } from './client.js';
@@ -28,4 +30,14 @@ export async function inviteMember({ shopId, email, name }) {
 export async function revokeMember({ shopId, userId }) {
   const { data } = await adminRequest('POST', `${MEMBERS_PATH}/${segment(userId)}/revoke`, { shopId });
   return data?.revoked ?? { userId };
+}
+
+/**
+ * A new invite link for a member who has not set a password yet (CP5-WK;
+ * unit CP5-FP). → { userId, surface, expiresAt } (never the link). The
+ * previous unused link stops working.
+ */
+export async function resendMemberInvite({ shopId, userId }) {
+  const { data } = await adminRequest('POST', `${MEMBERS_PATH}/${segment(userId)}/resend-invite`, { shopId });
+  return data?.invite ?? null;
 }

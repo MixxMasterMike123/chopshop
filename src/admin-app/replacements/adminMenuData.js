@@ -8,15 +8,20 @@
 //             admin lists
 //   the menu  the identity's `menu` (GET /v1/admin/settings through
 //             shopConfig.js)
-//   save      saveShopConfig({ menu }) — the whole array replaces the key. A
-//             stored image id whose object is gone is cleared in the same save,
-//             or the identity would be refused for it.
+//   save      saveShopConfig({ menu }) — the fenced PATCH of the one key `menu`
+//             (unit CP5-FP), the whole array replacing it. Only the keys a
+//             PATCH writes are checked, so an image whose object is gone no
+//             longer blocks the menu's save (the identity is not sent).
+//   conflict  the settings changed since the page read them (409): the menu
+//             shown follows what is stored when the other change moved the
+//             menu too (the seller's menu is then lost, and said so); when it
+//             moved only other settings, the seller's menu stays on the page
 
 import { AdminApiError } from '../../api/admin/client.js';
 import { listAllCollections, listAllPages } from '../../api/admin/content.js';
-import { getSettings } from '../../api/admin/settings.js';
 import { categoriesOf, menuPageTitle, settingsRefusal, tagsOf } from '../adapters/content.js';
-import { deadReferencesPatch, readImages } from './brandingImages.js';
+import { mergeThree } from '../adapters/merge.js';
+import { settingsConflictMessage } from '../adapters/settings.js';
 import { loadProductsWithTags } from './contentSources.js';
 import { loadShopConfig, saveShopConfig } from './shopConfig.js';
 
@@ -44,12 +49,21 @@ export async function loadMenuBuilder(shopId) {
   };
 }
 
+const menuOf = (saved) => (Array.isArray(saved?.menu) ? saved.menu : []);
+
 export async function saveMenu(menu, shopId) {
   try {
-    const identity = (await getSettings({ shopId }))?.storeIdentity ?? {};
-    const dead = deadReferencesPatch(identity, await readImages(identity, shopId));
-    await saveShopConfig({ menu, ...dead }, shopId);
+    await saveShopConfig({ menu }, shopId);
   } catch (error) {
+    if (error?.code === 'settings_conflict') {
+      const merged = mergeThree({ menu }, { menu: menuOf(error.before) }, { menu: menuOf(error.saved) });
+      const message = settingsConflictMessage(merged.lost, { lostAnswer: error.lostAnswer });
+      const refused = new Error(message, { cause: error });
+      refused.userMessage = message;
+      refused.menu = merged.value.menu ?? [];
+      throw refused;
+    }
+    if (error?.userMessage) throw error;
     const message = error instanceof AdminApiError ? settingsRefusal(error) : null;
     if (message) {
       const refused = new Error(message, { cause: error });

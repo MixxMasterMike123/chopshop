@@ -7,6 +7,8 @@
 //   create a user                                  app.ts handlePlatformUserRoute, platform/provision-users.ts
 //   Connect enable/disable                         routes/connect-platform.ts (the Connect state is the
 //                                                  payments rows' connectOf, so the seller's page agrees)
+//   counts                                         ?counts=1 on the directory, always on the detail
+//                                                  (CP5-WK; invented numbers, unit CP5-FP)
 // Changes are held in memory per server (state.fi), over the fixtures.
 //
 // The shops this module creates exist only here: the other units' rows (the
@@ -142,6 +144,7 @@ function detailOf(state, shop, connectOf, headers) {
   const c = connectOf(state, shop.tenantId, headers);
   const now = new Date().toISOString();
   return {
+    counts: countsOf(shop),
     domains: shop.domains.map((d, i) => ({
       createdAt: shop.createdAt, domainId: `dev-domain-${shop.tenantId}-${i}`, hostname: d.hostname, kind: d.kind,
       status: d.status, updatedAt: shop.createdAt, verifiedAt: d.status === 'verified' ? shop.createdAt : null,
@@ -172,6 +175,21 @@ function detailOf(state, shop, connectOf, headers) {
       vatRateBp: shop.vatRateBp,
     },
   };
+}
+
+// Unit CP5-FP: invented counts per shop (a created shop has none yet). As the
+// Worker: products = draft + active, publishedProducts = 0 while the shop is
+// unpublished or not active, orders = every order.
+const DEV_COUNTS = {
+  'test-shop-a': { products: 24, published: 18, orders: 57 },
+  'test-shop-b': { products: 3, published: 3, orders: 0 },
+  'test-shop-c': { products: 6, published: 4, orders: 2 },
+};
+
+function countsOf(shop) {
+  const c = DEV_COUNTS[shop.tenantId] ?? { products: 0, published: 0, orders: 0 };
+  const live = shop.published === true && shop.status === 'active';
+  return { orders: c.orders, products: c.products, publishedProducts: live ? c.published : 0 };
 }
 
 function listItem(shop) {
@@ -230,7 +248,9 @@ export function platformShopRoutes({ connectOf, rest = [] }) {
     ['GET', '/v1/platform/tenants', (state, { url, headers }) => {
       if (scenario(headers) === 'error') return serverError();
       const params = url.searchParams;
-      for (const key of params.keys()) if (!['cursor', 'limit', 'status'].includes(key)) return invalid();
+      for (const key of params.keys()) if (!['counts', 'cursor', 'limit', 'status'].includes(key)) return invalid();
+      // counts: exactly `1`, given once (CP5-WK); anything else is a 400.
+      if (params.has('counts') && (params.getAll('counts').length > 1 || params.get('counts') !== '1')) return invalid();
       const limit = params.get('limit') === null ? 50 : Number(params.get('limit'));
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) return invalid();
       const cursor = params.get('cursor');
@@ -240,7 +260,11 @@ export function platformShopRoutes({ connectOf, rest = [] }) {
       if (status) shops = shops.filter((s) => s.status === status);
       if (cursor) shops = shops.filter((s) => s.tenantId > cursor);
       const page = shops.slice(0, limit);
-      return json(200, { tenants: page.map(listItem), nextCursor: shops.length > limit ? page.at(-1).tenantId : null });
+      const withCounts = params.get('counts') === '1';
+      return json(200, {
+        tenants: page.map((shop) => (withCounts ? { ...listItem(shop), counts: countsOf(shop) } : listItem(shop))),
+        nextCursor: shops.length > limit ? page.at(-1).tenantId : null,
+      });
     }],
 
     ['POST', '/v1/platform/tenants', (state, { body }) => {

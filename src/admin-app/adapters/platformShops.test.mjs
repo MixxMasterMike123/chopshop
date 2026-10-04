@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  SHOP_COUNT_COLUMNS,
+  countsOf,
   API_FEATURE_KEYS,
   commissionErrorMessage,
   featureMapOf,
@@ -49,13 +51,15 @@ describe('the list', () => {
       null,
     ]);
     assert.deepEqual(rows, [
-      { id: 'b', name: 'Alfa', status: 'disabled', tenantStatus: 'closed', published: false },
-      { id: 'zeta', name: null, status: 'active', tenantStatus: 'active', published: true },
+      { id: 'b', name: 'Alfa', status: 'disabled', tenantStatus: 'closed', published: false, counts: null },
+      { id: 'zeta', name: null, status: 'active', tenantStatus: 'active', published: true, counts: null },
     ]);
   });
-  it('carries no count (the API has none)', () => {
-    const [row] = toListShops([{ tenantId: 'a', shopName: 'A', status: 'active', published: true }]);
-    assert.equal('counts' in row, false);
+  it('carries the counts of ?counts=1 (CP5-FP): products, visible, orders; no customer count', () => {
+    const [row] = toListShops([{ tenantId: 'a', shopName: 'A', status: 'active', published: true, counts: { products: 4, publishedProducts: 3, orders: 0, b2cCustomers: 9 } }]);
+    assert.deepEqual(row.counts, { products: 4, publishedProducts: 3, orders: 0 });
+    assert.deepEqual(countsOf({ products: -1, publishedProducts: 1.5, orders: '2' }), { products: null, publishedProducts: null, orders: null });
+    assert.deepEqual(SHOP_COUNT_COLUMNS.map((c) => c.key), ['products', 'publishedProducts', 'orders']);
   });
 });
 

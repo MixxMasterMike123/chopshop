@@ -16,7 +16,14 @@
 // Seller-facing money surface: the page gets the five facts of
 // toPagePayments() and the links the server gives. No fee, no commission, no
 // platform figure; nothing is computed.
+//
+// The balance (unit CP5-FP): GET /v1/admin/payments/connect/balance, the
+// connected account's own balance per currency and its payout schedule, read
+// once per visit while the account can take payments (useConnectBalance) and
+// again on "Uppdatera" only — never on a timer or a re-render: the read
+// spends the per-shop Stripe limiter (12 per window) the page's buttons share.
 
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../providers/Session.jsx';
 import { AdminApiError } from '../../api/admin/client.js';
 import {
@@ -24,11 +31,14 @@ import {
   createLoginLink,
   createOnboardingLink,
   getConnect,
+  getConnectBalance as readConnectBalance,
   getPlatformConnect,
   refreshConnect,
   setPlatformPayoutDelay,
 } from '../../api/admin/payments.js';
 import {
+  balanceFailure,
+  balanceView,
   connectErrorMessage,
   loginLinkRefusal,
   notEnabledPayments,
@@ -36,8 +46,11 @@ import {
   toPagePayments,
 } from '../adapters/payments.js';
 
-/** No balance route exists (CP3_F_REPORT "No balance read"): the balance block leaves. */
+/** The older balance block (the callable's single-currency shape) is not this build's. */
 export const BALANCE_READ = false;
+
+/** The per-currency balance panel (useConnectBalance) is this build's (unit CP5-FP). */
+export const CONNECT_BALANCE = true;
 
 /** How often a pending account creation (202) is asked again before giving up. */
 const PENDING_ROUNDS = 3;
@@ -215,9 +228,52 @@ export function useLoginLinkRefusal() {
   return loginLinkRefusal({ isPlatform });
 }
 
-/** No balance route: never called in this build (BALANCE_READ is false). */
+/** The older block's read: never called in this build (BALANCE_READ is false; see useConnectBalance). */
 export async function getConnectBalance() {
-  throw new Error('Saldot finns inte i den här versionen av admin.');
+  throw new Error('Saldot läses med useConnectBalance i den här versionen av admin.');
+}
+
+/**
+ * The balance panel's read: once per visit while `active` (an account that
+ * can take payments), and on `refresh()`. → { state, view, message,
+ * refreshing, refresh }, `state` one of 'loading' | 'ok' | 'none' (no panel:
+ * no account, Connect not enabled) | 'limited' (429) | 'unavailable' (502) |
+ * 'error'. A refresh that fails keeps the balance shown and says why below it.
+ * An answer older than a later read is dropped.
+ */
+export function useConnectBalance(shopId, active) {
+  const [read, setRead] = useState({ state: 'loading', view: null, message: '', refreshing: false });
+  const loadedFor = useRef(null);
+  const ticket = useRef(0);
+
+  const fetchBalance = useCallback(async (refreshing) => {
+    const mine = ++ticket.current;
+    if (refreshing) setRead((r) => ({ ...r, refreshing: true, message: '' }));
+    try {
+      const view = balanceView(await readConnectBalance({ shopId }));
+      if (mine !== ticket.current) return;
+      setRead(view
+        ? { state: 'ok', view, message: '', refreshing: false }
+        : { state: 'error', view: null, message: 'Saldot kunde inte läsas: svaret saknade saldot.', refreshing: false });
+    } catch (error) {
+      if (mine !== ticket.current) return;
+      const failure = balanceFailure(error);
+      setRead((r) => (r.view && failure.state !== 'none'
+        ? { ...r, refreshing: false, message: failure.message }
+        : { state: failure.state, view: null, message: failure.message, refreshing: false }));
+    }
+  }, [shopId]);
+
+  useEffect(() => {
+    // Once per visit (and per shop): a re-render, or React's development
+    // double effect, does not read again.
+    if (!active || !shopId || loadedFor.current === shopId) return;
+    loadedFor.current = shopId;
+    fetchBalance(false);
+  }, [shopId, active, fetchBalance]);
+
+  const refresh = useCallback(() => fetchBalance(true), [fetchBalance]);
+  return { ...read, refresh };
 }
 
 /** Platform only: the current payout delay (days or 'minimum'), from the platform's view. */

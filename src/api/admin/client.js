@@ -31,10 +31,12 @@ const ME_PATH = '/v1/me';
  * …) or one of this client's own: `network_error`, `bad_response`, `no_shop`,
  * `bad_request`, `unauthenticated`, `not_available`. `reason`: the API's
  * finer reason when it gives one (`error.reason`). `details`: the whole error
- * object of the body (e.g. `keys` of a refused identity).
+ * object of the body (e.g. `keys` of a refused identity). `body`: the whole
+ * parsed body, for an answer that carries more beside `error` (the stored
+ * `settings` of a 409 conflict of PATCH /v1/admin/settings).
  */
 export class AdminApiError extends Error {
-  constructor({ status, code, message, reason = null, details = null, retryAfterSeconds = null }) {
+  constructor({ status, code, message, reason = null, details = null, retryAfterSeconds = null, body = null }) {
     super(message || code);
     this.name = 'AdminApiError';
     this.status = status;
@@ -42,6 +44,7 @@ export class AdminApiError extends Error {
     this.reason = reason;
     this.details = details;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.body = body;
   }
 }
 
@@ -129,6 +132,7 @@ function errorFromBody(status, parsed, data, headers) {
     reason: typeof error?.reason === 'string' ? error.reason : null,
     details: error && typeof error === 'object' ? error : null,
     retryAfterSeconds: retryAfter(headers.get('retry-after')),
+    body,
   });
 }
 

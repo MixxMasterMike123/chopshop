@@ -1,7 +1,10 @@
 // node --test src/admin-app/adapters/member.test.mjs
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { INVITE_MAIL_FAILED, memberActionMessage, memberRowsOf, isInviteMailFailure } from './member.js';
+import {
+  INVITE_MAIL_FAILED, RESEND_UNCLEAR, memberActionMessage, memberRowsOf, isInviteMailFailure,
+  resendDoneMessage, resendGoneMessage, resendRefusal,
+} from './member.js';
 
 const m = (o) => ({ userId: 'u', email: 'a@example.com', name: 'A', status: 'active', invited: false, joinedAt: '2026-09-01T10:00:00.000Z', self: false, ...o });
 
@@ -50,5 +53,29 @@ describe('memberActionMessage', () => {
   it('the mail failure is told apart', () => {
     assert.equal(isInviteMailFailure({ status: 503, code: 'email_unavailable' }), true);
     assert.equal(isInviteMailFailure({ status: 503, code: 'x' }), false);
+  });
+});
+
+describe('"Skicka inbjudan igen" (CP5-FP)', () => {
+  it('a new link: the old one stops working', () => {
+    assert.match(resendDoneMessage('a@example.com', { expiresAt: '2026-10-07T10:00:00.000Z' }), /ny inbjudningslänk.*a@example\.com.*tidigare länken fungerar inte längre.*gäller till/);
+    assert.doesNotMatch(resendDoneMessage('a@example.com', null), /gäller till/);
+  });
+
+  it('each refusal: who must reload, and when to try again', () => {
+    assert.deepEqual(resendRefusal({ status: 409, code: 'not_invited' }, 'a@example.com'), { message: 'a@example.com har redan valt ett lösenord, så ingen ny inbjudan behövs.', reload: true });
+    assert.match(resendRefusal({ status: 409, code: 'not_invitable' }, 'a').message, /spärrat av plattformen/);
+    assert.match(resendRefusal({ status: 429, code: 'rate_limited', retryAfterSeconds: 900 }, 'a').message, /om 15 minuter/);
+    assert.match(resendRefusal({ status: 429, code: 'rate_limited', retryAfterSeconds: 7200 }, 'a').message, /om 2 timmar/);
+    assert.match(resendRefusal({ status: 429, code: 'rate_limited' }, 'a').message, /om en stund/);
+    assert.match(resendRefusal({ status: 503, code: 'email_unavailable' }, 'a').message, /kunde inte skickas just nu, och den tidigare länken fungerar inte längre/);
+    assert.equal(resendRefusal({ status: 404, code: 'not_found' }, 'a'), null);
+    assert.equal(resendRefusal({ status: 502, code: 'bad_gateway' }, 'a'), null);
+  });
+
+  it('a 404 after the list was read again: gone, or the route is off here', () => {
+    assert.match(resendGoneMessage(false, 'a@example.com'), /inte längre administratör/);
+    assert.match(resendGoneMessage(true, 'a@example.com'), /inte påslagen i den här miljön/);
+    assert.match(RESEND_UNCLEAR, /oklart.*Du kan skicka igen/);
   });
 });

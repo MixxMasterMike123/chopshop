@@ -3,7 +3,10 @@
 // shapes and with its refusals (cloudflare/src/routes/pod-platform.ts,
 // cloudflare/src/pod/printers.ts, print-defaults.ts):
 //   GET   /v1/platform/printers[?cursor&limit≤50]   → { printers, nextCursor, defaultPrinterId }
+//   GET   /v1/platform/printers/:id                 → { printer }   (unit CP5-FP: the save's read-back)
 //   PATCH /v1/platform/printers/:id                 → { printer, diff, suspendedMappings }
+//   PATCH /v1/platform/printers/:id { …, dryRun: true } → { dryRun: true, diff, revision, suspendedMappings }
+//                                                     (CP5-WK: nothing written; unit CP5-FP)
 //   PUT   /v1/platform/printers/default             → { defaultPrinter }
 // This dev environment plays staging: its dispatch target is `fake-printer`,
 // so an `api` printer with another id is refused (printer_not_allowed), as
@@ -17,10 +20,14 @@
 //   error   the list answers 500
 //   dark    every printer route answers the opaque 404 (no dispatch target)
 //   floor   a save reports two products under the price floor
+// and, by the cookie `admin_dev_fp` (fp-dev.mjs): `moved`: another operator
+// edits the printer right after a dry run (once: its revision moves); `lost`:
+// a real save is made but its answer is lost (502).
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fpScenario } from './fp-dev.mjs';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'printers-fixtures.json');
 const TARGET = 'fake-printer';
@@ -232,12 +239,22 @@ function putDefault(state, { body }) {
   });
 }
 
+function getOne(state, { segments }) {
+  const fk = held(state);
+  const printerId = decodeURIComponent(segments[0]);
+  const p = ID.test(printerId) && printerId !== 'default' ? fk.printers.get(printerId) : null;
+  return p ? json(200, { printer: viewOf(fk, p) }) : notFound();
+}
+
 function patch(state, { segments, body, headers }) {
   const fk = held(state);
   const printerId = decodeURIComponent(segments[0]);
   if (!ID.test(printerId) || printerId === 'default') return notFound();
   const p = fk.printers.get(printerId);
-  const input = parsePatch(body);
+  // pod-platform.ts dryRunFlag: a boolean, default false; anything else is a 400.
+  if (isObject(body) && Object.hasOwn(body, 'dryRun') && typeof body.dryRun !== 'boolean') return invalid();
+  const dryRun = isObject(body) && body.dryRun === true;
+  const input = parsePatch(isObject(body) ? Object.fromEntries(Object.entries(body).filter(([k]) => k !== 'dryRun')) : body);
   if (input === null) return invalid();
   if (!p) return notFound();
   if (p.tenantId !== null) return refused(409, 'tenant_printer', 'Tenant printers are not edited here');
@@ -279,7 +296,6 @@ function patch(state, { segments, body, headers }) {
     if (m.printerId !== printerId || m.status !== 'active') continue;
     const reason = suspendReason(caps, next, m);
     if (reason === null) continue;
-    m.status = 'suspended';
     suspensions.push({ mappingId: m.mappingId, productId: m.productId, reason, sku: m.sku, tenantId: m.tenantId });
   }
 
@@ -291,7 +307,10 @@ function patch(state, { segments, body, headers }) {
   if (stable(caps) !== stable(current)) fields.push('capabilities');
   const diff = {
     belowFloor: scenario(headers) === 'floor' && status === 'active'
-      ? { count: 2, products: [] }
+      ? { count: 2, products: [
+        { live: true, newFloorMinor: 27900, priceMinor: 24900, productId: 'prod-dev-1', tenantId: 'test-shop-a', variantId: null },
+        { live: false, newFloorMinor: 52900, priceMinor: 49900, productId: 'prod-dev-2', tenantId: 'test-shop-a', variantId: 'var-dev-2-m' },
+      ] }
       : { count: 0, products: [] },
     fields,
     models: keyDiff(current?.models ?? {}, caps.models),
@@ -301,6 +320,16 @@ function patch(state, { segments, body, headers }) {
     unpricedSkus: Object.keys(caps.skus).filter((sku) => !next.has(sku)).sort(),
   };
 
+  if (dryRun) {
+    const answer = json(200, { diff, dryRun: true, revision: p.revision, suspendedMappings: suspensions.length });
+    // Another operator saves the printer right after this preview (once).
+    if (fpScenario(headers) === 'moved' && !fk.movedDone) {
+      fk.movedDone = true;
+      Object.assign(p, { revision: p.revision + 1, updatedAt: new Date().toISOString() });
+    }
+    return answer;
+  }
+  for (const s of suspensions) fk.mappings.find((m) => m.mappingId === s.mappingId).status = 'suspended';
   Object.assign(p, {
     capabilities: caps,
     name: input.edit.name ?? p.name,
@@ -310,6 +339,7 @@ function patch(state, { segments, body, headers }) {
     tiers: [...next.values()],
     updatedAt: new Date().toISOString(),
   });
+  if (fpScenario(headers) === 'lost') return json(502, { error: { code: 'bad_gateway', message: 'The answer was lost on the way (dev scenario)' } });
   return json(200, { diff, printer: viewOf(fk, p), suspendedMappings: suspensions.length });
 }
 
@@ -319,5 +349,6 @@ const lit = (handler) => (state, ctx) => (scenario(ctx.headers) === 'dark' ? not
 export const PRINTER_ROUTES = [
   ['GET', '/v1/platform/printers', lit(list)],
   ['PUT', '/v1/platform/printers/default', lit(putDefault)],
+  ['GET', PRINTER, lit(getOne)],
   ['PATCH', PRINTER, lit(patch)],
 ];

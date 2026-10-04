@@ -9,6 +9,7 @@ import {
   MIGRATORS,
   PUBLISH_COPY,
   SHOW_COUNTS,
+  COUNT_COLUMNS,
   loadShop,
   openStorefront,
   setShopConnectEnabled,
@@ -277,12 +278,8 @@ const PlatformShopDetail = () => {
           {/* Overview / counts */}
           {SHOW_COUNTS && <Card title="Översikt">
             <div className="grid grid-cols-3 gap-4">
-              {[
-                ['Produkter', counts?.products],
-                ['Ordrar', counts?.orders],
-                ['Kunder', counts?.b2cCustomers],
-              ].map(([label, val]) => (
-                <div key={label} className="rounded-lg border border-white/10 bg-gray-950 p-4">
+              {COUNT_COLUMNS.map((c) => [c.label, counts?.[c.key], c.title]).map(([label, val, title]) => (
+                <div key={label} title={title} className="rounded-lg border border-white/10 bg-gray-950 p-4">
                   <div className="text-2xl font-bold tabular-nums text-white">{val ?? '–'}</div>
                   <div className="mt-1 text-xs text-gray-500">{label}</div>
                 </div>

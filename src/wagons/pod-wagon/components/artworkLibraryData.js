@@ -25,3 +25,18 @@ export const CAN_REPLACE = true;
 /** No rename in this build: the name is set at upload. */
 export const canRename = () => false;
 export const renameArtwork = async () => null;
+
+// Map artworkId → the SKU+slot pills that reference it (built once from the shared
+// mappings). MULTI-PLACEMENT: a SKU may appear per slot, so the pill carries the
+// slot too ("north-01 · Rygg"). Missing placementSlot → 'front' (Bröst).
+// (Moved here from ArtworkLibrary.jsx, CP5-FP: the admin build counts per product.)
+export const usagePills = (mappings, slotLabel, slotOf) => {
+  const m = new Map();
+  mappings.forEach((mp) => {
+    if (!mp.artworkId || !mp.sku) return;
+    const arr = m.get(mp.artworkId) || [];
+    arr.push({ key: mp.id || `${mp.sku}-${slotOf(mp)}`, text: mp.sku, mono: true, variants: 0, slots: mp.slotsLabel || slotLabel(slotOf(mp)) });
+    m.set(mp.artworkId, arr);
+  });
+  return m;
+};

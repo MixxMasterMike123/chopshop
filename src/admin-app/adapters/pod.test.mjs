@@ -26,6 +26,7 @@ import {
   scopeSlots,
   targetOfSku,
   uploadLabel,
+  usagePillsByArtwork,
 } from './pod.js';
 
 const summary = (over = {}) => ({
@@ -299,5 +300,37 @@ describe('refusals', () => {
     assert.match(artworkRefusalMessage({ status: 400 }, { step: 'rename' }), /120 tecken/);
     assert.match(artworkRefusalMessage({ code: 'rights_not_confirmed' }), /rätt att använda/);
     assert.equal(artworkRefusalMessage({ status: 500 }), null);
+  });
+});
+
+describe('"Används av": one pill per product (CP5-FP)', () => {
+  const entries = [{
+    item: { productId: 'p1', sku: '', name: 'Tröja Nord', status: 'active' },
+    detail: { variants: ['S', 'M', 'L'].map((size, i) => ({ variantId: `v${i}`, sku: `TN-${size}`, size, active: true, position: i })), images: [] },
+  }, {
+    item: { productId: 'p2', sku: 'MUG-1', name: '', status: 'active' },
+    detail: { variants: [], images: [] },
+  }];
+  const { byScope } = pickerProducts(entries);
+  const mapping = (id, productId, variantId, artworkId, slots) => ({
+    mappingId: id, productId, variantId, artworkId, printerId: 'fake-printer', sku: 'DEV', status: 'active',
+    slots: slots.map((slot) => ({ slot, widthMm: 100, heightMm: 100 })),
+  });
+
+  it('a product mapped per variant is one pill with its variant count and every slot', () => {
+    const rows = mappingRows([
+      mapping('m0', 'p1', 'v0', 'art-1', ['front']),
+      mapping('m1', 'p1', 'v1', 'art-1', ['front', 'back']),
+      mapping('m2', 'p1', 'v2', 'art-1', ['front']),
+      mapping('m3', 'p2', null, 'art-1', ['front']),
+      mapping('m4', 'p1', 'v0', 'art-2', ['back']),
+    ], { byScope, slotLabel });
+    const pills = usagePillsByArtwork(rows, slotLabel);
+    assert.deepEqual(pills.get('art-1').map(({ text, mono, variants, slots }) => ({ text, mono, variants, slots })), [
+      { text: 'Tröja Nord', mono: false, variants: 3, slots: `${slotLabel('front')} + ${slotLabel('back')}` },
+      { text: 'MUG-1', mono: true, variants: 0, slots: slotLabel('front') },
+    ]);
+    assert.equal(pills.get('art-2').length, 1);
+    assert.equal(pills.get('art-2')[0].variants, 1);
   });
 });

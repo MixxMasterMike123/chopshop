@@ -14,10 +14,13 @@
 //   "Ersätt fil" and the link to the print file / original leave: no route
 //                   replaces a file, the print file is the print shop's, and
 //                   the original is private.
+//   "Används av"    one pill per PRODUCT (unit CP5-FP): a studio product maps
+//                   every variant, and a pill per variant made one row of 65
+//                   pills; the pill counts the variants instead
 
 import { notAvailable } from '../../api/admin/client.js';
 import { renameArtwork as renameArtworkRoute } from '../../api/admin/pod.js';
-import { LABEL_MAX, artworkRefusalMessage, renameValue } from '../adapters/pod.js';
+import { LABEL_MAX, artworkRefusalMessage, renameValue, usagePillsByArtwork } from '../adapters/pod.js';
 
 export const revalidateArtwork = async () => {
   throw notAvailable('Validera om');
@@ -54,3 +57,6 @@ export async function renameArtwork(shopId, art, typed) {
     throw e;
   }
 }
+
+/** The "Används av" pills: artworkId → [{ key, text, mono, variants, slots }], one per product. */
+export const usagePills = (mappings, slotLabel) => usagePillsByArtwork(mappings, slotLabel);

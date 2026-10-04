@@ -19,7 +19,25 @@ export function pageStatusOf(apiStatus) {
   return apiStatus === 'active' ? 'active' : 'disabled';
 }
 
-/** A row of GET /v1/platform/tenants → { id, name, status, tenantStatus, published }. */
+/**
+ * The shop's counts (`counts` of a list row with ?counts=1, and of the
+ * detail; CP5-WK): { products, publishedProducts, orders }, each a whole
+ * number or null when the answer did not carry it. There is no customer count.
+ */
+export function countsOf(raw) {
+  const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null);
+  if (!raw || typeof raw !== 'object') return null;
+  return { products: count(raw.products), publishedProducts: count(raw.publishedProducts), orders: count(raw.orders) };
+}
+
+/** The count columns of the list and the detail's card: [label, counts key, header title]. */
+export const SHOP_COUNT_COLUMNS = Object.freeze([
+  Object.freeze({ label: 'Produkter', key: 'products', title: 'Produkter som inte är arkiverade (utkast och aktiva)' }),
+  Object.freeze({ label: 'Synliga', key: 'publishedProducts', title: 'Produkter som syns i butiken nu (0 medan butiken inte är publicerad eller är inaktiverad)' }),
+  Object.freeze({ label: 'Ordrar', key: 'orders', title: 'Alla butikens ordrar' }),
+]);
+
+/** A row of GET /v1/platform/tenants → { id, name, status, tenantStatus, published, counts }. */
 export function toListShop(item) {
   return {
     id: item.tenantId,
@@ -27,6 +45,7 @@ export function toListShop(item) {
     status: pageStatusOf(item.status),
     tenantStatus: item.status,
     published: item.published === true,
+    counts: countsOf(item.counts),
   };
 }
 

@@ -66,3 +66,68 @@ export function memberActionMessage(error) {
   if (error.status === 404) return 'Administratören hittades inte, eller så kan butikens administratörer inte hanteras här.';
   return typeof error.code === 'string' ? REFUSALS[error.code] ?? null : null;
 }
+
+// ── "Skicka inbjudan igen" (unit CP5-FP) ────────────────────────────────────
+// POST /v1/admin/members/:userId/resend-invite → 202 { invite: { userId,
+// surface, expiresAt } }: a new 72-hour link is queued and the previous
+// unused one is dead. 409 not_invited (the person has set a password) ·
+// 409 not_invitable · 429 (Retry-After) · 503 email_unavailable (the old link
+// is already superseded: WK open question 3) · 404 (no longer a member here,
+// OR the route is dark: invite mail not configured in this environment).
+
+/** "15 minuter", "1 timme": a Retry-After as words, or null. */
+function waitText(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  if (seconds < 90) return `${Math.ceil(seconds)} sekunder`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 90) return `${minutes} ${minutes === 1 ? 'minut' : 'minuter'}`;
+  const hours = Math.ceil(minutes / 60);
+  return `${hours} ${hours === 1 ? 'timme' : 'timmar'}`;
+}
+
+/** The sentence after a new link was sent. */
+export function resendDoneMessage(email, invite) {
+  const until = typeof invite?.expiresAt === 'string' && !Number.isNaN(Date.parse(invite.expiresAt))
+    ? ` Den gäller till ${new Date(invite.expiresAt).toLocaleString('sv-SE', { dateStyle: 'medium', timeStyle: 'short' })}.`
+    : '';
+  return `En ny inbjudningslänk har skickats till ${email}. Den tidigare länken fungerar inte längre.${until}`;
+}
+
+/**
+ * A refused or failed resend → { message, reload }: the sentence, and whether
+ * the list must be read again (the person's row is no longer what it shows).
+ * A 404 is decided by the caller after that re-read (resendGoneMessage).
+ * null for a lost answer (the caller says it is unclear).
+ */
+export function resendRefusal(error, email) {
+  if (error?.status === 409 && error.code === 'not_invited') {
+    return { message: `${email} har redan valt ett lösenord, så ingen ny inbjudan behövs.`, reload: true };
+  }
+  if (error?.status === 409 && error.code === 'not_invitable') {
+    return { message: `${email} kan inte bjudas in: kontot är spärrat av plattformen.`, reload: false };
+  }
+  if (error?.status === 429) {
+    const wait = waitText(error.retryAfterSeconds);
+    return { message: `För många inbjudningar på kort tid. Försök igen ${wait ? `om ${wait}` : 'om en stund'}.`, reload: false };
+  }
+  if (isInviteMailFailure(error)) {
+    return { message: 'Inbjudan kunde inte skickas just nu, och den tidigare länken fungerar inte längre. Försök igen om en stund.', reload: false };
+  }
+  if (error?.code === 'unauthenticated') return { message: error.message, reload: false };
+  return null;
+}
+
+/**
+ * A 404, after the list was read again: the person is gone from the list →
+ * no longer a member here; still listed → the route itself is off here
+ * (invite mail is not set up in this environment).
+ */
+export function resendGoneMessage(stillListed, email) {
+  return stillListed
+    ? 'Inbjudningar kan inte skickas igen härifrån just nu: e-post för inbjudningar är inte påslagen i den här miljön.'
+    : `${email} är inte längre administratör i butiken.`;
+}
+
+/** A resend whose answer was lost: nothing a route shows tells whether it went. */
+export const RESEND_UNCLEAR =
+  'Anslutningen bröts, så det är oklart om en ny inbjudan skickades. Om den skickades fungerar bara den nya länken. Du kan skicka igen.';

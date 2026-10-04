@@ -5,9 +5,11 @@
 // `url`): nothing is constructed by hand. A page's table address → object id
 // is kept per shop, from the load and from the uploads of this tab.
 //
-// An object that no longer answers (removed, D93) would make the PUT of the
-// identity refuse its stored id (`unreferencable_images`) and so block every
-// save of the identity: those ids are cleared in the save that comes next.
+// An object that no longer answers (removed, D93) makes a write of ITS key
+// refuse (`unreferencable_images`); since the fenced PATCH (unit CP5-FP) only
+// the keys a save writes are checked, so it no longer blocks other saves, and
+// the storefront page clears such ids when it is saved (adapters/content.js
+// brandingPatch).
 // An object whose read FAILED (a network error, a 500) is not gone: its
 // preview is unavailable, and its stored id is kept on save unless the page
 // replaces the image (`unread`; CP5-FX, finding 7).
@@ -82,18 +84,4 @@ export function rememberImages(shopId, identity, { loaded, addresses }) {
     const url = addresses[`gallery:${item?.imageObjectId}`];
     if (url) state.urls.set(url, item.imageObjectId);
   }
-}
-
-/** The patch that clears every stored reference whose object is gone ({} when none is). */
-export function deadReferencesPatch(identity, { loaded, addresses }) {
-  const patch = {};
-  for (const [key, entry] of Object.entries(loaded)) if (entry.resolved === false) patch[key] = null;
-  if (Array.isArray(identity?.gallery) && identity.gallery.some((item) => addresses[`gone:${item?.imageObjectId}`])) {
-    patch.gallery = identity.gallery.map((item) => {
-      if (!addresses[`gone:${item?.imageObjectId}`]) return item;
-      const { imageObjectId, ...rest } = item;
-      return rest;
-    });
-  }
-  return patch;
 }
