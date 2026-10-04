@@ -459,7 +459,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0049_pod_studio_assets.sql";
+const REQUIRED_MIGRATION = "0050_email_kinds.sql";
 
 const MINUTE_MS = 60 * 1_000;
 

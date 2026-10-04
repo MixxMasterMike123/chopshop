@@ -661,7 +661,8 @@ export async function handleStripeWebhookEvent(
   //   dispatch  one per production line, with the stable printer job id
   //             `{orderId}-{lineNo}` so a resubmission is deduplicated by the
   //             printer. Only when there is a snapshot.
-  //   email     the order confirmation, one per order.
+  //   email     the order confirmation and the shop's notice, one each per
+  //             order.
   // The ids of the rows this batch inserts: nudged once it has committed.
   const outboxIds: string[] = [];
   if (production.status === "ok") {
@@ -706,6 +707,17 @@ export async function handleStripeWebhookEvent(
       eventType: "email",
       now,
       payload: { orderId, kind: "order_confirmation" },
+      tenantId: checkout.tenant_id,
+    }),
+    // CP5-WE: the shop's new-order notice, in the same batch as its order (no
+    // order without its notice queued, no notice without its order). Ids only:
+    // the effect (src/outbox/email-effect.ts) finds the shop's address.
+    outboxStatement(db, outboxIds, {
+      aggregateId: orderId,
+      dedupeKey: `email:order_notice_shop:${orderId}`,
+      eventType: "email",
+      now,
+      payload: { orderId, kind: "order_notice_shop" },
       tenantId: checkout.tenant_id,
     }),
   );

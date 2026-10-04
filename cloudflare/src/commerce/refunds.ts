@@ -208,6 +208,31 @@ function orderEffectStatements(
            AND status <> ${STATUS_AFTER_REFUND_SQL}`,
       )
       .bind(op.id, op.transitionId, op.orderId),
+    // CP5-WE: the buyer's refund notice, ONLY when THIS transition is the one
+    // that made the operation 'succeeded' (a reservation, a submission or a
+    // failure writes nothing). After the money moved, so `full` reads the new
+    // totals. Ids and a flag only. DO NOTHING on any conflict: a mail row can
+    // never abort the batch that moves money.
+    db
+      .prepare(
+        `INSERT INTO outbox_events (
+           outbox_id, tenant_id, event_type, aggregate_type, aggregate_id,
+           dedupe_key, payload_json, status, next_attempt_at, created_at, updated_at
+         )
+         SELECT 'email-refund-notice:' || r.id, o.tenant_id, 'email', 'order', o.order_id,
+                'email:refund_notice:' || r.id,
+                json_object('kind', 'refund_notice', 'orderId', o.order_id, 'operationId', r.id,
+                            'full', json(CASE WHEN o.charged_minor > 0
+                                               AND o.refund_succeeded_minor >= o.charged_minor
+                                              THEN 'true' ELSE 'false' END)),
+                'pending', ?4, ?4, ?4
+         FROM refund_operations AS r
+         JOIN orders AS o ON o.order_id = r.order_id AND o.tenant_id = r.tenant_id
+         WHERE r.id = ?1 AND r.transition_id = ?2 AND o.order_id = ?3
+           AND r.state = 'succeeded' AND r.prev_state IS NOT 'succeeded'
+         ON CONFLICT DO NOTHING`,
+      )
+      .bind(op.id, op.transitionId, op.orderId, now),
   ];
 }
 

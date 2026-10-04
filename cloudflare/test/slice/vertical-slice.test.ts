@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { runReconciliation, runRetentionSweep } from "../../src/commerce/crons";
+import { formatOrderMoney } from "../../src/email/auth-email-job";
 import { postEvent } from "../money-fixtures";
 import { lineRow, outboxRow, printerJobs } from "../dispatch-fixtures";
 import { expectNoCostKeys, TEE_S } from "../pod-fixtures";
@@ -349,7 +350,7 @@ describe("CP2 vertical slice", () => {
       const orderBatch = orderBatches[0]!;
       const count = (pattern: RegExp) => orderBatch.sql.filter((sql) => pattern.test(sql)).length;
       expect(count(/INSERT INTO order_items\b/), "the line").toBe(1);
-      expect(count(/INSERT INTO outbox_events\b/), "dispatch + email").toBe(2);
+      expect(count(/INSERT INTO outbox_events\b/), "dispatch + confirmation + shop notice").toBe(3);
       expect(count(/INSERT INTO order_receipt_handoffs\b/), "the receipt capability").toBe(1);
       expect(count(/INSERT INTO payment_events\b/), "the event ledger").toBe(1);
       expect(count(/UPDATE checkouts\b/), "the checkout spent").toBe(1);
@@ -387,13 +388,15 @@ describe("CP2 vertical slice", () => {
       expect(outbox.map((row) => [row.event_type, row.status])).toEqual([
         ["dispatch", "pending"],
         ["email", "pending"],
+        ["email", "pending"],
       ]);
       const dispatchId = outbox[0]!.outbox_id;
-      const emailId = outbox[1]!.outbox_id;
-      // The webhook nudged both rows once the batch committed (CP2-E): the
+      // The confirmation and (CP5-WE) the shop's new-order notice.
+      const emailIds = [outbox[1]!.outbox_id, outbox[2]!.outbox_id];
+      // The webhook nudged every row once the batch committed (CP2-E): the
       // printer hears within seconds, not at the next 15-minute sweep.
       expect(world.nudges.sent).toEqual(
-        expect.arrayContaining([{ outboxId: dispatchId }, { outboxId: emailId }]),
+        expect.arrayContaining([dispatchId, ...emailIds].map((outboxId) => ({ outboxId }))),
       );
       expect(JSON.parse((await outboxRow(dispatchId)).payload_json)).toEqual({
         jobId: `${orderId}-1`,
@@ -407,10 +410,10 @@ describe("CP2 vertical slice", () => {
       const wire: PrinterLog = [];
       const delivered = await deliverOutbox(
         world,
-        [dispatchId, emailId],
+        [dispatchId, ...emailIds],
         world.with(printerWire(() => "deliver", undefined, wire)),
       );
-      expect(delivered).toEqual({ acks: ["m0", "m1"], retries: [] });
+      expect(delivered).toEqual({ acks: ["m0", "m1", "m2"], retries: [] });
       expect(wire, "one submission on the printer's wire").toEqual([{ fault: "deliver", jobId: `${orderId}-1` }]);
       const jobs = await printerJobs(orderId);
       expect(jobs.map((job) => job.job_id)).toEqual([`${orderId}-1`]);
@@ -425,13 +428,25 @@ describe("CP2 vertical slice", () => {
       expect(await lineRow(orderId)).toMatchObject({ dispatch_state: "accepted", printer_job_ref: jobs[0]!.id });
       expect(await outboxRow(dispatchId)).toMatchObject({ result_ref: jobs[0]!.id, status: "done" });
 
-      // The order confirmation, through the real -email consumer: ONE email.
+      // The order confirmation and the shop's notice, through the real -email
+      // consumer: ONE email each.
       const resend = new FakeResend();
       await deliverEmails(world, resend);
-      expect(resend.delivered.size).toBe(1);
-      const email = [...resend.delivered.values()][0]!;
+      expect(resend.delivered.size).toBe(2);
+      const sent = [...resend.delivered.values()];
+      const email = sent.find((mail) => /^Orderbekräftelse /.test(String(mail.payload.subject)))!;
       expect(email.payload.to).toEqual([buyerEmail]);
-      expect(email.payload.subject).toMatch(/^Orderbekräftelse /);
+      // The shop has no support address here, so its one active admin is told.
+      const notice = sent.find((mail) => /^Ny beställning: /.test(String(mail.payload.subject)))!;
+      expect(notice.payload.to).toEqual([`admin@${tenant.host}`]);
+      // The seller sees ONE number, in the admin: the notice names what the
+      // buyer paid and no platform figure.
+      const noticeText = String((notice.payload as { text?: unknown }).text);
+      expect(noticeText).toContain(formatOrderMoney(PRICE_MINOR, "SEK"));
+      for (const hidden of [fee, withheld, PRICE_MINOR - fee]) {
+        expect(noticeText).not.toContain(formatOrderMoney(hidden, "SEK"));
+      }
+      expect(noticeText).not.toMatch(/avgift|provision|utbetal|tryck/i);
 
       // ── 17. receipt hand-off (once) + the buyer's allowlisted read ──────
       const claimed = await expectJson<{ receipt: { orderId: string; receiptToken: string; status: string } }>(

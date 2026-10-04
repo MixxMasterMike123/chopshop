@@ -6,6 +6,7 @@ import {
   failAuthEmailDelivery,
   retryAuthEmailDelivery,
 } from "./email-delivery-store";
+import { isOrderEmailJob, orderEmailReplyTo } from "./order-emails";
 
 /**
  * The `-email` queue consumer: auth email jobs → Resend.
@@ -15,7 +16,10 @@ import {
  * outbox dedupe key, and since CP2-D2 the platform `alert_digest` (D40,
  * src/commerce/alert-digest.ts) with a delivery id derived from its 15-minute
  * bucket. They take the same path — parse, ledger claim, one send — through
- * the same functions; only the template differs (auth-email-job.ts).
+ * the same functions; only the template differs (auth-email-job.ts). Since
+ * CP5-WE also the three order mails (order-emails.ts: the buyer's status
+ * update and refund notice, with the shop's support address as Reply-To, and
+ * the shop's new-order notice).
  *
  * ── EXACTLY-ONCE ON TOP OF AT-LEAST-ONCE ─────────────────────────────────────
  * Queues deliver at least once, so every message first CLAIMS its ledger row
@@ -136,6 +140,9 @@ async function sendThroughResend(
   attempts: number,
 ): Promise<SendOutcome> {
   const message = renderAuthEmail(job);
+  // A buyer's order mail (CP5-WE) answers to the shop, not to the platform's
+  // sender: the address is the shop's own, frozen in the job's content.
+  const replyTo = isOrderEmailJob(job) ? orderEmailReplyTo(job) : null;
 
   let response: Response;
   try {
@@ -144,6 +151,7 @@ async function sendThroughResend(
         body: JSON.stringify({
           from: config.from,
           html: message.html,
+          ...(replyTo === null ? {} : { reply_to: replyTo }),
           subject: message.subject,
           text: message.text,
           to: [job.recipient],

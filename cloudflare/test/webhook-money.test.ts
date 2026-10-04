@@ -190,7 +190,7 @@ describe("the production snapshot, copied opaquely", () => {
 });
 
 describe("the outbox rows in the order batch", () => {
-  it("queues one dispatch per production line and one confirmation email", async () => {
+  it("queues one dispatch per production line, one confirmation and one shop notice", async () => {
     const checkout = await podCheckout(2);
     const orderId = await payCheckout(checkout, TENANT);
 
@@ -199,6 +199,8 @@ describe("the outbox rows in the order batch", () => {
       ["dispatch", `dispatch:${orderId}:1`],
       ["dispatch", `dispatch:${orderId}:2`],
       ["email", `email:order_confirmation:${orderId}`],
+      // CP5-WE: the shop's new-order notice, in the same batch.
+      ["email", `email:order_notice_shop:${orderId}`],
     ]);
     for (const row of rows) {
       expect(row).toMatchObject({
@@ -220,13 +222,16 @@ describe("the outbox rows in the order batch", () => {
     expect(rows[2]?.payload_json).toBe(
       `{"orderId":"${orderId}","kind":"order_confirmation"}`,
     );
+    expect(rows[3]?.payload_json).toBe(
+      `{"orderId":"${orderId}","kind":"order_notice_shop"}`,
+    );
   });
 
-  it("queues only the email for an order without a snapshot", async () => {
+  it("queues only the two mails for an order without a snapshot", async () => {
     const checkout = await seedCheckout({ tenantId: TENANT });
     const orderId = await payCheckout(checkout, TENANT);
 
-    expect((await outboxFor(orderId)).map((r) => r.event_type)).toEqual(["email"]);
+    expect((await outboxFor(orderId)).map((r) => r.event_type)).toEqual(["email", "email"]);
   });
 
   it("writes the rows exactly once however often the event arrives", async () => {
@@ -255,7 +260,7 @@ describe("the outbox rows in the order batch", () => {
       .all<{ order_id: string }>();
     expect(orders.results).toHaveLength(1);
     const orderId = orders.results[0]?.order_id as string;
-    expect(await outboxFor(orderId)).toHaveLength(2);
+    expect(await outboxFor(orderId)).toHaveLength(3);
 
     // No orphaned rows from a losing batch: every outbox row for any order of
     // this checkout belongs to the one order that exists.
@@ -285,7 +290,7 @@ describe("a snapshot the webhook cannot read", () => {
       .bind(orderId)
       .first<{ production_snapshot_json: string | null }>();
     expect(order?.production_snapshot_json).toBeNull();
-    expect((await outboxFor(orderId)).map((r) => r.event_type)).toEqual(["email"]);
+    expect((await outboxFor(orderId)).map((r) => r.event_type)).toEqual(["email", "email"]);
 
     const alerts = await openAlerts("production_snapshot_invalid", orderId);
     expect(alerts).toHaveLength(1);

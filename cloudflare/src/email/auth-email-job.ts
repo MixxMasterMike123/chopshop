@@ -1,4 +1,11 @@
 import {
+  isOrderEmailJob,
+  isOrderEmailKind,
+  type OrderEmailJob,
+  parseOrderEmailJob,
+  renderOrderEmail,
+} from "./order-emails";
+import {
   isWithdrawalEmailJob,
   isWithdrawalEmailKind,
   parseWithdrawalEmailJob,
@@ -10,7 +17,11 @@ export type AuthEmailKind =
   | "alert_digest"
   | "email_verification"
   | "order_confirmation"
+  // CP5-WE: the three order mails (./order-emails.ts).
+  | "order_notice_shop"
+  | "order_status_update"
   | "password_reset"
+  | "refund_notice"
   // CP4-G: the two mails of the withdrawal function (./withdrawal-email.ts).
   | "withdrawal_notice"
   | "withdrawal_receipt";
@@ -147,6 +158,7 @@ export type AuthEmailJob =
   | AuthActionEmailJob
   | AlertDigestEmailJob
   | OrderConfirmationEmailJob
+  | OrderEmailJob
   | WithdrawalEmailJob;
 
 export interface AuthEmailMessage {
@@ -255,6 +267,10 @@ export function parseAuthEmailJob(
     return parseWithdrawalEmailJob(value);
   }
 
+  if (isOrderEmailKind((value as { kind?: unknown }).kind)) {
+    return parseOrderEmailJob(value);
+  }
+
   if ((value as { kind?: unknown }).kind === "order_confirmation") {
     return parseOrderConfirmationEmailJob(value);
   }
@@ -333,6 +349,10 @@ function escapeHtml(value: string): string {
 export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
   if (isWithdrawalEmailJob(job)) {
     return renderWithdrawalEmail(job);
+  }
+
+  if (isOrderEmailJob(job)) {
+    return renderOrderEmail(job);
   }
 
   if (job.kind === "order_confirmation") {
@@ -651,7 +671,7 @@ export function formatOrderMoney(minor: number, currency: string): string {
   return new Intl.NumberFormat("sv-SE", { currency, style: "currency" }).format(minor / 100);
 }
 
-const COUNTRY_NAMES_SV: Record<string, string> = {
+export const COUNTRY_NAMES_SV: Record<string, string> = {
   DK: "Danmark",
   FI: "Finland",
   NO: "Norge",

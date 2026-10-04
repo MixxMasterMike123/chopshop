@@ -3,7 +3,7 @@ import {
   runPrinterCancellationEffect,
 } from "../dispatch/dispatch-effect";
 import { runWithdrawalEmailEffect } from "../commerce/withdrawals";
-import { runEmailEffect } from "./email-effect";
+import { runEmailEffect, runOrderStatusEmailEffect } from "./email-effect";
 import {
   claimById,
   claimNext,
@@ -24,6 +24,7 @@ import {
 const EFFECTS: Record<OutboxEffectType, (ctx: EffectContext) => Promise<OutboxRunOutcome>> = {
   dispatch: runDispatchEffect,
   email: runEmailEffect,
+  "email.order_status": runOrderStatusEmailEffect,
   printer_cancellation: runPrinterCancellationEffect,
   withdrawal_email: runWithdrawalEmailEffect,
 };

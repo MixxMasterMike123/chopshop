@@ -820,6 +820,8 @@ export interface PaidOrder {
   checkoutId: string;
   dispatchIds: string[];
   emailId: string;
+  /** The shop's new-order notice (CP5-WE). */
+  noticeId: string;
   orderId: string;
   paymentIntentId: string;
   totalMinor: number;
@@ -827,8 +829,8 @@ export interface PaidOrder {
 
 /**
  * Checkout → PaymentIntent → signed success webhook, then the order
- * confirmation delivered (so no test leaves a due email row for another
- * test's sweep to trip over).
+ * confirmation and the shop's notice delivered (so no test leaves a due email
+ * row for another test's sweep to trip over).
  */
 export async function buyProduct(
   world: SliceWorld,
@@ -847,17 +849,27 @@ export async function buyProduct(
     throw new Error("the webhook made no order");
   }
   const rows = await outboxRowsFor(orderId);
-  const emailId = rows.find((row) => row.event_type === "email")?.outbox_id;
-  if (emailId === undefined) {
-    throw new Error("no confirmation email row");
+  // The two `email` rows of the order batch, told apart by their dedupe key:
+  // the confirmation and (CP5-WE) the shop's new-order notice.
+  const emailRow = async (kind: string) =>
+    (
+      await env.DB.prepare("SELECT outbox_id FROM outbox_events WHERE dedupe_key = ?")
+        .bind(`email:${kind}:${orderId}`)
+        .first<{ outbox_id: string }>()
+    )?.outbox_id;
+  const emailId = await emailRow("order_confirmation");
+  const noticeId = await emailRow("order_notice_shop");
+  if (emailId === undefined || noticeId === undefined) {
+    throw new Error("no confirmation or shop notice email row");
   }
   if (options.deliverEmail !== false) {
-    await deliverOutbox(world, [emailId]);
+    await deliverOutbox(world, [emailId, noticeId]);
   }
   return {
     checkoutId: checkout.checkoutId,
     dispatchIds: rows.filter((row) => row.event_type === "dispatch").map((row) => row.outbox_id),
     emailId,
+    noticeId,
     orderId,
     paymentIntentId,
     totalMinor: checkout.totalMinor,

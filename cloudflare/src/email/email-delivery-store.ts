@@ -4,6 +4,7 @@ import {
   hashEmailRecipient,
   type AuthEmailJob,
 } from "./auth-email-job";
+import { fingerprintOrderEmailJob, isOrderEmailJob } from "./order-emails";
 import { fingerprintWithdrawalEmailJob, isWithdrawalEmailJob } from "./withdrawal-email";
 
 const LEASE_DURATION_MS = 60_000;
@@ -33,6 +34,10 @@ export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string
   // The withdrawal mails fingerprint their own content (all of it is rendered).
   if (isWithdrawalEmailJob(job)) {
     return fingerprintWithdrawalEmailJob(job);
+  }
+  // So do the order mails of CP5-WE.
+  if (isOrderEmailJob(job)) {
+    return fingerprintOrderEmailJob(job);
   }
 
   const canonical = JSON.stringify({

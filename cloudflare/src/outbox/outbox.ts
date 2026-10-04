@@ -38,6 +38,8 @@ export const CLAIM_TTL_MS = 5 * 60 * 1_000;
 export const OUTBOX_EFFECT_TYPES = [
   "dispatch",
   "email",
+  // CP5-WE: the buyer's status mail, one row per fulfilment change (CP5-WB).
+  "email.order_status",
   "printer_cancellation",
   // CP4-G: the receipt and the notice of a withdrawal (src/commerce/withdrawals.ts).
   "withdrawal_email",

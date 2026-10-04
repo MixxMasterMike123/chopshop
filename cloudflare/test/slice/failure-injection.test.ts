@@ -327,7 +327,8 @@ describe("1. crash after each external success, before the local commit", () => 
 
   it("email (outbox effect): enqueued, then the worker died before its commit → identical job re-queued, the -email consumer sends ONE", async () => {
     const order = await buyProduct(world, shopA, teeA, { deliverEmail: false });
-    await deliverOutbox(world, order.dispatchIds);
+    await deliverOutbox(world, [...order.dispatchIds, order.noticeId]);
+    world.emails.sent.length = 0;
     let enqueued = false;
     const emails = world.emails;
     const crashingQueue = {
@@ -361,7 +362,10 @@ describe("1. crash after each external success, before the local commit", () => 
   it("email (-email consumer): Resend accepted, the ledger write died → the redelivery repeats the Idempotency-Key; the buyer gets ONE email", async () => {
     const order = await buyProduct(world, shopA, teeA, { deliverEmail: false });
     await drain(order.orderId);
-    const jobs = world.emails.sent.splice(0);
+    // The confirmation; the shop's notice (CP5-WE) is the other job.
+    const jobs = world.emails.sent
+      .splice(0)
+      .filter((job) => (job as { kind: string }).kind === "order_confirmation");
     expect(jobs).toHaveLength(1);
     const deliveryId = (jobs[0] as { deliveryId: string }).deliveryId;
     const resend = new FakeResend();
@@ -410,7 +414,7 @@ describe("2. duplicate webhook replay", () => {
     expect(other.orderId).toBe(first.orderId);
     expect(await ordersForCheckout(checkout.checkoutId)).toBe(1);
     const rows = await outboxRowsFor(first.orderId ?? "");
-    expect(rows.map((row) => row.event_type)).toEqual(["dispatch", "email"]);
+    expect(rows.map((row) => row.event_type)).toEqual(["dispatch", "email", "email"]);
     const ledgerRows = await env.DB.prepare("SELECT COUNT(*) AS n FROM payment_events WHERE event_id = ?")
       .bind(first.eventId)
       .first<{ n: number }>();
@@ -1117,17 +1121,26 @@ describe("the webhook nudges the outbox after its batch commits", () => {
       .bind(checkout.checkoutId)
       .first<{ order_id: string }>();
     const rows = await outboxRowsFor(order?.order_id ?? "");
-    expect(rows.map((row) => row.event_type)).toEqual(["dispatch", "email"]);
-    expect(world.nudges.sent).toEqual(rows.map((row) => ({ outboxId: row.outbox_id })));
+    expect(rows.map((row) => row.event_type)).toEqual(["dispatch", "email", "email"]);
+    expect(world.nudges.sent).toEqual(
+      expect.arrayContaining(rows.map((row) => ({ outboxId: row.outbox_id }))),
+    );
+    expect(world.nudges.sent).toHaveLength(3);
 
     // A replay of the event commits nothing and nudges nothing more.
     await postEvent("payment_intent.succeeded", object, { env: world.env, eventId: retried.eventId });
-    expect(world.nudges.sent).toHaveLength(2);
+    expect(world.nudges.sent).toHaveLength(3);
     await drain(order?.order_id ?? "");
     expect(await printerJobs(order?.order_id ?? "")).toHaveLength(1);
   });
 
   it("the queue is down: the webhook still answers 200 with the order committed; the sweeper delivers it", async () => {
+    // Earlier suites' rows that are due (the buyers' refund notices, CP5-WE,
+    // and printer cancellations) are swept first, so the one sweep below has
+    // room for this order's rows.
+    for (let round = 0; round < 5 && (await runOutboxSweep(world.env, Date.now())).processed > 0; round += 1) {
+      // keep sweeping
+    }
     const down = recordingQueue({ fail: true });
     const checkout = await openCheckout(world, shopB, [{ productId: mugB, quantity: 1 }]);
     const paymentIntentId = await payCheckout(world, shopB, checkout.checkoutId);
@@ -1139,11 +1152,14 @@ describe("the webhook nudges the outbox after its batch commits", () => {
     );
     expect(orderId).not.toBeNull();
     expect(down.sent).toEqual([]);
-    const [email] = await outboxRowsFor(orderId ?? "");
-    expect(email).toMatchObject({ event_type: "email", status: "pending" });
+    const emails = await outboxRowsFor(orderId ?? "");
+    expect(emails.map((row) => [row.event_type, row.status])).toEqual([
+      ["email", "pending"],
+      ["email", "pending"],
+    ]);
 
     await runOutboxSweep(world.env, Date.now());
-    expect((await outboxRowsFor(orderId ?? ""))[0]?.status).toBe("done");
+    expect((await outboxRowsFor(orderId ?? "")).map((row) => row.status)).toEqual(["done", "done"]);
   });
 });
 
