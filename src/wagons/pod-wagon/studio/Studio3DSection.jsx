@@ -24,10 +24,11 @@
 //
 // pixi.js loads lazily: DisplacementPreview is React.lazy'd, so its chunk is
 // fetched only when the seller opens the 3D view.
-import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { DEV_3D_GARMENTS } from './pixi/displacement3dConfig';
 import { defaultPlacement } from './placementMath';
 import KnobSlider from './KnobSlider';
+import LazyPart from './LazyPart';
 
 const DisplacementPreview = React.lazy(() => import('./pixi/DisplacementPreview'));
 
@@ -220,7 +221,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
               {/* Canvas — 2/3 */}
               <div className="lg:col-span-2">
-                <Suspense fallback={<div className="grid aspect-[4/5] w-full place-items-center rounded-[var(--radius-admin)] bg-admin-surface-2 text-[12px] text-admin-text-muted">Laddar 3D-motorn…</div>}>
+                <LazyPart fallback={<div className="grid aspect-[4/5] w-full place-items-center rounded-[var(--radius-admin)] bg-admin-surface-2 text-[12px] text-admin-text-muted">Laddar 3D-motorn…</div>}>
                   <DisplacementPreview
                     ref={previewRef}
                     garment={garment}
@@ -231,7 +232,7 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                     tuning={tuning}
                     className="w-full"
                   />
-                </Suspense>
+                </LazyPart>
               </div>
 
               {/* Controls rail — 1/3 */}

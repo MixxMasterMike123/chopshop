@@ -18,11 +18,12 @@
 //   onAdjust        (next | null) → void
 //   initialColorwayId
 //   disabled        true while mockups are being generated or published
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import TemplateBackground, { displacementTuningFor, templateViewBox, viewForSlot } from './TemplateBackground';
 import { isComposable, placementToViewBoxRect, rectToPercent } from './placementMath';
 import { FABRIC_BLENDS, FABRIC_KNOBS, hasFabricAdjust, setFabricKnob } from './fabricAdjust';
 import KnobSlider from './KnobSlider';
+import LazyPart from './LazyPart';
 
 // The Pixi engine stays out of the studio's main bundle until the panel opens.
 const DisplacedTemplatePreview = React.lazy(() => import('./pixi/DisplacedTemplatePreview'));
@@ -122,7 +123,7 @@ const FabricTuningSection = ({
                 />
               )}
               {composable && placement && !mapMissing && !failed && (
-                <Suspense fallback={null}>
+                <LazyPart>
                   <DisplacedTemplatePreview
                     template={template}
                     colorway={colorway}
@@ -132,7 +133,7 @@ const FabricTuningSection = ({
                     onError={handleError}
                     onReadyChange={handleReady}
                   />
-                </Suspense>
+                </LazyPart>
               )}
             </div>
             {failed && (

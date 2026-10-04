@@ -1317,7 +1317,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
                   disabled={!selectable}
                   onClick={() => pickMotif(a)}
                   aria-pressed={isCurrent}
-                  aria-label={`${a.label || a.fileName}${a.validation?.tier && a.validation.tier !== 'pass' ? ` — ${tierLabel(a.validation.tier)}` : ''}${selectable ? '' : ' — kan inte förhandsgranskas'}`}
+                  aria-label={`${a.label || a.fileName}${a.validation?.tier && String(a.validation.tier).toUpperCase() !== 'PASS' ? ` — ${tierLabel(a.validation.tier)}` : ''}${selectable ? '' : ' — kan inte förhandsgranskas'}`}
                   title={`${a.label || a.fileName}${selectable ? '' : ' — kan inte förhandsgranskas i studion'}`}
                   className={`relative overflow-hidden rounded-[var(--radius-admin-el)] border p-1 text-left ${
                     isCurrent
@@ -1335,7 +1335,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
                   <span className="mt-1 block truncate text-[11px] text-admin-text">{a.label || a.fileName}</span>
                   {/* Advisory validation tier (WARN/FAIL) as a caution dot —
                       tiers never block here (podValidation's contract). */}
-                  {a.validation?.tier && a.validation.tier !== 'pass' && (
+                  {a.validation?.tier && String(a.validation.tier).toUpperCase() !== 'PASS' && (
                     <span
                       className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full border border-admin-surface bg-admin-caution-dot"
                       title={tierLabel(a.validation.tier)}

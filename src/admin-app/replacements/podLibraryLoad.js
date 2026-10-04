@@ -35,6 +35,7 @@ import {
   profileFromApi,
   renderState,
 } from '../adapters/pod.js';
+import { HELD_PREVIEW_LIMIT, heldPreviewUrl } from './podPreviewBlobs.js';
 
 /** How many reads of one kind run at once (details, objects, products). */
 export const READ_CONCURRENCY = 4;
@@ -139,12 +140,19 @@ export function loadArtworkRows(shopId) {
         tracked.delete(s.artworkId);
       }
     }
-    const rows = await mapLimited(summaries, READ_CONCURRENCY, async (s) => {
+    const rows = await mapLimited(summaries, READ_CONCURRENCY, async (s, i) => {
       const [detail, object] = await Promise.all([
         getArtwork(s.artworkId, { shopId: id }).catch(() => null),
         originalOf(id, s.originalObjectId).catch(() => null),
       ]);
-      return artworkRow(s, { detail: detail?.artwork ?? null, previewUrl: detail?.previewUrl ?? null, object });
+      // The preview is fetched now, while its signed address is fresh, and
+      // held as a blob: address (podPreviewBlobs.js): the studio draws it long
+      // after the five minutes the signed address lasts.
+      const signed = detail?.previewUrl ?? null;
+      const previewUrl = s.status === 'ready' && i < HELD_PREVIEW_LIMIT
+        ? await heldPreviewUrl(id, s.artworkId, signed)
+        : signed;
+      return artworkRow(s, { detail: detail?.artwork ?? null, previewUrl, object });
     });
 
     // The renders the tab saw processing that the list no longer carries.
