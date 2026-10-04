@@ -375,3 +375,64 @@ export function floorText(summary) {
 }
 
 export { krText };
+
+// ── the print size, exactly as the Worker sizes it ──────────────────────────
+// cloudflare/src/pod/pod-mappings.ts createMappingOnce + sizeSlot, and
+// cloudflare/src/pod/printers.ts slotFrame + POCKET_AREA_MM. A mapping
+// stores no placement: the server prints each slot at this size. The studio
+// draws, renders and measures with the same numbers (Codex FN1 round 1).
+
+/** The Worker's DPI floor when the artwork's profile names none (pod-mappings.ts DEFAULT_MIN_DPI). */
+export const DEFAULT_MIN_DPI = 300;
+/** The pocket's frame inside the front (printers.ts POCKET_AREA_MM). */
+export const POCKET_AREA_MM = Object.freeze({ w: 100, h: 100 });
+
+/**
+ * The DPI floor the server sizes THIS artwork with: its own profile's
+ * min_dpi (the artwork's `purpose` is its profileId), else 300 — never the
+ * template's profile. `profiles`: the loaded list in the older shape
+ * ({ id, min_dpi }); unavailable (empty) → 300.
+ */
+export function artworkMinDpi(artwork, profiles) {
+  const profile = list(profiles).find((p) => isObj(p) && p.id === artwork?.purpose);
+  return typeof profile?.min_dpi === 'number' ? profile.min_dpi : DEFAULT_MIN_DPI;
+}
+
+/** printers.ts slotFrame on one model's frames: its own frame, or (pocket) a 100 × 100 spot inside the front; null when it cannot print the slot. */
+export function slotFrame(frames, slot) {
+  const own = frames?.[slot];
+  if (isObj(own)) return { w: own.w, h: own.h };
+  if (slot === 'pocket' && isObj(frames?.front)) {
+    return { w: Math.min(POCKET_AREA_MM.w, frames.front.w), h: Math.min(POCKET_AREA_MM.h, frames.front.h) };
+  }
+  return null;
+}
+
+/** pod-mappings.ts sizeSlot, verbatim: contain-fit, capped at the DPI floor, floored to whole mm; null under 1 mm. */
+export function sizeSlot(widthPx, heightPx, frame, minDpi) {
+  if (!(widthPx > 0) || !(heightPx > 0) || !(minDpi > 0)) return null;
+  const aspect = widthPx / heightPx;
+  const containW = Math.min(frame.w, frame.h * aspect);
+  const maxWAtDpi = (widthPx / minDpi) * 25.4;
+  const w = Math.min(containW, maxWAtDpi);
+  const widthMm = Math.floor(w);
+  const heightMm = Math.floor(w / aspect);
+  return widthMm >= 1 && heightMm >= 1 ? { widthMm, heightMm } : null;
+}
+
+/**
+ * The studio's placement ({ xMm, yMm, wMm, rotationDeg }, in the template
+ * slot's mm, centred) of the print the server will make of `artwork` on
+ * `slot`, given the chosen model's frames. null when the server would refuse
+ * it (no frame, or under 1 mm at the DPI floor). The width is the server's
+ * whole-mm width; the studio derives the height from the artwork's aspect.
+ */
+export function serverPlacement(template, slot, artwork, { frames, profiles }) {
+  const mm = template?.printAreaMm?.[slot];
+  const frame = slotFrame(frames, slot);
+  if (!mm || !frame) return null;
+  const size = sizeSlot(artwork?.sourceWidthPx, artwork?.sourceHeightPx, frame, artworkMinDpi(artwork, profiles));
+  if (!size) return null;
+  const hMm = size.widthMm * (artwork.sourceHeightPx / artwork.sourceWidthPx);
+  return { xMm: (mm.w - size.widthMm) / 2, yMm: (mm.h - hMm) / 2, wMm: size.widthMm, rotationDeg: 0 };
+}

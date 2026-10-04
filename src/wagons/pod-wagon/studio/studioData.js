@@ -24,7 +24,7 @@ import { orderedVariantMockupUrls } from './mockupVariantImages';
 import { screenProduct } from '../../../utils/contentScreening';
 import { loadScreeningBlocklist } from '../../../utils/loadContentScreening';
 import { garmentOfTemplate } from '../../../config/podMockupTemplates';
-import { placementReadout } from './placementMath';
+import { placementReadout, containPlacement } from './placementMath';
 import { pocketPositionLabel } from '../../../config/podSlots';
 
 // What this build's studio does (the Cloudflare admin's module answers
@@ -54,6 +54,15 @@ export const STUDIO_TEXT = Object.freeze({
 // Publish/update refuse to write when the server cost quote could not be
 // fetched (A13) — see freshQuoteFor. (Moved with the bodies that use it.)
 const QUOTE_FAILED_MSG = 'Produktionskostnaden kunde inte hämtas. Kontrollera anslutningen och försök igen.';
+
+/**
+ * The placement of a LOCKED slot (the pocket here): the artwork contain-fit
+ * in the slot's area, capped at the template profile's DPI floor, centred —
+ * exactly what the studio computed before (placementMath containPlacement).
+ * The Cloudflare admin's module sizes it as its server does instead.
+ */
+export const lockedPlacement = (template, slot, artwork, { profile } = {}) =>
+  containPlacement(template, slot, artwork, profile?.min_dpi ?? null);
 
 const NO_ENV = Object.freeze({});
 /** What the studio needs of the shop for a publish: nothing in this build. */

@@ -199,7 +199,9 @@ const CompositorCanvas = ({
   // parent's placement, or the default until first touched.
   const effective = useMemo(() => {
     if (!composable || !template || !ppm) return null;
-    if (locked) return containPlacement(template, slot, artwork, minDpi);
+    // A locked slot shows the parent's placement when it gives one (the
+    // Cloudflare admin: the server's own sizing), else the contain rect.
+    if (locked) return placement || containPlacement(template, slot, artwork, minDpi);
     return placement
       ? clampPlacement(placement, template, slot, artwork, minDpi)
       : defaultPlacement(template, slot, artwork, minDpi);

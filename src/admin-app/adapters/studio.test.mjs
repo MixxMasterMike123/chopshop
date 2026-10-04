@@ -4,6 +4,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  DEFAULT_MIN_DPI,
+  artworkMinDpi,
+  serverPlacement,
+  sizeSlot,
+  slotFrame,
   duplicateArticles,
   floorText,
   inkopText,
@@ -22,6 +27,7 @@ import {
 import { applyPrinterAreas } from '../../config/printerAreas.js';
 import { resolvePrinterUid } from '../../wagons/pod-wagon/printRouting.js';
 import { garmentOfTemplate, templateSlots } from '../../config/podMockupTemplateHelpers.js';
+import { containPlacement } from '../../wagons/pod-wagon/studio/placementMath.js';
 
 const TEMPLATE = {
   id: 'tee_a', label: 'T-shirt', garment: 'tee', profileId: 'apparel_dtg', provisional: true,
@@ -193,5 +199,59 @@ describe('the quote, as the panel shows it', () => {
     assert.equal(floorText(s), '204 kr');
     assert.equal(inkopText(s), '125–131 kr');
     assert.equal(inkopText(quoteSummary(['A'], { A: q(10000, 19700) })), '125 kr');
+  });
+});
+
+describe('the print size, as the Worker sizes it (Codex FN1 round 1)', () => {
+  const profiles = [{ id: 'apparel_dtg', min_dpi: 300 }, { id: 'poster_low', min_dpi: 150 }, { id: 'no_floor', min_dpi: null }];
+  const template = { printAreas: { front: { x: 0, y: 0, w: 250, h: 350 }, back: { x: 0, y: 0, w: 300, h: 400 }, pocket: { x: 0, y: 0, w: 100, h: 100 } },
+    printAreaMm: { front: { w: 250, h: 350 }, back: { w: 300, h: 400 }, pocket: { w: 100, h: 100 } } };
+  const frames = { front: { w: 250, h: 350, offsetTopMm: 70 }, back: { w: 300, h: 400 } };
+  const art = (w, h, purpose) => ({ sourceWidthPx: w, sourceHeightPx: h, purpose, previewUrl: 'x' });
+
+  it('the DPI floor is the ARTWORK\'s own profile\'s, else 300 (no profile, a profile without a floor, no list)', () => {
+    assert.equal(artworkMinDpi(art(1, 1, 'poster_low'), profiles), 150);
+    assert.equal(artworkMinDpi(art(1, 1, 'apparel_dtg'), profiles), 300);
+    assert.equal(artworkMinDpi(art(1, 1, 'gone'), profiles), DEFAULT_MIN_DPI);
+    assert.equal(artworkMinDpi(art(1, 1, 'no_floor'), profiles), 300);
+    assert.equal(artworkMinDpi(art(1, 1, 'poster_low'), []), 300);
+    assert.equal(artworkMinDpi(art(1, 1, 'poster_low'), undefined), 300);
+  });
+
+  it('sizeSlot is the Worker\'s: contain-fit, capped at the floor, whole mm; null under 1 mm', () => {
+    assert.deepEqual(sizeSlot(3000, 3000, { w: 250, h: 350 }, 300), { widthMm: 250, heightMm: 250 }); // the frame binds (cap 254 mm)
+    assert.deepEqual(sizeSlot(2000, 2000, { w: 250, h: 350 }, 300), { widthMm: 169, heightMm: 169 }); // the cap binds (169.33 mm)
+    assert.deepEqual(sizeSlot(4200, 5600, { w: 300, h: 400 }, 300), { widthMm: 300, heightMm: 400 }); // the dev API stores 300 × 400 for this one
+    assert.deepEqual(sizeSlot(1000, 3000, { w: 250, h: 350 }, 150), { widthMm: 116, heightMm: 350 }); // the height binds (116.67)
+    assert.equal(sizeSlot(10, 10, { w: 250, h: 350 }, 300), null);
+    assert.equal(sizeSlot(3000, 3000, { w: 250, h: 350 }, 0), null);
+  });
+
+  it('the frame is the model\'s; the pocket a 100 × 100 spot inside the front', () => {
+    assert.deepEqual(slotFrame(frames, 'front'), { w: 250, h: 350 });
+    assert.deepEqual(slotFrame(frames, 'pocket'), { w: 100, h: 100 });
+    assert.deepEqual(slotFrame({ front: { w: 80, h: 350 } }, 'pocket'), { w: 80, h: 100 });
+    assert.equal(slotFrame(frames, 'left_sleeve'), null);
+    assert.equal(slotFrame(null, 'front'), null);
+  });
+
+  it('an artwork whose profile differs from the template\'s is sized by its own floor (not the template\'s)', () => {
+    const low = art(2000, 2000, 'poster_low');
+    const p = serverPlacement(template, 'front', low, { frames, profiles });
+    assert.equal(p.wMm, 250); // 150 DPI: the frame binds
+    // The older path, with the template's 300-DPI profile, would have shown 169 mm.
+    assert.equal(Math.floor(containPlacement(template, 'front', low, 300).wMm), 169);
+    assert.deepEqual(p, { xMm: 0, yMm: 50, wMm: 250, rotationDeg: 0 });
+  });
+
+  it('the profile list unavailable → 300, the cap binds, and the print is centred in the slot', () => {
+    const p = serverPlacement(template, 'front', art(2000, 2000, 'poster_low'), { frames, profiles: [] });
+    assert.deepEqual(p, { xMm: 40.5, yMm: 90.5, wMm: 169, rotationDeg: 0 });
+  });
+
+  it('no frame (the model cannot print the slot) or too small → no placement', () => {
+    assert.equal(serverPlacement(template, 'left_sleeve', art(3000, 3000, 'apparel_dtg'), { frames, profiles }), null);
+    assert.equal(serverPlacement(template, 'front', art(3000, 3000, 'apparel_dtg'), { frames: null, profiles }), null);
+    assert.equal(serverPlacement(template, 'front', art(10, 10, 'apparel_dtg'), { frames, profiles }), null);
   });
 });

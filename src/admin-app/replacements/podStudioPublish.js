@@ -119,6 +119,24 @@ async function freshFloors(skus, { shopId, printerId, slots }) {
 
 const floorKr = (minor) => krText(minor / 100);
 
+/**
+ * The product as the server holds it after a write whose answer was lost:
+ * { published, product } (published = live: active and published), or null
+ * when it cannot be read either (the outcome is then unknown).
+ */
+async function readBackLive(productId, shopId) {
+  try {
+    const detail = await getProduct(productId, { shopId });
+    if (!detail) return null;
+    return {
+      published: detail.publication?.published === true && detail.product?.status === 'active',
+      product: detail.product,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function mappingStepMessage(error) {
   return mappingRefusalMessage(error) ?? (isNetwork(error) ? 'Anslutningen bröts.' : 'En tryckkoppling kunde inte sparas.');
 }
@@ -333,11 +351,31 @@ export async function publishNewDesign(input, deps) {
       : await publishProduct(productId, { shopId });
   } catch (error) {
     if (error?.code === 'unauthenticated') return draftError(SESSION_GONE);
-    const said = refusalMessage(error, { step: 'publish' });
-    if (error?.code === 'price_below_floor') {
-      return { ...draftError('Priset ligger under prisgolvet.'), field: 'price' };
+    if (isNetwork(error)) {
+      // The answer was lost (or replaced by a gateway error): the server may
+      // have done it. The product is read back before anything is said about
+      // whether customers can buy it (Codex FN1 round 1).
+      const live = await readBackLive(productId, shopId);
+      if (live === null) {
+        return {
+          changed: true,
+          error:
+            `Anslutningen bröts och det är oklart om produkten ”${name}” (SKU ${resolvedSku}) publicerades. ` +
+            'Kontrollera under Produkter innan du försöker igen.',
+        };
+      }
+      if (live.published) {
+        after = live.product;
+      } else {
+        return draftError('Anslutningen bröts innan produkten publicerades.');
+      }
+    } else {
+      const said = refusalMessage(error, { step: 'publish' });
+      if (error?.code === 'price_below_floor') {
+        return { ...draftError('Priset ligger under prisgolvet.'), field: 'price' };
+      }
+      return draftError(said ?? 'Produkten kunde inte publiceras.');
     }
-    return draftError(said ?? 'Produkten kunde inte publiceras.');
   }
 
   pendingRuns.delete(shopId);

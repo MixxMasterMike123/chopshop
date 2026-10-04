@@ -303,6 +303,63 @@ describe('publishing a new design', () => {
     assert.deepEqual(writes().map((r) => r.method), ['PATCH', 'POST'], 'only the product and the publish: nothing else differs');
   });
 
+  it('a lost answer to the publish while it went live: read back, and said as published (Codex FN1 round 1)', async () => {
+    inject = (r) => {
+      if (r.url.endsWith('/publish')) {
+        route(state, 'POST', new URL(`http://dev.invalid${r.url}`), r.headers, r.body); // the server did it
+        return fail(502, 'bad_gateway');
+      }
+      return undefined;
+    };
+    const out = await publishNewDesign(design(), DEPS);
+    assert.equal(out.error, undefined);
+    assert.equal(out.result.published, true);
+    assert.equal(read(`/v1/admin/products/${out.result.productId}`).publication.published, true);
+    assert.equal(pendingRun('test-shop-a'), null);
+  });
+
+  it('a lost answer to the publish while it did NOT go live: read back, and said as a draft', async () => {
+    inject = (r) => (r.url.endsWith('/publish') ? fail(502, 'bad_gateway') : undefined);
+    const out = await publishNewDesign(design(), DEPS);
+    assert.match(out.error, /finns som utkast och visas inte i butiken.*Anslutningen bröts innan produkten publicerades/);
+    const draft = pendingRun('test-shop-a');
+    assert.ok(draft);
+    assert.notEqual(read(`/v1/admin/products/${draft.productId}`).publication?.published, true);
+  });
+
+  it('a lost answer to the publish and a failed read-back: the outcome is said as UNKNOWN, never "not in the shop"', async () => {
+    let published = false;
+    inject = (r) => {
+      if (r.url.endsWith('/publish')) {
+        route(state, 'POST', new URL(`http://dev.invalid${r.url}`), r.headers, r.body);
+        published = true;
+        return fail(504, 'gateway_timeout');
+      }
+      if (published && r.method === 'GET' && /\/v1\/admin\/products\/[^/]+$/.test(r.url)) return fail(503, 'unavailable');
+      return undefined;
+    };
+    const out = await publishNewDesign(design(), DEPS);
+    assert.match(out.error, /oklart om produkten ”Fjälltröja” \(SKU fjalltroja\) publicerades/);
+    assert.doesNotMatch(out.error, /visas inte i butiken/);
+    assert.equal(out.changed, true);
+  });
+
+  it('a lost answer to the status change: read back (not live), said as a draft; the next try publishes it', async () => {
+    inject = (r) => {
+      if (r.method === 'PATCH' && r.body?.status === 'active') {
+        route(state, 'PATCH', new URL(`http://dev.invalid${r.url}`), r.headers, r.body);
+        return fail(502, 'bad_gateway');
+      }
+      return undefined;
+    };
+    const out = await publishNewDesign(design(), DEPS);
+    assert.match(out.error, /finns som utkast och visas inte i butiken/);
+    inject = null;
+    const again = await publishNewDesign(design(), DEPS);
+    assert.equal(again.result.published, true);
+    assert.equal(productsNamed('Fjälltröja').length, 1);
+  });
+
   it('a lost answer to the create: the product is found by its SKU and the next try continues it', async () => {
     inject = (r) => {
       if (r.method === 'POST' && r.url.endsWith('/v1/admin/products')) {

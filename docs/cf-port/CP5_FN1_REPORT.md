@@ -222,3 +222,62 @@ What I saw that is not this unit's:
 4. **Continuing the draft.** After a failed publish, the next "Skapa produkt" in that tab writes into the same draft, even if the seller changed the design meanwhile. That keeps orphans away. Is it the behaviour you want?
 5. **The new and changed texts** in §(a) need your words.
 6. **The caution dot on every motif** (the `'pass'` vs `PASS` mismatch, pre-existing). Fix it in both builds?
+
+## Codex round 1 (on `ff19a0c7`; worked at HEAD `a0034343`)
+
+Model: claude-opus-5-5 (Opus 5.5). Working tree only; no git writes, no network. I did not touch `cloudflare/**` or `scripts/cf-port/migrate/**`, nor the reviewer's files (`podLibrary.js`, `podProductMappingData.js`, `podLibraryLoad.test.mjs`; nothing of mine uses `targetOf`).
+
+### 1. [P2] A lost answer to the publish no longer says "draft" for a product that is live
+
+`podStudioPublish.js`, step 5:
+- **The read-back.** When the status PATCH or the publish fails as a network error (no answer, `status 0`, or a 5xx such as a gateway error), the product is read back (`GET /v1/admin/products/:id`, the new `readBackLive`) before anything is said:
+  - **live** (active and published): reported as success, the same result as the normal path (`productId`, `sku`, the screening notice from the product read back), and the draft memory is cleared;
+  - **not live**: the draft message, cause "Anslutningen bröts innan produkten publicerades.";
+  - **the read-back fails too** (or answers 404): "Anslutningen bröts och det är oklart om produkten ”X” (SKU y) publicerades. Kontrollera under Produkter innan du försöker igen." (`changed: true`). It never says "visas inte i butiken". The draft memory is kept, so the next try reads the product and finishes (or reports it live).
+- **The status PATCH.** It goes through the same read-back. A lost answer there cannot make a product live (the publish was never sent), so it reads as a draft, and the next try publishes it (tested).
+- **Unchanged:** a refusal with an answer (422 `price_below_floor`, `pod_mapping_missing`, …) is said as before, with no read-back.
+
+### 2. [P2] The locked placement is the Worker's own sizing of each artwork
+
+- **The pure functions** in `src/admin-app/adapters/studio.js` mirror the Worker exactly:
+  - `artworkMinDpi`: the artwork's own profile (`purpose` = its profileId) → `min_dpi`, else 300. A missing profile, a profile without a floor, and an unavailable profile list all give 300, as `profile_min_dpi ?? DEFAULT_MIN_DPI` in `createMappingOnce`.
+  - `slotFrame`: the model's own frame, or the pocket as `min(100 × 100, front)` (`printers.ts slotFrame`, `POCKET_AREA_MM`).
+  - `sizeSlot`: verbatim `pod-mappings.ts sizeSlot`.
+  - `serverPlacement`: that whole-mm width, centred in the template slot.
+- **One function for everything.** The admin data module's new `lockedPlacement` (`podStudioData.js`) is the single source for the canvas, the review strip, the mockups (`effectivePlacementFor` feeds `renderMockup`) and the cm readout. It uses the frames of the routed (printer, model) entry, never the template's profile.
+- **The older build** keeps its behaviour: its `lockedPlacement` (`studio/studioData.js`) is the former `containPlacement(…, profile?.min_dpi ?? null)`.
+- **Shared-file changes:**
+  - `DesignStudio.jsx` passes `routedFrames`/`profiles` into `lockedPlacement`, and gives the canvas and the strip that placement when `placementEditable` is false (the older expression otherwise).
+  - `CompositorCanvas.jsx` and `ColorwayStrip.jsx` MiniMockup: a locked slot now uses the placement it is given, else `containPlacement` as before. In the older build a locked slot (the pocket) is never given one, so nothing changes there.
+  - `ColorwayStrip` passes the resolved artwork to `placementFor(slot, artwork)`; the older callers ignore the second argument.
+- **Seen rendered** (dev API, `/private/tmp/fn1-shots/codex1-step4-*`): front 25 × 25 cm, back 30 × 40 cm, the sizes the dev API stores for those mappings. Mockups were generated through to step 8.
+- **Still approximate:**
+  - The studio derives the height from the artwork's aspect at the server's whole-mm width, while the Worker floors the height separately. The difference is under 1 mm.
+  - The canvas's DPI verdict tone still uses the template's profile thresholds (the DPI figure itself is geometric and exact).
+
+### Tests (10 new) and mutations
+
+**Tests:**
+- `studio.test.mjs` (6): artwork profile ≠ template profile (250 mm against the template path's 169); the profile list unavailable → 300; a profile without a floor → 300; the cap binds (169 mm) against the frame binds (250 mm) and the height binds; the pocket frame; no frame or too small → null.
+- `podStudioPublish.test.mjs` (4): a lost publish answer + live → success; + still a draft → draft; + a failed read-back → "oklart", never "visas inte i butiken"; a lost status-PATCH answer → draft, then the next try publishes one product.
+
+**Mutations**, each made once and reverted. Every one was caught:
+
+| Mutation | Tests failed |
+|---|---|
+| no read-back | 3 |
+| failed read-back said as a draft | 1 |
+| floor always 300 | 2 |
+| no whole-mm floor | 2 |
+| pocket = the whole front | 1 |
+| an unavailable list keeps a profile's floor | 2 |
+
+The canvas and strip wiring is JSX: I checked it by eye, as described above.
+
+### Gates
+
+- `node --test src/api/*.test.mjs src/api/admin/*.test.mjs "src/admin-app/**/*.test.mjs" src/storefront/adapters/*.test.mjs src/storefront/dev/*.test.mjs` → **tests 756, pass 756, fail 0** (746 at HEAD + 10).
+- `npx vite build --config vite.admin.config.js` → ✓ built. `node cloudflare/admin/check-admin-build.mjs` → "admin build: 27 files (21 text) checked, no Firebase code, no source map, no secret, every file servable." The bundle search for dev fixture names found nothing.
+- `npx vite build` → ✓ built. `node cloudflare/web/check-storefront-build.mjs` → "storefront build: 11 files (7 text) checked, no Firebase code, every file servable."
+- `node --test src/wagons/pod-wagon/*.test.js src/wagons/pod-wagon/studio/*.test.js` → tests 20, pass 20.
+- `node guard/guards.test.mjs` → **guard: PASS** (exit 0), allowlist 296.

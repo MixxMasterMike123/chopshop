@@ -24,6 +24,7 @@ import { useAdminShop } from '../providers/ShopFeatures.jsx';
 import { skuFromName, uniqueSku } from '../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../utils/variantDerivation';
 import { publishNewDesign, updateExistingFromDesign } from './podStudioPublish.js';
+import { serverPlacement } from '../adapters/studio.js';
 
 export const STUDIO_FLAGS = Object.freeze({
   /** The seller drags and resizes a print (and picks the pocket position). */
@@ -47,6 +48,16 @@ export const STUDIO_TEXT = Object.freeze({
   no3d: '3D-vyn finns inte i den här versionen av adminen ännu.',
   productionLabel: 'Tryckeri och plagg',
 });
+
+/**
+ * The placement of a locked slot (every slot here): the print exactly as the
+ * Worker sizes it — the chosen model's frame (slotFrame), the ARTWORK's own
+ * profile DPI floor (else 300, never the template's), contain-fit, whole mm —
+ * centred (adapters/studio.js serverPlacement). The canvas, the review strip,
+ * the mockups and the measurements shown all read this one function.
+ */
+export const lockedPlacement = (template, slot, artwork, { frames, profiles } = {}) =>
+  serverPlacement(template, slot, artwork, { frames, profiles });
 
 /** What the studio needs of the shop for a publish: its currency. */
 export function useStudioEnv() {

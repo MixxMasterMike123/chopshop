@@ -34,8 +34,10 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
 
   let artRect = null;
   if (artwork && isComposable(artwork)) {
+    // A locked slot uses the placement it is given (the Cloudflare admin: the
+    // server's own sizing of THIS artwork), else the contain rect.
     const p = locked
-      ? containPlacement(template, slot, artwork, minDpi)
+      ? placement || containPlacement(template, slot, artwork, minDpi)
       : clampPlacement(
           placement || defaultPlacement(template, slot, artwork, minDpi),
           template, slot, artwork, minDpi
@@ -74,7 +76,8 @@ const MiniMockup = ({ template, slot, colorway, artwork, placement, minDpi = nul
  *                             single-surface behaviour the dev harnesses use.
  *   activeColorwayId        — selected colourway
  *   onSelect(colorwayId)
- *   placementFor(slot)      — that slot's shared placement (or null → default)
+ *   placementFor(slot, artwork) — that slot's shared placement (or null → default;
+ *                             a locked slot: its fixed placement for that artwork, or null → contain)
  *   resolveArtwork(slot, colorwayId) → artwork doc that colourway prints there
  *   overridesFor(slot)      — { [colorwayId]: artworkId } for that slot
  *   onOverrideChange(slot, colorwayId, artworkId|null)
@@ -224,7 +227,7 @@ const ColorwayStrip = ({
                   slot={railSlot}
                   colorway={cw}
                   artwork={resolveArtwork(railSlot, cw.id)}
-                  placement={placementFor(railSlot)}
+                  placement={placementFor(railSlot, resolveArtwork(railSlot, cw.id))}
                   locked={lockedSlot(railSlot)}
                   minDpi={minDpi}
                 />
@@ -290,7 +293,7 @@ const ColorwayStrip = ({
                       slot={s}
                       colorway={active}
                       artwork={art}
-                      placement={placementFor(s)}
+                      placement={placementFor(s, art)}
                       locked={lockedSlot(s)}
                       minDpi={minDpi}
                     />

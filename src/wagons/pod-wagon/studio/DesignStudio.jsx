@@ -56,7 +56,7 @@ import { STORE } from '../../../config/store';
 // (vite.admin.config.js; CP5 unit FN1), together with what that build does
 // differently (STUDIO_FLAGS, STUDIO_TEXT). The studio itself imports no
 // Firebase; PublishPanel stays presentational.
-import { STUDIO_FLAGS, STUDIO_TEXT, publishDesign, updateProductFromDesign, useStudioEnv } from './studioData';
+import { STUDIO_FLAGS, STUDIO_TEXT, lockedPlacement, publishDesign, updateProductFromDesign, useStudioEnv } from './studioData';
 
 // Validation is ADVISORY (podValidation's contract: "WARN/FAIL never blocks — it
 // guides the seller; the printer decides"). The studio therefore selects ANY
@@ -551,9 +551,14 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // rect), else the compositor default. Same function feeds the mockup
   // renderer AND the publish readouts so they can never disagree.
   // (Where the print is sized by the server — STUDIO_FLAGS.placementEditable
-  // false — every slot is locked to that contain-fit placement, as the pocket.)
+  // false — every slot is locked, as the pocket, to the placement the data
+  // module gives: there the server's own sizing of THIS artwork on the
+  // routed model's frame. The older build's is containPlacement, as before.)
+  const routedFrames = routedPrinterUid
+    ? printersById[routedPrinterUid]?.printAreasMm?.[garmentOfTemplate(rawTemplate)] ?? null
+    : null;
   const effectivePlacementFor = (s, art) => (s === 'pocket' || !STUDIO_FLAGS.placementEditable
-    ? containPlacement(effTemplate, s, art, profile?.min_dpi ?? null)
+    ? lockedPlacement(effTemplate, s, art, { profile, profiles, frames: routedFrames })
     : (placements[s]
         ? clampPlacement(placements[s], effTemplate, s, art, profile?.min_dpi ?? null)
         : defaultPlacement(effTemplate, s, art, profile?.min_dpi ?? null)));
@@ -1419,7 +1424,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             // error. Step 6 (Godkänn), the preview and the exported mockups
             // still show the warped truth.
             flat
-            placement={placements[slot] || null}
+            placement={STUDIO_FLAGS.placementEditable
+              ? placements[slot] || null
+              : (canvasArtwork ? effectivePlacementFor(slot, canvasArtwork) : null)}
             ghostAreas={ghostAreas}
             onGhostClick={(s) => {
               const i = prints.findIndex((p) => p.slot === s);
@@ -1478,7 +1485,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             minDpi={profile?.min_dpi ?? null}
             activeColorwayId={colorwayId}
             onSelect={setColorwayId}
-            placementFor={(s) => placements[s] || null}
+            placementFor={(s, art) => (STUDIO_FLAGS.placementEditable
+              ? placements[s] || null
+              : (art ? effectivePlacementFor(s, art) : null))}
             lockedSlot={(s) => s === 'pocket' || !STUDIO_FLAGS.placementEditable}
             labelForSlot={labelForSlot}
             resolveArtwork={resolveArtwork}
