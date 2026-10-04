@@ -4,7 +4,25 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP5 — Admin (started 2026-10-03 on Mikael's "keep going … full autonomy")
 
-### 🚀 2026-10-04 00:05 — the admin's PAGES are on staging; Codex's ten findings are fixed — START HERE
+### 🚀 2026-10-04 07:53 — POD library, mapping, the studio (both parts), the order mails and the Worker follow-ups are ON STAGING — START HERE
+
+**Deployed, attested, tree clean, pushed. HEAD `3f39c724`.** API `ecbee84d-697e-43ae-91ca-af665684b77d` and web `dc12234a-3309-4fd4-9a2f-9bb42444a196` (at `959f7892`), admin `12e7dc6f-6c5f-4246-a4a9-5c15c97b0330` (at `3f39c724`; nothing but the admin's pages changed between the two). Migrations 0049 and 0050 applied (bookmark BEFORE `000002f2-00000000-000050fa-ab946994a6b1b9394105c6bc7fa2737f`); `/ready` answers 0050.
+
+Codex has read every commit; its last verdicts: `959f7892` clean, `1628bf21` (FN2) one P2 → `3f39c724` clean. In all tonight: 13 P2 on the POD, studio, mail and assets units, 2 P1 on the printers page; all fixed, all re-read clean. (The table of commits is in the "Update" blocks below, which are now history.)
+
+**Done on staging:**
+- CORS on `chopshop-stg-public` and `chopshop-stg-private`: GET, HEAD from the staging admin origin only.
+- The studio assets imported (`import-studio-assets.mjs`, export bundle `~/chopshop-export/export-2026-09-27T15-02-15.414Z`, work dir `~/chopshop-export/studio-import-2026-10-04`): 86 files copied, 8 templates and 6 3D models created, read back with 0 mismatches. The 3D originals are not carried (6 colourways).
+
+**Smoke in a browser (ninetone's review admin; no console error but the signed-out 401):**
+- `/admin/pod`, Original: an upload with the rights box → 202 → "Bearbetas…" → the server's verdict. A 3000 px image with a transparent margin was trimmed to 1800 px and REJECTED at 183 DPI with the server's sentence; a 3600 px one was APPROVED (366 DPI, "Ej transparent"). Both are left in ninetone's library ("Röktest fjäll", "Röktest rutor").
+- Studio, steps 1–4: the garment (only Sweatshirt: `fake-printer` is staging's one usable printer), the print areas (39 × 49 cm from the printer's frame), the approved original (its preview from the private bucket), the placement drawn at the server's size (30,4 × 30,4 cm, 301 DPI).
+- The seller routes answer: mockup templates, 3D models, printers, tags, legal status. The products list shows "Varianter"; settings shows "Godkända av …"; the order list takes a name in `q`.
+- **NOT walked on staging:** the studio's steps 5–8 (colours, approval, the mockups' export, publish with images), the mapping form's save, the 3D view. They are verified against the dev API only (the builders' shots in `/private/tmp/fn1-shots`, `fn2-shots`, `fm-shots`). No test product was created in a shop Mikael reviews.
+
+**Next (none started):** Mikael's look at `/admin/pod` in a real browser (the 3D view, the mockups); the nice-to-have Worker units WD (settings PATCH), WF (Connect balance), WI (platform counts); FL (new platform pages: needs a design word); the printer's real submit and status signal (wait for SnapWear: LAUNCH_TODO A5, A6, C1–C5); then CP7, the cutover runbook (production env, the import, the switch — each needs Mikael's explicit go).
+
+### (history) 🚀 2026-10-04 00:05 — the admin's PAGES are on staging; Codex's ten findings are fixed — START HERE
 
 **Deployed SHA `d92458f1`, attested, tree clean, pushed.** API `dbd1b35d-3d0e-4bd7-8f42-65741591190f`, web `5fccd42f-aa75-485d-858d-7c92750867d9` (both at `abc10141`), admin `f3ad5bff-603c-4a9f-9b38-48435898a8b0` (`d92458f1`). Migration 0048 applied on staging (bookmark BEFORE `000002cd-00000000-000050f9-66a757f1e50aa3fdacb674dc560f14ed`); `/ready` answers 0048.
 
