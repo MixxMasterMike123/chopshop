@@ -91,6 +91,13 @@ Gates at `fbab7d98`/`959f7892` (run by the reviewer): Worker 102 files / 4322, t
 
 **Open for Mikael (collected, none blocks):** the locked placement and whether the printer centres or top-aligns; the margin tool gone from the studio; the seller picks printer articles (sees supplier labels); an acting-as platform user can confirm artwork rights; printer price edits reach live products at once and "under the floor" is only reported; mails need `RESEND_API_KEY` + `EMAIL_FROM` on staging; the shop's notice address, the buyer's name in it, the withdrawal text in the refund mail; imported legal evidence shown by its stored address; D101; 3D originals not carried; all imported templates marked provisional.
 
+**Update 2026-10-04 03:35 — FN2 committed; CORS set on staging; two commits wait for Codex (07:36).**
+
+- `1628bf21` FN2 (Opus, 381k tokens): the mockups become the product's images inside the publish sequence (after the variants, before live); the 3D view reads `GET /v1/admin/pod/3d-models`. 786 tests under Node. **Not read by Codex.** The detached job `run-wait-0738.sh` now holds `959f7892 1628bf21`.
+- **Step 3 of the deploy list above is DONE:** both staging buckets (`chopshop-stg-public`, `chopshop-stg-private`, EU) had no CORS rule; each now allows GET and HEAD from `https://chopshop-admin-stg.kent-ee2.workers.dev` only (file in the session's scratchpad; rule read back). Production's buckets are untouched.
+- To check in a real browser on staging (the headless one lost its WebGL context on the 3D view once and said so): the 3D view draws; the mockups export.
+- CP6 after this: only the printer's real submit and status signal remain, and they wait for SnapWear's answers (`docs/SnapWearDocs/LAUNCH_TODO.md` A5, A6, C1–C5). Nice-to-have Worker units not started: WD (settings PATCH), WF (Connect balance), WI (platform counts); FL (new platform pages) needs Mikael's design word.
+
 ### (history) 🔁 HANDOVER 2026-10-03 23:10 — every launch-scope page but the printers page is COMMITTED; Codex found 10 things to fix before the next deploy
 
 **Tree clean, HEAD `a5b3cfa1` pushed, no builder running, no job waiting.** Staging is unchanged since 19:10: it serves `63760063` (the sign-in works, stand-ins behind it; the entry below).
