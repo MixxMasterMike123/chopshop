@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
-import { heldPreviewUrl, resetHeldPreviews } from './podPreviewBlobs.js';
+import { beginPreviewRead, heldPreviewCount, heldPreviewUrl, releaseHeldPreviews, resetHeldPreviews } from './podPreviewBlobs.js';
 
 const SIGNED = 'https://account.eu.r2.cloudflarestorage.com/bucket/pod/shop-a/preview/art-1.webp?X-Amz-Expires=300&X-Amz-Signature=aa';
 const SIGNED_LATER = 'https://account.eu.r2.cloudflarestorage.com/bucket/pod/shop-a/preview/art-1.webp?X-Amz-Expires=300&X-Amz-Signature=bb';
@@ -57,6 +57,43 @@ describe('heldPreviewUrl', () => {
     const { calls, fetchImpl } = fakeFetch();
     assert.match(await heldPreviewUrl('shop-a', 'art-1', SIGNED_LATER, { fetchImpl }), /^blob:/);
     assert.equal(calls.length, 1);
+  });
+
+  it('a library read lets go of what its list no longer shows, and of another shop', async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const revoked = [];
+    const realRevoke = URL.revokeObjectURL;
+    URL.revokeObjectURL = (address) => { revoked.push(address); realRevoke.call(URL, address); };
+    try {
+      const one = await heldPreviewUrl('shop-a', 'art-1', SIGNED, { fetchImpl });
+      const two = await heldPreviewUrl('shop-a', 'art-2', SIGNED, { fetchImpl });
+      const other = await heldPreviewUrl('shop-b', 'art-1', SIGNED, { fetchImpl });
+      assert.equal(heldPreviewCount(), 3);
+      // The read of shop-a whose list holds art-2 only (art-1 was deleted).
+      const read = beginPreviewRead();
+      assert.equal(releaseHeldPreviews('shop-a', ['art-2'], read), 2);
+      assert.deepEqual(revoked.sort(), [one, other].sort());
+      assert.equal(heldPreviewCount(), 1);
+      assert.equal(await heldPreviewUrl('shop-a', 'art-2', SIGNED_LATER, { fetchImpl }), two);
+      assert.equal(calls.length, 3);
+      // A freed preview is fetched again when a list shows it again.
+      assert.notEqual(await heldPreviewUrl('shop-a', 'art-1', SIGNED_LATER, { fetchImpl }), one);
+      assert.equal(calls.length, 4);
+    } finally {
+      URL.revokeObjectURL = realRevoke;
+    }
+  });
+
+  it('an older read that answers late frees nothing', async () => {
+    const { fetchImpl } = fakeFetch();
+    const older = beginPreviewRead();
+    const newer = beginPreviewRead();
+    // The newer read's list holds an artwork uploaded after the older one listed.
+    const fresh = await heldPreviewUrl('shop-a', 'art-new', SIGNED, { fetchImpl });
+    assert.equal(releaseHeldPreviews('shop-a', ['art-new'], newer), 0);
+    assert.equal(releaseHeldPreviews('shop-a', [], older), 0);
+    assert.equal(heldPreviewCount(), 1);
+    assert.equal(await heldPreviewUrl('shop-a', 'art-new', SIGNED_LATER, { fetchImpl }), fresh);
   });
 
   it('an address that is not signed is answered as it is, with no fetch', async () => {

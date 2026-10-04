@@ -17,6 +17,14 @@
 //
 // A preview that cannot be fetched keeps its signed address: it is shown as
 // before, and drawn while the address lasts (corsImage.js).
+//
+// WHAT IS HELD IS BOUNDED. Each library read ends by letting go of every
+// preview that its list no longer holds among its newest HELD_PREVIEW_LIMIT
+// (a deleted artwork, one pushed out by newer uploads) and of every other
+// shop's previews (the tab works in one shop at a time): at most
+// HELD_PREVIEW_LIMIT previews are held, of one shop. Only the LATEST read may
+// let go: an older read that answers late knows nothing of an artwork
+// uploaded since, and must not free the preview the newer rows show.
 
 import { isSignedUrl } from '../../wagons/pod-wagon/studio/corsImage.js';
 
@@ -24,6 +32,31 @@ import { isSignedUrl } from '../../wagons/pod-wagon/studio/corsImage.js';
 export const HELD_PREVIEW_LIMIT = 100;
 
 const held = new Map(); // `${shopId}\n${artworkId}` → blob: address
+let latestRead = 0;
+
+/** A library read starts: its token says whether it is still the latest when it ends. */
+export function beginPreviewRead() {
+  latestRead += 1;
+  return latestRead;
+}
+
+/**
+ * A library read ends: every held preview that is not one of `keepArtworkIds`
+ * of `shopId` is freed. Nothing happens when a newer read has started since.
+ * Answers how many were freed.
+ */
+export function releaseHeldPreviews(shopId, keepArtworkIds, token) {
+  if (token !== latestRead) return 0;
+  const keep = new Set([...keepArtworkIds].map((artworkId) => `${shopId}\n${artworkId}`));
+  let freed = 0;
+  for (const [key, address] of held) {
+    if (keep.has(key)) continue;
+    held.delete(key);
+    URL.revokeObjectURL(address);
+    freed += 1;
+  }
+  return freed;
+}
 
 /** The address to show and draw an artwork's preview from. */
 export async function heldPreviewUrl(shopId, artworkId, previewUrl, { fetchImpl = globalThis.fetch } = {}) {
@@ -47,7 +80,11 @@ export async function heldPreviewUrl(shopId, artworkId, previewUrl, { fetchImpl 
   }
 }
 
+/** How many previews are held (tests, and a look from the console). */
+export const heldPreviewCount = () => held.size;
+
 /** Tests only: forget every held preview. */
 export function resetHeldPreviews() {
   held.clear();
+  latestRead = 0;
 }

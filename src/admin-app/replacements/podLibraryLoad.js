@@ -35,7 +35,7 @@ import {
   profileFromApi,
   renderState,
 } from '../adapters/pod.js';
-import { HELD_PREVIEW_LIMIT, heldPreviewUrl } from './podPreviewBlobs.js';
+import { HELD_PREVIEW_LIMIT, beginPreviewRead, heldPreviewUrl, releaseHeldPreviews } from './podPreviewBlobs.js';
 
 /** How many reads of one kind run at once (details, objects, products). */
 export const READ_CONCURRENCY = 4;
@@ -131,6 +131,7 @@ async function originalOf(shopId, objectId) {
 export function loadArtworkRows(shopId) {
   const shop = shopOf(shopId);
   return readForShop(shop, async (id) => {
+    const previewRead = beginPreviewRead();
     const summaries = await listArtwork({ shopId: id });
     const tracked = trackerOf(id);
     for (const s of summaries) {
@@ -154,6 +155,8 @@ export function loadArtworkRows(shopId) {
         : signed;
       return artworkRow(s, { detail: detail?.artwork ?? null, previewUrl, object });
     });
+    // Held previews this list no longer shows are let go (podPreviewBlobs.js).
+    releaseHeldPreviews(id, summaries.slice(0, HELD_PREVIEW_LIMIT).filter((s) => s.status === 'ready').map((s) => s.artworkId), previewRead);
 
     // The renders the tab saw processing that the list no longer carries.
     const listed = new Set(summaries.map((s) => s.artworkId));
