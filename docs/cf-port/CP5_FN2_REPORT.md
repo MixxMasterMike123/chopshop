@@ -202,3 +202,47 @@ The upload itself is same-origin (`/_api` → Worker) and needs no CORS. No `blo
 3. **The main image on update** follows the older opt-in rule, but the old main image is now kept as the second image instead of being lost. OK?
 4. **Removing replaced studio objects (D93) on update** is immediate after a confirmed write. Should they instead be left for a later sweep?
 5. **Over 30 images** (more than about 7 colours with front and back), the gallery keeps only the hero and each colour shows its own images. Is that acceptable, or should the studio limit the number of colours?
+
+## Codex round 1 (on `1628bf21`; worked at HEAD `cd633900`)
+
+Model: claude-opus-5-5 (Opus 5.5). Working tree only; no git writes, no network. I did not touch `cloudflare/**` or the shared studio components.
+
+### [P2] The studio's earlier images on an INACTIVE size of a colour were kept
+
+**The cause.** The colour → variants map held only ACTIVE variants. When the size that carried a colour's studio rows became inactive, those rows were no longer seen as the colour's. Two ways a size becomes inactive: an order or a mapping names it, or a "removed" size could only be deactivated. The planner kept the rows and added the new ones on an active size. The storefront's group rule still shows an inactive size's images to its active siblings, so the old design stayed first.
+
+**The fix.**
+- `adapters/studioMedia.js planStudioImages`: a colour now carries two lists.
+  - `variantIds`: the ACTIVE variants by position. The studio's rows name the first.
+  - `siblingIds`: EVERY variant of the colour, inactive ones too.
+- Rows on any sibling are the colour's:
+  - the studio's earlier rows there are removed or replaced;
+  - the new rows sit on the first active size;
+  - the seller's rows stay where they are, including on the inactive size.
+- When every size of a colour is inactive, the studio's old rows there still go, and the mockups stay in the gallery (said as before).
+- `podStudioPublish.js`: a new helper, `coloursOnProduct(colorways, variants)`. It finds the colour's group by exact name, as before; ids decide the write.
+  - **Update existing:** the helper reads all of the product's variants (`detail.variants`, active or not).
+  - **A continued draft:** the re-read after the variant sync now also gives the draft's variants. A size the sync could only deactivate is a sibling, so its studio rows go too.
+
+### Tests (3 new) and mutations
+
+- `podStudioPublish.test.mjs`:
+  - **Update existing:** Svart / S held the studio's Svart rows and is then deactivated; the design changes. After the update, Svart's rows are the two new studio rows on Svart / M, then the seller's two images still on Svart / S. No object of the old Svart design remains.
+  - **Draft continued:** the first run fails at the mappings, so the images sit on Vit / S. Vit / S is then removed from the design but is named elsewhere, so the sync can only deactivate it. On the next run: Vit / S is inactive with no row left on it, Vit / M holds "Vit – framsida", "Vit – baksida", and the product is published.
+- `studioMedia.test.mjs`, pure: rows on an inactive sibling (studio replaced, seller kept), and a colour with no active size left.
+
+| Mutation (each made once, then reverted) | Failed |
+|---|---|
+| planner ignores siblings (the reported bug) | 3 |
+| update: siblings = active only | 2 |
+| draft resume: siblings not read | 1 |
+| all sizes inactive: old studio rows kept | 1 |
+
+### Gates
+
+- `node --test src/api/*.test.mjs src/api/admin/*.test.mjs "src/admin-app/**/*.test.mjs" src/storefront/adapters/*.test.mjs src/storefront/dev/*.test.mjs` → **tests 789, pass 789, fail 0** (786 + 3).
+- `npx vite build --config vite.admin.config.js` → ✓ built. `node cloudflare/admin/check-admin-build.mjs` → "admin build: 27 files (21 text) checked, no Firebase code, no source map, no secret, every file servable."
+- `npx vite build` → ✓ built. `node cloudflare/web/check-storefront-build.mjs` → "storefront build: 11 files (7 text) checked, no Firebase code, every file servable."
+- `node guard/guards.test.mjs` → **guard: PASS** (allowlist 296). Pod-wagon node tests → pass 20, fail 0.
+
+Files: `src/admin-app/adapters/studioMedia.js`, `src/admin-app/adapters/studioMedia.test.mjs`, `src/admin-app/replacements/podStudioPublish.js`, `src/admin-app/replacements/podStudioPublish.test.mjs`, `docs/cf-port/CP5_FN2_REPORT.md`.

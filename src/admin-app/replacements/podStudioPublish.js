@@ -170,6 +170,25 @@ function mockupCheck({ mockups, colours, slots, rows = [], heroKey, replaceImage
   return { missingSides };
 }
 
+/**
+ * Each published colour's variants on a product by its exact name (the
+ * variant's group, else its label): `variantIds` the ACTIVE ones by position
+ * (the studio's rows name the first), `siblingIds` every one, inactive too.
+ * Ids decide the write; the name only finds the colour's group.
+ */
+function coloursOnProduct(colorways, variants) {
+  const all = [...(variants ?? [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  return colorways.map((c) => {
+    const mine = all.filter((v) => normalizeLabel(v.group ?? v.label) === normalizeLabel(c.label));
+    return {
+      id: c.id,
+      label: c.label,
+      variantIds: mine.filter((v) => v.active === true).map((v) => v.variantId),
+      siblingIds: mine.map((v) => v.variantId),
+    };
+  });
+}
+
 const tooManyImages = (count) =>
   `Produkten skulle få ${count} bilder, men högst ${IMAGE_ROWS_MAX} är tillåtna. Välj färre färger, eller ta bort bilder under Produkter.`;
 
@@ -411,16 +430,21 @@ export async function publishNewDesign(input, deps) {
   }
 
   // 4. The images (before anything can make the product live).
-  const colourVariants = colorways.map((c) => ({
+  let colourVariants = colorways.map((c) => ({
     id: c.id,
     label: c.label,
     variantIds: units.filter((u) => u.colorway.id === c.id).map((u) => variantIdBySku.get(u.row.sku.toLowerCase())).filter(Boolean),
   }));
   let rowsNow = [];
   if (server) {
-    // The draft's rows as they are now (the variant sync may have removed some).
+    // The draft's rows as they are now (the variant sync may have removed
+    // some), and its variants: a size the sync could only DEACTIVATE (a
+    // mapping names it) still carries the colour's earlier rows.
     try {
-      rowsNow = rowsOf(await getProduct(productId, { shopId }));
+      const now = await getProduct(productId, { shopId });
+      rowsNow = rowsOf(now);
+      const siblings = coloursOnProduct(colorways, now?.variants);
+      colourVariants = colourVariants.map((c, i) => ({ ...c, siblingIds: siblings[i].siblingIds }));
     } catch (error) {
       return draftError(error?.code === 'unauthenticated' ? SESSION_GONE : `Produktbilderna kunde inte sparas: ${imageStepCause(error)}`);
     }
@@ -553,12 +577,10 @@ export async function updateExistingFromDesign(input) {
     return { error: 'Samma artikel hos tryckeriet är vald för två varianter. Välj en egen artikel för varje variant.' };
   }
   // The images: each published colour's variants on the product (its exact
-  // name, as the motif rule above), the first first; the checks write nothing.
-  const colourVariants = colorways.map((c) => ({
-    id: c.id,
-    label: c.label,
-    variantIds: scopes.filter((s) => s.variantId && s.group && normalizeLabel(s.group) === normalizeLabel(c.label)).map((s) => s.variantId),
-  }));
+  // name, as the motif rule above), the first ACTIVE one first, and every
+  // variant of the colour, inactive ones too (their rows are the colour's:
+  // the storefront shows them on the active sizes); the checks write nothing.
+  const colourVariants = coloursOnProduct(colorways, detail.variants);
   const rows = rowsOf(detail);
   const images = mockupCheck({ mockups, colours: colourVariants, slots, rows, heroKey, replaceImages, fresh: false });
   if (images.error) return { error: images.error };

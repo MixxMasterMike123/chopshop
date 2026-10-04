@@ -710,3 +710,68 @@ describe('the 3D models', () => {
     assert.equal(await settled(late), false);
   });
 });
+
+// ── Codex FN2 round 1: a colour's images on a size that is no longer active ──
+
+describe('the studio\'s earlier images on an inactive size of the colour', () => {
+  const catalogueOf = () => state.fcCatalogue.get('test-shop-a');
+  const variantOf = (productId, variantId) => catalogueOf().products.get(productId).variants.find((v) => v.variantId === variantId);
+
+  it('update existing: the image-holding size was deactivated — its old studio rows go, the new sit on the first active size, the seller\'s stay', async () => {
+    const input = {
+      shopId: 'test-shop-a',
+      productId: 'prod-tee',
+      slots: ['front', 'back'],
+      printerId: 'dev-printer',
+      articles: {
+        'var-tee-svart-s': 'DEV-TEE-BLK-S', 'var-tee-svart-m': 'DEV-TEE-BLK-M', 'var-tee-svart-l': 'DEV-TEE-BLK-L',
+        'var-tee-vit-s': 'DEV-TEE-WHT-S', 'var-tee-vit-m': 'DEV-TEE-WHT-M', 'var-tee-sand': 'DEV-TEE-SND-M',
+      },
+      colorways: [{ id: 'vit', label: 'Vit' }, { id: 'svart', label: 'Svart' }],
+      overrideColorwayIds: [],
+      artworkFor: (slot) => ART[slot],
+      mockups: mockupsOf(['vit', 'svart']),
+      heroKey: 'vit:front',
+      replaceImages: true,
+    };
+    await updateExistingFromDesign(input);
+    const first = read('/v1/admin/products/prod-tee').images;
+    assert.ok(first.some((r) => r.variantId === 'var-tee-svart-s' && r.alt === 'Svart – framsida'), 'the studio\'s rows sat on Svart / S');
+
+    // Svart / S is deactivated (an order names it); the design changes.
+    variantOf('prod-tee', 'var-tee-svart-s').active = false;
+    const next = await updateExistingFromDesign({ ...input, mockups: mockupsOf(['vit', 'svart'], ['front', 'back'], { 'svart:front': 2, 'svart:back': 2 }) });
+    assert.ok(next.result, next.error);
+    const after = read('/v1/admin/products/prod-tee').images;
+    const svart = after.filter((r) => r.variantId?.startsWith('var-tee-svart'));
+    assert.deepEqual(svart.map((r) => [r.variantId, r.alt ?? r.objectId]), [
+      ['var-tee-svart-m', 'Svart – framsida'], ['var-tee-svart-m', 'Svart – baksida'],
+      ['var-tee-svart-s', 'obj-tee-black'], ['var-tee-svart-s', 'obj-tee-black-2'],
+    ]);
+    const oldSvart = first.filter((r) => r.alt?.startsWith('Svart')).map((r) => r.objectId);
+    assert.ok(!after.some((r) => oldSvart.includes(r.objectId)), 'nothing of the old Svart design remains');
+  });
+
+  it('a draft continued: a removed size that could only be deactivated loses its studio rows; the new sit on the colour\'s first active size', async () => {
+    let posts = 0;
+    inject = (r) => (r.url.endsWith('/pod/mappings') && r.method === 'POST' && ++posts === 1 ? fail(500, 'internal') : undefined);
+    const first = await publishNewDesign(design(), DEPS);
+    assert.match(first.error, /finns som utkast/);
+    const { productId } = pendingRun('test-shop-a');
+    const vitS = read(`/v1/admin/products/${productId}`).variants.find((v) => v.label === 'Vit / S').variantId;
+    assert.ok(read(`/v1/admin/products/${productId}`).images.some((r) => r.variantId === vitS && r.alt === 'Vit – framsida'));
+
+    // Vit / S is removed from the design, but something names it: the sync can only deactivate it.
+    variantOf(productId, vitS).onOrder = true;
+    inject = null;
+    const d = design();
+    d.colorways[0].cells = [{ size: 'M', sku: 'DEV-TEE-WHT-M' }];
+    const again = await publishNewDesign(d, DEPS);
+    assert.ok(again.result?.published, again.error);
+    const detail = read(`/v1/admin/products/${productId}`);
+    assert.equal(detail.variants.find((v) => v.variantId === vitS).active, false);
+    const vitM = detail.variants.find((v) => v.label === 'Vit / M').variantId;
+    assert.ok(!detail.images.some((r) => r.variantId === vitS), 'no row left on the inactive size');
+    assert.deepEqual(detail.images.filter((r) => r.variantId === vitM).map((r) => r.alt), ['Vit – framsida', 'Vit – baksida']);
+  });
+});

@@ -10,7 +10,9 @@
 // object). The studio's layout, the older studio's order kept:
 //   - the product's own rows: the hero mockup first, then every other mockup
 //     of the published colours, in the mockups' order (colour × printed side);
-//   - each colour's rows: its front mockup (else its first printed side: a
+//   - each colour's rows, on its first ACTIVE variant (rows the studio wrote
+//     on any other size of the colour, inactive ones included, are replaced):
+//     its front mockup (else its first printed side: a
 //     design printed on the back only shows the back first), then its back
 //     (mockupVariantImages.js orderedVariantMockupUrls, the older function).
 //     Pocket and sleeve mockups stay in the product's own rows only.
@@ -98,9 +100,16 @@ export function mockupCoverage({ mockups, colours, slots }) {
  *
  * input:
  *   rows           the server's rows now [{ objectId, variantId, alt }], in order
- *   colours        the published colours [{ id, label, variantIds }] (variantIds:
- *                  the colour's variants on the product, the first first; [] when
- *                  the product has no variant of that colour)
+ *   colours        the published colours [{ id, label, variantIds, siblingIds? }]
+ *                  variantIds: the colour's ACTIVE variants on the product, the
+ *                  first first (the studio's rows name the first); [] when the
+ *                  product has no active variant of that colour.
+ *                  siblingIds: EVERY variant of the colour, inactive ones too
+ *                  (a size an order or a mapping names is deactivated, not
+ *                  deleted, and the storefront's group rule still shows its
+ *                  images on its active siblings): rows on any of them are the
+ *                  colour's, so the studio's earlier rows there are replaced
+ *                  too (Codex FN2 round 1).
  *   mockups        the published colours' mockups [{ key, colorwayId, slot, objectId }],
  *                  in the studio's order
  *   heroKey        the mockup the seller picked as the main image (else the first)
@@ -131,19 +140,22 @@ export function planStudioImages({ rows = [], colours = [], mockups = [], heroKe
 
   // Each colour's rows.
   const colourOfVariant = new Map();
-  for (const c of colours) for (const v of c.variantIds ?? []) colourOfVariant.set(v, c);
+  for (const c of colours) for (const v of [...(c.variantIds ?? []), ...(c.siblingIds ?? [])]) colourOfVariant.set(v, c);
   const variantOld = rows.filter((r) => r.variantId != null);
   const blocks = new Map(); // colour id → its rows after this run
   const keptSeller = [];
   const galleryOnly = [];
   for (const c of colours) {
     const firstVariant = c.variantIds?.[0] ?? null;
-    if (!firstVariant) {
-      if (published.some((m) => m.colorwayId === c.id)) galleryOnly.push(c.label);
-      continue;
-    }
     const old = variantOld.filter((r) => colourOfVariant.get(r.variantId) === c);
     const seller = old.filter((r) => !isStudio(r));
+    if (!firstVariant) {
+      if (published.some((m) => m.colorwayId === c.id)) galleryOnly.push(c.label);
+      // Only inactive sizes left: the studio's earlier rows there go (they
+      // would show the old design); the seller's stay.
+      if (old.length > 0) blocks.set(c.id, seller);
+      continue;
+    }
     const hadStudio = old.length > seller.length;
     const own = published.filter((m) => m.colorwayId === c.id);
     const ordered = orderedVariantMockupUrls({ colorwayId: c.id, mockups: own, urls: own.map((m) => m.objectId) });

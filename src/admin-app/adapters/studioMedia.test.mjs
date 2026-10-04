@@ -109,6 +109,20 @@ describe('the image list of an existing product', () => {
     assert.deepEqual(droppedStudioObjects(rows, list, COLOURS), []);
   });
 
+  it('rows on an INACTIVE size of a colour are the colour\'s: the studio\'s go, the new sit on the first active size, the seller\'s stay (Codex FN2 r1)', () => {
+    const rows = [
+      { objectId: 'o-old', variantId: 'v-svart-s', alt: 'Svart – framsida' },
+      { objectId: 'hand', variantId: 'v-svart-s', alt: null },
+    ];
+    const colours = [{ id: 'svart', label: 'Svart', variantIds: ['v-svart-m'], siblingIds: ['v-svart-s', 'v-svart-m'] }];
+    const { list } = planStudioImages({ rows, colours, mockups: FRONT_BACK.slice(2) });
+    assert.deepEqual(short(list.filter((r) => r.variantId)), ['v-svart-m:o-svart-front', 'v-svart-m:o-svart-back', 'v-svart-s:hand']);
+    // Every size of the colour inactive: the old studio row still goes; the mockups stay in the gallery.
+    const none = planStudioImages({ rows, colours: [{ ...colours[0], variantIds: [] }], mockups: FRONT_BACK.slice(2) });
+    assert.deepEqual(short(none.list.filter((r) => r.variantId)), ['v-svart-s:hand']);
+    assert.deepEqual(none.galleryOnly, ['Svart']);
+  });
+
   it('a colour the product has no variant of: its mockups in the gallery only, said', () => {
     const plan = planStudioImages({ rows: [], colours: [{ id: 'vit', label: 'Vit', variantIds: [] }], mockups: FRONT_BACK.slice(0, 2) });
     assert.deepEqual(short(plan.list), ['-:o-vit-front', '-:o-vit-back']);
