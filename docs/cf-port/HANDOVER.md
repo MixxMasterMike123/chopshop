@@ -4,7 +4,21 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP5 — Admin (started 2026-10-03 on Mikael's "keep going … full autonomy")
 
-### 🔁 HANDOVER 2026-10-04 10:15 — stopped at the 5-hour limit; three builders were STOPPED mid-work, their files are in the tree UNCOMMITTED — START HERE
+### ▶ 2026-10-04 14:10 — resumed from the 10:15 stop: FL is fixed and ON STAGING, T1 is committed and 0052 is applied on staging; two builders run — START HERE
+
+**Staging serves: admin `237f0339` (version `4b6d7789-…`), API `6549f276` (code requires 0051; the database is on 0052), web `959f7892`.** HEAD `f085d880` pushed; both new commits are Codex-clean and attested (logs `~/chopshop-export/codex-2026-10-04/codex-237f0339.log`, `codex-f085d880.log`).
+
+- **FL `237f0339`** (Codex's three findings on `7538d015`, by the reviewer, a test per finding, each fix mutation-checked): the brand filter takes no write while "Alla träffar spärrar" is not known and reads it again before each confirm; a lost add is proven only by the requested term's own stored form (a port of the Worker's normalisation, pinned to its source by a test); a publish's confirm is written on the versions read now and checked again at the confirm (`publishVersion(form, confirmedCurrent)`). **Deployed** (admin Worker only, from a clean worktree) and smoke-tested in a browser: `/platform/settings`, `/platform/screening` (a test term added and removed: the filter's version on staging went 2 → 4), `/platform/terms` (the publish confirm opened and cancelled; nothing published), `/admin/redirects` (as ninetone's review admin). Not closed: the publish has no server-side fence on the version in force (a window of milliseconds between the page's last read and the POST remains); an `expectedCurrentVersion` on `POST /v1/platform/legal/terms-versions` would close it.
+- **T1 `f085d880`** (the stopped builder's work, read line by line by the reviewer, nothing changed): the import tools' production mode and migration 0052 (one completed production import run per kind). Gates: 481 script tests, the Worker's suite 110 files / 4483. **0052 is applied on staging** (bookmark before: `00000312-00000000-000050fa-e4e915708e65d22fb733dffd46ed8dbd`). Its report was never written; the runbook's §3.5 and blockers 3–6 say what it does.
+- **WK in the tree, uncommitted** (`cloudflare/src/**`, five new tests): the stopped builder's parts are reviewed and good (settings PATCH with its fence, Connect balance, shop counts, the printer PATCH dry run, `moreInfo`'s refusal naming its field). **A builder (Opus) is finishing the two missing parts**: `POST /v1/admin/members/:userId/resend-invite` and `GET /v1/platform/print-jobs`; it writes `CP5_WK_REPORT.md` with every WK route's contract. `app.ts` in the tree now holds only WK's lines.
+- **A second builder (Opus) builds CP7-T2** (`scripts/cf-port/**`, the runbook, `CP7_T2_REPORT.md`): runbook blockers 8–11 (a read-only production reconcile; `import.mjs` P1 + evidence files for P3/P4/P5; `verify.mjs`'s deferred items; `state-from-queries.mjs`). Offline only.
+- Both die with the window: finish from the tree (`git status`, the reports if written, the gates).
+
+**Then, in this order:** review + commit WK → Codex → attest → `scripts/cf-deploy.sh staging api` (0052 is already applied) → smoke the new routes; review + commit T2 → Codex; a frontend unit on WK's routes (the settings page's PATCH, the balance panel — it shares the 12-per-window Connect limiter, so the page must take a 429 quietly —, `SHOW_COUNTS`, the printer save's preview, the members' resend button, a print-jobs control) + the artwork library's pills per product + `alt` kept on an image re-save; PS2 (the canvas PNG per line).
+
+**Waits for Mikael / Kent / SnapWear:** unchanged from the 10:15 entry below (its last paragraph).
+
+### (history) 🔁 HANDOVER 2026-10-04 10:15 — stopped at the 5-hour limit; three builders were STOPPED mid-work, their files are in the tree UNCOMMITTED
 
 **HEAD `7538d015` pushed. Staging serves: API `6549f276` (version `8c579e2b-…`, migrations through 0051), admin `d26946ed` (`377c4433-…`), web `959f7892`.** Codex logs of today: `~/chopshop-export/codex-2026-10-04/`.
 
