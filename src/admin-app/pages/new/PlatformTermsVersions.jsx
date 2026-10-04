@@ -30,6 +30,7 @@ import {
 } from '../../adapters/termsVersions.js';
 import {
   archiveText,
+  currentVersionOf,
   loadVersionText,
   loadVersions,
   publishVersion,
@@ -353,18 +354,50 @@ export default function PlatformTermsVersions() {
     }
   };
 
-  const askPublish = (form) => {
-    setComposeError('');
+  // The confirm of a publish says what it does to every shop, and that hangs
+  // on the version in force: it is written on the versions as the server
+  // holds them NOW, and checked again when the operator confirms
+  // (publishVersion). A version that came into force in between rewrites the
+  // confirm and asks again; nothing is published on a confirm that was untrue.
+  const openPublishConfirm = (form, confirmedCurrent) => {
     setPending({
-      confirm: publishConfirm(form.version.trim(), current?.version ?? null),
+      confirm: publishConfirm(form.version.trim(), confirmedCurrent),
       run: async () => {
-        const published = await publishVersion(form, rows);
+        let published;
+        try {
+          published = await publishVersion(form, confirmedCurrent);
+        } catch (e) {
+          if (e.currentMoved) {
+            setRows(e.rows);
+            openPublishConfirm(form, e.current);
+          }
+          throw e;
+        }
         setComposing(false);
         await load({ quiet: true });
         setOpen(published.version);
         toast.success(`Version ${published.version} är publicerad.`);
       },
     });
+  };
+
+  const askPublish = async (form) => {
+    if (busy) return;
+    setComposeError('');
+    setBusy(true);
+    let fresh;
+    try {
+      fresh = await loadVersions();
+    } catch (e) {
+      setComposeError(e.userMessage || 'Villkorsversionerna kunde inte läsas, så bekräftelsen kan inte skrivas. Försök igen.');
+      return;
+    } finally {
+      setBusy(false);
+    }
+    setRows(fresh);
+    const body = newVersionBody(form, fresh);
+    if (body.problem) { setComposeError(body.problem); return; }
+    openPublishConfirm(form, currentVersionOf(fresh));
   };
 
   const askArchive = (version, text) => {

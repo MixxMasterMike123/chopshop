@@ -102,13 +102,33 @@ async function readBackText(version, what, cause) {
   }
 }
 
+/** The version in force among the rows (versionRows), or null when none is. */
+export const currentVersionOf = (rows) => (rows ?? []).find((r) => r.state === 'current')?.version ?? null;
+
 /**
- * Publishes a new version now. `form` = { version, terms, dpa }; `versions`
- * the rows the page lists (a taken name is refused before sending).
+ * Publishes a new version now. `form` = { version, terms, dpa };
+ * `confirmedCurrent` = the version in force that the operator's confirm named
+ * (null: none). What a publish does to every shop depends on it (a shop that
+ * accepted THAT version keeps its checkout for 14 days; any older acceptance
+ * closes it at once), so the versions are read again first: when another
+ * version came into force since the confirm was written, nothing is sent and
+ * the error carries `currentMoved`, `current` and `rows` for a new confirm.
+ * A taken name is refused before sending, on the rows just read.
  * → the version as the server published it ({ version, publishedAt, sha256, … }).
  */
-export async function publishVersion(form, versions) {
-  const body = newVersionBody(form, versions);
+export async function publishVersion(form, confirmedCurrent) {
+  const rows = await loadVersions();
+  const current = currentVersionOf(rows);
+  if (current !== (confirmedCurrent ?? null)) {
+    throw pageError(
+      current
+        ? `Version ${current} har börjat gälla sedan bekräftelsen skrevs. Ingenting är publicerat. Läs bekräftelsen igen: den utgår nu från ${current}.`
+        : 'Ingen version gäller längre. Ingenting är publicerat. Läs bekräftelsen igen.',
+      null,
+      { currentMoved: true, current, rows },
+    );
+  }
+  const body = newVersionBody(form, rows);
   if (body.problem) throw pageError(body.problem);
   try {
     const published = await publishTermsVersion(body);

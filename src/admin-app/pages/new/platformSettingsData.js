@@ -100,6 +100,27 @@ export async function loadTerms() {
   }
 }
 
+/**
+ * Whether "Alla träffar spärrar" is on, as the server holds it now: true or
+ * false, or null when it cannot be read. Null is never read as "off": while
+ * it is not known the page takes no filter write (policyKnown), because what
+ * an add, a change, a removal or a re-screen does in the shops depends on it.
+ */
+export async function loadGlobalHardBlock() {
+  try {
+    const flag = (await loadSettings()).screeningHardBlock;
+    return typeof flag === 'boolean' ? flag : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The brand filter's page → { terms, termsVersion, globalHardBlock (true / false / null: not known) }. */
+export async function loadScreening() {
+  const [list, globalHardBlock] = await Promise.all([loadTerms(), loadGlobalHardBlock()]);
+  return { terms: list.terms, termsVersion: list.termsVersion, globalHardBlock };
+}
+
 async function readBackTerms(what, cause) {
   try {
     return (await readAllScreeningTerms()).terms;

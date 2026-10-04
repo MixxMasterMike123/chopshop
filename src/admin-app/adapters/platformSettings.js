@@ -221,6 +221,13 @@ export function termChanges(term, draft) {
  * `globalHardBlock`: "Alla träffar spärrar" is on, so every term blocks
  * whatever its own flag says (isHardBlock in screening-core.ts).
  */
+/**
+ * Whether the page knows if "Alla träffar spärrar" is on (true / false as the
+ * server holds it). Not known (the settings could not be read) → the page
+ * takes no filter write: what a change does in the shops cannot be said.
+ */
+export const policyKnown = (globalHardBlock) => globalHardBlock === true || globalHardBlock === false;
+
 export function addTermConfirm(body, globalHardBlock = false) {
   if (body.hardBlock !== true && globalHardBlock !== true) return null;
   return {
@@ -316,17 +323,54 @@ export function rescreenResultText(result) {
   return [done, ...(rest.length > 0 ? rest : ['Alla publicerade produkter är granskade mot filtret som det ser ut nu.'])].join(' ');
 }
 
+// ── the term's stored form (the Worker's, ported line for line) ─────────────
+// cloudflare/src/catalog/screening-core.ts foldText / tokenize / termMatch /
+// normalizeScreeningTerm: a term is stored in the form the matcher compares
+// ("  Glimmer-KRAFT " → "glimmer kraft"; a symbol-only term trimmed, NFC).
+// Used ONLY to tell the term a lost add asked for in a read-back; the browser
+// never refuses a term on its own (the server's refusal is shown).
+
+const EXTRA_FOLDS = { æ: 'ae', ð: 'd', đ: 'd', ı: 'i', ł: 'l', ø: 'o', œ: 'oe', ß: 'ss', þ: 'th' };
+const foldText = (value) => String(value ?? '')
+  .normalize('NFKD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[øæœßðþłđı]/g, (c) => EXTRA_FOLDS[c] ?? c);
+const tokenize = (value) => {
+  const t = foldText(value).replace(/[^a-z0-9]+/g, ' ').trim();
+  return t ? ` ${t} ` : '';
+};
+const MAX_TERM_LENGTH = 200;
+
+/** The form the Worker stores a typed term in, or null when it would refuse it. */
+export function storedTermOf(input) {
+  if (typeof input !== 'string' || /[\u0000-\u001f\u007f]/.test(input)) return null;
+  const trimmed = input.normalize('NFC').trim();
+  if (trimmed === '') return null;
+  const symbolOnly = !/[\p{L}\p{N}]/u.test(trimmed);
+  const tok = symbolOnly ? '' : tokenize(trimmed);
+  if (!symbolOnly && tok === '') return null;
+  const term = symbolOnly ? trimmed.normalize('NFC') : tok.trim();
+  return term.length >= 1 && term.length <= MAX_TERM_LENGTH ? term : null;
+}
+
 /**
- * After an add whose answer was lost: the term the read-back found that was
- * not there before, with the kind, flag and note sent. → the term, null when
- * none, or 'unclear' when several new terms appeared (someone else added too).
+ * After an add whose answer was lost, from the list read back. The add is
+ * proven only by the term's IDENTITY: the stored form of the requested term,
+ * new since `before`, with the kind, flag and note sent. → that term; null
+ * when nothing at all is new (it was not added); 'unclear' in every other case
+ * (another term appeared, the requested one is there with other fields, or its
+ * stored form cannot be told). Never success without the identity.
  */
 export function findAddedTerm(before, after, body) {
   const known = new Set((before ?? []).map((t) => t.termKey));
   const fresh = (after ?? []).filter((t) => !known.has(t.termKey));
-  const same = fresh.filter((t) => t.kind === body.kind && t.hardBlock === body.hardBlock && (t.note ?? null) === (body.note ?? null));
-  if (same.length === 1 && fresh.length === 1) return same[0];
   if (fresh.length === 0) return null;
+  const stored = storedTermOf(body?.term);
+  const mine = stored === null ? undefined : fresh.find((t) => t.term === stored);
+  if (mine && mine.kind === body.kind && mine.hardBlock === body.hardBlock && (mine.note ?? null) === (body.note ?? null)) {
+    return mine;
+  }
   return 'unclear';
 }
 

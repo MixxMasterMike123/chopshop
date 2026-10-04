@@ -13,9 +13,9 @@ import { SEED_TEXT } from '../../dev/platform-settings-dev.mjs';
 import { newTermBody } from '../../adapters/platformSettings.js';
 import { parseTermsText } from '../../adapters/termsVersions.js';
 import {
-  addTerm, freshSettingsFor, loadSettings, loadTerms, removeTerm, runRescreen, saveSettings, updateTerm,
+  addTerm, freshSettingsFor, loadGlobalHardBlock, loadScreening, loadSettings, loadTerms, removeTerm, runRescreen, saveSettings, updateTerm,
 } from './platformSettingsData.js';
-import { archiveText, loadVersionText, loadVersions, publishVersion, startingDocuments, textOfFile } from './termsVersionsData.js';
+import { archiveText, currentVersionOf, loadVersionText, loadVersions, publishVersion, startingDocuments, textOfFile } from './termsVersionsData.js';
 import { findForward, loadForwards, removeForward, saveForward } from './redirectsData.js';
 
 const realFetch = globalThis.fetch;
@@ -148,6 +148,33 @@ describe('the brand filter', () => {
     await assert.rejects(addTerm(body, terms), (e) => /Filtret är fullt/.test(e.userMessage));
   });
 
+  it('a lost add while someone else adds a term alike in kind, flag and note: unclear, never a success', async () => {
+    const { terms } = await loadTerms();
+    await addTerm(newTermBody({ term: 'Annan Artist', kind: 'band', hardBlock: false, note: '' }).body, terms); // the other operator
+    scenario('drop');
+    const body = newTermBody({ term: 'Ny Artist', kind: 'band', hardBlock: false, note: '' }).body;
+    await assert.rejects(addTerm(body, terms), (e) => /oklart om ordet lades till/.test(e.userMessage));
+    scenario('lost'); // this time it is stored: told by the term itself, beside the other's
+    assert.deepEqual([(await addTerm(body, terms)).term.term, (await loadTerms()).terms.length], ['ny artist', 10]);
+  });
+
+  it('the global hard block is read as the server holds it; a settings read that fails leaves it NOT KNOWN, never "off"', async () => {
+    assert.equal((await loadScreening()).globalHardBlock, false);
+    await saveSettings({ screeningHardBlock: true });
+    assert.equal(await loadGlobalHardBlock(), true);
+    const routed = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => (String(url).includes('/v1/platform/settings')
+      ? new Response(JSON.stringify({ error: { code: 'internal_error', message: 'x' } }), { status: 500 })
+      : routed(url, init));
+    const page = await loadScreening(); // the terms still load: the page shows them, locked
+    assert.deepEqual([page.terms.length, page.termsVersion > 0, page.globalHardBlock], [8, true, null]);
+    assert.equal(await loadGlobalHardBlock(), null);
+    globalThis.fetch = async (url, init = {}) => (String(url).includes('/v1/platform/settings')
+      ? new Response(JSON.stringify({ settings: { defaultCommissionBps: 500 } }), { status: 200 })
+      : routed(url, init));
+    assert.equal(await loadGlobalHardBlock(), null); // an answer without the value is not "off" either
+  });
+
   it('a term someone removed meanwhile: the change is refused with a reload', async () => {
     const { terms } = await loadTerms();
     await removeTerm(terms[0]);
@@ -189,7 +216,8 @@ describe('the terms versions', () => {
 
   it('publishes now in the seller\'s format; the list then has it as current', async () => {
     const rows = await loadVersions();
-    const published = await publishVersion({ version: 'v-test', terms: '## Villkor', dpa: '## Avtal' }, rows);
+    assert.equal(currentVersionOf(rows), '2026-09-07');
+    const published = await publishVersion({ version: 'v-test', terms: '## Villkor', dpa: '## Avtal' }, '2026-09-07');
     assert.equal(published.version, 'v-test');
     const post = writes().find((w) => w.method === 'POST');
     assert.deepEqual(Object.keys(post.body), ['version', 'text']); // no publishedAt: now
@@ -200,22 +228,52 @@ describe('the terms versions', () => {
   });
 
   it('a taken name is refused before sending; a lost publish is read back; a dropped one is not published', async () => {
-    const rows = await loadVersions();
-    await assert.rejects(publishVersion({ version: '2026-09-07', terms: 'T', dpa: 'D' }, rows), (e) => /redan en version/.test(e.userMessage));
+    await assert.rejects(publishVersion({ version: '2026-09-07', terms: 'T', dpa: 'D' }, '2026-09-07'), (e) => /redan en version/.test(e.userMessage));
     assert.equal(writes().length, 0);
     scenario('lost');
-    assert.equal((await publishVersion({ version: 'v-lost', terms: 'T', dpa: 'D' }, rows)).version, 'v-lost');
+    assert.equal((await publishVersion({ version: 'v-lost', terms: 'T', dpa: 'D' }, '2026-09-07')).version, 'v-lost');
     await new Promise((r) => setTimeout(r, 5)); // a new version must be published strictly after the latest
     scenario('drop');
-    await assert.rejects(publishVersion({ version: 'v-drop', terms: 'T', dpa: 'D' }, rows), (e) => e.userMessage === 'Anslutningen bröts och versionen publicerades inte. Försök igen.');
-    scenario('unclear');
-    await assert.rejects(publishVersion({ version: 'v-unclear', terms: 'T', dpa: 'D' }, rows), (e) => /oklart om versionen publicerades/.test(e.userMessage));
+    await assert.rejects(publishVersion({ version: 'v-drop', terms: 'T', dpa: 'D' }, 'v-lost'), (e) => e.userMessage === 'Anslutningen bröts och versionen publicerades inte. Försök igen.');
+    // unclear: the answer AND the read-back are lost (the list before the request was still readable)
+    const routed = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      if (init.method === 'POST') scenario('unclear');
+      return routed(url, init);
+    };
+    scenario('');
+    await assert.rejects(publishVersion({ version: 'v-unclear', terms: 'T', dpa: 'D' }, 'v-lost'), (e) => /oklart om versionen publicerades/.test(e.userMessage));
+  });
+
+  it('a version that came into force after the confirm was written: nothing is sent, the error carries the version now', async () => {
+    assert.equal(currentVersionOf(await loadVersions()), '2026-09-07'); // what the page loaded
+    await publishVersion({ version: 'v-other', terms: 'T', dpa: 'D' }, '2026-09-07'); // another operator publishes
+    await new Promise((r) => setTimeout(r, 5));
+    const before = writes().length;
+    let refusal;
+    await assert.rejects(publishVersion({ version: 'v-mine', terms: 'T', dpa: 'D' }, '2026-09-07'), (e) => { refusal = e; return true; });
+    assert.equal(writes().length, before); // no POST
+    assert.match(refusal.userMessage, /Version v-other har börjat gälla sedan bekräftelsen skrevs\. Ingenting är publicerat/);
+    assert.deepEqual([refusal.currentMoved, refusal.current, currentVersionOf(refusal.rows)], [true, 'v-other', 'v-other']);
+    // Confirmed again on the version now in force, it goes through.
+    assert.equal((await publishVersion({ version: 'v-mine', terms: 'T', dpa: 'D' }, refusal.current)).version, 'v-mine');
+    // No version in force and a confirm that named one (and the reverse) is the same refusal.
+    scenario('empty');
+    await assert.rejects(publishVersion({ version: 'v-none', terms: 'T', dpa: 'D' }, 'v-mine'), (e) => e.currentMoved === true && e.current === null && /Ingen version gäller längre/.test(e.userMessage));
+    scenario('');
+    await assert.rejects(publishVersion({ version: 'v-none', terms: 'T', dpa: 'D' }, null), (e) => e.currentMoved === true && e.current === 'v-mine');
+  });
+
+  it('a list that cannot be read before a publish: nothing is sent', async () => {
+    scenario('error');
+    await assert.rejects(publishVersion({ version: 'v-x', terms: 'T', dpa: 'D' }, '2026-09-07'), (e) => /Villkorsversionerna kunde inte läsas/.test(e.userMessage));
+    assert.equal(writes().length, 0);
   });
 
   it('without the archive (dark), the text and the publish are refused in words', async () => {
     scenario('dark');
     await assert.rejects(loadVersionText('2026-05-01'), (e) => /villkorsarkivet inte påslaget/.test(e.userMessage)); // a text never cached
-    await assert.rejects(publishVersion({ version: 'v-dark', terms: 'T', dpa: 'D' }, []), (e) => /villkorsarkivet/.test(e.userMessage));
+    await assert.rejects(publishVersion({ version: 'v-dark', terms: 'T', dpa: 'D' }, '2026-09-07'), (e) => /villkorsarkivet/.test(e.userMessage));
   });
 });
 

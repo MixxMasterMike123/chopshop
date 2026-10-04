@@ -4,7 +4,9 @@
 // term, a re-screen) says what it does before it is sent; the server's
 // counts are shown after. The page is locked while a write runs; a lost
 // answer is read back (platformSettingsData.js). The global hard block is
-// read beside the terms: while it is on, every term blocks.
+// read beside the terms: while it is on, every term blocks. While it is NOT
+// KNOWN (the settings could not be read) the page says so and takes no write,
+// and it is read again before each write's confirm is written.
 // New page of the admin build: no older page, no alias row.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -19,6 +21,7 @@ import {
   addTermConfirm,
   deleteTermConfirm,
   newTermBody,
+  policyKnown,
   rescreenConfirm,
   rescreenResultText,
   rescreenSummaryText,
@@ -27,7 +30,7 @@ import {
   updateTermConfirm,
 } from '../../adapters/platformSettings.js';
 import { dateText } from '../../adapters/termsVersions.js';
-import { addTerm, loadSettings, loadTerms, removeTerm, runRescreen, updateTerm } from './platformSettingsData.js';
+import { addTerm, loadGlobalHardBlock, loadScreening, removeTerm, runRescreen, updateTerm } from './platformSettingsData.js';
 import {
   Card, ConfirmDialog, LoadError, Loading, SettingsHeader,
   btnPrimary, btnPrimarySm, btnQuiet, btnRowDanger, errorCls, inputCls, noticeCls, pillCls,
@@ -68,10 +71,10 @@ export default function PlatformScreening() {
       setLoadError('');
     }
     try {
-      const [list, settings] = await Promise.all([loadTerms(), loadSettings().catch(() => null)]);
-      setTerms([...list.terms].sort(byTerm));
-      setTermsVersion(list.termsVersion);
-      setGlobalHardBlock(settings ? settings.screeningHardBlock === true : null);
+      const page = await loadScreening();
+      setTerms([...page.terms].sort(byTerm));
+      setTermsVersion(page.termsVersion);
+      setGlobalHardBlock(page.globalHardBlock);
     } catch (e) {
       if (!quiet) setLoadError(e.userMessage || 'Varumärkesfiltret kunde inte läsas.');
     } finally {
@@ -84,6 +87,25 @@ export default function PlatformScreening() {
     const q = query.trim().toLowerCase();
     return q ? terms.filter((t) => t.term.toLowerCase().includes(q) || (t.note ?? '').toLowerCase().includes(q)) : terms;
   }, [terms, query]);
+
+  // No write while the global hard block is not known: null is not "off".
+  const locked = busy || !policyKnown(globalHardBlock);
+
+  /**
+   * The global hard block as the server holds it NOW, for the confirm about
+   * to be written (someone may have switched it since the page loaded).
+   * → true / false, or null: it cannot be read, the page is locked and says so.
+   */
+  const freshPolicy = async () => {
+    setBusy(true);
+    try {
+      const now = await loadGlobalHardBlock();
+      setGlobalHardBlock(now);
+      return now;
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const ask = (confirm, run) => {
     setConfirmError('');
@@ -121,11 +143,13 @@ export default function PlatformScreening() {
   };
 
   // ── add ──
-  const submitAdd = (e) => {
+  const submitAdd = async (e) => {
     e.preventDefault();
-    if (busy) return;
+    if (locked) return;
     const parsed = newTermBody(form);
     if (parsed.problem) { setFormError(parsed.problem); return; }
+    const policy = await freshPolicy();
+    if (!policyKnown(policy)) return;
     const run = async () => {
       const answer = await addTerm(parsed.body, terms);
       setForm(EMPTY_FORM);
@@ -133,14 +157,14 @@ export default function PlatformScreening() {
       summaryAfter(`"${answer.term.term}" lades till.`, answer);
       toast.success('Ordet lades till.');
     };
-    const confirm = addTermConfirm(parsed.body, globalHardBlock === true);
+    const confirm = addTermConfirm(parsed.body, policy);
     if (confirm) ask(confirm, run);
     else perform(run, setFormError, 'add');
   };
 
   // ── change ──
   const startEdit = (t) => {
-    if (busy) return;
+    if (locked) return;
     setEditKey(t.termKey);
     setEditDraft({ kind: t.kind, hardBlock: t.hardBlock, note: t.note ?? '' });
     setEditError('');
@@ -151,11 +175,13 @@ export default function PlatformScreening() {
     setEditDraft(null);
     setEditError('');
   };
-  const submitEdit = (t) => {
-    if (busy) return;
+  const submitEdit = async (t) => {
+    if (locked) return;
     const changes = termChanges(t, editDraft);
     if (Object.keys(changes).length === 0) { stopEdit(); return; }
     if ((changes.note ?? '').length > MAX_TERM_NOTE_LENGTH) { setEditError(`Anteckningen får vara högst ${MAX_TERM_NOTE_LENGTH} tecken.`); return; }
+    const policy = await freshPolicy();
+    if (!policyKnown(policy)) return;
     const run = async () => {
       const answer = await updateTerm(t, changes);
       setEditKey(null);
@@ -163,15 +189,17 @@ export default function PlatformScreening() {
       summaryAfter(`"${t.term}" ändrades.`, answer);
       toast.success('Ändringen är sparad.');
     };
-    const confirm = updateTermConfirm(t, changes, globalHardBlock === true);
+    const confirm = updateTermConfirm(t, changes, policy);
     if (confirm) ask(confirm, run);
     else perform(run, setEditError, 'edit');
   };
 
   // ── remove ──
-  const askRemove = (t) => {
-    if (busy) return;
-    ask(deleteTermConfirm(t, globalHardBlock === true), async () => {
+  const askRemove = async (t) => {
+    if (locked) return;
+    const policy = await freshPolicy();
+    if (!policyKnown(policy)) return;
+    ask(deleteTermConfirm(t, policy), async () => {
       const answer = await removeTerm(t);
       if (editKey === t.termKey) { setEditKey(null); setEditDraft(null); }
       summaryAfter(`"${t.term}" togs bort.`, answer);
@@ -180,9 +208,11 @@ export default function PlatformScreening() {
   };
 
   // ── re-screen ──
-  const askRescreen = () => {
-    if (busy) return;
-    ask(rescreenConfirm(globalHardBlock === true), async () => {
+  const askRescreen = async () => {
+    if (locked) return;
+    const policy = await freshPolicy();
+    if (!policyKnown(policy)) return;
+    ask(rescreenConfirm(policy), async () => {
       const result = await runRescreen();
       setRescreen(result);
       toast.success('Omgranskningen kördes.');
@@ -205,6 +235,17 @@ export default function PlatformScreening() {
           <LoadError icon={ShieldCheckIcon} message={loadError} onRetry={() => load()} />
         ) : (
           <div className="space-y-5">
+            {!policyKnown(globalHardBlock) && (
+              <div role="alert" className={`${noticeCls} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6`}>
+                <p>
+                  Det gick inte att läsa om "Alla träffar spärrar" är på. Utan det går det inte att säga vad en ändring gör i butikerna,
+                  så filtret kan inte ändras eller granskas om förrän inställningen har lästs.
+                </p>
+                <button type="button" className={`${btnQuiet} shrink-0 self-start sm:self-auto`} onClick={() => freshPolicy()} disabled={busy}>
+                  Försök igen
+                </button>
+              </div>
+            )}
             {globalHardBlock === true && (
               <p className={noticeCls}>
                 "Alla träffar spärrar" är på under <Link to="/settings" className="underline hover:text-amber-100">Allmänt</Link>:
@@ -221,7 +262,7 @@ export default function PlatformScreening() {
                       id="fl-term"
                       value={form.term}
                       onChange={(e) => { setForm((f) => ({ ...f, term: e.target.value })); setFormError(''); }}
-                      disabled={busy || full}
+                      disabled={locked || full}
                       placeholder="t.ex. ett bandnamn eller ett varumärke"
                       aria-describedby="fl-term-help"
                       className={`w-full ${inputCls}`}
@@ -233,7 +274,7 @@ export default function PlatformScreening() {
                       id="fl-kind"
                       value={form.kind}
                       onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}
-                      disabled={busy || full}
+                      disabled={locked || full}
                       className={`w-full ${inputCls}`}
                     >
                       {TERM_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
@@ -247,7 +288,7 @@ export default function PlatformScreening() {
                     value={form.note}
                     maxLength={MAX_TERM_NOTE_LENGTH}
                     onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
-                    disabled={busy || full}
+                    disabled={locked || full}
                     placeholder="t.ex. vem som begärt spärren"
                     className={`w-full ${inputCls}`}
                   />
@@ -262,12 +303,12 @@ export default function PlatformScreening() {
                       type="checkbox"
                       checked={form.hardBlock}
                       onChange={(e) => setForm((f) => ({ ...f, hardBlock: e.target.checked }))}
-                      disabled={busy || full}
+                      disabled={locked || full}
                       className={`mt-0.5 ${checkboxCls}`}
                     />
                     <span>Spärrar: en träff tar produkten ur butiken direkt</span>
                   </label>
-                  <button type="submit" className={btnPrimary} disabled={busy || full}>
+                  <button type="submit" className={btnPrimary} disabled={locked || full}>
                     {busyWhat === 'add' ? 'Sparar…' : 'Lägg till'}
                   </button>
                 </div>
@@ -282,7 +323,7 @@ export default function PlatformScreening() {
                   När filtret ändras granskas publicerade produkter om automatiskt, högst 25 åt gången var 15:e minut.
                   Produkter som ett nytt spärrande ord träffar tas bort ur butikerna redan när du sparar ordet.
                 </p>
-                <button type="button" className={`${btnQuiet} shrink-0 self-start`} onClick={askRescreen} disabled={busy}>
+                <button type="button" className={`${btnQuiet} shrink-0 self-start`} onClick={askRescreen} disabled={locked}>
                   {rescreen?.pending > 0 ? 'Granska nästa omgång…' : 'Granska om nu…'}
                 </button>
               </div>
@@ -356,10 +397,10 @@ export default function PlatformScreening() {
                             <td className="hidden whitespace-nowrap px-4 py-3 tabular-nums text-gray-400 md:table-cell">{dateText(t.createdAt)}</td>
                             <td className="px-4 py-3">
                               <div className="flex flex-col items-end gap-1.5 whitespace-nowrap sm:flex-row sm:justify-end sm:gap-2">
-                                <button type="button" className={btnQuiet} onClick={() => (editKey === t.termKey ? stopEdit() : startEdit(t))} disabled={busy}>
+                                <button type="button" className={btnQuiet} onClick={() => (editKey === t.termKey ? stopEdit() : startEdit(t))} disabled={editKey === t.termKey ? busy : locked}>
                                   {editKey === t.termKey ? 'Stäng' : 'Ändra'}
                                 </button>
-                                <button type="button" className={btnRowDanger} onClick={() => askRemove(t)} disabled={busy} aria-label={`Ta bort ${t.term}`}>
+                                <button type="button" className={btnRowDanger} onClick={() => askRemove(t)} disabled={locked} aria-label={`Ta bort ${t.term}`}>
                                   Ta bort
                                 </button>
                               </div>
@@ -406,7 +447,7 @@ export default function PlatformScreening() {
                                   {editError && <p role="alert" className={`${errorCls} sm:col-span-2`}>{editError}</p>}
                                   <div className="flex justify-end gap-2 sm:col-span-2">
                                     <button type="button" className={btnQuiet} onClick={stopEdit} disabled={busy}>Avbryt</button>
-                                    <button type="button" className={btnPrimarySm} onClick={() => submitEdit(t)} disabled={busy}>
+                                    <button type="button" className={btnPrimarySm} onClick={() => submitEdit(t)} disabled={locked}>
                                       {busyWhat === 'edit' ? 'Sparar…' : 'Spara'}
                                     </button>
                                   </div>

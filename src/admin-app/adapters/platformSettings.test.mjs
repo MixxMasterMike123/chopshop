@@ -2,6 +2,7 @@
 //   node --test src/admin-app/adapters/platformSettings.test.mjs
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
@@ -17,12 +18,14 @@ import {
   patchApplied,
   percentInput,
   percentText,
+  policyKnown,
   refusalMessage,
   rescreenConfirm,
   rescreenResultText,
   rescreenSummaryText,
   staleFields,
   staleSettingMessage,
+  storedTermOf,
   termChanges,
   termHolds,
   updateTermConfirm,
@@ -135,13 +138,51 @@ describe('the brand filter', () => {
     assert.ok(deleteTermConfirm({ term: 'x', hardBlock: false }, true).lines.some((l) => /kommer tillbaka i butiken/.test(l)));
   });
 
-  it('a lost add is told by the one new term with the kind, flag and note sent', () => {
-    const before = [{ termKey: 'a' }];
-    const body = { kind: 'band', hardBlock: false, note: null };
-    assert.deepEqual(findAddedTerm(before, [{ termKey: 'a' }, { termKey: 'b', ...body }], body), { termKey: 'b', ...body });
-    assert.equal(findAddedTerm(before, [{ termKey: 'a' }], body), null);
-    assert.equal(findAddedTerm(before, [{ termKey: 'b', ...body }, { termKey: 'c', ...body }], body), 'unclear');
-    assert.equal(findAddedTerm(before, [{ termKey: 'b', kind: 'brand', hardBlock: false, note: null }], body), 'unclear');
+  it('the global hard block is known only as true or false', () => {
+    assert.deepEqual([true, false, null, undefined, 'true', 0].map(policyKnown), [true, true, false, false, false, false]);
+  });
+
+  it('a typed term → the form the Worker stores it in', () => {
+    assert.equal(storedTermOf('  Glimmer-KRAFT '), 'glimmer kraft');
+    assert.equal(storedTermOf('AC/DC'), 'ac dc');
+    assert.equal(storedTermOf('Håkan  Hellström'), 'hakan hellstrom');
+    assert.equal(storedTermOf('Weiß & Søn'), 'weiss son');
+    assert.equal(storedTermOf(' ™ '), '™');
+    for (const refused of ['', '   ', '日本', 'a\u0000b', 'x'.repeat(201), null, 7]) assert.equal(storedTermOf(refused), null);
+    assert.equal(storedTermOf('x'.repeat(200)).length, 200);
+  });
+
+  it('the port is the Worker\'s normalisation still (cloudflare/src/catalog/screening-core.ts)', () => {
+    const worker = readFileSync(new URL('../../../cloudflare/src/catalog/screening-core.ts', import.meta.url), 'utf8');
+    for (const piece of [
+      '.normalize("NFKD")',
+      '.replace(/[\\u0300-\\u036f]/g, "")',
+      '.replace(/[øæœßðþłđı]/g, (c) => EXTRA_FOLDS[c] ?? c)',
+      'foldText(value).replace(/[^a-z0-9]+/g, " ").trim()',
+      'const symbolOnly = !/[\\p{L}\\p{N}]/u.test(trimmed);',
+      '/[\\u0000-\\u001f\\u007f]/.test(input)',
+      'export const MAX_TERM_LENGTH = 200;',
+      'const term = match.symbolOnly ? match.raw : match.tok.trim();',
+    ]) assert.ok(worker.includes(piece), piece);
+    const folds = worker.slice(worker.indexOf('const EXTRA_FOLDS'), worker.indexOf('export const foldText'));
+    assert.deepEqual([...folds.matchAll(/^\s+(\S+): "(\w+)",$/gm)].map((m) => `${m[1]}=${m[2]}`),
+      ['æ=ae', 'ð=d', 'đ=d', 'ı=i', 'ł=l', 'ø=o', 'œ=oe', 'ß=ss', 'þ=th']);
+  });
+
+  it('a lost add is proven only by the requested term itself, new, with the kind, flag and note sent', () => {
+    const before = [{ termKey: 'a', term: 'a' }];
+    const body = { term: ' Ny-Artist ', kind: 'band', hardBlock: false, note: null };
+    const mine = { termKey: 'b', term: 'ny artist', kind: 'band', hardBlock: false, note: null };
+    const other = { termKey: 'c', term: 'annan', kind: 'band', hardBlock: false, note: null };
+    assert.deepEqual(findAddedTerm(before, [...before, mine], body), mine);
+    assert.deepEqual(findAddedTerm(before, [...before, other, mine], body), mine); // someone else added too
+    assert.equal(findAddedTerm(before, before, body), null);
+    // Another operator's term with the same kind, flag and note is not the add asked for.
+    assert.equal(findAddedTerm(before, [...before, other], body), 'unclear');
+    assert.equal(findAddedTerm(before, [...before, { ...mine, kind: 'brand' }], body), 'unclear');
+    assert.equal(findAddedTerm(before, [...before, { ...mine, note: 'n' }], body), 'unclear');
+    assert.equal(findAddedTerm(before, [...before, mine], { ...body, term: undefined }), 'unclear');
+    assert.equal(findAddedTerm(before, [...before, mine], { ...body, term: '日本' }), 'unclear');
   });
 });
 
