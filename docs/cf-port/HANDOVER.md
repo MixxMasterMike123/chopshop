@@ -63,6 +63,34 @@ The detached Codex job now holds `14976ab0 fd7755df 794dc56a` (`run-wait-0236.sh
 
 **Next:** Codex's three verdicts → fix → attest HEAD → `scripts/cf-deploy.sh staging` (apply 0049 first if WH is in HEAD by then) → smoke `/admin/pod` → review WH → the studio assets imported on staging → FN1, FN2 → WE, WD, FL.
 
+**Update 2026-10-04 03:05 — everything through the studio's part 1 is committed and Codex-read; ONE commit waits for Codex (07:36); staging is NOT yet deployed with it.**
+
+HEAD `959f7892` (code), pushed. Staging still serves: admin `97d421c8`, API and web `abc10141`, migrations through 0048.
+
+| Commit | What | Codex |
+|---|---|---|
+| `14976ab0` WJ · `fd7755df` FW | Worker follow-ups · the pages read them | clean |
+| `794dc56a` FM → `baeafbca` | `/admin/pod` library and mapping → the poll no longer stalls; an ambiguous SKU is refused | 2 P2 → clean |
+| `464b6af8` WH → `945c136a` | studio assets, **migration 0049** → the import's verification, all files resolved, a broken source retried | 3 P2 → clean |
+| `0881ca1d` WE → `a0034343` → `fdd29f3f` → `831df605` | order mails, **migration 0050** → the routes nudge their mail → the notice's `?shopId=` link, the 500-character pickup address → the nudge never fails a request | 2 P2, 1 P2 → clean |
+| `ff19a0c7` FN1 → `fbab7d98` → **`959f7892`** | the studio's part 1 → a lost publish answer is read back; the Worker's sizing per artwork → an exported mockup draws the locked placement as it is | 2 P2 → 1 P2 → **`959f7892` NOT READ: Codex's limit, back 07:36; a detached job reads it: `run-wait-0738.sh` → `codex-959f7892.log`** |
+
+Gates at `fbab7d98`/`959f7892` (run by the reviewer): Worker 102 files / 4322, tsc clean ×3, types up to date, 756 tests under Node, 454 script tests, preflight tests 302, deploy tests 90, the three builds and their checks, guard PASS (296). A flaky assertion in `test/refunds.test.ts` (digits searched in a text with random ids) was fixed in `a0034343`.
+
+**Running (dies with the window; finish from the tree):** FN2 (Opus) — the mockups become the product's images inside the publish sequence (before the product goes live), the 3D section reads `GET /v1/admin/pod/3d-models`; report `CP5_FN2_REPORT.md`.
+
+**THE DEPLOY, in this order (when Codex is clean on `959f7892`; if FN2 is committed by then it needs Codex too, else deploy from a clean worktree of the Codex-read SHA):**
+1. `scripts/cf-preflight.sh staging -- d1 time-travel info chopshop-stg` (note the bookmark), then `scripts/cf-preflight.sh staging -- d1 migrations apply chopshop-stg --remote` (0049, 0050; `/ready` of the deployed API only asks that ITS migration exists, so applying first is safe).
+2. Attest HEAD, `scripts/cf-deploy.sh staging` (api, web, admin).
+3. CORS on BOTH buckets for the admin origin `https://chopshop-admin-stg.kent-ee2.workers.dev` (GET, HEAD; the public bucket for template photos, the private one for presigned artwork previews): through the preflight, `r2 bucket cors set …` (read the current rules first).
+4. Import the studio templates and models: the run book in `CP5_WH_REPORT.md` (`import-studio-assets.mjs --env staging --bundle … --out … --hosting-dir public`, a dry run first).
+5. Staging rows of `email.order_status` older than 24 h will end `email_expired` with an alert each (WE's note): mark them superseded first if the noise is unwanted.
+6. Smoke `/admin/pod` in a browser: upload an original, map a product on `fake-printer` (its two sweatshirt articles are all staging can map), the studio through to a published product; `/platform/shops/<shop>` shows the legal readiness; the products list shows "Varianter"; order search by a name.
+
+**Decisions taken on defaults this night (veto):** D101 (studio images in the public bucket under `platform/studio/`); the studio's placement is the server's (locked) in this build; a studio product is published only after its images exist (from FN2 on; in FN1 alone it was published without).
+
+**Open for Mikael (collected, none blocks):** the locked placement and whether the printer centres or top-aligns; the margin tool gone from the studio; the seller picks printer articles (sees supplier labels); an acting-as platform user can confirm artwork rights; printer price edits reach live products at once and "under the floor" is only reported; mails need `RESEND_API_KEY` + `EMAIL_FROM` on staging; the shop's notice address, the buyer's name in it, the withdrawal text in the refund mail; imported legal evidence shown by its stored address; D101; 3D originals not carried; all imported templates marked provisional.
+
 ### (history) 🔁 HANDOVER 2026-10-03 23:10 — every launch-scope page but the printers page is COMMITTED; Codex found 10 things to fix before the next deploy
 
 **Tree clean, HEAD `a5b3cfa1` pushed, no builder running, no job waiting.** Staging is unchanged since 19:10: it serves `63760063` (the sign-in works, stand-ins behind it; the entry below).
