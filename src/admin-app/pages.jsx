@@ -41,4 +41,5 @@ export { default as PlatformShopDetail } from '../pages/platform/PlatformShopDet
 export { default as PlatformAddons } from '../pages/platform/PlatformAddons.jsx';
 export { default as PlatformUsers } from '../pages/platform/PlatformUsers.jsx';
 export { default as PlatformPrinters } from '../pages/platform/PlatformPrinters.jsx';
+export { default as PlatformModels } from '../pages/platform/PlatformModels.jsx';
 export { default as PlatformReports } from '../pages/platform/PlatformReports.jsx';

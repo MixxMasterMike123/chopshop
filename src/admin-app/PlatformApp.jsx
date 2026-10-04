@@ -1,8 +1,9 @@
 // The platform console's router (CP5 brief FA.4, D102): every address under
 // /platform, mounted with `basename="/platform"`, so the pages' absolute links
 // (`/shops/:id`, PlatformLayout's menu) need no edit. Routes and guards mirror
-// src/App.jsx's platform branch for the launch-scope pages; the 3D models,
-// DAC7 and leads pages left the build (gap analysis §1b, D103).
+// src/App.jsx's platform branch for the launch-scope pages; the DAC7 and leads
+// pages left the build (gap analysis §1b, D103). The 3D models page came back
+// with unit CP5-FO (the Worker's platform 3D-model routes, CP5-WH).
 //
 // Signing in happens on the admin tree's /login: PlatformRoute's
 // `<Navigate to="/login">` lands on /platform/login here, which loads /login.
@@ -22,6 +23,7 @@ export const PLATFORM_ROUTES = [
   { path: '/shops/:shopId', page: 'PlatformShopDetail' },
   { path: '/addons', page: 'PlatformAddons' },
   { path: '/printers', page: 'PlatformPrinters' },
+  { path: '/models', page: 'PlatformModels' },
   { path: '/reports', page: 'PlatformReports' },
   { path: '/users', page: 'PlatformUsers' },
 ];

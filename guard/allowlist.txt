@@ -157,7 +157,6 @@ src/components/auth/ImpersonationIntake.jsx
 src/components/layout/AppLayout.jsx
 src/components/platform/MigrateShopifyModal.jsx
 src/components/platform/MigrateWooModal.jsx
-src/components/platform/ModelEditor.jsx
 src/components/platform/addShopUserData.js
 src/components/platform/platformLayoutData.js
 src/components/platform/provisionShopData.js
@@ -217,8 +216,8 @@ src/pages/admin/adminSettingsData.js
 src/pages/admin/adminStorefrontData.js
 src/pages/platform/PlatformDac7.jsx
 src/pages/platform/PlatformLeads.jsx
-src/pages/platform/PlatformModels.jsx
 src/pages/platform/platformAddonsData.js
+src/pages/platform/platformModelsData.js
 src/pages/platform/platformPrintersData.js
 src/pages/platform/platformReportsData.js
 src/pages/platform/platformShopDetailData.js
@@ -264,7 +263,6 @@ src/utils/legalAcceptance.js
 src/utils/loadContentScreening.js
 src/utils/marketingMaterials.js
 src/utils/orderUtils.js
-src/utils/pod3dUpload.js
 src/utils/podArtwork.js
 src/utils/podMappings.js
 src/utils/podUpload.js

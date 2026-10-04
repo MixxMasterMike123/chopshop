@@ -1,9 +1,10 @@
 // src/components/platform/platformLayoutData.js for the admin build (alias
 // list, vite.admin.config.js): what the console shell shows on Cloudflare.
 //
-//   the menu      the launch scope (CP5_GAP_ANALYSIS.md §1b, D103): the 3D
-//                 models, DAC7 and leads pages left the build, so their
-//                 entries leave; the "snart" placeholders stay as they were
+//   the menu      the launch scope (CP5_GAP_ANALYSIS.md §1b, D103): the DAC7
+//                 and leads pages left the build, so their entries leave; the
+//                 "snart" placeholders stay as they were. 3D-modeller is back
+//                 (unit CP5-FO: the page on the Worker's 3D-model routes)
 //   the badge     GET /v1/platform/reports?status=new → `newCount` (every
 //                 shop's unhandled reports), per mount and on the badge event
 //   the notices   an acting-as session that ended in this tab (ran out, or
@@ -16,7 +17,6 @@ import { actingAsNoticeText, takeActingAsNotice } from './impersonationAudit.js'
 
 /** Console paths that leave this build, with why (the CP5-FB report lists them). */
 export const LEFT_PLATFORM_PATHS = Object.freeze({
-  '/models': '3D model tooling is PORT-LATER (PLAN §3.2); the page left the build',
   '/dac7': 'DAC7 is CP9 (D23); the page left the build',
   '/leads': 'the leads page leaves (D103)',
 });

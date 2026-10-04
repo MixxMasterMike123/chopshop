@@ -62,10 +62,10 @@ describe('the admin shell\'s scope', () => {
 });
 
 describe('the console shell\'s scope', () => {
-  it('3D-modeller, DAC7 and Leads leave; the "snart" placeholders stay', () => {
-    assert.deepEqual(Object.keys(LEFT_PLATFORM_PATHS).sort(), ['/dac7', '/leads', '/models']);
+  it('DAC7 and Leads leave; 3D-modeller stays (CP5-FO); the "snart" placeholders stay', () => {
+    assert.deepEqual(Object.keys(LEFT_PLATFORM_PATHS).sort(), ['/dac7', '/leads']);
     assert.deepEqual(scopePlatformNav(PLATFORM_NAV).map((i) => i.path),
-      ['/shops', '/addons', '/printers', '/reports', '/users', '/payments', '/settings']);
+      ['/shops', '/addons', '/models', '/printers', '/reports', '/users', '/payments', '/settings']);
   });
 
   it('the badge: newCount when it is a count, else no badge', () => {

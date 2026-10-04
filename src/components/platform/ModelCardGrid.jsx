@@ -72,6 +72,7 @@ const ModelCard = ({ model, onEdit, onToggleActive, onDelete, busy }) => {
           >
             {busy ? '…' : active ? 'Inaktivera' : 'Aktivera'}
           </button>
+          {onDelete && (
           <button
             type="button"
             onClick={() => onDelete(model)}
@@ -80,6 +81,7 @@ const ModelCard = ({ model, onEdit, onToggleActive, onDelete, busy }) => {
           >
             Ta bort
           </button>
+          )}
         </div>
       </div>
     </div>
@@ -88,7 +90,8 @@ const ModelCard = ({ model, onEdit, onToggleActive, onDelete, busy }) => {
 
 /**
  * ModelCardGrid — { models, onEdit, onToggleActive, onDelete, busyId }
- * Renders the empty state when models is empty.
+ * Renders the empty state when models is empty. Without onDelete (a build
+ * that deletes no model) the card has no "Ta bort".
  */
 const ModelCardGrid = ({ models, onEdit, onToggleActive, onDelete, busyId }) => {
   if (!models || models.length === 0) {

@@ -99,7 +99,7 @@ const ADMIN_ALIASES = [
   ['src/components/admin/platformTermsData.js', 'src/admin-app/replacements/platformTermsData.js',
     'PlatformTermsGate and AdminPlatformTerms: GET /v1/admin/legal/status and /terms, POST /accept-terms; the text of the current version as archived'],
   ['src/components/platform/platformLayoutData.js', 'src/admin-app/replacements/platformLayoutData.js',
-    'PlatformLayout: the launch-scope menu (3D-modeller, DAC7, Leads leave), the badge from GET /v1/platform/reports newCount, the acting-as notice'],
+    'PlatformLayout: the launch-scope menu (DAC7, Leads leave), the badge from GET /v1/platform/reports newCount, the acting-as notice'],
   // Unit FJ: the platform console's add-ons, users and reports.
   ['src/pages/platform/platformAddonsData.js', 'src/admin-app/replacements/platformAddonsData.js',
     'PlatformAddons: the shops of GET /v1/platform/tenants and their features by …/features; the columns of add-ons the Worker refuses (deleted CRM add-ons, affiliate, wholesale) leave'],
@@ -158,6 +158,9 @@ const ADMIN_ALIASES = [
   // Unit FK: the platform console's printers (platform-only: prices, frames, the default printer).
   ['src/pages/platform/platformPrintersData.js', 'src/admin-app/replacements/platformPrintersData.js',
     'PlatformPrinters: GET /v1/platform/printers; status, garment prices and frames by PATCH …/:id (only the changed fields, fenced on the revision); the default printer by PUT …/default; no print-shop accounts (print portal PORT-LATER), no routing per garment (a mapping names its printer)'],
+  // Unit FO: the platform console's 3D models (platform-only: the studio's 3D view reads them).
+  ['src/pages/platform/platformModelsData.js', 'src/admin-app/replacements/platformModelsData.js',
+    'PlatformModels and ModelEditor: GET /v1/platform/pod/3d-models; a write is the WHOLE document (what the server last answered + the editor\'s patch) by PUT …/:modelId, its answer replacing the editor\'s; Aktivera/Inaktivera by PATCH; a colourway\'s web derivatives by POST /v1/platform/pod/studio-files (no raw originals); no delete of a model (no "Ta bort") and no delete of a file; a lost answer is read back'],
   // Unit FM: the POD page (/admin/pod): the artwork library and the print mappings (D83).
   ['src/wagons/pod-wagon/components/usePodLibrary.js', 'src/admin-app/replacements/podLibrary.js',
     'PodAdminPage: the library, profiles, mappings and products from the POD and product routes, bound to the shop; a render still processing is asked again until its verdict; a failed render is said'],

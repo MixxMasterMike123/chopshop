@@ -10,10 +10,21 @@
 // Presentation is harness-renderable WITHOUT Firebase: uploadAssets / saveDoc /
 // deleteColorway are INJECTABLE props defaulting to the real implementations.
 // Firestore hygiene: never write `undefined` (client throws) — omit or null.
+//
+// DATA: every write goes through ../../pages/platform/platformModelsData
+// (Firebase in the older build; the admin build's alias list swaps in the API's
+// version, src/admin-app/replacements/platformModelsData.js, whose writes answer
+// the stored model: the editor then follows it).
 import React, { useMemo, useRef, useState } from 'react';
-import { doc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
-import { db } from '../../firebase/config';
-import { uploadModelColorwayAssets, deleteColorwayAssets, LOW_CONTRAST_SD_THRESHOLD } from '../../utils/pod3dUpload';
+import {
+  serverTimestamp,
+  deleteField,
+  saveModelDoc,
+  uploadModelColorwayAssets,
+  deleteColorwayAssets,
+  removeColorwayConfirm,
+} from '../../pages/platform/platformModelsData';
+import { LOW_CONTRAST_SD_THRESHOLD } from '../../utils/pod3dUpload';
 import { clearPod3dModelsCache } from '../../config/pod3dModels';
 import toast from 'react-hot-toast';
 import { XMarkIcon } from '@heroicons/react/24/outline';
@@ -54,7 +65,7 @@ const defaultPrintArea = (w, h, mmW, mmH) => {
 const deleteFieldMarker = () => deleteField();
 
 // ── Real default handlers (production). The harness injects stubs. ────────────
-const realSaveDoc = (modelId, data) => updateDoc(doc(db, 'pod3dModels', modelId), data);
+const realSaveDoc = (modelId, data) => saveModelDoc(modelId, data);
 const realDeleteColorway = (modelId, viewId, colorwayId) =>
   deleteColorwayAssets(modelId, viewId, colorwayId);
 
@@ -130,6 +141,12 @@ const ModelEditor = ({
   const [lowContrast, setLowContrast] = useState({});
 
   const [saving, setSaving] = useState(false);
+  // True from a write's click until its answer: the editor is locked for that
+  // time (no second write, no closing), so the answer lands in this editor.
+  const writing = useRef(false);
+  const close = () => {
+    if (!writing.current) onClose();
+  };
   const photoInput = useRef(null);
   const mapInput = useRef(null);
   const maskInput = useRef(null);
@@ -150,6 +167,7 @@ const ModelEditor = ({
   };
 
   const addColorway = async () => {
+    if (writing.current) return;
     setAddError('');
     const newId = derivedId;
     if (!cwLabel.trim()) return setAddError('Ange ett namn på färgvägen.');
@@ -158,6 +176,7 @@ const ModelEditor = ({
     if (!cwPhoto) return setAddError('Plaggfoto krävs.');
     if (!cwMap) return setAddError('Displacement-karta krävs.');
 
+    writing.current = true;
     setUploading(true);
     try {
       const res = await uploadAssets({
@@ -179,6 +198,8 @@ const ModelEditor = ({
       };
       if (res.maskUrl) entry.maskUrl = res.maskUrl;
       if (res.originalPaths) entry.originalPaths = res.originalPaths;
+      // The images' ids where the build stores images by id (the admin build).
+      if (res.fileIds) entry.fileIds = res.fileIds;
       // Harmless metadata: lets the studio warn later if we want.
       if (Number.isFinite(res.mapContrastSd)) entry.mapContrastSd = res.mapContrastSd;
 
@@ -202,15 +223,17 @@ const ModelEditor = ({
         ? defaultPrintArea(newViewW, newViewH, num(areaWcm) * 10, num(areaHcm) * 10)
         : null;
       if (seeded) patch['views.front.printArea'] = seeded;
-      await saveDoc(modelId, patch);
+      const stored = await saveDoc(modelId, patch);
       clearPod3dModelsCache();
-      if (seeded) setPrintArea(seeded);
+      // The view as the server stored it, when the build's write answers it.
+      const sv = stored?.views?.front;
+      if (seeded) setPrintArea(sv ? sv.printArea : seeded);
 
       // Update local state. If this was the FIRST colorway, seed the output res.
-      setColorways(nextColorways);
-      setViewW(newViewW);
-      setViewH(newViewH);
-      setOriginalDims(newOrig);
+      setColorways(sv ? sv.colorways : nextColorways);
+      setViewW(sv ? sv.w : newViewW);
+      setViewH(sv ? sv.h : newViewH);
+      setOriginalDims(sv ? sv.originalDims : newOrig);
       if (outW == null) setOutW(newViewW);
       if (outH == null) setOutH(newViewH);
       // Persistent low-contrast warning: a weak map warps the artwork barely at
@@ -235,13 +258,16 @@ const ModelEditor = ({
       }
       setAddError(err?.message || 'Kunde inte ladda upp färgvägen.');
     } finally {
+      writing.current = false;
       setUploading(false);
     }
   };
 
   const removeColorway = async (cwId) => {
+    if (writing.current) return;
     const cw = colorways[cwId];
-    if (!window.confirm(`Vill du ta bort färgvägen "${cw?.label || cwId}"? Filerna raderas.`)) return;
+    if (!window.confirm(removeColorwayConfirm(cw?.label || cwId))) return;
+    writing.current = true;
     setSaving(true);
     try {
       await deleteColorway(modelId, 'front', cwId);
@@ -263,20 +289,22 @@ const ModelEditor = ({
       // Drop any per-colorway override for this id.
       if (perColorway[cwId]) update[`perColorway.${cwId}`] = deleteFieldMarker();
 
-      await saveDoc(modelId, update);
+      const stored = await saveDoc(modelId, update);
       clearPod3dModelsCache();
+      // The view as the server stored it, when the build's write answers it.
+      const sv = stored?.views?.front;
 
-      setColorways(next);
+      setColorways(sv ? sv.colorways : next);
       setLowContrast((prev) => {
         if (!prev[cwId]) return prev;
         const p = { ...prev };
         delete p[cwId];
         return p;
       });
-      if (wasLast) {
-        setViewW(null);
-        setViewH(null);
-        setOriginalDims(null);
+      if (wasLast || sv) {
+        setViewW(sv ? sv.w : null);
+        setViewH(sv ? sv.h : null);
+        setOriginalDims(sv ? sv.originalDims : null);
       }
       if (perColorway[cwId]) {
         setPerColorway((prev) => {
@@ -289,6 +317,7 @@ const ModelEditor = ({
     } catch (err) {
       toast.error(err?.message || 'Kunde inte ta bort färgvägen.');
     } finally {
+      writing.current = false;
       setSaving(false);
     }
   };
@@ -321,6 +350,8 @@ const ModelEditor = ({
   };
 
   const save = async () => {
+    if (writing.current) return;
+    writing.current = true;
     setSaving(true);
     try {
       const data = {
@@ -351,6 +382,7 @@ const ModelEditor = ({
     } catch (err) {
       toast.error(err?.message || 'Kunde inte spara modellen.');
     } finally {
+      writing.current = false;
       setSaving(false);
     }
   };
@@ -371,7 +403,7 @@ const ModelEditor = ({
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 overflow-y-auto"
-      onClick={onClose}
+      onClick={close}
     >
       <div
         className="my-6 w-full max-w-3xl rounded-2xl border border-white/10 bg-gray-900 text-gray-100 max-h-[90vh] overflow-y-auto"
@@ -379,7 +411,7 @@ const ModelEditor = ({
       >
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-gray-900/95 px-6 py-4 backdrop-blur">
           <h2 className="text-lg font-bold">Redigera modell</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300">
+          <button onClick={close} className="text-gray-500 hover:text-gray-300">
             <XMarkIcon className="h-5 w-5" />
           </button>
         </div>
@@ -728,7 +760,7 @@ const ModelEditor = ({
         <div className="sticky bottom-0 flex justify-end gap-2 border-t border-white/10 bg-gray-900/95 px-6 py-4 backdrop-blur">
           <button
             type="button"
-            onClick={onClose}
+            onClick={close}
             className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-gray-200"
           >
             Avbryt

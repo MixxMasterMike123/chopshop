@@ -320,3 +320,50 @@ export async function putDefaultPrinter(printerId) {
 }
 
 // ═══ end CP5-FK ═════════════════════════════════════════════════════════════
+
+// ═══ CP5-FO ═════════════════════════════════════════════════════════════════
+// The platform's 3D models for the design studio's 3D view, and the studio
+// files they name (cloudflare/src/routes/pod-studio-assets.ts; CP5_WH_REPORT.md
+// "Platform"). PLATFORM-ONLY: only the platform console's models page imports
+// this section. No route here deletes anything: a model is deactivated, and a
+// studio file stays in the public bucket.
+//
+//   GET   /v1/platform/pod/3d-models             { models: [PlatformModel], files: { fileId: StudioFile } }
+//                                                (inactive models too; files = every active file they name)
+//   PUT   /v1/platform/pod/3d-models/:modelId    the whole document → 201 (created) | 200 { changed, model }
+//                                                400 invalid_request (reason: file_not_found | not_registered |
+//                                                duplicate_colorway, or none) · 409 limit_reached · 413
+//   PATCH /v1/platform/pod/3d-models/:modelId    { active } → 200 { changed, model } · 404 unknown id
+//   POST  /v1/platform/pod/studio-files          the raw bytes, Content-Type image/png|jpeg|webp|avif
+//                                                → 201 | 200 (the same bytes were stored) { file }
+//                                                400 (reason: not_an_allowed_image | type_not_as_stated) ·
+//                                                413 (over 15 MiB) · 409 conflict · 404 (dark: no public bucket)
+
+/** Every model, inactive ones included, and the files they name: { models, files }. */
+export async function readAll3dModels({ signal } = {}) {
+  const { data } = await platformRequest('GET', '/v1/platform/pod/3d-models', { signal });
+  return {
+    models: Array.isArray(data?.models) ? data.models : [],
+    files: data?.files && typeof data.files === 'object' && !Array.isArray(data.files) ? data.files : {},
+  };
+}
+
+/** Creates or replaces a model whole. → { model, changed, created }. */
+export async function put3dModel(modelId, body) {
+  const { status, data } = await platformRequest('PUT', `/v1/platform/pod/3d-models/${segment(modelId)}`, { json: body });
+  return { model: data?.model ?? null, changed: data?.changed === true, created: status === 201 };
+}
+
+/** Activates or deactivates a model. → { model, changed }. */
+export async function set3dModelActive(modelId, active) {
+  const { data } = await platformRequest('PATCH', `/v1/platform/pod/3d-models/${segment(modelId)}`, { json: { active } });
+  return { model: data?.model ?? null, changed: data?.changed === true };
+}
+
+/** One image (a Blob) as a studio file, its type stated. → { fileId, url, width, height, … }. */
+export async function uploadStudioFile(blob, contentType = blob?.type) {
+  const { data } = await platformRequest('POST', '/v1/platform/pod/studio-files', { body: blob, contentType });
+  return data?.file ?? null;
+}
+
+// ═══ end CP5-FO ═════════════════════════════════════════════════════════════

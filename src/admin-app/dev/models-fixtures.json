@@ -1,0 +1,85 @@
+{
+  "_comment": "INVENTED data for the dev API's platform 3D models (unit CP5-FO, models-dev.mjs). Each file is drawn as a small PNG when the dev server starts: a garment of `fill` on a backdrop (photo), grey folds (map) or a white garment shape on black (mask).",
+  "files": [
+    { "fileId": "0f3d0000-0000-4000-8000-00000000a001", "draw": "photo", "fill": "#f1f0ec", "width": 400, "height": 500 },
+    { "fileId": "0f3d0000-0000-4000-8000-00000000a002", "draw": "map", "width": 400, "height": 500 },
+    { "fileId": "0f3d0000-0000-4000-8000-00000000a003", "draw": "mask", "width": 400, "height": 500 },
+    { "fileId": "0f3d0000-0000-4000-8000-00000000a004", "draw": "photo", "fill": "#2b2b30", "width": 400, "height": 500 },
+    { "fileId": "0f3d0000-0000-4000-8000-00000000a005", "draw": "photo", "fill": "#6d7f5e", "width": 360, "height": 480 },
+    { "fileId": "0f3d0000-0000-4000-8000-00000000a006", "draw": "map", "width": 360, "height": 480 }
+  ],
+  "models": [
+    {
+      "modelId": "DevTeeOnModel0000001",
+      "label": "T-shirt på modell",
+      "active": true,
+      "displacementScale": 30,
+      "displacementBlur": 6,
+      "displacementContrast": 1.4,
+      "blend": "multiply",
+      "alpha": 0.8,
+      "output": { "w": 400, "h": 500 },
+      "perColorway": { "svart": { "blend": "screen", "alpha": 0.9 } },
+      "views": {
+        "front": {
+          "w": 400, "h": 500,
+          "printArea": { "x": 135, "y": 150, "w": 130, "h": 173 },
+          "printAreaMm": { "w": 300, "h": 400 },
+          "originalDims": { "w": 2000, "h": 2500 },
+          "colorways": [
+            { "id": "vit", "label": "Vit", "photoFileId": "0f3d0000-0000-4000-8000-00000000a001", "displacementFileId": "0f3d0000-0000-4000-8000-00000000a002", "maskFileId": "0f3d0000-0000-4000-8000-00000000a003", "mapContrastSd": 48.2 },
+            { "id": "svart", "label": "Svart", "photoFileId": "0f3d0000-0000-4000-8000-00000000a004", "displacementFileId": "0f3d0000-0000-4000-8000-00000000a002", "maskFileId": null, "mapContrastSd": 48.2 }
+          ]
+        }
+      },
+      "createdAt": "2026-09-20T10:00:00.000Z",
+      "updatedAt": "2026-09-28T14:12:00.000Z"
+    },
+    {
+      "modelId": "DevHoodieModel000002",
+      "label": "Hoodie (ej kalibrerad)",
+      "active": true,
+      "displacementScale": 30,
+      "displacementBlur": 6,
+      "blend": "multiply",
+      "alpha": 0.8,
+      "output": null,
+      "perColorway": {},
+      "views": {
+        "front": {
+          "w": null, "h": null,
+          "printArea": { "x": 0, "y": 0, "w": 0, "h": 0 },
+          "printAreaMm": { "w": 300, "h": 400 },
+          "originalDims": null,
+          "colorways": []
+        }
+      },
+      "createdAt": "2026-09-29T08:30:00.000Z",
+      "updatedAt": "2026-09-29T08:30:00.000Z"
+    },
+    {
+      "modelId": "DevTankModel00000003",
+      "label": "Linne (utgått)",
+      "active": false,
+      "displacementScale": 24,
+      "displacementBlur": 4,
+      "blend": "multiply",
+      "alpha": 0.85,
+      "output": null,
+      "perColorway": {},
+      "views": {
+        "front": {
+          "w": 360, "h": 480,
+          "printArea": { "x": 110, "y": 140, "w": 140, "h": 187 },
+          "printAreaMm": { "w": 250, "h": 330 },
+          "originalDims": { "w": 1800, "h": 2400 },
+          "colorways": [
+            { "id": "oliv", "label": "Oliv", "photoFileId": "0f3d0000-0000-4000-8000-00000000a005", "displacementFileId": "0f3d0000-0000-4000-8000-00000000a006", "maskFileId": null }
+          ]
+        }
+      },
+      "createdAt": "2026-08-01T09:00:00.000Z",
+      "updatedAt": "2026-08-02T09:00:00.000Z"
+    }
+  ]
+}

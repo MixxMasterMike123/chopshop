@@ -3,25 +3,27 @@
 // photos + displacement maps that feed the studio's 3D-vy (replaces the hardcoded
 // DEV_3D_GARMENTS). Platform-only. PLATFORM DARK design (not admin-*).
 //
-// Reads Firestore DIRECTLY (getDocs) — never the cached loader — so platform edits
-// are never stale; every successful write calls clearPod3dModelsCache() so an open
+// Reads the models DIRECTLY — never the cached loader — so platform edits are
+// never stale; every successful write calls clearPod3dModelsCache() so an open
 // studio tab reloads fresh. (docs/PLATFORM_ARCHITECTURE.md)
+//
+// DATA: every read and write goes through ./platformModelsData (Firebase in the
+// older build; the admin build's alias list swaps in the API's version,
+// src/admin-app/replacements/platformModelsData.js).
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  collection,
-  getDocs,
-  doc,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db } from '../../firebase/config';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import ModelCardGrid from '../../components/platform/ModelCardGrid';
 import ModelEditor from '../../components/platform/ModelEditor';
 import { clearPod3dModelsCache } from '../../config/pod3dModels';
-import { deleteModelAssets } from '../../utils/pod3dUpload';
+import {
+  DELETE_MODEL,
+  loadModels,
+  readModelForEditor,
+  setModelActive,
+  deleteModel,
+  createModel as createModelDoc,
+  saveModelDoc,
+} from './platformModelsData';
 import toast from 'react-hot-toast';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 
@@ -35,13 +37,12 @@ const PlatformModels = () => {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const snap = await getDocs(collection(db, 'pod3dModels'));
-      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+      const list = await loadModels();
       list.sort((a, b) => String(a.label || '').localeCompare(String(b.label || ''), 'sv'));
       setModels(list);
     } catch (e) {
       console.error('Error loading pod3dModels:', e);
-      toast.error('Kunde inte ladda modeller');
+      toast.error(e?.userMessage || 'Kunde inte ladda modeller');
     } finally {
       setLoading(false);
     }
@@ -55,13 +56,14 @@ const PlatformModels = () => {
     const next = model.active === false;
     try {
       setBusyId(model.id);
-      await updateDoc(doc(db, 'pod3dModels', model.id), { active: next, updatedAt: serverTimestamp() });
+      // The stored model when the build's write answers one (the admin build).
+      const stored = await setModelActive(model, next);
       clearPod3dModelsCache();
-      setModels((prev) => prev.map((m) => (m.id === model.id ? { ...m, active: next } : m)));
+      setModels((prev) => prev.map((m) => (m.id === model.id ? stored || { ...m, active: next } : m)));
       toast.success(next ? 'Modell aktiverad' : 'Modell inaktiverad');
     } catch (e) {
       console.error('Error toggling model:', e);
-      toast.error('Kunde inte ändra status');
+      toast.error(e?.userMessage || 'Kunde inte ändra status');
     } finally {
       setBusyId(null);
     }
@@ -71,54 +73,51 @@ const PlatformModels = () => {
     if (!window.confirm(`Vill du ta bort "${model.label || model.id}"? Alla uppladdade filer raderas.`)) return;
     try {
       setBusyId(model.id);
-      await deleteModelAssets(model.id); // best-effort storage sweep (never throws)
-      await deleteDoc(doc(db, 'pod3dModels', model.id));
+      await deleteModel(model); // best-effort storage sweep (never throws), then the doc
       clearPod3dModelsCache();
       setModels((prev) => prev.filter((m) => m.id !== model.id));
       toast.success('Modell borttagen');
     } catch (e) {
       console.error('Error deleting model:', e);
-      toast.error('Kunde inte ta bort modellen');
+      toast.error(e?.userMessage || 'Kunde inte ta bort modellen');
     } finally {
       setBusyId(null);
     }
   };
 
   const createModel = async (label) => {
-    const created = await addDoc(collection(db, 'pod3dModels'), {
-      label: label.trim(),
-      scope: 'platform',
-      active: true,
-      views: { front: { w: null, h: null, printArea: { x: 0, y: 0, w: 0, h: 0 }, colorways: {} } },
-      printAreaMm: { front: { w: 300, h: 400 } },
-      displacementScale: 30,
-      displacementBlur: 6,
-      blend: 'multiply',
-      alpha: 0.8,
-      perColorway: {},
-      output: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    const newModel = await createModelDoc(label);
     clearPod3dModelsCache();
-    const newModel = {
-      id: created.id,
-      label: label.trim(),
-      scope: 'platform',
-      active: true,
-      views: { front: { w: null, h: null, printArea: { x: 0, y: 0, w: 0, h: 0 }, colorways: {} } },
-      printAreaMm: { front: { w: 300, h: 400 } },
-      displacementScale: 30,
-      displacementBlur: 6,
-      blend: 'multiply',
-      alpha: 0.8,
-      perColorway: {},
-      output: null,
-    };
     setModels((prev) => [...prev, newModel].sort((a, b) =>
       String(a.label || '').localeCompare(String(b.label || ''), 'sv')));
     setShowCreate(false);
     setEditing(newModel); // open editor directly
+  };
+
+  // Redigera: the editor starts from the model as it is stored now, never
+  // from the list's row as it was (the older build's list was read directly:
+  // it answers the row). Nothing else opens while a card is busy.
+  const openEditor = async (model) => {
+    if (busyId) return;
+    try {
+      setBusyId(model.id);
+      const fresh = await readModelForEditor(model);
+      setModels((prev) => prev.map((m) => (m.id === fresh.id ? fresh : m)));
+      setEditing(fresh);
+    } catch (e) {
+      console.error('Error opening model:', e);
+      toast.error(e?.userMessage || 'Kunde inte öppna modellen');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Every write of the editor: the card follows the stored model when the
+  // build's write answers one (the admin build; the older one answers nothing).
+  const saveFromEditor = async (modelId, data) => {
+    const stored = await saveModelDoc(modelId, data);
+    if (stored) setModels((prev) => prev.map((m) => (m.id === stored.id ? stored : m)));
+    return stored;
   };
 
   return (
@@ -145,9 +144,9 @@ const PlatformModels = () => {
           <ModelCardGrid
             models={models}
             busyId={busyId}
-            onEdit={(m) => setEditing(m)}
+            onEdit={openEditor}
             onToggleActive={toggleActive}
-            onDelete={removeModel}
+            onDelete={DELETE_MODEL ? removeModel : undefined}
           />
         )}
       </div>
@@ -159,6 +158,7 @@ const PlatformModels = () => {
       {editing && (
         <ModelEditor
           model={editing}
+          saveDoc={saveFromEditor}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -170,7 +170,7 @@ const PlatformModels = () => {
   );
 };
 
-// Small create-modal: label only → addDoc with defaults → open editor.
+// Small create-modal: label only → a new model with defaults → open editor.
 const CreateModelModal = ({ onClose, onCreate }) => {
   const [label, setLabel] = useState('');
   const [saving, setSaving] = useState(false);
@@ -185,7 +185,7 @@ const CreateModelModal = ({ onClose, onCreate }) => {
       await onCreate(label);
     } catch (err) {
       console.error('Create model failed:', err);
-      setError('Kunde inte skapa modellen (behörighet?). Försök igen.');
+      setError(err?.userMessage || 'Kunde inte skapa modellen (behörighet?). Försök igen.');
       setSaving(false);
     }
   };

@@ -34,6 +34,7 @@ import { PLATFORM_REST_ROUTES } from './platform-rest-dev.mjs';
 import { MEMBER_ROUTES } from './members-dev.mjs';
 import { PREVIEW_ADMIN_ROUTES, platformShopRoutes } from './platform-dev.mjs';
 import { PRINTER_ROUTES } from './printers-dev.mjs';
+import { MODEL_ROUTES } from './models-dev.mjs';
 import { POD_ROUTES } from './pod-dev.mjs';
 import { STUDIO_ROUTES } from './studio-dev.mjs';
 
@@ -415,6 +416,7 @@ const PLATFORM_ROUTES = [
   ...SHELL_PLATFORM_ROUTES,
   ...PLATFORM_CONNECT_ROUTES,
   ...PRINTER_ROUTES, // unit FK
+  ...MODEL_ROUTES, // unit FO
 ];
 
 function match(pattern, path) {
