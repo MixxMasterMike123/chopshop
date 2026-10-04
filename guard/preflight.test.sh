@@ -67,6 +67,9 @@ e = {"name": p["workerName"],
                               {"binding": "EMAIL_QUEUE", "queue": p["queues"]["email"]},
                               {"binding": "RENDER_JOBS_QUEUE", "queue": p["queues"]["renderJobs"]}],
                 "consumers": [{"queue": p["queues"]["outbox"]}, {"queue": p["queues"]["email"]}, {"queue": p["queues"]["renderJobs"]}]}}
+# CP7-T3: once the repo pins production on a custom host, production carries its custom domain (and no workers.dev).
+if env == "production" and not o["api"].endswith(".workers.dev"):
+    e.update(routes=[{"pattern": o["api"][len("https://"):], "custom_domain": True}], workers_dev=False, preview_urls=False)
 exec(edit)
 print(json.dumps({env: e}))' "$1" "$2" "${3:-}" "$REPO/cloudflare/pinned.$1.json" "$(pub_base "$1")"
 }
@@ -85,13 +88,17 @@ e = {"name": p["webWorkerName"], "workers_dev": env == "staging", "preview_urls"
                 "html_handling": "none", "not_found_handling": "none"},
      "services": [{"binding": "API", "service": p["workerName"], "entrypoint": "Internal"}],
      "vars": {"WEB_ORIGIN": p["origins"]["web"], "PUBLIC_OBJECT_BASE_URL": base}}
+if env == "production" and not p["origins"]["web"].endswith(".workers.dev"):  # CP7-T3, as in env_section
+    e["routes"] = [{"pattern": p["origins"]["web"][len("https://"):], "custom_domain": True}]
 exec(edit)
 print(json.dumps({env: e}))' "$1" "${2:-}" "$REPO/cloudflare/pinned.$1.json" "$(pub_base "$1")" "${3:-}"
 }
 WEB_STAGING=$(web_section staging)
 WEB_PRODUCTION=$(web_section production)
-# production has no admin domain yet (pinned origins.admin null): the tests that deploy it pin this one.
-ADMIN_PROD_ORIGIN=https://admin.prod.test.invalid
+# production has no admin domain yet (pinned origins.admin null): the tests that deploy it pin this one,
+# a workers.dev placeholder like the pinned api and web origins (runbook §2.5's name for it). A host
+# that is not on workers.dev needs its custom-domain route (CP7-T3): those cases are further down.
+ADMIN_PROD_ORIGIN=https://chopshop-admin.kent-ee2.workers.dev
 PIN_PROD_ADMIN="$PIN_PROD; p['origins']['admin'] = '$ADMIN_PROD_ORIGIN'"
 ENV_PRODUCTION_ADMIN=$(env_section production prod "e['vars']['AUTH_TRUSTED_ORIGINS'] += ',$ADMIN_PROD_ORIGIN'")
 admin_section() { # admin_section <env> [python on e, p] [argument] — a correct env.<env> block of the ADMIN
@@ -104,6 +111,8 @@ e = {"name": p["adminWorkerName"], "workers_dev": env == "staging", "preview_url
                 "html_handling": "none", "not_found_handling": "none"},
      "services": [{"binding": "API", "service": p["workerName"], "entrypoint": "Internal"}],
      "vars": {"ADMIN_ORIGIN": p["origins"]["admin"] or prod_admin, "PUBLIC_OBJECT_BASE_URL": base}}
+if env == "production" and not e["vars"]["ADMIN_ORIGIN"].endswith(".workers.dev"):  # CP7-T3, as in env_section
+    e["routes"] = [{"pattern": e["vars"]["ADMIN_ORIGIN"][len("https://"):], "custom_domain": True}]
 exec(edit)
 print(json.dumps({env: e}))' "$1" "${2:-}" "$REPO/cloudflare/pinned.$1.json" "$(pub_base "$1")" "${3:-}" "$ADMIN_PROD_ORIGIN"
 }
@@ -115,7 +124,7 @@ export CLOUDFLARE_API_TOKEN=INHERITED-WRONG-TOKEN CLOUDFLARE_API_KEY=inherited-g
   CLOUDFLARE_EMAIL=inherited@example.com CLOUDFLARE_ACCOUNT_ID=$OTHER CF_API_TOKEN=INHERITED-WRONG-TOKEN \
   CLOUDFLARE_API_BASE_URL=https://inherited.example.test CF_API_BASE_URL=https://inherited-alias.example.test
 
-write_jsonc() { # write_jsonc <tree> <account_id> [env-section-json] — real JSONC: comments, // in strings, trailing commas
+write_jsonc() { # write_jsonc <tree> <account_id> [env-section-json] [top-level lines, each ending in ","] — real JSONC: comments, // in strings, trailing commas
   local envline=
   if [ -n "${3:-}" ]; then envline="\"env\": $3,"; fi
   cat >"$1/cloudflare/wrangler.jsonc" <<EOF
@@ -124,6 +133,7 @@ write_jsonc() { # write_jsonc <tree> <account_id> [env-section-json] — real JS
   "name": "chopshop-api",
   "account_id": "$2", /* pinned? */
   "vars": { "AUTH_BASE_URL": "https://example.test/a//b", "APP_ENV": "top-level", },
+  ${4:-}
   $envline
 }
 EOF
@@ -1120,6 +1130,226 @@ fill_public_base "$T" production
 pin "$T" production "p['stripeAccountId'] = 'acct_PRODTEST'; p['stripeWebhookEndpointId'] = 'we_prod'; p['stripeConnectWebhookEndpointId'] = 'we_prodc'"
 stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"; run_prod --admin -- deploy
 expect_refused "repo files as committed: production --admin refused while pinned origins.admin is null (no domain yet)" "origins.admin is null - production has no admin domain yet"
+
+# =====================================================================================================
+# CP7-T3: a production Worker on a real domain (docs/cf-port/CP7_T3_REPORT.md). When a Worker's pinned
+# origin is not a workers.dev host, its env.production.routes is EXACTLY that host's custom domain;
+# otherwise it has no route. The example domain is the report's, shop-example.test (.test never resolves).
+# =====================================================================================================
+C_API=https://api.shop-example.test
+C_WEB=https://shop.shop-example.test
+C_ADMIN=https://admin.shop-example.test
+# workers.dev placeholders, written out (the repo's own production pins become custom hosts on the day).
+W_API=https://chopshop-api.kent-ee2.workers.dev
+W_WEB=https://chopshop-web.kent-ee2.workers.dev
+W_ADMIN=$ADMIN_PROD_ORIGIN
+PIN_CUSTOM="$PIN_PROD; p['origins'] = {'api': '$C_API', 'web': '$C_WEB', 'admin': '$C_ADMIN'}"
+# Each Worker's correct env.production on those hosts (python on e, for env_section / web_section / admin_section).
+API_CUSTOM="o = {'api': '$C_API', 'web': '$C_WEB', 'admin': '$C_ADMIN'}; e['vars']['CANONICAL_ORIGINS'] = dict(o); e['vars']['AUTH_BASE_URL'] = o['api']; e['vars']['AUTH_TRUSTED_ORIGINS'] = ','.join(o.values()); e['workers_dev'] = False; e['preview_urls'] = False; e['routes'] = [{'pattern': '${C_API#https://}', 'custom_domain': True}]"
+WEB_CUSTOM="e['vars']['WEB_ORIGIN'] = '$C_WEB'; e['routes'] = [{'pattern': '${C_WEB#https://}', 'custom_domain': True}]"
+ADMIN_CUSTOM="e['vars']['ADMIN_ORIGIN'] = '$C_ADMIN'; e['routes'] = [{'pattern': '${C_ADMIN#https://}', 'custom_domain': True}]"
+custom_tree() { # custom_tree <api|web|admin> [python on e: that Worker's env.production, after its correct block] [python on p]
+  # — a new tree: production pinned on the three custom hosts, launch gate done, live Stripe, all three
+  # configurations correct for those hosts; then the named Worker's env.production and the pins edited.
+  local api=$API_CUSTOM web=$WEB_CUSTOM admin=$ADMIN_CUSTOM
+  case $1 in
+    api) api="$api; ${2:-pass}" ;;
+    web) web="$web; ${2:-pass}" ;;
+    admin) admin="$admin; ${2:-pass}" ;;
+  esac
+  new_tree
+  pin "$T" production "$PIN_CUSTOM; ${3:-pass}"
+  write_jsonc "$T" "$GOOD" "$(env_section production prod "$api")"
+  write_web_jsonc "$T" "$GOOD" "$(web_section production "$web")"
+  write_admin_jsonc "$T" "$GOOD" "$(admin_section production "$admin")"
+  stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"
+}
+run_custom() { # run_custom <api|web|admin> -- <wrangler args…> — run_prod for that Worker
+  local kind=$1; shift
+  if [ "$kind" = api ]; then run_prod "$@"; else run_prod "--$kind" "$@"; fi
+}
+custom_host() { case $1 in api) printf '%s' "${C_API#https://}" ;; web) printf '%s' "${C_WEB#https://}" ;; admin) printf '%s' "${C_ADMIN#https://}" ;; esac; }
+deploy_exec() { # deploy_exec <api|web|admin> — the fake wrangler's whole exec line for a production deploy of that Worker
+  if [ "$1" = api ]; then printf 'FAKE-WRANGLER EXEC: --env production deploy | account=%s token=ok cwd=cloudflare' "$GOOD"
+  else printf 'FAKE-WRANGLER EXEC: --env production deploy | account=%s token=ok cwd=%s config=cloudflare/%s/wrangler.jsonc' "$GOOD" "$1" "$1"; fi
+}
+own_origin() { # own_origin <api|web|admin> <suffix> — python on e: that Worker's own origin var(s) get <suffix>, as its pin will
+  case $1 in
+    api) printf "o = e['vars']['CANONICAL_ORIGINS']; o['api'] += '%s'; e['vars']['AUTH_BASE_URL'] = o['api']; e['vars']['AUTH_TRUSTED_ORIGINS'] = ','.join(o.values())" "$2" ;;
+    web) printf "e['vars']['WEB_ORIGIN'] += '%s'" "$2" ;;
+    admin) printf "e['vars']['ADMIN_ORIGIN'] += '%s'" "$2" ;;
+  esac
+}
+
+# --- accepted: exactly one route, the pinned host's custom domain ------------------------------------
+for kind in api web admin; do
+  custom_tree "$kind"; run_custom "$kind" -- deploy
+  expect_exec_line "$kind production on its custom domain, routes EXACTLY [{pattern: $(custom_host "$kind"), custom_domain: true}] → execs" "$(deploy_exec "$kind")"
+done
+custom_tree api "e['routes'] = [{'custom_domain': True, 'pattern': '${C_API#https://}'}]"; run_prod -- deploy
+expect_exec_line "API custom-domain route with its keys in the other order → execs (key order is free)" "$(deploy_exec api)"
+custom_tree web "e['vars']['WEB_ORIGIN'] = '$W_WEB'; del e['routes']" "p['origins']['web'] = '$W_WEB'"; run_prod --web -- deploy
+expect_exec_line "web production on a workers.dev pin, no route, while the API's and admin's pins are custom hosts → execs (each Worker by its own pinned origin)" "$(deploy_exec web)"
+custom_tree api "del e['routes']"; run_prod --bootstrap -- d1 list
+expect_exec "production --bootstrap, custom-host pins, no route → execs (--bootstrap deploys nothing; check 5 is not run)" "FAKE-WRANGLER EXEC: --env production d1 list | account=$GOOD token=ok cwd=cloudflare"
+
+# --- refused: a custom-host pin with any other routes (none, more, another shape, host or key) --------
+for kind in api web admin; do
+  want="expected exactly [{\"custom_domain\": true, \"pattern\": \"$(custom_host "$kind")\"}] - pinned origins.$kind"
+  for edit in "del e['routes']" "e['routes'] = []" "e['routes'] = None" "e['routes'] = e['routes'][0]" \
+    "e['routes'].append(dict(e['routes'][0]))" "e['routes'].append({'pattern': 'www.shop-example.test', 'custom_domain': True})" \
+    "e['routes'] = [e['routes'][0]['pattern']]" \
+    "e['routes'] = [{'pattern': e['routes'][0]['pattern'] + '/*', 'zone_name': 'shop-example.test'}]" \
+    "e['routes'] = [{'pattern': e['routes'][0]['pattern'] + '/*', 'zone_id': '0123456789abcdef0123456789abcdef'}]" \
+    "e['routes'][0]['zone_name'] = 'shop-example.test'" \
+    "e['routes'][0]['pattern'] += '/'" "e['routes'][0]['pattern'] += '/*'" "e['routes'][0]['pattern'] += '/platform'" \
+    "e['routes'][0]['pattern'] = '*.shop-example.test'" "e['routes'][0]['pattern'] = '*' + e['routes'][0]['pattern']" \
+    "e['routes'][0]['pattern'] += ':443'" "e['routes'][0]['pattern'] = 'https://' + e['routes'][0]['pattern']" \
+    "e['routes'][0]['pattern'] = e['routes'][0]['pattern'].upper()" "e['routes'][0]['pattern'] = e['routes'][0]['pattern'].capitalize()" \
+    "e['routes'][0]['pattern'] += '.'" "e['routes'][0]['pattern'] = 'www.shop-example.test'" \
+    "e['routes'][0]['custom_domain'] = False" "e['routes'][0]['custom_domain'] = 1" "e['routes'][0]['custom_domain'] = 'true'" \
+    "del e['routes'][0]['custom_domain']" "e['routes'][0]['enabled'] = True" "e['routes'][0]['previews_enabled'] = False"; do
+    custom_tree "$kind" "$edit"; run_custom "$kind" -- deploy
+    expect_refused "$kind production on a custom host, routes: $edit → refused" "$want"
+  done
+done
+
+# --- refused: the custom-host pin itself carries a port, or another pinned address's host ------------
+for kind in api web admin; do
+  custom_tree "$kind" "$(own_origin "$kind" :8443); e['routes'][0]['pattern'] += ':8443'" "p['origins']['$kind'] += ':8443'"; run_custom "$kind" -- deploy
+  expect_refused "$kind production pinned on a custom host with a port (and the route's pattern with it) → refused" "origins.$kind 'https://$(custom_host "$kind"):8443' has a port - its Worker is reached through a custom domain"
+  custom_tree "$kind" "$(own_origin "$kind" :443)" "p['origins']['$kind'] += ':443'"; run_custom "$kind" -- deploy
+  expect_refused "$kind production pinned on a custom host with an explicit :443 (the route without it, as new URL() gives) → refused" "origins.$kind 'https://$(custom_host "$kind"):443' has a port"
+done
+custom_tree api "e['vars']['CANONICAL_ORIGINS']['web'] = '$C_API'; e['vars']['AUTH_TRUSTED_ORIGINS'] = ','.join(e['vars']['CANONICAL_ORIGINS'].values())" "p['origins']['web'] = '$C_API'"; run_prod -- deploy
+expect_refused "API production: pinned origins.web is the API's custom host → refused" "origins.api '$C_API' has the host of origins.web '$C_API' - each production Worker's custom domain is a host of its own"
+custom_tree web "e['vars']['WEB_ORIGIN'] = '$C_ADMIN'; e['routes'][0]['pattern'] = '${C_ADMIN#https://}'" "p['origins']['web'] = '$C_ADMIN'"; run_prod --web -- deploy
+expect_refused "web production: pinned on the admin Worker's custom host → refused" "origins.web '$C_ADMIN' has the host of origins.admin '$C_ADMIN'"
+custom_tree admin "e['vars']['ADMIN_ORIGIN'] = '$C_WEB'; e['routes'][0]['pattern'] = '${C_WEB#https://}'" "p['origins']['admin'] = '$C_WEB'"; run_prod --admin -- deploy
+expect_refused "admin production: pinned on the web Worker's custom host → refused" "origins.admin '$C_WEB' has the host of origins.web '$C_WEB'"
+custom_tree web "e['vars']['PUBLIC_OBJECT_BASE_URL'] = '$C_WEB'" "p['r2']['publicBaseUrl'] = '$C_WEB'"; run_prod --web -- deploy
+expect_refused "web production: pinned r2.publicBaseUrl is the web Worker's custom host → refused" "origins.web '$C_WEB' has the host of r2.publicBaseUrl '$C_WEB'"
+custom_tree api "e['vars']['PUBLIC_OBJECT_BASE_URL'] = '$C_API:8443'" "p['r2']['publicBaseUrl'] = '$C_API:8443'"; run_prod -- deploy
+expect_refused "API production: pinned r2.publicBaseUrl on the API's custom host, another port → refused (one host, one custom domain)" "origins.api '$C_API' has the host of r2.publicBaseUrl '$C_API:8443'"
+
+# --- refused: workers.dev stays off on a custom domain (the API newly, web and admin as always) --------
+for kind in api web admin; do
+  for edit in "e['workers_dev'] = True" "del e['workers_dev']" "e['preview_urls'] = True" "del e['preview_urls']"; do
+    key=workers_dev; case $edit in *preview_urls*) key=preview_urls ;; esac
+    val=true; case $edit in del*) val=null ;; esac
+    custom_tree "$kind" "$edit"; run_custom "$kind" -- deploy
+    expect_refused "$kind production on its custom domain: $edit → refused" "env.production.$key is $val, production"
+  done
+done
+
+# --- refused: a production route while the Worker's pin is a workers.dev host (today's placeholders) ---
+W_PINS="p['origins'] = {'api': '$W_API', 'web': '$W_WEB', 'admin': '$W_ADMIN'}"
+W_API_VARS="o = {'api': '$W_API', 'web': '$W_WEB', 'admin': '$W_ADMIN'}; e['vars']['CANONICAL_ORIGINS'] = dict(o); e['vars']['AUTH_BASE_URL'] = o['api']; e['vars']['AUTH_TRUSTED_ORIGINS'] = ','.join(o.values())"
+custom_tree api "$W_API_VARS; e['routes'][0]['pattern'] = '${W_API#https://}'" "$W_PINS"; run_prod -- deploy
+expect_refused "API production on a workers.dev pin with a custom-domain route on that host → refused" "env.production.routes is [{\"custom_domain\": true, \"pattern\": \"${W_API#https://}\"}] - pinned origins.api '$W_API' is a workers.dev host, so the api Worker takes no route"
+custom_tree api "$W_API_VARS; e['routes'] = []" "$W_PINS"; run_prod -- deploy
+expect_refused "API production on a workers.dev pin with routes [] → refused (absent means absent)" "env.production.routes is [] - pinned origins.api '$W_API' is a workers.dev host"
+custom_tree api "$W_API_VARS; del e['routes']" "$W_PINS"; run_prod -- deploy
+expect_exec_line "API production on a workers.dev pin with no route → execs (workers_dev false and no address, exactly as before CP7-T3)" "$(deploy_exec api)"
+custom_tree web "e['vars']['WEB_ORIGIN'] = '$W_WEB'; e['routes'][0]['pattern'] = '${W_WEB#https://}'" "p['origins']['web'] = '$W_WEB'"; run_prod --web -- deploy
+expect_refused "web production on a workers.dev pin with a custom-domain route on that host → refused" "pinned origins.web '$W_WEB' is a workers.dev host, so the web Worker takes no route"
+custom_tree admin "e['vars']['ADMIN_ORIGIN'] = '$W_ADMIN'; e['routes'][0]['pattern'] = '${W_ADMIN#https://}'" "p['origins']['admin'] = '$W_ADMIN'"; run_prod --admin -- deploy
+expect_refused "admin production on a workers.dev pin with a custom-domain route on that host → refused" "pinned origins.admin '$W_ADMIN' is a workers.dev host, so the admin Worker takes no route"
+
+# --- refused: any route in staging -------------------------------------------------------------------
+for edit in "e['routes'] = [{'pattern': p['origins']['api'][8:], 'custom_domain': True}]" "e['routes'] = []" \
+  "e['routes'] = [{'pattern': 'api.shop-example.test/*', 'zone_name': 'shop-example.test'}]" "e['route'] = 'api.shop-example.test/*'"; do
+  new_tree; pin "$T" staging "$PIN_STG"; write_jsonc "$T" "$GOOD" "$(env_section staging stg "$edit")"; stripe_file "$T" staging "$SKEY_TEST"; run_stg -- deploy
+  expect_refused "API env.staging: $edit → refused" "cloudflare/wrangler.jsonc env.staging.route"
+done
+# (Each edit goes through a variable: bash 3.2 brace-expands a literal "{a, b}" nested in "$(… "…")".)
+S_API=https://api-stg.shop-example.test
+edit="e['vars']['CANONICAL_ORIGINS']['api'] = e['vars']['AUTH_BASE_URL'] = '$S_API'; e['vars']['AUTH_TRUSTED_ORIGINS'] = ','.join(e['vars']['CANONICAL_ORIGINS'].values()); e['routes'] = [{'pattern': '${S_API#https://}', 'custom_domain': True}]"
+new_tree; pin "$T" staging "$PIN_STG; p['origins']['api'] = '$S_API'"; stripe_file "$T" staging "$SKEY_TEST"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "$edit")"; run_stg -- deploy
+expect_refused "API staging pinned on a custom host, with exactly that custom-domain route → refused (only production takes a route)" "env.staging.routes is [{\"custom_domain\": true, \"pattern\": \"api-stg.shop-example.test\"}] - staging takes no route"
+edit="e['routes'] = [{'pattern': p['origins']['web'][8:], 'custom_domain': True}]"
+web_tree staging "$(web_section staging "$edit")"; run_stg --web -- deploy
+expect_refused "web env.staging with a custom-domain route on its pinned host → refused" "web/wrangler.jsonc env.staging has routes - the web Worker holds no data, no secret, no route and no trigger"
+edit="e['routes'] = [{'pattern': p['origins']['admin'][8:], 'custom_domain': True}]"
+admin_tree staging "$(admin_section staging "$edit")"; run_stg --admin -- deploy
+expect_refused "admin env.staging with a custom-domain route on its pinned host → refused" "admin/wrangler.jsonc env.staging has routes - the admin Worker holds no data, no secret, no route and no trigger"
+
+# --- refused: route (singular), and routes at the top level (inherited into every env) --------------
+for edit in "e['route'] = e.pop('routes')[0]" "e['route'] = e.pop('routes')[0]['pattern']" "e['route'] = e['routes'][0]['pattern']"; do
+  custom_tree api "$edit"; run_prod -- deploy
+  expect_refused "API env.production: $edit → refused (route, singular, is never accepted)" "cloudflare/wrangler.jsonc env.production.route is"
+done
+for kind in web admin; do
+  custom_tree "$kind" "e['route'] = e.pop('routes')[0]"; run_custom "$kind" -- deploy
+  expect_refused "$kind env.production with route (singular) → refused" "$kind/wrangler.jsonc env.production has route - the $kind Worker holds no data, no secret, no trigger and no route but its pinned custom domain: env.production may only hold account_id, assets, name, preview_urls, routes, services, vars, workers_dev"
+done
+custom_tree web "e['kv_namespaces'] = [{'binding': 'KV', 'id': 'abc'}]"; run_prod --web -- deploy
+expect_refused "web env.production on its custom domain with a KV binding → refused (a route is the only key production adds)" "web/wrangler.jsonc env.production has kv_namespaces - the web Worker holds no data"
+for top in "\"routes\": [{\"pattern\": \"${C_API#https://}\", \"custom_domain\": true}]," "\"route\": {\"pattern\": \"${C_API#https://}\", \"custom_domain\": true}," '"routes": [],'; do
+  key=${top#\"}; key=${key%%\"*}
+  custom_tree api; write_jsonc "$T" "$GOOD" "$(env_section production prod "$API_CUSTOM")" "$top"; run_prod -- deploy
+  expect_refused "API top level with ${top%,}, env.production on its custom domain → refused" "cloudflare/wrangler.jsonc top level has $key - wrangler inherits it into every env section"
+done
+new_tree; pin "$T" staging "$PIN_STG"; stripe_file "$T" staging "$SKEY_TEST"
+write_jsonc "$T" "$GOOD" "$ENV_STAGING" '"routes": [{"pattern": "chopshop-api-stg.kent-ee2.workers.dev", "custom_domain": true}],'; run_stg -- deploy
+expect_refused "API top level with routes, staging → refused" "cloudflare/wrangler.jsonc top level has routes - wrangler inherits it into every env section"
+custom_tree web; write_web_jsonc "$T" "$GOOD" "$(web_section production "$WEB_CUSTOM")" "\"routes\": [{\"pattern\": \"${C_WEB#https://}\", \"custom_domain\": true}],"; run_prod --web -- deploy
+expect_refused "web top level with routes, env.production on its custom domain → refused" "web/wrangler.jsonc top level has routes - it may only hold"
+custom_tree admin; write_admin_jsonc "$T" "$GOOD" "$(admin_section production "$ADMIN_CUSTOM")" "\"routes\": [{\"pattern\": \"${C_ADMIN#https://}\", \"custom_domain\": true}],"; run_prod --admin -- deploy
+expect_refused "admin top level with routes, env.production on its custom domain → refused" "admin/wrangler.jsonc top level has routes - it may only hold"
+
+# --- the repo's REAL files, edited as CP7_T3_REPORT.md "The day the domain exists" says ----------------
+# Copies of the three committed configurations and the committed pins, with exactly the report's edits
+# (pins, vars, one routes line per Worker; the Stripe ids as above). With the routes lines all three
+# deploys pass; without them all three are refused for the missing route. Once the repo is on its
+# domain, the real-file cases above check it as committed.
+day_of_domain() { # day_of_domain <tree> <with|without> — the report's edits, each anchor exactly once
+  python3 -c 'import json, sys
+tree, routes, api, web, admin, img = sys.argv[1:7]
+f = tree + "/cloudflare/pinned.production.json"
+p = json.load(open(f)); old = p["origins"]
+def edit(path, *pairs):
+    text = open(path).read()
+    for anchor, new in pairs:
+        if text.count(anchor) != 1:
+            sys.exit("day_of_domain: %r is not exactly once in %s" % (anchor, path))
+        text = text.replace(anchor, new)
+    open(path, "w").write(text)
+def name(worker, origin):
+    line = "\"name\": \"%s\"," % worker
+    return (line, line + (" \"routes\": [{ \"pattern\": \"%s\", \"custom_domain\": true }]," % origin[len("https://"):] if routes == "with" else ""))
+base = "\"PUBLIC_OBJECT_BASE_URL\": \"%s\"" % img
+edit(tree + "/cloudflare/wrangler.jsonc", name(p["workerName"], api),
+     ("\"api\": \"%s\"," % old["api"], "\"api\": \"%s\"," % api),
+     ("\"web\": \"%s\"" % old["web"], "\"web\": \"%s\", \"admin\": \"%s\"" % (web, admin)),
+     ("\"AUTH_BASE_URL\": \"%s\"," % old["api"], "\"AUTH_BASE_URL\": \"%s\"," % api),
+     ("\"AUTH_TRUSTED_ORIGINS\": \"%s,%s\"," % (old["api"], old["web"]), "\"AUTH_TRUSTED_ORIGINS\": \"%s,%s,%s\"," % (api, web, admin)),
+     ("\"APP_ENV\": \"production\",", "\"APP_ENV\": \"production\", %s," % base))
+edit(tree + "/cloudflare/web/wrangler.jsonc", name(p["webWorkerName"], web),
+     ("\"WEB_ORIGIN\": \"%s\"" % old["web"], "\"WEB_ORIGIN\": \"%s\", %s" % (web, base)))
+edit(tree + "/cloudflare/admin/wrangler.jsonc", name(p["adminWorkerName"], admin),
+     ("\"ADMIN_ORIGIN\": \"https://chopshop-admin.kent-ee2.workers.dev\"", "\"ADMIN_ORIGIN\": \"%s\", %s" % (admin, base)))
+p["origins"] = {"api": api, "web": web, "admin": admin}; p["r2"]["publicBaseUrl"] = img
+p["stripeAccountId"], p["stripeWebhookEndpointId"], p["stripeConnectWebhookEndpointId"] = "acct_PRODTEST", "we_prod", "we_prodc"
+json.dump(p, open(f, "w"), indent=2)' "$1" "$2" "$C_API" "$C_WEB" "$C_ADMIN" https://img.shop-example.test
+}
+if python3 -c 'import json, sys; sys.exit(not json.load(open(sys.argv[1]))["origins"]["api"].endswith(".workers.dev"))' "$REPO/cloudflare/pinned.production.json"; then
+  for routes in with without; do
+    new_tree; cp "$REPO/cloudflare/wrangler.jsonc" "$T/cloudflare/"; cp "$REPO/cloudflare/web/wrangler.jsonc" "$T/cloudflare/web/"; cp "$REPO/cloudflare/admin/wrangler.jsonc" "$T/cloudflare/admin/"
+    day_of_domain "$T" "$routes"; stripe_file "$T" production "$SKEY_LIVE"; launch_todo_all_done "$T"
+    for kind in api web admin; do
+      run_custom "$kind" -- deploy
+      if [ "$routes" = with ]; then
+        expect_exec_line "repo $kind config + the report's day-of-domain edits → passes every production check" "$(deploy_exec "$kind")"
+      else
+        expect_refused "repo $kind config + the report's edits WITHOUT its routes line → refused (no address)" "env.production.routes is null, expected exactly [{\"custom_domain\": true, \"pattern\": \"$(custom_host "$kind")\"}]"
+      fi
+    done
+  done
+else
+  ok "repo pinned.production.json is already on its custom domain: the real-file cases above check it as committed"
+fi
 
 # --- secrets never surface ----------------------------------------------------------------
 RC=0 OUT=$ALL_OUT

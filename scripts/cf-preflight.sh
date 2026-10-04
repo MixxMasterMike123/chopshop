@@ -49,17 +49,31 @@
 #      one entry { binding API, service == pinned workerName (the API of the SAME env),
 #      entrypoint Internal }; vars EXACTLY WEB_ORIGIN == pinned origins.web and
 #      PUBLIC_OBJECT_BASE_URL == pinned r2.publicBaseUrl; NO other key in env.<env> (only name,
-#      account_id, workers_dev, preview_urls, assets, services, vars) nor at the top level (only
+#      account_id, workers_dev, preview_urls, assets, services, vars, and in production routes,
+#      see "addresses" below) nor at the top level (only
 #      $schema, name, account_id, main, compatibility_date, compatibility_flags, observability,
 #      env; wrangler inherits routes, triggers, workers_dev, assets and build into env.<env>) — so
 #      no D1, R2, KV, queue, Durable Object, container, secret-store, AI or any other binding, no
-#      route, no cron trigger: the web Worker holds no data and no secret; production's
-#      workers_dev and preview_urls are exactly false (absent, wrangler turns workers_dev on);
+#      route but production's custom domain, no cron trigger: the web Worker holds no data and
+#      no secret; production's workers_dev and preview_urls are exactly false (absent, wrangler
+#      turns workers_dev on when there is no route);
 #      and for `deploy`, cloudflare/web/dist/index.html exists (the storefront was built) and
 #      dist holds no source map (no *.map file, no sourceMappingURL comment);
 #      admin (--admin, cloudflare/admin/wrangler.jsonc): the same, with adminWorkerName, vars
 #      EXACTLY ADMIN_ORIGIN == pinned origins.admin and PUBLIC_OBJECT_BASE_URL, the same key lists
 #      and services entry, cloudflare/admin/dist, and the API's AUTH_TRUSTED_ORIGINS as above;
+#      addresses (CP7-T3; the API, --web and --admin alike, each by its OWN pinned origin:
+#      origins.api, origins.web, origins.admin): no `route` key anywhere, no `routes` at the top
+#      level (wrangler inherits it into every env section), no `routes` in env.staging; in
+#      env.production, when that origin's host ends in .workers.dev (today's placeholder pins)
+#      no `routes` either and nothing else changes; when it does NOT, `routes` is EXACTLY
+#      [{"pattern": "<that origin's host>", "custom_domain": true}] — one custom domain, no zone
+#      route, no path, wildcard, port, upper case, other host or other key; without it the Worker
+#      would deploy with no address — that origin carries no port (a custom domain answers on
+#      the https port only), its host is not the host of another pinned origin nor of
+#      r2.publicBaseUrl (a second Worker deploying the same custom domain would take it from the
+#      first), and the API's workers_dev and preview_urls are exactly false (the web and admin
+#      Workers' are in production always, above);
 #   6. production without --bootstrap (with --web / --admin too: those Workers are part of the same
 #      launch): every launch-gate item of docs/SnapWearDocs/LAUNCH_TODO.md
 #      (A1–A7, A9–A11, A13–A14, B1–B10 — PLAN §0) is ☑;
@@ -472,12 +486,19 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     consumers = sorted(item.get("queue") for item in (q.get("consumers") or []))
     if consumers != sorted(want_q.values()):
         refuse(f"{jsonc} env.{env} queue consumers are {consumers}, expected exactly the pinned {sorted(want_q.values())}")
+    # The API's address (CP7-T3). On its custom domain it has no other: no workers.dev, no
+    # preview URL, written out as for the web and admin Workers.
+    if check_route(jsonc, cfg, e, env, "api", p, pinned_path):
+        for key in ("workers_dev", "preview_urls"):
+            if e.get(key) is not False:
+                refuse(f"{jsonc} env.production.{key} is {canon(e.get(key))}, production on a custom domain requires false (the API answers on its pinned origin only, nothing of it on workers.dev)")
 
 # The web and admin Workers (cloudflare/web/wrangler.jsonc, cloudflare/admin/wrangler.jsonc) hold no
 # data, no secret, no route and no trigger: these are the ONLY keys their configurations may have. Anything else — any binding kind wrangler
 # knows today or adds later, a route, a cron trigger, a build command — is refused until the
 # preflight is extended for it. The top level counts too: wrangler inherits routes, triggers,
-# workers_dev, assets and build from it into every env section.
+# workers_dev, assets and build from it into every env section. The one route there is:
+# env.production.routes, the custom domain of the pinned origin (CP7-T3, check_route).
 WEB_TOP_KEYS = {"$schema", "name", "account_id", "main", "compatibility_date", "compatibility_flags", "observability", "env"}
 WEB_ENV_KEYS = {"name", "account_id", "workers_dev", "preview_urls", "assets", "services", "vars"}
 WEB_ASSETS = {"directory": "./dist", "binding": "ASSETS", "run_worker_first": True,
@@ -486,6 +507,34 @@ WEB_ASSETS = {"directory": "./dist", "binding": "ASSETS", "run_worker_first": Tr
 def canon(value):
     """Exact JSON equality: key order is free, but true is not 1 and "1" is not 1."""
     return json.dumps(value, sort_keys=True)
+
+def check_route(jsonc, cfg, e, env, kind, p, pinned_path):
+    """The Worker's address (CP7-T3), by its own pinned origin (origins.<kind>). Returns True when
+    env.production carries that origin's custom domain, False when the Worker takes no route
+    (staging, or a pinned workers.dev host: exactly as before)."""
+    for key in ("routes", "route"):
+        if key in cfg:
+            refuse(f"{jsonc} top level has {key} - wrangler inherits it into every env section; the only route allowed is env.production.routes, the custom domain of the pinned origin")
+    if "route" in e:
+        refuse(f"{jsonc} env.{env}.route is {canon(e['route'])} - the only route allowed is env.production.routes, the custom domain of the pinned origin")
+    origin = p["origins"][kind]
+    host = origin[len("https://"):]  # check 2: a bare https origin, so this is its host (a port as written)
+    if env != "production" or host.split(":")[0].endswith(".workers.dev"):
+        if "routes" in e:
+            why = "staging takes no route" if env == "staging" else f"pinned origins.{kind} {origin!r} is a workers.dev host, so the {kind} Worker takes no route"
+            refuse(f"{jsonc} env.{env}.routes is {canon(e['routes'])} - {why} (a route is only the custom domain of a pinned production origin that is not on workers.dev)")
+        return False
+    if ":" in host:
+        refuse(f"{pinned_path}: origins.{kind} {origin!r} has a port - its Worker is reached through a custom domain, which answers on the https port only; pin the origin without one")
+    others = {f"origins.{k}": p["origins"][k] for k in ("api", "web", "admin") if k != kind}
+    others["r2.publicBaseUrl"] = p["r2"]["publicBaseUrl"]
+    for key, other in others.items():
+        if other is not None and other[len("https://"):].split(":")[0] == host:
+            refuse(f"{pinned_path}: origins.{kind} {origin!r} has the host of {key} {other!r} - each production Worker's custom domain is a host of its own (wrangler, run without a terminal, moves a custom domain that another Worker holds to the one it deploys)")
+    want = [{"pattern": host, "custom_domain": True}]
+    if canon(e.get("routes")) != canon(want):
+        refuse(f"{jsonc} env.production.routes is {canon(e.get('routes'))}, expected exactly {canon(want)} - pinned origins.{kind} {origin!r} is not a workers.dev host, so the {kind} Worker is reached only through that custom domain (without it, it deploys with no address)")
+    return True
 
 def check_edge(kind, jsonc, pinned_path, env):
     """kind is "web" or "admin": the same checks, bound to that Worker's pinned name, origin and var."""
@@ -498,9 +547,12 @@ def check_edge(kind, jsonc, pinned_path, env):
     extra = sorted(set(cfg) - WEB_TOP_KEYS)
     if extra:
         refuse(f"{jsonc} top level has {', '.join(extra)} - it may only hold {', '.join(sorted(WEB_TOP_KEYS))} (wrangler inherits routes, triggers, workers_dev, assets and build into env.{env}; the {kind} Worker holds no data, no secret, no route and no trigger)")
-    extra = sorted(set(e) - WEB_ENV_KEYS)
+    # Production may hold routes (check_route below decides which); staging never.
+    env_keys = WEB_ENV_KEYS | ({"routes"} if env == "production" else set())
+    extra = sorted(set(e) - env_keys)
     if extra:
-        refuse(f"{jsonc} env.{env} has {', '.join(extra)} - the {kind} Worker holds no data, no secret, no route and no trigger: env.{env} may only hold {', '.join(sorted(WEB_ENV_KEYS))}")
+        holds = "no data, no secret, no route and no trigger" if env == "staging" else "no data, no secret, no trigger and no route but its pinned custom domain"
+        refuse(f"{jsonc} env.{env} has {', '.join(extra)} - the {kind} Worker holds {holds}: env.{env} may only hold {', '.join(sorted(env_keys))}")
     name = e.get("name", f"{cfg.get('name')}-{env}")
     if name != p[name_key]:
         inherited = "" if "name" in e else " (wrangler's effective name: top-level name + '-" + env + "')"
@@ -523,7 +575,8 @@ def check_edge(kind, jsonc, pinned_path, env):
         # Absent is not off: without a route wrangler turns workers_dev on.
         for key in ("workers_dev", "preview_urls"):
             if e.get(key) is not False:
-                refuse(f"{jsonc} env.production.{key} is {canon(e.get(key))}, production requires false (nothing of the production {kind} Worker on workers.dev; absent, wrangler turns workers_dev on)")
+                refuse(f"{jsonc} env.production.{key} is {canon(e.get(key))}, production requires false (nothing of the production {kind} Worker on workers.dev; absent, wrangler turns workers_dev on when there is no route)")
+    check_route(jsonc, cfg, e, env, kind, p, pinned_path)
     print(p[name_key])
 
 def cmd_webjsonc(jsonc, pinned_path, env):
