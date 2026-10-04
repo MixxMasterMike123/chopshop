@@ -662,7 +662,7 @@ It is kept as a deployable artifact together with the pre-freeze SHA (PLAN §10 
 
 ### 4.10 Freeze evidence — LOCAL
 
-Write `$W/freeze-evidence.md` with:
+Write `$W/freeze-evidence.md`, the human log, with:
 - the time of each of §4.3–§4.8;
 - the shop flags before and after;
 - the PaymentIntent counts per state (all 0);
@@ -671,7 +671,51 @@ Write `$W/freeze-evidence.md` with:
 - the message to Kent;
 - who gave each go.
 
-The manifest's P3 asks for this file before the import.
+Then the two files `import.mjs` checks (manifest §d P3 and P4; CP7-T2, `scripts/cf-port/migrate/lib/production-evidence.mjs` has every refusal). Without them a production plan is refused.
+
+1. **`$W/freeze-evidence.json`** (P3). The times, in UTC, of the steps above. `frozenAt` is the moment the freeze was **complete**: after its last step, so no step may be later. It is not the §4.3 time: the hidden toggle of §4.3 is itself a write to `shops`.
+
+   ```
+   {
+     "evidence": "freeze",
+     "checkoutsStoppedAt": "<§4.3, or the frozen build's deploy under option B>",
+     "schedulesPausedAt": "<§4.6>",
+     "webhookDisabledAt": "<§4.7>",
+     "editsStoppedAt": "<§4.8>",
+     "frozenAt": "<now, after the last of them>"
+   }
+   ```
+
+   Each time is `YYYY-MM-DDTHH:MM:SS.sssZ`. The tool refuses: a step after `frozenAt`; a bundle exported before `frozenAt`; a carried collection whose `maxUpdateTimeSeen` is after `frozenAt` (someone wrote after the freeze).
+2. **`$W/open-payments.json`** (P4), from a Stripe read made after §4.3 (§4.4's morning read qualifies; repeat it if in doubt). It is needed at §5.4: write it once §5.2 step 1's dry run has shown the `printNotifications` count. READ-ONLY; the key goes to curl on stdin, as in §4.4:
+
+   ```
+   umask 077
+   sk() { printf 'user = "%s:"\n' "$(sed -n 's/^STRIPE_SECRET_KEY=//p' ~/.config/chopshop/stripe.production.env)"; }
+   PRINT_NOTIFICATIONS=0     # the export dry run's printNotifications count (see below)
+   READ_AT=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+   sk | curl -sS -K - https://api.stripe.com/v1/account > $W/stripe-account.json
+   for s in requires_payment_method requires_confirmation requires_action requires_capture processing; do
+     sk | curl -sS -K - "https://api.stripe.com/v1/payment_intents/search?query=status%3A%27$s%27&limit=100" > "$W/pi-$s.json"
+   done
+   python3 - "$W" "$READ_AT" "$PRINT_NOTIFICATIONS" <<'PY'
+   import json, sys
+   w, read_at, pending = sys.argv[1], sys.argv[2], int(sys.argv[3])
+   states = ['requires_payment_method', 'requires_confirmation', 'requires_action', 'requires_capture', 'processing']
+   out = {'evidence': 'open-payments', 'readAt': read_at, 'platformAccountId': json.load(open(f'{w}/stripe-account.json'))['id'],
+          'openPaymentIntents': {}, 'printNotificationsPending': pending, 'terminalCheckouts': []}
+   for s in states:
+       d = json.load(open(f'{w}/pi-{s}.json'))
+       if 'data' not in d or d.get('has_more'): sys.exit(f'{s}: not a complete search answer')
+       out['openPaymentIntents'][s] = [p['id'] for p in d['data']]
+   json.dump(out, open(f'{w}/open-payments.json', 'w'), indent=2)
+   print({s: len(v) for s, v in out['openPaymentIntents'].items()})
+   PY
+   ```
+
+   - `PRINT_NOTIFICATIONS` is the count on the export dry run's `printNotifications [drop]` line (§5.2 step 1): `0 (absent)` means 0. A non-zero count must be read by hand; write the number still pending.
+   - `terminalCheckouts` stays `[]` unless the export holds a source checkout whose status is not completed, failed or skipped: add its id only after its PaymentIntent was read as terminal at Stripe (§4.5).
+   - **Expect:** `{…: 0}` for every state. The tool refuses: a read before `checkoutsStoppedAt`; a key of another account than the pinned `stripeAccountId` (and every production plan while that pin is null, §2.3); a missing state; any PaymentIntent listed; a pending printer notification; an open checkout in the export.
 
 ---
 
@@ -693,15 +737,15 @@ Each step below names the tool's state in production **today**. Where a tool ref
 | Tool | Production today | Before the cutover |
 |---|---|---|
 | `scripts/cf-port/migrate/export.mjs` | reads production by design; read-only (`:15-20`, test `no-write-calls.test.mjs`) | run from a clean tree; P3 is proven with a double export (§5.2) |
-| `import.mjs` | **accepts** `--env production` (`:108`). Refuses the staging scrub options there. Needs `--commission-default-for melodie-mc`. Its plan is the production **platform** run (0052: one per kind). Does **not** check the manifest's P1 (`--confirm`, `--expect-tenants`), P3 (freeze evidence), P4 (open payments) or P5 (re-pull Connect flags) | P1/P3/P4/P5 by hand (blocker 9) |
-| `state-from-queries.mjs` | prints production queries **without `--bootstrap`**, so they are launch-gated (`:113`) | add `--bootstrap` by hand, or fix (blocker 11) |
-| `verify.mjs` | accepts production; expects `snapwear` active and the default printer, and 2 platform admins plus 1 shop admin (`:63-64, 123-125`); leaves 9 items DEFERRED | check the deferred items by hand (§5.9; blocker 10) |
+| `import.mjs` | **production mode** (CP7-T2): `--confirm production --expect-tenants <n>` (P1), `--freeze-evidence` and `--rescan-bundle` (P3), `--payments-evidence` (P4), `--connect-evidence` (P5; the plan writes the live flags). Refuses the staging scrub options there. Needs `--commission-default-for melodie-mc`. Its plan is the production **platform** run (0052: one per kind). Refuses while `stripeAccountId` is null in the pinned file | the pinned `stripeAccountId` (§2.3) and the three evidence files (§4.10, §5.4) |
+| `state-from-queries.mjs` | prints production's commands **with `--bootstrap`** (CP7-T2), and for `actual` also the go-live queries of `verify.mjs` | none |
+| `verify.mjs` | accepts production; expects `snapwear` active and the default printer, and 2 platform admins plus 1 shop admin. **Go-live items** (CP7-T2): decides 8, 9, 10, 11, 13, 16, 18 from the state, the bundle and the repository, 12 and 19 in the final run (`--final`, §5.9); 5, part of 8 and part of 13 stay DEFERRED with their manual check | the manual checks of §5.9 |
 | `storage-copy.mjs` | **production mode** (CP7-T1): `--env production --confirm production`; the API origin of the pinned file; credentials from the environment or `~/.config/chopshop/secrets.production.env` only; refuses a shop that is not yet a tenant (§5.5) | the address of the production API (blocker 2) and the production secrets file |
 | `import-catalogue.mjs` | **production mode** (CP7-T1): `--confirm production`; its plan is the production **catalogue** run (0052); refuses while `r2.publicBaseUrl` is null (§5.6) | `r2.publicBaseUrl` pinned (blocker 16) |
 | `verify-catalogue.mjs` | **production mode** (CP7-T1): `--confirm production`, for the queries and the checks (§5.6) | none |
 | `import-studio-assets.mjs` | **production mode** (CP7-T1): as `storage-copy.mjs` (§5.11); needed only for the studio and POD | the address of the production API (blocker 2) and the production secrets file |
 | `staging-legal.mjs` | **REFUSES** production by design: the seller adopts the pages himself (`:5-6`) | only its step (a), the archived terms text, is needed in production (blocker 7) |
-| `reconcile-staging.mjs` | **REFUSES** a non-staging origin or a non-sandbox account (`:82-83, 198-199`) | production mode (blocker 8) |
+| `reconcile-staging.mjs` | **production mode** (CP7-T2), read-only: `--env production --confirm production --tenant <shop>`; the pinned API origin; the live key from `~/.config/chopshop/stripe.production.env` only (§7.5) | the address of the production API (blocker 2), the pinned `stripeAccountId`, the live key file and the production secrets file |
 | `restore-archive.mjs` | **REFUSES** production (`:119-128`) | after the cutover only |
 | `seed-staging-slice.mjs`, `connect-proof-staging.mjs` | staging only, by design | none; the smoke is done by hand (§7) |
 | `build-locales.mjs` | no environment; the files are in the repository | check that nothing changed (§5.8) |
@@ -732,7 +776,8 @@ scripts/cf-preflight.sh production --bootstrap -- d1 time-travel info chopshop-p
    PY
    ```
 
-   - **Expect:** every line `SAME`. Every `maxUpdateTimeSeen` is earlier than the §4.3 time.
+   - **Expect:** every line `SAME`. Every `maxUpdateTimeSeen` is not later than `frozenAt` of `$W/freeze-evidence.json` (§4.10). The §4.3 time is too early a bound: the hidden toggle writes `shops`.
+   - `import.mjs` makes this comparison itself and refuses the plan on any difference (P3, CP7-T2): pass `--rescan-bundle "$B2"` (§5.4). It compares every carried, mixed and verify-only collection and the Auth users (a changed sign-in time alone is reported, not refused), and reports an archive collection that differs.
    - **Also compare the Auth users:** `shasum -a 256 "$B/_auth/users.jsonl" "$B2/_auth/users.jsonl"`. They are not a Firestore collection, so the loop above does not cover them. A difference means an account changed, or someone signed in to Firebase, if the sign-in time is part of the record (**not verified**). Read which before going on.
    - **If a line says CHANGED:** someone wrote after the freeze. Find out what it was, and decide whether the freeze holds before going on.
 4. `$B` is the bundle for every step below.
@@ -747,23 +792,60 @@ node scripts/cf-port/build-locales.mjs --bundle "$B" --out $W/locales && diff -r
 
 ### 5.4 The CP3 import: tenants, users, printers, settings — NEEDS MIKAEL'S GO for the apply
 
-1. **Target state** (READ-ONLY on production): print the queries with `node scripts/cf-port/migrate/state-from-queries.mjs --print-queries target --env production`. Run each printed command **with `--bootstrap` added after `production`** (blocker 11), redirected into `$W/q-target/<name>.json`. Then:
+1. **Target state** (READ-ONLY on production): print the queries with `node scripts/cf-port/migrate/state-from-queries.mjs --print-queries target --env production`. Each printed command already runs through `scripts/cf-preflight.sh production --bootstrap --` (CP7-T2; `--bootstrap` admits d1 and skips the launch gate, blocker 11). Run each, redirected into `$W/q-target/<name>.json`. Then:
 
    ```
    node scripts/cf-port/migrate/state-from-queries.mjs --from $W/q-target --kind target --out $W/target-state.json
    ```
 
    - **Expect:** with decision 1.11 (a), one user (the bootstrapped platform admin) and no tenant.
-2. **Plan** (LOCAL):
+2. **Connect facts from live Stripe** (READ-ONLY; manifest P5: re-pull, never carry). After the export (§5.2), right before the plan. The key goes to curl on stdin:
 
    ```
-   node scripts/cf-port/migrate/import.mjs --env production --bundle "$B" --out $W/cp3-plan --target-state $W/target-state.json --commission-default-for melodie-mc
+   umask 077
+   python3 - "$B" > $W/connect-ids.txt <<'PY'
+   import glob, json, os, sys
+   ids = set()
+   for part in sorted(glob.glob(os.path.join(sys.argv[1], 'shops', 'part-*.jsonl'))):
+       for line in open(part):
+           a = ((json.loads(line).get('data') or {}).get('payments') or {}).get('stripeAccountId')
+           if a: ids.add(a)
+   print('\n'.join(sorted(ids)))
+   PY
+   sk() { printf 'user = "%s:"\n' "$(sed -n 's/^STRIPE_SECRET_KEY=//p' ~/.config/chopshop/stripe.production.env)"; }
+   READ_AT=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+   sk | curl -sS -K - https://api.stripe.com/v1/account > $W/stripe-account.json
+   while read -r a; do sk | curl -sS -K - "https://api.stripe.com/v1/accounts/$a" > "$W/stripe-$a.json"; done < $W/connect-ids.txt
+   python3 - "$W" "$READ_AT" <<'PY'
+   import json, sys
+   w, read_at = sys.argv[1], sys.argv[2]
+   out = {'evidence': 'connect-facts', 'readAt': read_at, 'platformAccountId': json.load(open(f'{w}/stripe-account.json'))['id'], 'accounts': {}}
+   for a in open(f'{w}/connect-ids.txt').read().split():
+       r = json.load(open(f'{w}/stripe-{a}.json'))
+       if r.get('id') != a: sys.exit(f'{a}: not readable under the platform key ({(r.get("error") or {}).get("code")})')
+       out['accounts'][a] = {'chargesEnabled': r.get('charges_enabled') is True, 'payoutsEnabled': r.get('payouts_enabled') is True, 'detailsSubmitted': r.get('details_submitted') is True}
+   json.dump(out, open(f'{w}/connect-facts.json', 'w'), indent=2)
+   print(len(out['accounts']), 'account(s)')
+   PY
    ```
 
-   - **Expect** (§3.2 and staging): about 864 statements, about 286 KB; 4 tenants (gif-sundsvall, melodie-mc, ninetone, sillmans; robowatz is archived, D21); 2 platform admins and 1 shop admin (melodie-mc), with the operator's admin **adopted**, not created (1.11); `snapwear` with 323 article tiers; 63 screening terms; 8 POD profiles.
-   - **If it refuses:** read every `REFUSED:` line. A commission, an unknown address or a collision means stop and ask.
+   - A successful `GET /v1/accounts/{id}` under the platform key is the proof that the account belongs to the platform; one that fails stops the script.
+   - **Expect:** `2 account(s)` at the 2026-09-27 export (melodie-mc, sillmans).
+   - The `stripe-*.json` files hold the accounts' business details: keep `$W` outside the repository.
+3. **Plan** (LOCAL):
+
+   ```
+   node scripts/cf-port/migrate/import.mjs --env production --confirm production --expect-tenants 4 \
+     --bundle "$B" --rescan-bundle "$B2" \
+     --freeze-evidence $W/freeze-evidence.json --payments-evidence $W/open-payments.json --connect-evidence $W/connect-facts.json \
+     --out $W/cp3-plan --target-state $W/target-state.json --commission-default-for melodie-mc
+   ```
+
+   - `--expect-tenants` is the number of shops the export carries: 4 (gif-sundsvall, melodie-mc, ninetone, sillmans; robowatz is archived, D21). The manifest's 5 predates D21. A plan that writes another number is refused.
+   - **Expect** (rehearsal, CP7-T2 report): 864 statements, about 287 KB; 4 tenants; 2 platform admins and 1 shop admin (melodie-mc), with the operator's admin **adopted**, not created (1.11); `snapwear` with 323 article tiers; 63 screening terms; 8 POD profiles. The report lines include `re-scan: the second export (…) equals the bundle …` and `connect: the flags of 2 account(s) are taken from the live read of …`, and one `Connect flags from the live read differ from the source` line per shop whose flags changed (the live ones are written).
+   - **If it refuses:** read every `REFUSED:` line. A commission, an unknown address, a collision, a write after the freeze, an open payment or a missing account means stop and ask. `cloudflare/pinned.production.json stripeAccountId is null` means §2.3 is not done.
    - This plan is the production **platform** run. Migration 0052 lets production complete one run of each kind, so the catalogue (§5.6) is the second run, of kind `catalogue` (blocker 3, closed).
-3. **Apply.** NEEDS MIKAEL'S GO:
+4. **Apply.** NEEDS MIKAEL'S GO (the plan's `apply.md` prints the same command):
 
    ```
    scripts/cf-preflight.sh production --bootstrap -- d1 execute chopshop-prod --remote --file=$W/cp3-plan/plan.sql
@@ -772,24 +854,28 @@ node scripts/cf-port/build-locales.mjs --bundle "$B" --out $W/locales && diff -r
    - **Expect:** success with no error. On staging, 862 statements and 2 509 rows were written, first try (HANDOVER CP3).
    - **If it stops halfway:** the plan's `apply.md` §4 says how to complete the same run.
    - **Undo:** restore to the §5.1 bookmark.
-4. **Actual state and verify** (READ-ONLY, then LOCAL): `--print-queries actual --env production`, the same way as step 1, into `$W/q-actual`. Then:
+5. **Actual state and verify** (READ-ONLY, then LOCAL): `--print-queries actual --env production`, the same way as step 1, into `$W/q-actual`. It prints 14 commands at today's schema: the 9 of CP3 and the go-live queries (`go_live_counts`, `go_live_legal`, `storage_texts_1` … `storage_texts_3`). Run every one; a partial set is refused. Then:
 
    ```
    node scripts/cf-port/migrate/state-from-queries.mjs --from $W/q-actual --kind actual --out $W/actual-state.json
    node scripts/cf-port/migrate/verify.mjs --env production --bundle "$B" --plan $W/cp3-plan --actual-state $W/actual-state.json | tee $W/verify-cp3.txt
    ```
 
-   - **Expect:** `PASS: verify complete, nothing failed`, with these items PASS:
+   - **Expect:** `PASS: verify complete, nothing failed` (rehearsal: 23 PASS, 0 FAIL, 6 DEFERRED), with these items PASS:
      - #1 `refund_application_fee = false` (D9);
      - #2 `default_commission_bps = 500`;
      - #3 `reverse_dispute_on_created = true`;
-     - #4 Connect facts, commission and VAT equal to the plan (Connect ids carried, D75 for melodie-mc);
+     - #4 Connect facts, commission and VAT equal to the plan (Connect ids carried, flags from the live read, D75 for melodie-mc);
      - #6 `default_printer_id = snapwear`, `snapwear` active and `type = api`;
      - #7 63 terms, `review_first_products = 2`, `hard_block = false`;
-     - #10 every POD profile present;
+     - #8, #9, #10 no POD mapping or artwork (POD off, 1.4), every profile present;
+     - #13 no text column of any of the 74 tables names the source's storage; every stored object active with its sha256;
      - #14 identities {platform_admin 2, tenant_admin 1};
      - #15 status, published and `pod` equal to the plan;
-     - #17 the bundle verifies.
+     - #16 the locale files equal the build from this bundle (§5.3, now checked here too);
+     - #17 the bundle verifies;
+     - #18 no order, payment event, checkout or outbox row.
+   - **DEFERRED, expected here:** #5 and part of #8 and #13 (live checks, §5.9), #11 (melodie-mc is not legally ready until §6.6), #12 and #19 (the final run, §5.9).
 
 ### 5.5 The file copy — NEEDS MIKAEL'S GO
 
@@ -928,20 +1014,29 @@ await (await fetch('/_api/v1/platform/screening-terms/rescreen', { method: 'POST
 - **Today** only `staging-legal.mjs` builds it, and that tool refuses production (blocker 7).
 - **The shops' legal pages are NOT imported by any script.** Each seller adopts them (§6.6).
 
-### 5.9 The checks `verify.mjs` defers — READ-ONLY, by hand (blocker 10)
+### 5.9 The final verify — READ-ONLY, then LOCAL (manifest P6)
 
-| Manifest (e) item | Check |
-|---|---|
-| 5 | `scripts/cf-preflight.sh production -- whoami` prints both pinned endpoints |
-| 8, 9 | POD off: `SELECT COUNT(*) FROM pod_mappings` = 0 and `SELECT COUNT(*) FROM pod_artwork` = 0 in production |
-| 11 | melodie-mc's legal readiness, after §6.6: `GET /_api/v1/platform/tenants/melodie-mc` → `legal` ready |
-| 12 | §5.6's verify-catalogue counts, once a production mode exists |
-| 13 | `SELECT COUNT(*) FROM products WHERE description LIKE '%firebasestorage%' OR description LIKE '%storage.googleapis%'` = 0, plus the same on the other text columns the catalogue verify scans. A public object answers 200 on the public host, and a private key answers 404 there |
-| 16 | §5.3 |
-| 18 | `SELECT (SELECT COUNT(*) FROM orders), (SELECT COUNT(*) FROM payment_events), (SELECT COUNT(*) FROM checkouts), (SELECT COUNT(*) FROM outbox_events)` = 0, 0, 0, 0 |
-| 19 | the launch gate, or decision 1.3 |
+After §5.8 and the re-screen (§5.7), before the switch (§6). `verify.mjs --final` decides every go-live item it can (CP7-T2, blocker 10 closed):
 
-Run each query through `scripts/cf-preflight.sh production --bootstrap -- d1 execute chopshop-prod --remote --command "…"`.
+1. Collect the actual state again: `node scripts/cf-port/migrate/state-from-queries.mjs --print-queries actual --env production`, every command into a new `$W/q-actual-final/`, then `--from $W/q-actual-final --kind actual --out $W/actual-state-final.json`. The catalogue's state is §5.6 step 6's `$W/catalogue-actual-state.json`; collect it again if anything changed since.
+2. Run:
+
+   ```
+   node scripts/cf-port/migrate/verify.mjs --env production --final --bundle "$B" --plan $W/cp3-plan --actual-state $W/actual-state-final.json \
+     --catalogue-plan $W/catalogue-plan --catalogue-actual-state $W/catalogue-actual-state.json | tee $W/verify-final.txt
+   ```
+
+   - **Expect:** `PASS: verify complete, nothing failed`, then `FINAL run: 4 item(s) deferred …: #5, #8, #11, #13`. `--final` adds #12 (every check of `verify-catalogue.mjs`, run in process) and #19 (`docs/SnapWearDocs/LAUNCH_TODO.md`, read with the preflight's own list and rule).
+   - **#19 FAILs while the launch gate is open** (rehearsal 2026-10-04: A5, A6, A7, B1–B10). It passes once every gated item is ☑, or once decision 1.3 narrows the preflight's list (the tool reads the list from `scripts/cf-preflight.sh`).
+3. **What stays by hand** (each DEFERRED line names its check):
+
+| Manifest (e) item | Why the tool cannot | Check |
+|---|---|---|
+| 5 | the endpoints and their API version live at Stripe | with `~/.config/chopshop/stripe.production.env` in place, `scripts/cf-preflight.sh production --bootstrap -- whoami` prints `pinned Stripe webhook endpoint we_… exists: enabled -> <url>` for both pinned endpoints; the API version `2023-10-16` is read on each endpoint in the Dashboard |
+| 8 (the quote) | needs the Worker's quote | none at the cutover: no mapping exists (POD off, 1.4). When POD goes on: each mapped product of melodie-mc quotes with no 409 reason |
+| 11 | not ready until Kent's step | after §6.6: `GET /_api/v1/platform/tenants/melodie-mc` → `legal` ready, or collect the go-live queries again and re-run step 2 |
+| 13 (HTTP) | needs reads of the public host | a sample of public objects answers 200 there, and a private key 404 (§7.2); needs `r2.publicBaseUrl` (blocker 16) |
+| 18 | holds only as of the queries | `go_live_counts` collected again right before checkout opens |
 
 ### 5.10 The printer: rebuild SnapWear's offer — NEEDS MIKAEL'S GO — can wait until POD goes on
 
@@ -1134,11 +1229,20 @@ Before this step, read §8.1 one last time. After it, §8.1 no longer applies.
 
 **This test costs the platform's commission on the item plus Stripe's card fee.**
 
-### 7.5 Reconcile — READ-ONLY, by hand (blocker 8)
+### 7.5 Reconcile — READ-ONLY
 
-1. Compare the admin's order page with the Stripe Dashboard: charged, refunded, application fee, transfer and its reversal.
-   - The rule is `reconcile-staging.mjs`'s: payout = transfer − reversed − (fee − fee refunded).
-2. After 30 minutes (two cron runs): `GET /_api/v1/platform/alerts?state=open` is empty.
+1. **The tool** (CP7-T2, blocker 8 closed), after the refund settled:
+
+   ```
+   node scripts/cf-port/reconcile-staging.mjs --env production --confirm production --tenant melodie-mc --order <the §7.3 order id>
+   ```
+
+   - It writes nothing: every API request is a GET except the sign-in, no acting-as grant is opened, every Stripe call is a GET. The seller's figures come from the platform's order view.
+   - It needs: the production API's address (blocker 2; an explicit `CHOPSHOP_API_URL` must equal the pin); the pinned `stripeAccountId` (§2.3); `~/.config/chopshop/stripe.production.env` with a **live** key, mode 600 (the preflight's file; `STRIPE_SECRET_KEY` in the environment is refused, and so is a test key); the platform user in the environment or `~/.config/chopshop/secrets.production.env`.
+   - **Expect:** the order's row, `Dispatch rows … 0`, `Open alerts (0)`, and the last line `BALANCED — 1 order(s), Δ 0 öre`, exit 0. The rule: payout = transfer − reversed − (fee − fee refunded); after §7.4 the fee is kept (D9) and the transfer reversed.
+   - Exit 1 is `UNBALANCED … Δ <öre>`: stop and read each `✗` line. Exit 2 is a refusal with its reason, before any request where it can be decided without one, or `Tenant … has no orders yet`.
+2. The Stripe Dashboard shows the same: charged, refunded, application fee, transfer and its reversal.
+3. After 30 minutes (two cron runs): `GET /_api/v1/platform/alerts?state=open` is empty.
 
 ### 7.6 Watch for 24 hours
 
@@ -1295,19 +1399,28 @@ Each blocker has an owner and the smallest next step. "Blocks" says **cutover** 
 6. **`import-studio-assets.mjs` refuses production. — CLOSED by CP7-T1 (commit to come).** The same target and refusals as the copy (§5.11). **Still open:** blocker 2 and the production secrets file, as for 4. Blocks: **POD-on** (the studio) until reviewed.
 7. **The platform terms' archived text has no production path.**
    - `staging-legal.mjs` step (a) is staging-only.
-   - There is no terms-versions page: FL is not built.
+   - The platform's terms-versions page now exists on staging (`/platform/terms`, `7538d015` + `237f0339`): it archives a version's exact text by its hash and publishes new versions. Whether it serves for `2026-09-07` in production is **not verified**.
    - Owner: the port.
-   - Next step: build FL's terms page, or give that one step a production mode.
+   - Next step: archive `2026-09-07` in production through that page (or a production mode of step (a)), and write the steps into §5.8.
    - Blocks: **cutover** (the terms page is empty without it; whether the sellers' acceptance also needs it is **not verified**).
-8. **No production reconciliation tool.** `reconcile-staging.mjs` refuses a non-staging origin and key (`:82-83, 198-199`). Owner: the port. Next step: production mode, read-only. Blocks: **cutover** (the smoke's proof; by hand meanwhile).
-9. **`import.mjs` does not enforce the manifest's production preconditions.**
-   - P1 (`--confirm production --expect-tenants`; the manifest's 5 is 4 now, robowatz being archived), P3 (freeze evidence, update-time re-scan), P4 (open payments) and P5 (re-pull Connect flags from live Stripe) are not implemented.
-   - Connect flags are carried verbatim (`lib/scrub.mjs:205-207`).
-   - Owner: the port.
-   - Next step: implement them, or accept §4.10, §5.2 step 3, §4.4 and §6.5 step 4 as the manual equivalents. Mikael decides.
-   - Blocks: **cutover**.
-10. **`verify.mjs` leaves 9 manifest items DEFERRED** (5, 8, 9, 11, 12, 13, 16, 18, 19). The manifest says its output must be all PASS before the switch. Owner: the port. Next step: §5.9's manual checks, or add them to the tool. Blocks: **cutover**.
-11. **`state-from-queries.mjs` prints production queries without `--bootstrap`** (`:113`), so they are launch-gated. Owner: the port (small). Next step: print `--bootstrap` for production d1 reads, or follow decision 1.3. Blocks: **cutover** (workaround in §5.4).
+8. **No production reconciliation tool. — CLOSED by CP7-T2 (commit to come); `docs/cf-port/CP7_T2_REPORT.md`.**
+   - `reconcile-staging.mjs --env production --confirm production --tenant <shop>` (§7.5), in place (the file keeps its name). It writes nothing: every API request is a GET except the sign-in, no acting-as grant is opened (the seller's figures come from the platform's order view), every Stripe call is a GET, `FAKE_PRINTER_TOKEN` is refused.
+   - The API origin of `cloudflare/pinned.production.json` (refused while null; an explicit `CHOPSHOP_API_URL` must equal it), whose `/health` must say production; the platform user from the environment or `~/.config/chopshop/secrets.production.env` only; the Stripe key from `~/.config/chopshop/stripe.production.env` only (mode 600; `STRIPE_SECRET_KEY` in the environment, the staging file and a test key are refused), whose account must be the pinned `stripeAccountId`. Staging's rules are unchanged. Each refusal is tested and mutation-checked; rehearsed offline: BALANCED, one non-GET request (the sign-in).
+   - **Still open:** the production API has no address (blocker 2); `stripeAccountId` is null (§2.3, so the tool refuses today); the live key file and the production secrets file do not exist yet. It has never run against a real host.
+   - Blocks: **cutover** until the commit is reviewed.
+9. **`import.mjs` does not enforce the manifest's production preconditions. — CLOSED by CP7-T2 (commit to come), as evidence files.**
+   - P1: `--confirm production` and `--expect-tenants <n>` (the operator's number, 4 today); a plan that writes another number of tenants is refused.
+   - P3: `--freeze-evidence` (§4.10: the steps' times and `frozenAt`) and `--rescan-bundle "$B2"` (§5.2 step 3). Refused: a freeze completed after the export, a carried document written after it, any carried, mixed or verify-only collection that differs between the two exports, an Auth user changed other than by a sign-in.
+   - P4: `--payments-evidence` (§4.10): no open PaymentIntent in any of the five states, no pending printer notification, no open checkout in the export.
+   - P5: `--connect-evidence` (§5.4 step 2): every shop's account read from live Stripe under the pinned platform account; the plan writes **those** flags, not the source's (`lib/scrub.mjs` still carries them for the evidence to replace).
+   - The Stripe evidence must name the pinned `stripeAccountId`, so a production plan is refused while it is null. Staging refuses the four options and its plans are byte-identical. Each refusal is tested and mutation-checked; rehearsed offline on the real bundle (CP7-T2 report).
+   - **Still open, by hand:** the evidence's facts are typed in or read by the runbook's commands: the freeze times, the `printNotifications` count (a dropped collection, not in the bundle), and each Stripe read. The tool proves they agree with the bundle and with each other, not that they are true.
+   - Blocks: **cutover** until the commit is reviewed.
+10. **`verify.mjs` leaves 9 manifest items DEFERRED** (5, 8, 9, 11, 12, 13, 16, 18, 19). **— CLOSED by CP7-T2 (commit to come), except what needs a live system.**
+    - Production now decides 8 (mappings resolve), 9, the rest of 10, 13 (no text column of any table names the source's storage; every stored object active with sha256), 16 and 18 from the go-live queries, the bundle and the repository; 11 is PASS once melodie-mc is ready and DEFERRED until then (expected until §6.6); `--final` (§5.9) adds 12 (`verify-catalogue.mjs`'s checks) and 19 (the launch checklist, read with the preflight's list).
+    - **Still open, by hand (§5.9):** 5 (Stripe), the quote half of 8 (the Worker; only at POD-on), the HTTP half of 13 (needs `r2.publicBaseUrl`, blocker 16), and 11 after Kent's step. 19 FAILs until the launch gate is done or narrowed (blocker 1).
+    - Blocks: **cutover** until the commit is reviewed.
+11. **`state-from-queries.mjs` prints production queries without `--bootstrap`.** **— CLOSED by CP7-T2 (commit to come).** Its production commands, and `import.mjs`'s `apply.md`, run through `scripts/cf-preflight.sh production --bootstrap --`; `--bootstrap` admits `d1` and still checks the credentials, the pins and the account (checks 1–4). The preflight is unchanged. **Still open:** `import-catalogue.mjs` and `verify-catalogue.mjs` print theirs without it; §5.6's workaround (add `--bootstrap` by hand) stays. Blocks: nothing once reviewed.
 12. **The real SnapWear submit client does not exist.**
     - `cloudflare/src/dispatch/printer-client.ts:191-195` is a stub that rejects; production's `DISPATCH_TARGET` resolves to it.
     - It is being built and stays OFF until SnapWear confirms C1–C9.

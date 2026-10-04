@@ -5,6 +5,7 @@ import path from 'node:path';
 import { runImport, DEFERRED_ROWS, DEFERRED_TARGET_TABLES, assertOutsideRepo, buildApplyMd, REPO_ROOT } from '../import.mjs';
 import { scanForbiddenStatements } from '../lib/sql.mjs';
 import { tmpDir, rmDir, buildFixtureBundle, FIXED_EMAIL_MAP, FIXED_NOW } from './fixtures.mjs';
+import { productionOptions } from './production-fixtures.mjs';
 
 async function withFixture(fn, overrides = {}) {
   const base = tmpDir();
@@ -455,14 +456,15 @@ test('a statement over D1\'s length limit refuses the plan, named by table', asy
 
 test('production: the two scrub options are refused, and without them every address is carried as it is', async () => {
   await withFixture(async (bundleDir, base) => {
-    const withMap = runImport({ bundleDir, emailMapPath: writeEmailMap(base), env: 'production' });
+    const production = await productionOptions(base);
+    const withMap = runImport({ bundleDir, emailMapPath: writeEmailMap(base), env: 'production', ...production });
     assert.equal(withMap.ok, false);
     assert.match(withMap.problems[0], /--email-map is a staging option/);
-    const withScrub = runImport({ bundleDir, env: 'production', scrubUnmapped: true });
+    const withScrub = runImport({ bundleDir, env: 'production', scrubUnmapped: true, ...production });
     assert.equal(withScrub.ok, false);
     assert.match(withScrub.problems[0], /--scrub-unmapped is a staging option/);
 
-    const plain = runImport({ bundleDir, env: 'production' });
+    const plain = runImport({ bundleDir, env: 'production', ...production });
     assert.equal(plain.ok, true, JSON.stringify(plain.problems));
     assert.ok(plain.planText.includes("'admin1@example.com'"));
     assert.ok(plain.planText.includes("'owner-a@example.com'"));
@@ -515,7 +517,8 @@ test('a commission above the cap: reported on staging, refuses the plan on produ
       const staging = runImport({ bundleDir, emailMapPath: writeEmailMap(base), env: 'staging' });
       assert.equal(staging.ok, true, JSON.stringify(staging.problems));
       assert.ok(staging.reportLines.some((l) => l.includes('shops/test-shop-a: payments.commissionBps is 5000')));
-      const production = runImport({ bundleDir, env: 'production' });
+      const fixture = { schemaPatch: (schema) => { schema.shops['test-shop-a'].data.payments.commissionBps = 5000; } };
+      const production = runImport({ bundleDir, env: 'production', ...(await productionOptions(base, { fixture })) });
       assert.equal(production.ok, false);
       assert.ok(production.problems.some((p) => p.startsWith('REFUSED: shops/test-shop-a: payments.commissionBps is 5000')));
     },
@@ -553,23 +556,24 @@ test('a commission or a VAT rate that is not a usable number is never written', 
 
 test('D75: --commission-default-for accepts the platform default for the named shop, and only where it is needed', async () => {
   await withFixture(
-    async (bundleDir) => {
-      const refused = runImport({ bundleDir, env: 'production' });
+    async (bundleDir, base) => {
+      const production = await productionOptions(base, { fixture: { schemaPatch: (schema) => { schema.shops['test-shop-a'].data.payments.commissionBps = 5000; } } });
+      const refused = runImport({ bundleDir, env: 'production', ...production });
       assert.equal(refused.ok, false);
       assert.ok(refused.problems.some((p) => p.includes('pass --commission-default-for test-shop-a')));
 
-      const accepted = runImport({ bundleDir, commissionDefaultFor: ['test-shop-a'], env: 'production' });
+      const accepted = runImport({ bundleDir, commissionDefaultFor: ['test-shop-a'], env: 'production', ...production });
       assert.equal(accepted.ok, true, JSON.stringify(accepted.problems));
       assert.equal(accepted.planJson.expected.tenants['test-shop-a'].commissionBps, null);
       assert.ok(accepted.reportLines.some((l) => l.includes('accepted for this shop by --commission-default-for')));
       assert.notEqual(accepted.planJson.runId, refused.planJson?.runId);
 
       // The acceptance of one shop accepts no other, and a name that fits nothing is an error.
-      const other = runImport({ bundleDir, commissionDefaultFor: ['test-shop-b'], env: 'production' });
+      const other = runImport({ bundleDir, commissionDefaultFor: ['test-shop-b'], env: 'production', ...production });
       assert.equal(other.ok, false);
       assert.ok(other.problems.some((p) => p.includes("--commission-default-for test-shop-b: that shop's commission needs no acceptance")));
       assert.ok(other.problems.some((p) => p.includes('shops/test-shop-a: payments.commissionBps is 5000')));
-      const unknown = runImport({ bundleDir, commissionDefaultFor: ['test-shop-a', 'no-such-shop'], env: 'production' });
+      const unknown = runImport({ bundleDir, commissionDefaultFor: ['test-shop-a', 'no-such-shop'], env: 'production', ...production });
       assert.ok(unknown.problems.some((p) => p.includes('--commission-default-for no-such-shop: no such shop')));
     },
     { schemaPatch: (schema) => { schema.shops['test-shop-a'].data.payments.commissionBps = 5000; } },

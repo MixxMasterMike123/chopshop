@@ -180,20 +180,34 @@ export function buildTable(docs, rules, namedKeys = new Set()) {
   return { counts: { leftOut, read: docs.length, written: entries.length }, table: Object.fromEntries(entries) };
 }
 
-export async function buildLocales({ bundleDir, outDir = DEFAULT_OUT }) {
+/**
+ * The three files' bytes and counts, built in memory and written nowhere
+ * (CP7-T2: verify.mjs compares them with the committed files, manifest (e) 16).
+ * → { language: { counts, text } }
+ */
+export async function buildLocaleTexts({ bundleDir }) {
   const verify = verifyBundle(bundleDir);
   if (!verify.ok) throw new Error('the bundle does not verify: refusing to build from it');
   const worker = await loadWorkerRules();
   const rules = { isSourceStorageAddress: worker.isSourceStorageAddress, markers: buildMarkerPatterns(), names: guardNamePatterns() };
   const docsByLanguage = Object.fromEntries(Object.entries(LANGUAGES).map(([language, collection]) => [language, readCollection(bundleDir, collection)]));
   const namedKeys = keysNamedInAnyLanguage(docsByLanguage, rules);
-  mkdirSync(outDir, { recursive: true });
-  const summary = {};
+  const out = {};
   for (const [language, docs] of Object.entries(docsByLanguage)) {
     const { counts, table } = buildTable(docs, rules, namedKeys);
+    out[language] = { counts, text: `${JSON.stringify(table, null, 2)}\n` };
+  }
+  return out;
+}
+
+export async function buildLocales({ bundleDir, outDir = DEFAULT_OUT }) {
+  const built = await buildLocaleTexts({ bundleDir });
+  mkdirSync(outDir, { recursive: true });
+  const summary = {};
+  for (const [language, { counts, text }] of Object.entries(built)) {
     const file = path.join(outDir, `${language}.json`);
     const temporary = `${file}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(table, null, 2)}\n`);
+    writeFileSync(temporary, text);
     renameSync(temporary, file);
     summary[language] = counts;
   }

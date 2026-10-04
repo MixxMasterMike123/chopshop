@@ -107,8 +107,9 @@ export const img = (name) => `${STORAGE}/${encodeURIComponent(`products/${name}`
  * with a dangling member, smart); two pages (one clean with a storage image,
  * one with a script); a branding logo and hero.
  */
-export async function buildCatalogueBundle(bundleDir, { patch = null } = {}) {
+export async function buildCatalogueBundle(bundleDir, { exportedAt = undefined, patch = null } = {}) {
   await buildFixtureBundle(bundleDir, {
+    exportedAt,
     schemaPatch(schema) {
       const shop = schema.shops['test-shop-a'].data;
       shop.storeIdentity.logoUrl = img('logo.png');

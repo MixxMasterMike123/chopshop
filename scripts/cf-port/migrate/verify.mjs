@@ -24,6 +24,43 @@
  * Adjusted to the decisions: robowatz archived (D21), staging default printer
  * NULL (D66), snapwear inactive on staging (D59), known non-manifest tenants
  * (`bench-cp1`, `slice-20260927`, `slice-connect-20260927`) are expected extras (D56).
+ *
+ * CP7-T2 — THE GO-LIVE ITEMS, production only (staging prints the nine as
+ * DEFERRED exactly as before). Each is decided from what the tool has by
+ * design, or stays DEFERRED with its reason and the manual check named:
+ *
+ *   5   DEFERRED: the endpoints and their API version live at Stripe
+ *   8   the `goLive` section of --actual-state: every POD mapping's artwork
+ *       is in its own shop. DEFERRED: the garment and the quote (the Worker's
+ *       409 reasons) of each mapped product — needs the Worker, and applies
+ *       when POD goes on (decision 1.4)
+ *   9   goLive: every mapped artwork `ready` with its print and preview keys
+ *       and sha256 (the objects' presence in R2 is not read: no network)
+ *   10  goLive, added to the CP3 check: every artwork's profile resolves
+ *   11  goLive: melodie-mc's legal readiness (the Worker's three conditions
+ *       and the current platform terms accepted). Not ready is DEFERRED, not
+ *       FAIL: the manifest calls it expected until Kent's step (§6.6), and the
+ *       Worker keeps checkout closed until then
+ *   12  with --catalogue-plan and --catalogue-actual-state: verify-catalogue.mjs's
+ *       own checks, run in process (one source of truth, never restated);
+ *       without them DEFERRED to the final run
+ *   13  goLive: no text column of any table (lib/schema-text-columns.mjs, every
+ *       table of the migrations) names the source's storage, and every stored
+ *       object is active with its sha256. DEFERRED: the public host's 200 and
+ *       404 (HTTP)
+ *   16  the three locale files built in memory from the bundle
+ *       (build-locales.mjs buildLocaleTexts) equal src/locales/ byte for byte (§5.3)
+ *   18  goLive: orders, payment_events, checkouts, outbox_events all 0
+ *   19  with --final only: docs/SnapWearDocs/LAUNCH_TODO.md read with the
+ *       preflight's own list and rule (lib/launch-gate.mjs); without --final
+ *       DEFERRED to the final run
+ *
+ *   --final   the run before the switch (manifest P6, runbook §5.9): needs
+ *             --catalogue-plan and --catalogue-actual-state, and decides 19.
+ *             Refused on staging, as the catalogue options are.
+ *
+ * An item is PASS only on evidence: a missing goLive section FAILs every item
+ * that needs it. Prints values, counts, tenant ids and reasons only.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -32,7 +69,12 @@ import { fileURLToPath } from 'node:url';
 
 import { verifyBundle } from './lib/verify-bundle.mjs';
 import { bundleSha } from './lib/bundle-reader.mjs';
+import { launchGateStatus, launchRequiredItems, LAUNCH_TODO_FILE, PREFLIGHT_FILE } from './lib/launch-gate.mjs';
+import { textColumnsByTable } from './lib/schema-text-columns.mjs';
+import { loadWorkerRules } from './lib/worker-rules.mjs';
 import { printQueries } from './state-from-queries.mjs';
+import { runChecks as runCatalogueChecks } from './verify-catalogue.mjs';
+import { buildLocaleTexts, DEFAULT_OUT as LOCALES_DIR } from '../build-locales.mjs';
 
 // D56, plus the tenant of scripts/cf-port/connect-proof-staging.mjs.
 const KNOWN_NON_MANIFEST_TENANTS = new Set(['bench-cp1', 'slice-20260927', 'slice-connect-20260927']);
@@ -70,10 +112,13 @@ function die(message) {
 }
 
 function parseArgs(argv) {
-  const out = { actualState: null, bundle: null, env: null, plan: null, printQueries: false };
+  const out = { actualState: null, bundle: null, catalogueActualState: null, cataloguePlan: null, env: null, final: false, plan: null, printQueries: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--env') out.env = argv[++i] ?? die('--env needs a value');
+    else if (arg === '--final') out.final = true;
+    else if (arg === '--catalogue-plan') out.cataloguePlan = argv[++i] ?? die('--catalogue-plan needs a value');
+    else if (arg === '--catalogue-actual-state') out.catalogueActualState = argv[++i] ?? die('--catalogue-actual-state needs a value');
     else if (arg === '--bundle') out.bundle = argv[++i] ?? die('--bundle needs a value');
     else if (arg === '--plan') out.plan = argv[++i] ?? die('--plan needs a value');
     else if (arg === '--actual-state') out.actualState = argv[++i] ?? die('--actual-state needs a value');
@@ -154,7 +199,8 @@ function runChecks({ actualState, bundleVerified, env, planJson }) {
   } else {
     const actualIds = Array.isArray(actualState.podProfileIds) ? actualState.podProfileIds : [];
     const missing = expected.podProfileIds.filter((id) => !actualIds.includes(id));
-    record(checks, 10, ALL_ITEM_NAMES[10], Array.isArray(actualState.podProfileIds) && expected.podProfileIds.length > 0 && missing.length === 0, `${expected.podProfileIds.length} profile(s)`, missing.length === 0 ? `${actualIds.length} in the target, none missing` : `missing: ${missing.join(', ')}`);
+    // CP7-T2: production checks the artwork's profiles as a go-live item, so its name drops the deferral.
+    record(checks, 10, env === 'production' ? 'pod_profiles: every profile of the export is in the target' : ALL_ITEM_NAMES[10], Array.isArray(actualState.podProfileIds) && expected.podProfileIds.length > 0 && missing.length === 0, `${expected.podProfileIds.length} profile(s)`, missing.length === 0 ? `${actualIds.length} in the target, none missing` : `missing: ${missing.join(', ')}`);
   }
 
   // Item 14: active identities = those before the import + those the plan
@@ -227,9 +273,137 @@ function runChecks({ actualState, bundleVerified, env, planJson }) {
   return { checks, deferredItems };
 }
 
-function main() {
+/** The legal tenant of manifest (e) 11. */
+const LEGAL_TENANT = 'melodie-mc';
+const NO_GO_LIVE = 'the actual state has no goLive section: collect every query of --print-queries actual --env production';
+
+/**
+ * CP7-T2: the go-live items (production). Pure: every input is passed in.
+ *   actualState      with its `goLive` section (state-from-queries.mjs)
+ *   schemaTables     the tables the text scan must cover (textColumnsByTable)
+ *   locales          { language: { read, written, same } } (item 16)
+ *   catalogueChecks  verify-catalogue.mjs runChecks' result, or null (item 12)
+ *   launch           { notDone, duplicate, problem } or null (item 19, --final)
+ *   final            the run before the switch
+ * → { checks, deferred: [{ item, name, reason }] }
+ */
+function runGoLiveChecks({ actualState, catalogueChecks = null, final = false, launch = null, locales = null, schemaTables = [] }) {
+  const checks = [];
+  const deferred = [];
+  const defer = (item, name, reason) => deferred.push({ item, name, reason });
+  const goLive = actualState?.goLive ?? null;
+  const counts = goLive?.counts ?? null;
+
+  defer(5, 'the production Stripe webhook endpoints exist as pinned, on API version 2023-10-16', 'needs live Stripe. Manual: with ~/.config/chopshop/stripe.production.env in place, `scripts/cf-preflight.sh production --bootstrap -- whoami` prints "pinned Stripe webhook endpoint we_… exists: enabled -> <url>" for both pinned endpoints; the API version is read on each endpoint in the Dashboard');
+
+  if (counts === null) {
+    for (const [item, name] of [[8, 'POD mappings: every artwork in its own shop'], [9, 'POD artwork: every mapped artwork ready, with its print and preview'], [10, 'pod_profiles: every artwork\'s profile resolves'], [11, `legal readiness (${LEGAL_TENANT})`], [13, 'storage: no text column names the source\'s storage; every stored object active with sha256'], [18, 'orders, payment_events, checkouts, outbox_events all 0']]) {
+      record(checks, item, name, false, 'the goLive section', null, NO_GO_LIVE);
+    }
+  } else {
+    record(checks, 8, 'POD mappings: every artwork in its own shop', counts.pod_mappings_unresolved === 0, 0, `${counts.pod_mappings} mapping(s), ${counts.pod_mappings_unresolved} unresolved`,
+      counts.pod_mappings === 0 ? 'no mapping: POD is off at go-live (decision 1.4); no tool imports POD mappings yet' : '');
+    defer(8, 'the garment and the quote of every mapped POD product (no 409 block reason)', counts.pod_mappings === 0
+      ? 'no mapping exists: this applies when POD goes on (decision 1.4; blockers 12, 13). Manual then: the Worker\'s quote of each mapped product of melodie-mc'
+      : 'needs the Worker\'s quote. Manual: quote each mapped product of melodie-mc; none may answer no-printer-for-garment, routed-line-unpriced, pod-requires-connect or production-exceeds-gross');
+    record(checks, 9, 'POD artwork: every mapped artwork ready, with its print and preview', counts.pod_mapped_artwork_not_ready === 0, 0, `${counts.pod_artwork} artwork(s), ${counts.pod_mapped_artwork_not_ready} mapped and not ready`,
+      'the keys and sha256 are read; the objects\' presence in R2 is not (no network)');
+    record(checks, 10, 'pod_profiles: every artwork\'s profile resolves', counts.pod_artwork_profile_unresolved === 0, 0, `${counts.pod_artwork} artwork(s), ${counts.pod_artwork_profile_unresolved} unresolved`);
+
+    const legal = goLive.legal?.[LEGAL_TENANT];
+    if (legal === undefined) {
+      record(checks, 11, `legal readiness (${LEGAL_TENANT})`, false, `${LEGAL_TENANT} in the target`, '(tenant missing)');
+    } else {
+      const missing = [['returnAddress', 'return address'], ['vatAnswered', 'VAT answer'], ['legalPagesAccepted', 'legal pages adopted'], ['currentTermsAccepted', 'current platform terms accepted']]
+        .filter(([key]) => legal[key] !== true)
+        .map(([, label]) => label);
+      if (missing.length === 0) record(checks, 11, `legal readiness (${LEGAL_TENANT})`, true, 'ready', 'ready');
+      else defer(11, `legal readiness (${LEGAL_TENANT})`, `not ready — missing: ${missing.join(', ')}. Expected until Kent's step (§6.6); the Worker keeps the shop's checkout closed until then. Manual after §6.6: collect the go-live queries again, or GET /_api/v1/platform/tenants/${LEGAL_TENANT}`);
+    }
+
+    const scanned = Array.isArray(goLive.storageTexts?.scanned) ? goLive.storageTexts.scanned : [];
+    const notScanned = schemaTables.filter((table) => !scanned.includes(table));
+    const hits = goLive.storageTexts?.hits ?? {};
+    record(checks, 13, 'storage: no text column of any table names the source\'s storage', schemaTables.length > 0 && notScanned.length === 0 && Object.keys(hits).length === 0,
+      `0 rows in ${schemaTables.length} table(s)`, `rows: ${JSON.stringify(hits)}; tables not scanned: ${notScanned.join(', ') || 'none'}`);
+    record(checks, 13, 'storage: every stored object active, with its sha256', counts.stored_objects_not_active_with_sha256 === 0, 0, `${counts.stored_objects} object(s), ${counts.stored_objects_not_active_with_sha256} not active with sha256`);
+    record(checks, 18, 'orders, payment_events, checkouts, outbox_events all 0', ['orders', 'payment_events', 'checkouts', 'outbox_events'].every((key) => counts[key] === 0),
+      '0, 0, 0, 0', `${counts.orders}, ${counts.payment_events}, ${counts.checkouts}, ${counts.outbox_events}`, 'as of the queries: collect them again right before checkout opens');
+  }
+  defer(13, 'storage: public objects answer 200 on the public host; private and production keys 404', 'needs HTTP reads. Manual: §7.2 (a private key answers 404 on the public host) and a sample of public objects answering 200; needs r2.publicBaseUrl (blocker 16)');
+
+  if (catalogueChecks === null) {
+    defer(12, 'catalogue: the public projection per shop, by verify-catalogue.mjs', 'decided after the catalogue: the final run (--final --catalogue-plan <dir> --catalogue-actual-state <file>, §5.9)');
+  } else {
+    const failed = catalogueChecks.filter((c) => !c.ok);
+    record(checks, 12, 'catalogue: every check of verify-catalogue.mjs passes', catalogueChecks.length > 0 && failed.length === 0, `${catalogueChecks.length} check(s), none failing`,
+      failed.length === 0 ? `${catalogueChecks.length} passing` : `${failed.length} failing: ${failed.map((c) => c.name).join('; ')}`);
+  }
+
+  if (locales === null) {
+    record(checks, 16, 'translations: the locale files equal the build from this bundle', false, 'the build compared', null, 'the locale files were not built');
+  } else {
+    const entries = Object.entries(locales);
+    record(checks, 16, 'translations: the locale files equal the build from this bundle', entries.length === 3 && entries.every(([, l]) => l.same === true), 'sv-SE, en-GB, en-US equal',
+      entries.map(([language, l]) => `${language} read ${l.read}, written ${l.written}, ${l.same ? 'same' : 'DIFFERS'}`).join('; '), 'src/locales/ is what the storefront is built from (D16); the census read 1365 / 1365 / 1364');
+  }
+
+  if (!final) {
+    defer(19, 'LAUNCH_TODO: every gated A and B item ☑', 'decided by the final run (--final, §5.9)');
+  } else if (launch === null || launch.problem) {
+    record(checks, 19, 'LAUNCH_TODO: every gated A and B item ☑', false, 'the checklist read', null, launch?.problem ?? 'the checklist was not read');
+  } else {
+    record(checks, 19, 'LAUNCH_TODO: every gated A and B item ☑', launch.duplicate === null && launch.notDone.length === 0, 'none open',
+      launch.duplicate !== null ? `item ${launch.duplicate} appears twice` : `open: ${launch.notDone.join(', ') || 'none'}`, 'the preflight\'s list and rule (check 6); decision 1.3 may narrow the list there');
+  }
+
+  deferred.sort((a, b) => a.item - b.item);
+  return { checks, deferred };
+}
+
+/** What --final and the catalogue options need, or the refusal (null when none). */
+function finalArgsProblem(args) {
+  const catalogue = args.cataloguePlan !== null || args.catalogueActualState !== null;
+  if (args.env !== 'production' && (args.final || catalogue)) return '--final, --catalogue-plan and --catalogue-actual-state belong to --env production (the go-live verify)';
+  if (catalogue && (args.cataloguePlan === null || args.catalogueActualState === null)) return '--catalogue-plan and --catalogue-actual-state go together';
+  if (args.final && !catalogue) return '--final needs --catalogue-plan and --catalogue-actual-state (item 12, after the catalogue)';
+  return null;
+}
+
+/** The inputs of runGoLiveChecks that main reads from disk (production). */
+async function goLiveInputs(args, bundleDir) {
+  let catalogueChecks = null;
+  if (args.cataloguePlan !== null) {
+    const planPath = path.join(path.resolve(args.cataloguePlan), 'plan.json');
+    if (!existsSync(planPath)) die(`no plan.json in ${path.resolve(args.cataloguePlan)}`);
+    const cataloguePlan = JSON.parse(readFileSync(planPath, 'utf8'));
+    if (cataloguePlan.kind !== 'catalogue') die('--catalogue-plan is not a catalogue plan (import-catalogue.mjs)');
+    if (cataloguePlan.env !== args.env) die(`the catalogue plan was built for ${cataloguePlan.env}, not ${args.env}`);
+    if (cataloguePlan.bundleSha !== bundleSha(bundleDir)) die('the catalogue plan was not built from this bundle (bundle sha differs)');
+    const catalogueState = JSON.parse(readFileSync(path.resolve(args.catalogueActualState), 'utf8'));
+    catalogueChecks = runCatalogueChecks({ actualState: catalogueState, bundleVerified: verifyBundle(bundleDir).ok === true, planJson: cataloguePlan, rules: await loadWorkerRules() });
+  }
+  const locales = {};
+  for (const [language, built] of Object.entries(await buildLocaleTexts({ bundleDir }))) {
+    const file = path.join(LOCALES_DIR, `${language}.json`);
+    locales[language] = { read: built.counts.read, same: existsSync(file) && readFileSync(file, 'utf8') === built.text, written: built.counts.written };
+  }
+  let launch = null;
+  if (args.final) {
+    try {
+      launch = { ...launchGateStatus(readFileSync(LAUNCH_TODO_FILE, 'utf8'), launchRequiredItems(readFileSync(PREFLIGHT_FILE, 'utf8'))), problem: null };
+    } catch (error) {
+      launch = { duplicate: null, notDone: [], problem: error.message };
+    }
+  }
+  return { catalogueChecks, launch, locales, schemaTables: Object.keys(textColumnsByTable()).sort() };
+}
+
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.env !== 'staging' && args.env !== 'production') die('--env must be "staging" or "production"');
+  const finalProblem = finalArgsProblem(args);
+  if (finalProblem !== null) die(finalProblem);
   if (args.printQueries) {
     printQueries('actual', args.env);
     return;
@@ -246,23 +420,39 @@ function main() {
   const bundleVerified = verifyBundle(path.resolve(args.bundle)).ok === true;
 
   const { checks, deferredItems } = runChecks({ actualState, bundleVerified, env: args.env, planJson });
+  const goLive = args.env === 'production' ? runGoLiveChecks({ actualState, final: args.final, ...(await goLiveInputs(args, path.resolve(args.bundle))) }) : null;
+  if (goLive !== null) checks.push(...goLive.checks);
+  checks.sort((a, b) => a.item - b.item);
 
   for (const check of checks) {
     const label = check.ok ? 'PASS' : 'FAIL';
     console.log(`[${label}] #${check.item} ${check.name} — expected ${JSON.stringify(check.expected)}, got ${JSON.stringify(check.actual)}${check.note ? ` (${check.note})` : ''}`);
   }
-  for (const item of deferredItems) {
-    console.log(`[DEFERRED] #${item} ${ALL_ITEM_NAMES[item]}`);
+  if (goLive === null) {
+    for (const item of deferredItems) {
+      console.log(`[DEFERRED] #${item} ${ALL_ITEM_NAMES[item]}`);
+    }
+  } else {
+    for (const entry of goLive.deferred) {
+      console.log(`[DEFERRED] #${entry.item} ${entry.name} — ${entry.reason}`);
+    }
   }
 
   const ok = checks.every((c) => c.ok);
   console.log(ok ? '\nPASS: verify complete, nothing failed' : '\nFAIL: one or more checks failed');
+  if (goLive !== null) {
+    const items = [...new Set(goLive.deferred.map((entry) => entry.item))];
+    console.log(`${args.final ? 'FINAL run' : 'not the final run (--final, §5.9)'}: ${items.length} item(s) deferred, each with the check named on its line: ${items.map((n) => `#${n}`).join(', ')}`);
+  }
   process.exitCode = ok ? 0 : 1;
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  main();
+  main().catch((error) => {
+    console.error(`VERIFY REFUSED: ${error?.message ?? error}`);
+    process.exit(1);
+  });
 }
 
-export { parseArgs, runChecks, KNOWN_NON_MANIFEST_TENANTS, CP3_ITEMS, ALL_ITEM_NAMES };
+export { parseArgs, runChecks, runGoLiveChecks, finalArgsProblem, KNOWN_NON_MANIFEST_TENANTS, CP3_ITEMS, ALL_ITEM_NAMES, LEGAL_TENANT };

@@ -15,6 +15,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { runImport } from '../import.mjs';
+import { productionOptions } from './production-fixtures.mjs';
 import { buildTargetState, runImportCatalogue, targetQueries } from '../import-catalogue.mjs';
 import { rmDir, tmpDir } from './fixtures.mjs';
 import { buildCatalogueBundle, DatabaseSync, insertCopiedObjects, inventCopyManifest, migratedDb, writeQueryResults } from './catalogue-fixtures.mjs';
@@ -29,7 +30,8 @@ async function productionPlans() {
   const base = tmpDir('cfport-run-kinds-');
   const bundleDir = path.join(base, 'bundle');
   await buildCatalogueBundle(bundleDir);
-  const platform = runImport({ bundleDir, env: 'production' });
+  const production = await productionOptions(base, { buildRescan: (dir, exportedAt) => buildCatalogueBundle(dir, { exportedAt }) });
+  const platform = runImport({ bundleDir, env: 'production', ...production });
   assert.equal(platform.ok, true, JSON.stringify(platform.problems));
   const manifest = inventCopyManifest(bundleDir, { env: 'production' });
   const manifestPath = path.join(base, 'copy-manifest.json');
@@ -46,7 +48,7 @@ async function productionPlans() {
   writeFileSync(targetPath, JSON.stringify(buildTargetState(queries)));
   const catalogue = await runImportCatalogue({ bundleDir, confirm: 'production', copyManifestPath: manifestPath, env: 'production', pinned: PINS, targetStatePath: targetPath });
   assert.equal(catalogue.ok, true, JSON.stringify(catalogue.problems));
-  return { base, bundleDir, catalogue, manifest, manifestPath, platform, targetPath };
+  return { base, bundleDir, catalogue, manifest, manifestPath, platform, production, targetPath };
 }
 
 /** A migrated database with the copy's objects of `manifest` (and the platform plan when `platform` is given). */
@@ -117,7 +119,7 @@ test('production, in order: the platform plan, then the catalogue plan; neither 
     // New plans with other run ids (other options): the database refuses them, whatever the tools let through.
     const otherState = path.join(plans.base, 'other-target.json');
     writeFileSync(otherState, JSON.stringify({ tenants: { ids: [] } }));
-    const platform2 = runImport({ bundleDir: plans.bundleDir, env: 'production', targetStatePath: otherState });
+    const platform2 = runImport({ bundleDir: plans.bundleDir, env: 'production', ...plans.production, targetStatePath: otherState });
     assert.equal(platform2.ok, true, JSON.stringify(platform2.problems));
     assert.notEqual(platform2.planJson.runId, plans.platform.planJson.runId);
     assert.throws(() => db.exec(platform2.planText), ONCE_REFUSAL);

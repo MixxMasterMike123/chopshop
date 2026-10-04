@@ -7,6 +7,32 @@
  *   node scripts/cf-port/migrate/import.mjs --env staging --bundle <dir> --out <dir>
  *        [--email-map <file>] [--scrub-unmapped] [--connect-map <file>]
  *        [--target-state <file>] [--commission-default-for <shopId>]...
+ *        [--expect-tenants <n>]
+ *   node scripts/cf-port/migrate/import.mjs --env production --confirm production
+ *        --expect-tenants <n> --bundle <dir> --rescan-bundle <dir>
+ *        --freeze-evidence <file> --payments-evidence <file> --connect-evidence <file>
+ *        --out <dir> [--target-state <file>] [--commission-default-for <shopId>]...
+ *
+ * CP7-T2, THE PRODUCTION PRECONDITIONS (manifest §d; lib/production-evidence.mjs
+ * holds the file formats and every refusal):
+ *   P1  --confirm production, and --expect-tenants <n>: the plan is refused
+ *       unless it writes exactly n tenants (the operator's number: 4 at the
+ *       2026-09-27 export, robowatz being archived; never a constant here).
+ *       On staging --expect-tenants is optional and checked when given.
+ *   P3  --freeze-evidence (runbook §4.10) and --rescan-bundle (the second
+ *       export, §5.2 step 3): the freeze was complete before the export, no
+ *       carried document was written after it, and nothing carried differs
+ *       between the two exports.
+ *   P4  --payments-evidence (§4.10): no open PaymentIntent at Stripe, no
+ *       pending printer notification, no open checkout in the bundle.
+ *   P5  --connect-evidence (§5.4): every shop's account read from live
+ *       Stripe under the pinned platform account; the plan writes THOSE
+ *       chargesEnabled / payoutsEnabled / detailsSubmitted, never the source's.
+ *   P2 and P7 are the database's (0052); P6 is verify.mjs --final.
+ * The Stripe evidence is tied to cloudflare/pinned.production.json
+ * stripeAccountId, so a production plan is refused while that pin is null.
+ * Staging refuses --confirm and the four evidence options: staging never
+ * reads live facts (S3). Staging's plans are byte-for-byte what they were.
  *
  * NEVER talks to D1, Cloudflare, R2, Stripe, Google or Firebase. Reads only
  * local files (the bundle, the optional map/state files) and writes only
@@ -37,6 +63,8 @@ import { writeFileSecure, ensureDir } from './lib/bundle-writer.mjs';
 import { isInsideRepo } from './lib/outside-repo.mjs';
 import { canonicalStringify } from './lib/typed-json.mjs';
 import { planSafetyProblems } from './lib/plan-checks.mjs';
+import { productionPreconditions, stagingEvidenceProblem } from './lib/production-evidence.mjs';
+import { preflightCommand } from './state-from-queries.mjs';
 
 import { transformShop, ARCHIVED_SHOP_IDS } from './lib/transform-shops.mjs';
 import { joinUsersToAuth, transformUser, hasActivePlatformAdminAfterImport } from './lib/transform-users.mjs';
@@ -92,10 +120,34 @@ function step(message) {
 }
 
 function parseArgs(argv) {
-  const out = { bundle: null, commissionDefaultFor: [], connectMap: null, emailMap: null, env: null, out: null, scrubUnmapped: false, targetState: null };
+  const out = {
+    bundle: null,
+    commissionDefaultFor: [],
+    confirm: null,
+    connectEvidence: null,
+    connectMap: null,
+    emailMap: null,
+    env: null,
+    expectTenants: null,
+    freezeEvidence: null,
+    out: null,
+    paymentsEvidence: null,
+    rescanBundle: null,
+    scrubUnmapped: false,
+    targetState: null,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--env') out.env = argv[++i] ?? die('--env needs a value');
+    else if (arg === '--confirm') out.confirm = argv[++i] ?? die('--confirm needs a value');
+    else if (arg === '--expect-tenants') {
+      const raw = argv[++i] ?? die('--expect-tenants needs a number');
+      if (!/^[1-9]\d{0,3}$/.test(raw)) die('--expect-tenants must be a positive whole number');
+      out.expectTenants = Number(raw);
+    } else if (arg === '--rescan-bundle') out.rescanBundle = argv[++i] ?? die('--rescan-bundle needs a value');
+    else if (arg === '--freeze-evidence') out.freezeEvidence = argv[++i] ?? die('--freeze-evidence needs a value');
+    else if (arg === '--payments-evidence') out.paymentsEvidence = argv[++i] ?? die('--payments-evidence needs a value');
+    else if (arg === '--connect-evidence') out.connectEvidence = argv[++i] ?? die('--connect-evidence needs a value');
     else if (arg === '--bundle') out.bundle = argv[++i] ?? die('--bundle needs a value');
     else if (arg === '--out') out.out = argv[++i] ?? die('--out needs a value');
     else if (arg === '--email-map') out.emailMap = argv[++i] ?? die('--email-map needs a value');
@@ -150,9 +202,26 @@ function parseTargetState(raw) {
  * `write` is true (defaults to true for the CLI, false for tests that only
  * want the computed plan).
  */
-export function runImport({ bundleDir, commissionDefaultFor = [], connectMapPath = null, emailMapPath = null, env, now = null, scrubUnmapped = false, targetStatePath = null }) {
+export function runImport({
+  bundleDir,
+  commissionDefaultFor = [],
+  confirm = null,
+  connectEvidencePath = null,
+  connectMapPath = null,
+  emailMapPath = null,
+  env,
+  expectTenants = null,
+  freezeEvidencePath = null,
+  now = null,
+  paymentsEvidencePath = null,
+  pinned = null,
+  rescanBundleDir = null,
+  scrubUnmapped = false,
+  targetStatePath = null,
+}) {
   try {
-    return runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emailMapPath, env, now, scrubUnmapped, targetStatePath });
+    const production = { confirm, connectEvidencePath, expectTenants, freezeEvidencePath, paymentsEvidencePath, pinned, rescanBundleDir };
+    return runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emailMapPath, env, now, production, scrubUnmapped, targetStatePath });
   } catch (error) {
     // A refusal raised deep inside a transform (e.g. UnmappedEmailError) is a
     // REFUSAL, not a crash: surface it through the same { ok:false, problems }
@@ -162,9 +231,17 @@ export function runImport({ bundleDir, commissionDefaultFor = [], connectMapPath
   }
 }
 
-function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emailMapPath, env, now, scrubUnmapped, targetStatePath }) {
+function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emailMapPath, env, now, production, scrubUnmapped, targetStatePath }) {
   const problems = [];
   const reportLines = [];
+
+  // P1 first: a production run is confirmed before anything is read.
+  if (env !== 'production') {
+    const refusal = stagingEvidenceProblem(production);
+    if (refusal !== null) return { ok: false, problems: [refusal] };
+  } else if (production.confirm !== 'production') {
+    return { ok: false, problems: productionPreconditions({ confirm: production.confirm }).problems };
+  }
 
   // C2: verify the bundle first.
   const verify = verifyBundle(bundleDir);
@@ -179,6 +256,17 @@ function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emai
   const scrubProblem = scrubOptionsProblem(env, { emailMapGiven: emailMapPath !== null, scrubUnmapped });
   if (scrubProblem !== null) {
     return { ok: false, problems: [scrubProblem] };
+  }
+
+  // P1, P3, P4, P5 (lib/production-evidence.mjs): every evidence file checked
+  // against the bundle and the pins before a row is built.
+  let liveConnect = null;
+  if (env === 'production') {
+    const pinned = production.pinned ?? readPinnedFile('production');
+    const preconditions = productionPreconditions({ ...production, bundleDir, pinned, rootManifest });
+    if (preconditions.problems.length > 0) return { ok: false, problems: preconditions.problems };
+    reportLines.push(...preconditions.reportLines);
+    liveConnect = preconditions.connectAccounts;
   }
   const emailMapRaw = emailMapPath === null ? {} : readJsonFileOrNull(emailMapPath);
   const emailMap = emailMapFor(env, emailMapRaw);
@@ -218,6 +306,9 @@ function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emai
       emailMap: emailMapRaw ?? {},
       scrubUnmapped,
       targetState: targetStateRaw ?? {},
+      // P5: the live flags change the rows, so they change the run id. Absent
+      // on staging, whose run ids (and plans) are unchanged.
+      ...(liveConnect === null ? {} : { liveConnect }),
     }),
   );
   const runId = `import_${env}_${bSha.slice(0, 16)}_${optionsFingerprint.slice(0, 16)}`;
@@ -253,9 +344,23 @@ function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emai
       stripeAccountId: sourceStripeAccountId,
     };
     const resolvedConnect = resolveConnectFacts(connectFacts, connectMap, env);
+    // P5: production writes the flags of the live read, never the source's.
+    let liveFlags = {};
+    if (liveConnect !== null && sourceStripeAccountId !== null) {
+      const live = liveConnect[sourceStripeAccountId];
+      if (live === undefined) {
+        problems.push(`REFUSED: shops/${doc.id}: its Connect account ${sourceStripeAccountId} is not in --connect-evidence (re-pull every account from live Stripe, P5)`);
+      } else {
+        liveFlags = live;
+        const differing = ['chargesEnabled', 'payoutsEnabled', 'detailsSubmitted'].filter((key) => live[key] !== resolvedConnect[key]);
+        if (differing.length > 0) {
+          reportLines.push(`shops/${doc.id}: Connect flags from the live read differ from the source: ${differing.map((key) => `${key} ${resolvedConnect[key]} → ${live[key]}`).join(', ')} (P5: the live ones are written)`);
+        }
+      }
+    }
     const result = transformShop({
       acceptCommissionDefault: commissionDefaultFor.includes(doc.id),
-      connectFacts: { ...connectFacts, ...resolvedConnect },
+      connectFacts: { ...connectFacts, ...resolvedConnect, ...liveFlags },
       doc,
       emailMap,
       env,
@@ -279,6 +384,10 @@ function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emai
     } else if (!reportLines.some((l) => l.startsWith(`shops/${shopId}: payments.commissionBps is `))) {
       problems.push(`REFUSED: --commission-default-for ${shopId}: that shop's commission needs no acceptance`);
     }
+  }
+  // P1: the number of tenants is the operator's, given on the command line.
+  if (production.expectTenants !== null && production.expectTenants !== undefined && importedTenantIds.length !== production.expectTenants) {
+    problems.push(`REFUSED: the plan writes ${importedTenantIds.length} tenant(s) (${importedTenantIds.join(', ') || 'none'}), --expect-tenants says ${production.expectTenants} (P1)`);
   }
   addSection('tenants+tenant_domains+tenant_settings+tenant_features', shopRows);
 
@@ -474,6 +583,8 @@ function runImportUnsafe({ bundleDir, commissionDefaultFor, connectMapPath, emai
 function buildApplyMd({ env, planSha }) {
   const dbName = readDatabaseNameFromPinned(env);
   const dbNameOrPlaceholder = dbName ?? '<DATABASE_NAME — could not be read from cloudflare/pinned.' + env + '.json>';
+  // CP7-T2: production's d1 commands run under --bootstrap (state-from-queries.mjs header).
+  const preflight = preflightCommand(env);
   return `# Apply this plan
 
 **Environment:** ${env}
@@ -483,7 +594,7 @@ function buildApplyMd({ env, planSha }) {
 ## 1. Record a Time Travel bookmark first (D56)
 
 \`\`\`
-scripts/cf-preflight.sh ${env} -- d1 time-travel info ${dbNameOrPlaceholder}
+${preflight} d1 time-travel info ${dbNameOrPlaceholder}
 \`\`\`
 Write down the returned bookmark before continuing — this is the restore point if the apply needs to be rolled back.
 
@@ -503,7 +614,7 @@ turns those files into the \`--target-state\` JSON \`import.mjs\` expects.
 ## 3. Apply the plan through the project's preflight script
 
 \`\`\`
-scripts/cf-preflight.sh ${env} -- d1 execute ${dbNameOrPlaceholder} --remote --file=plan.sql
+${preflight} d1 execute ${dbNameOrPlaceholder} --remote --file=plan.sql
 \`\`\`
 
 The preflight script performs the network-dependent preconditions this
@@ -569,6 +680,16 @@ node scripts/cf-port/migrate/verify.mjs --env ${env} --bundle <bundle dir> --pla
 `;
 }
 
+/** cloudflare/pinned.<env>.json, or null when it cannot be read (a production
+ * plan then refuses: its Stripe evidence has no pinned account to match). */
+function readPinnedFile(env) {
+  try {
+    return JSON.parse(readFileSync(path.join(REPO_ROOT, 'cloudflare', `pinned.${env}.json`), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 /** Reads cloudflare/pinned.<env>.json's d1.name, or null if the file or the
  * field is missing (apply.md then prints a placeholder rather than
  * pretending it knows the database name). */
@@ -596,7 +717,13 @@ async function main() {
     connectMapPath: args.connectMap ? path.resolve(args.connectMap) : null,
     emailMapPath: args.emailMap ? path.resolve(args.emailMap) : null,
     commissionDefaultFor: args.commissionDefaultFor,
+    confirm: args.confirm,
+    connectEvidencePath: args.connectEvidence ? path.resolve(args.connectEvidence) : null,
     env: args.env,
+    expectTenants: args.expectTenants,
+    freezeEvidencePath: args.freezeEvidence ? path.resolve(args.freezeEvidence) : null,
+    paymentsEvidencePath: args.paymentsEvidence ? path.resolve(args.paymentsEvidence) : null,
+    rescanBundleDir: args.rescanBundle ? path.resolve(args.rescanBundle) : null,
     scrubUnmapped: args.scrubUnmapped,
     targetStatePath: args.targetState ? path.resolve(args.targetState) : null,
   });

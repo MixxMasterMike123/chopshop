@@ -20,6 +20,11 @@
  *
  * `environment` (default `staging`) is what /health answers: `production`
  * makes it the fake of a production API for the tools' production mode (CP7-T1).
+ *
+ * CP7-T2, the platform reads of reconcile-staging.mjs: GET /v1/platform/orders
+ * (`platformOrders`, by tenantId), /v1/platform/dispatch (`dispatches`, by
+ * state) and /v1/platform/alerts (`alerts`, by state), each paginated with
+ * `limit` and an opaque `cursor` as src/routes/platform-orders.ts answers.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -63,6 +68,9 @@ export async function startFakeStagingApi(options = {}) {
     tenants: new Map(), // id → { published, settings: { returnAddress, vatRegistered } }
     terms: options.terms ?? [], // { version, publishedAt, sha256, text }
     users: new Map(), // email → { id, password, accountType }
+    platformOrders: options.platformOrders ?? [], // PlatformOrderView-shaped rows
+    dispatches: options.dispatches ?? [], // { state, tenantId, outboxId, orderId, lineNo, lastError }
+    alerts: options.alerts ?? [], // { state, tenantId, createdAt, severity, kind, resourceType, resourceId }
   };
   state.users.set(state.platformUser.email, { accountType: 'platform_admin', id: state.platformUser.id, password: state.platformUser.password });
   for (const [tenantId, tenant] of Object.entries(options.tenants ?? {})) {
@@ -372,6 +380,18 @@ export async function startFakeStagingApi(options = {}) {
           textsSha256: 'f'.repeat(64),
         },
       });
+    }
+
+    // ── platform reads (src/routes/platform-orders.ts, the platform dispatch list) ──
+    const platformList = { '/v1/platform/alerts': ['alerts', 'state'], '/v1/platform/dispatch': ['dispatches', 'state'], '/v1/platform/orders': ['orders', 'tenantId'] }[url.pathname];
+    if (platformList) {
+      if (!platformOk(false) || method !== 'GET') return notFound();
+      const [key, filter] = platformList;
+      const source = key === 'orders' ? state.platformOrders : state[key];
+      const rows = source.filter((row) => row[filter] === url.searchParams.get(filter));
+      const limit = Number(url.searchParams.get('limit') ?? 50);
+      const start = Number(url.searchParams.get('cursor') ?? 0);
+      return send(200, { [key]: rows.slice(start, start + limit), nextCursor: start + limit < rows.length ? String(start + limit) : null });
     }
 
     return notFound();

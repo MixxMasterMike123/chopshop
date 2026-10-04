@@ -12,6 +12,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { runImport } from '../import.mjs';
+import { productionOptions } from './production-fixtures.mjs';
 import { buildApplyMd, buildTargetState, productionPinProblems, readPinned, REPO_ROOT, runImportCatalogue, targetQueries } from '../import-catalogue.mjs';
 import { actualQueries, buildActualState, envProblem, liftedShopGate, runChecks } from '../verify-catalogue.mjs';
 import { loadWorkerRules } from '../lib/worker-rules.mjs';
@@ -83,7 +84,7 @@ async function setupProduction({ manifestPatch = null, statusOf } = {}) {
   const base = tmpDir('cfport-catalogue-prod-');
   const bundleDir = path.join(base, 'bundle');
   await buildCatalogueBundle(bundleDir);
-  const cp3 = runImport({ bundleDir, env: 'production' });
+  const cp3 = runImport({ bundleDir, env: 'production', ...(await productionOptions(base, { buildRescan: (dir, exportedAt) => buildCatalogueBundle(dir, { exportedAt }) })) });
   assert.equal(cp3.ok, true, JSON.stringify(cp3.problems));
   const db = migratedDb();
   db.exec(cp3.planText);

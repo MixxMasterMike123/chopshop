@@ -10,6 +10,25 @@
  * NEVER talks to D1 itself — it only prints commands (for a human, or a
  * script the human runs, to execute through the preflight script) and reads
  * back their JSON output from local files.
+ *
+ * CP7-T2:
+ *   - production's commands carry `--bootstrap` (`scripts/cf-preflight.sh
+ *     production --bootstrap -- d1 execute …`). Without it every production
+ *     command is launch-gated (preflight check 6), so a read-only SELECT could
+ *     not run before the launch checklist is ☑. `--bootstrap` admits only
+ *     whoami, d1, r2 and queues, and still checks the credentials file, the
+ *     pinned identity, the account wrangler sees and the configuration's
+ *     account id (checks 1–4); every printed command is one SELECT. Staging's
+ *     commands are unchanged.
+ *   - `--print-queries actual --env production` also prints the GO-LIVE
+ *     queries verify.mjs needs for manifest (e) 8, 9, 10, 11, 13 and 18:
+ *     `go_live_counts` (orders, payment events, checkouts, outbox, POD
+ *     mappings and artwork, stored objects), `go_live_legal` (each tenant's
+ *     legal readiness facts) and `storage_texts_<n>` (every text column of
+ *     every table, lib/schema-text-columns.mjs). `--kind actual` reads them
+ *     into a `goLive` section when they are there; some but not all of them
+ *     refuses. The section holds counts and booleans only: the return address
+ *     is read as "set or not" (the Worker's JavaScript trim), never kept.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -17,6 +36,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeFileSecure, ensureDir } from './lib/bundle-writer.mjs';
 import { isInsideRepo } from './lib/outside-repo.mjs';
+import { STORAGE_TEXTS_FILE_PREFIX, storageTextQueries, textColumnsByTable } from './lib/schema-text-columns.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -95,12 +115,60 @@ const ACTUAL_QUERIES = [
   { file: 'pod_profiles', sql: `SELECT profile_id FROM pod_profiles ORDER BY profile_id;` },
 ];
 
+/**
+ * CP7-T2: the go-live queries of verify.mjs (production only). Each is one
+ * SELECT of scalar subqueries; none is a compound SELECT.
+ */
+const GO_LIVE_QUERIES = [
+  {
+    file: 'go_live_counts',
+    sql: [
+      'SELECT (SELECT COUNT(*) FROM orders) AS orders,',
+      '(SELECT COUNT(*) FROM payment_events) AS payment_events,',
+      '(SELECT COUNT(*) FROM checkouts) AS checkouts,',
+      '(SELECT COUNT(*) FROM outbox_events) AS outbox_events,',
+      '(SELECT COUNT(*) FROM pod_mappings) AS pod_mappings,',
+      '(SELECT COUNT(*) FROM pod_mappings AS m WHERE NOT EXISTS (SELECT 1 FROM pod_artwork AS a WHERE a.artwork_id = m.artwork_id AND a.tenant_id = m.tenant_id)) AS pod_mappings_unresolved,',
+      '(SELECT COUNT(*) FROM pod_artwork) AS pod_artwork,',
+      "(SELECT COUNT(*) FROM pod_artwork AS a WHERE EXISTS (SELECT 1 FROM pod_mappings AS m WHERE m.artwork_id = a.artwork_id AND m.tenant_id = a.tenant_id) AND (a.status IS NOT 'ready' OR a.print_object_key IS NULL OR a.print_sha256 IS NULL OR a.preview_object_key IS NULL OR a.preview_sha256 IS NULL)) AS pod_mapped_artwork_not_ready,",
+      '(SELECT COUNT(*) FROM pod_artwork AS a WHERE a.profile_id IS NULL OR NOT EXISTS (SELECT 1 FROM pod_profiles AS p WHERE p.profile_id = a.profile_id)) AS pod_artwork_profile_unresolved,',
+      '(SELECT COUNT(*) FROM stored_objects) AS stored_objects,',
+      "(SELECT COUNT(*) FROM stored_objects WHERE status IS NOT 'active' OR sha256 IS NULL OR length(sha256) != 64) AS stored_objects_not_active_with_sha256;",
+    ].join(' '),
+  },
+  {
+    file: 'go_live_legal',
+    // The Worker's readLegalReadiness (src/legal/legal-pages.ts) and its
+    // current platform terms version (src/legal/platform-terms.ts readTermsStatus).
+    sql: [
+      'SELECT t.tenant_id AS tenant_id, s.return_address AS return_address, s.vat_registered AS vat_registered,',
+      "EXISTS (SELECT 1 FROM legal_acceptances AS a WHERE a.tenant_id = t.tenant_id AND a.type = 'legalPages') AS legal_pages_accepted,",
+      "EXISTS (SELECT 1 FROM platform_terms_acceptances AS p WHERE p.tenant_id = t.tenant_id AND p.terms_version = (SELECT v.version FROM platform_terms_versions AS v WHERE v.published_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ORDER BY v.published_at DESC, v.version DESC LIMIT 1)) AS current_terms_accepted",
+      'FROM tenants AS t LEFT JOIN tenant_settings AS s ON s.tenant_id = t.tenant_id ORDER BY t.tenant_id;',
+    ].join(' '),
+  },
+];
+
+/** The go-live queries: the two fixed ones, then the text scan of the schema. */
+function goLiveQueries() {
+  return [...GO_LIVE_QUERIES, ...storageTextQueries(textColumnsByTable())];
+}
+
+/**
+ * The preflight invocation a printed command runs through. Production reads
+ * with `--bootstrap`, which admits d1 and skips the launch gate (see the header).
+ */
+function preflightCommand(env) {
+  return env === 'production' ? 'scripts/cf-preflight.sh production --bootstrap --' : `scripts/cf-preflight.sh ${env} --`;
+}
+
 function printQueries(kind, env) {
   const pinned = readPinned(env);
   const dbName = pinned.d1?.name;
   if (!dbName) die(`cloudflare/pinned.${env}.json has no d1.name`);
 
-  const queries = kind === 'target' ? TARGET_QUERIES : kind === 'actual' ? ACTUAL_QUERIES : die(`--print-queries must be "target" or "actual", got ${JSON.stringify(kind)}`);
+  const base = kind === 'target' ? TARGET_QUERIES : kind === 'actual' ? ACTUAL_QUERIES : die(`--print-queries must be "target" or "actual", got ${JSON.stringify(kind)}`);
+  const queries = kind === 'actual' && env === 'production' ? [...base, ...goLiveQueries()] : base;
 
   console.log(`# Read-only ${kind}-state queries for env=${env}, database=${dbName}.`);
   console.log('# Run each through the preflight script, redirecting into a named file in a');
@@ -110,7 +178,7 @@ function printQueries(kind, env) {
   for (const q of queries) {
     console.log('');
     console.log(`# -> ${q.file}.json`);
-    console.log(`scripts/cf-preflight.sh ${env} -- d1 execute ${dbName} --remote --json --command="${q.sql.replace(/"/g, '\\"')}" > /path/outside/repo/state-queries-${kind}/${q.file}.json`);
+    console.log(`${preflightCommand(env)} d1 execute ${dbName} --remote --json --command="${q.sql.replace(/"/g, '\\"')}" > /path/outside/repo/state-queries-${kind}/${q.file}.json`);
   }
   console.log('');
   console.log(`node scripts/cf-port/migrate/state-from-queries.mjs --from /path/outside/repo/state-queries-${kind} --kind ${kind} --out /path/outside/repo/${kind}-state.json`);
@@ -249,7 +317,9 @@ function buildActualState(fromDir) {
     tenantFeaturesPod[row.tenant_id] = row.enabled === 1;
   }
 
+  const goLive = buildGoLiveSection(fromDir);
   return {
+    ...(goLive === null ? {} : { goLive }),
     identityActive: activeCountsOf(readQueryFile(fromDir, 'identity_counts')),
     platformSettings: {
       defaultCommissionBps: settings.default_commission_bps,
@@ -265,6 +335,48 @@ function buildActualState(fromDir) {
     tenants,
     terms: readQueryFile(fromDir, 'terms').map((r) => r.term),
   };
+}
+
+const isCount = (value) => Number.isInteger(value) && value >= 0;
+
+/**
+ * CP7-T2: the go-live section of the actual state, or null when none of its
+ * files is in the directory (a staging run, or production's earlier query
+ * set). Some but not all of them refuses: a half-collected set would leave an
+ * item without evidence. Counts and booleans only.
+ */
+function buildGoLiveSection(fromDir) {
+  const expected = goLiveQueries().map((q) => q.file);
+  const present = expected.filter((file) => existsSync(path.join(fromDir, `${file}.json`)));
+  if (present.length === 0) return null;
+  if (present.length !== expected.length) {
+    die(`the go-live query files are incomplete: missing ${expected.filter((file) => !present.includes(file)).join(', ')} (run every query of --print-queries actual --env production)`);
+  }
+  const counts = readQueryFile(fromDir, 'go_live_counts')[0] ?? null;
+  const countKeys = ['orders', 'payment_events', 'checkouts', 'outbox_events', 'pod_mappings', 'pod_mappings_unresolved', 'pod_artwork', 'pod_mapped_artwork_not_ready', 'pod_artwork_profile_unresolved', 'stored_objects', 'stored_objects_not_active_with_sha256'];
+  if (counts === null || !countKeys.every((key) => isCount(counts[key]))) die('go_live_counts.json does not hold one row of counts (run the go_live_counts query again)');
+  const legal = {};
+  for (const row of readQueryFile(fromDir, 'go_live_legal')) {
+    if (typeof row?.tenant_id !== 'string') die('go_live_legal.json holds a row without a tenant id');
+    legal[row.tenant_id] = {
+      currentTermsAccepted: row.current_terms_accepted === 1,
+      legalPagesAccepted: row.legal_pages_accepted === 1,
+      // The Worker's rule: a JavaScript trim, so a whitespace-only address is missing.
+      returnAddress: typeof row.return_address === 'string' && row.return_address.trim().length > 0,
+      vatAnswered: row.vat_registered === 0 || row.vat_registered === 1,
+    };
+  }
+  const scanned = [];
+  const hits = {};
+  for (const file of expected.filter((name) => name.startsWith(STORAGE_TEXTS_FILE_PREFIX))) {
+    const row = readQueryFile(fromDir, file)[0] ?? null;
+    if (row === null || !Object.values(row).every(isCount)) die(`${file}.json does not hold one row of counts (run the ${file} query again)`);
+    for (const [table, n] of Object.entries(row)) {
+      scanned.push(table);
+      if (n > 0) hits[table] = n;
+    }
+  }
+  return { counts: Object.fromEntries(countKeys.map((key) => [key, counts[key]])), legal, storageTexts: { hits, scanned: scanned.sort() } };
 }
 
 function main() {
@@ -299,4 +411,4 @@ if (isMain) {
   main();
 }
 
-export { parseArgs, assertOutsideRepo, extractJsonArray, resultsOf, buildTargetState, buildActualState, printQueries, TARGET_QUERIES, ACTUAL_QUERIES, readPinned };
+export { parseArgs, assertOutsideRepo, extractJsonArray, resultsOf, buildTargetState, buildActualState, printQueries, preflightCommand, goLiveQueries, GO_LIVE_QUERIES, TARGET_QUERIES, ACTUAL_QUERIES, readPinned };
