@@ -434,7 +434,7 @@ export async function changeFulfilment(
           ...guardBinds,
         ),
       // The buyer's status mail: ids only. Event types are free text (0021);
-      // the consumer and the template are unit WE's, so this row waits.
+      // src/outbox/email-effect.ts consumes it, and the route nudges it.
       db
         .prepare(
           `INSERT INTO outbox_events (

@@ -2,7 +2,7 @@ import { authorizeTenantAdminRequest } from "../auth/request-authorization";
 import { readAdminOrder } from "../commerce/admin-orders";
 import { pendingPrinterCancellationIds } from "../commerce/dispatch-hold";
 import { readAdminOrderConsent } from "../legal/consent";
-import { nudgeOutbox } from "../outbox/nudge";
+import { nudgeOutbox, pendingOrderMailIds } from "../outbox/nudge";
 import type { RefundRequestInput, RefundState } from "../commerce/refunds";
 import { parseRefundRequestInput, requestRefund } from "../commerce/refunds";
 import {
@@ -288,6 +288,8 @@ export async function handleAdminOrderRefundsRoute(
   // leave it for the next 15-minute sweep while the job may be printing.
   if (outcome.status === "created") {
     await nudgeOutbox(env, await pendingPrinterCancellationIds(env.DB, [orderId]));
+    // And the buyer's refund notice, written by the same settlement.
+    await nudgeOutbox(env, await pendingOrderMailIds(env.DB, principal.tenantId, orderId));
   }
 
   switch (outcome.status) {

@@ -636,6 +636,23 @@ describe("refund_notice: written when the refund SETTLES, never on a reservation
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe("order_status_update: the consumer of CP5-WB's rows", () => {
+  it("the routes nudge their mail at once: the status mail after a fulfilment step, the notice after a settled refund", async () => {
+    const order = await plainOrder(TENANT_A, "shipping");
+    await addRecipient(order.orderId, TENANT_A, "shipping");
+    const first = quiet();
+    const outboxId = await fulfil(order.orderId, { to: "processing" }, first.env);
+    expect(first.nudges.sent).toContainEqual({ outboxId });
+
+    const paid = await pay(TENANT_A);
+    const second = quiet();
+    const response = await refund(paid.orderId, CHARGE_MINOR, second.env);
+    expect(response.status).toBe(201);
+    const { refund: settled } = await response.json<{ refund: { refundId: string } }>();
+    expect(second.nudges.sent).toContainEqual({ outboxId: `email-refund-notice:${settled.refundId}` });
+    // Only this order's rows: the other order's status mail is not nudged again.
+    expect(second.nudges.sent).not.toContainEqual({ outboxId });
+  });
+
   it("mails processing, shipped (tracking + carrier), a further parcel and delivered; completed mails nothing", async () => {
     const order = await plainOrder(TENANT_A, "shipping");
     await addRecipient(order.orderId, TENANT_A, "shipping");

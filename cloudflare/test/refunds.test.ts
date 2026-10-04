@@ -927,8 +927,10 @@ describe("GET /v1/admin/orders/:orderId", () => {
 
     // Neither half of the 13 300 fee may appear anywhere: not the 12 300
     // withheld, not the 1 000 commission, not the per-line 9 840 cost.
-    expect(text).not.toContain("12300");
-    expect(text).not.toContain("9840");
+    // As a number of its own: the text also holds random ids and addresses,
+    // whose digits can spell either figure by chance.
+    expect(text).not.toMatch(/[^0-9A-Za-z_-]12300[^0-9A-Za-z_-]/);
+    expect(text).not.toMatch(/[^0-9A-Za-z_-]9840[^0-9A-Za-z_-]/);
     // (the detail only: the list legitimately shows other orders' 1 000 refunds)
     expect(detailText).not.toMatch(/[^0-9]1000[^0-9]/);
     expect(text).not.toContain(accountA);
