@@ -10,7 +10,7 @@
 // DATA: every read and write goes through ./platformModelsData (Firebase in the
 // older build; the admin build's alias list swaps in the API's version,
 // src/admin-app/replacements/platformModelsData.js).
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import ModelCardGrid from '../../components/platform/ModelCardGrid';
 import ModelEditor from '../../components/platform/ModelEditor';
@@ -33,6 +33,10 @@ const PlatformModels = () => {
   const [busyId, setBusyId] = useState(null);
   const [editing, setEditing] = useState(null); // model being edited
   const [showCreate, setShowCreate] = useState(false);
+  // Counts every opening (Redigera, Ny modell). A Redigera whose read answers
+  // after another opening began opens nothing: its model must never land in an
+  // editor (or over a create form) that the operator opened meanwhile.
+  const opening = useRef(0);
 
   const load = useCallback(async () => {
     try {
@@ -90,6 +94,7 @@ const PlatformModels = () => {
     clearPod3dModelsCache();
     setModels((prev) => [...prev, newModel].sort((a, b) =>
       String(a.label || '').localeCompare(String(b.label || ''), 'sv')));
+    opening.current += 1;
     setShowCreate(false);
     setEditing(newModel); // open editor directly
   };
@@ -99,11 +104,12 @@ const PlatformModels = () => {
   // it answers the row). Nothing else opens while a card is busy.
   const openEditor = async (model) => {
     if (busyId) return;
+    const mine = ++opening.current;
     try {
       setBusyId(model.id);
       const fresh = await readModelForEditor(model);
       setModels((prev) => prev.map((m) => (m.id === fresh.id ? fresh : m)));
-      setEditing(fresh);
+      if (mine === opening.current) setEditing(fresh);
     } catch (e) {
       console.error('Error opening model:', e);
       toast.error(e?.userMessage || 'Kunde inte öppna modellen');
@@ -131,7 +137,10 @@ const PlatformModels = () => {
             </p>
           </div>
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() => {
+              opening.current += 1;
+              setShowCreate(true);
+            }}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
           >
             Ny modell
@@ -157,6 +166,7 @@ const PlatformModels = () => {
 
       {editing && (
         <ModelEditor
+          key={editing.id}
           model={editing}
           saveDoc={saveFromEditor}
           onClose={() => setEditing(null)}
