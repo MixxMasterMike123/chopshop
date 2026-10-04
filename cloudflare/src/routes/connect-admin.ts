@@ -1,6 +1,6 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { authorizeTenantAdminRequest } from "../auth/request-authorization";
-import type { ConnectGateway } from "../commerce/connect-gateway";
+import type { ConnectBalance, ConnectGateway } from "../commerce/connect-gateway";
 import { resolveConnectGateway } from "../commerce/connect-gateway";
 import {
   createOrReuseConnectAccount,
@@ -51,7 +51,29 @@ import { isSameOriginRequest } from "../lib/same-origin";
  *            own Stripe dashboard — bank details, payouts — and Stripe's rule
  *            is that login links go only to the account holder)
  *
- * The four POSTs call Stripe, so they share one per-shop limiter.
+ *   GET  /v1/admin/payments/connect/balance          (CP5-WK, unit WF)
+ *        200 { balance: { available: [{ currency, amountMinor }],
+ *                         pending:   [{ currency, amountMinor }],
+ *                         payoutSchedule: { interval, delayDays, monthlyAnchor,
+ *                                           weeklyAnchor } | null,
+ *                         retrievedAt } }
+ *            the CONNECTED account's own balance at Stripe, read now (never
+ *            stored), per currency; nothing of the platform's balance, fee or
+ *            reserve, and no account id (the seller sees one number)
+ *        409 connect_account_missing   no account yet (Stripe not called)
+ *        502 connect_unavailable       Stripe refused or could not be reached
+ *        429 rate_limited              the shared per-shop limiter
+ *        404 Connect not enabled for the shop by the platform (dark, as the
+ *            create and onboarding routes), no Connect gateway configured, or
+ *            any guard. An ACTING-AS platform user IS admitted: a balance is
+ *            amounts, not access — unlike the login link it opens nothing of
+ *            the seller's Stripe account, and the platform reads every
+ *            connected account's balance in its own Stripe dashboard anyway;
+ *            Firebase's getConnectBalance let the platform read any shop's.
+ *            A read: no same-origin requirement, no audit row.
+ *
+ * Every Stripe-calling seller request — the four POSTs and the balance read —
+ * shares one per-shop limiter.
  */
 
 export const ADMIN_CONNECT_PATH = "/v1/admin/payments/connect";
@@ -59,6 +81,7 @@ export const ADMIN_CONNECT_ACCOUNT_PATH = `${ADMIN_CONNECT_PATH}/account`;
 export const ADMIN_CONNECT_ONBOARDING_LINK_PATH = `${ADMIN_CONNECT_PATH}/onboarding-link`;
 export const ADMIN_CONNECT_REFRESH_PATH = `${ADMIN_CONNECT_PATH}/refresh`;
 export const ADMIN_CONNECT_LOGIN_LINK_PATH = `${ADMIN_CONNECT_PATH}/login-link`;
+export const ADMIN_CONNECT_BALANCE_PATH = `${ADMIN_CONNECT_PATH}/balance`;
 
 /** Stripe-calling seller requests per shop per window (a person clicks a few times a minute). */
 export const CONNECT_TENANT_LIMIT = 12;
@@ -226,4 +249,65 @@ export async function handleAdminConnectLoginLinkRoute(env: Env, request: Reques
     default:
       return routeNotFoundResponse();
   }
+}
+
+/**
+ * `GET /v1/admin/payments/connect/balance` (CP5-WK, unit WF). The guard order:
+ * session + shop (acting-as admitted), a configured gateway, Connect enabled
+ * for the shop — each the opaque 404 — then an account (409), the shared
+ * limiter, and only then Stripe.
+ */
+export async function handleAdminConnectBalanceRoute(env: Env, request: Request): Promise<Response> {
+  if (request.method !== "GET") {
+    return routeNotFoundResponse();
+  }
+  const principal = await authorizeTenantAdminRequest(env, request);
+  if (principal === null) {
+    return routeNotFoundResponse();
+  }
+  const gateway = resolveConnectGateway(env);
+  if (gateway === null) {
+    return routeNotFoundResponse();
+  }
+  const tenant = await readTenantConnect(env.DB, principal.tenantId);
+  if (tenant === null || tenant.connect_enabled !== 1) {
+    return routeNotFoundResponse();
+  }
+  if (tenant.stripe_account_id === null) {
+    return errorResponse(409, "connect_account_missing", "Create the payment account first");
+  }
+  const limit = await enforceRateLimit(env.DB, {
+    key: principal.tenantId,
+    limit: CONNECT_TENANT_LIMIT,
+    now: Date.now(),
+    scope: CONNECT_TENANT_SCOPE,
+    windowMs: CONNECT_TENANT_WINDOW_MS,
+  });
+  if (!limit.allowed) {
+    return rateLimitedResponse(limit.retryAfterSeconds);
+  }
+
+  let balance: ConnectBalance;
+  try {
+    balance = await gateway.retrieveBalance(tenant.stripe_account_id);
+  } catch {
+    return unavailableResponse();
+  }
+  // Named fields only: whatever else a gateway hands back never reaches the seller.
+  return jsonResponse({
+    balance: {
+      available: balance.available.map(({ amountMinor, currency }) => ({ amountMinor, currency })),
+      payoutSchedule:
+        balance.payoutSchedule === null
+          ? null
+          : {
+              delayDays: balance.payoutSchedule.delayDays,
+              interval: balance.payoutSchedule.interval,
+              monthlyAnchor: balance.payoutSchedule.monthlyAnchor,
+              weeklyAnchor: balance.payoutSchedule.weeklyAnchor,
+            },
+      pending: balance.pending.map(({ amountMinor, currency }) => ({ amountMinor, currency })),
+      retrievedAt: new Date().toISOString(),
+    },
+  });
 }

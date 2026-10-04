@@ -1,3 +1,4 @@
+import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { authorizeTenantAdminRequest } from "../auth/request-authorization";
 import { jsonResponse } from "../lib/http";
 import {
@@ -8,6 +9,8 @@ import {
 import { isSameOriginRequest } from "../lib/same-origin";
 import {
   parseStoreSettingsInput,
+  parseStoreSettingsPatchInput,
+  patchTenantSettings,
   readTenantSettings,
   unreferencableStoreIdentityImages,
   writeTenantSettings,
@@ -28,6 +31,21 @@ import {
  *                                            (tenant-config.ts REFUSED_…)
  *       404                                  no session, no membership, no
  *                                            acting-as grant, cross-origin PUT
+ *   PATCH /v1/admin/settings  (CP5-WK, unit WD; tenant-config.ts "the fenced
+ *                              partial write" for what merge means)
+ *       { expectedUpdatedAt: <updatedAt as read> | null,
+ *         storeIdentity?: { <top-level key>: <value>, … },   each key REPLACED
+ *         returnAddress?, vatRegistered?, vatNumber?, sellerType? }
+ *       200 { settings }                     the merged settings
+ *       409 { error: { code: "conflict" }, settings }
+ *                                            the row is not at expectedUpdatedAt
+ *                                            (nothing written; `settings` is
+ *                                            what is stored now)
+ *       400 invalid_request · refused_store_identity_keys · unreferencable_images
+ *                                            as the PUT, for the keys written; the
+ *                                            merged identity over the size cap is
+ *                                            invalid_request
+ *       404                                  as the PUT (cross-origin PATCH too)
  *
  * Tenant = `X-Shop-Id` checked against the session's live memberships, or a
  * platform user's live acting-as grant on it (admitted here, unlike the
@@ -41,11 +59,11 @@ import {
 export const ADMIN_SETTINGS_PATH = "/v1/admin/settings";
 
 export async function handleAdminSettingsRoute(env: Env, request: Request): Promise<Response> {
-  if (request.method !== "GET" && request.method !== "PUT") {
+  if (request.method !== "GET" && request.method !== "PUT" && request.method !== "PATCH") {
     return routeNotFoundResponse();
   }
   const principal = await authorizeTenantAdminRequest(env, request);
-  if (principal === null || (request.method === "PUT" && !isSameOriginRequest(request))) {
+  if (principal === null || (request.method !== "GET" && !isSameOriginRequest(request))) {
     return routeNotFoundResponse();
   }
 
@@ -53,21 +71,16 @@ export async function handleAdminSettingsRoute(env: Env, request: Request): Prom
     return jsonResponse({ settings: await readTenantSettings(env.DB, principal.tenantId) });
   }
 
+  if (request.method === "PATCH") {
+    return patchSettings(env, principal, request);
+  }
+
   const parsed = parseStoreSettingsInput(await readJsonBody(request));
   if (parsed.status === "invalid") {
     return invalidRequestResponse();
   }
   if (parsed.status === "refused") {
-    return jsonResponse(
-      {
-        error: {
-          code: "refused_store_identity_keys",
-          keys: parsed.keys,
-          message: "The store identity carries keys this route does not accept",
-        },
-      },
-      400,
-    );
+    return refusedKeysResponse(parsed.keys);
   }
 
   // CP4-D: an image the identity names is an active public branding image of
@@ -80,20 +93,84 @@ export async function handleAdminSettingsRoute(env: Env, request: Request): Prom
       parsed.input.storeIdentityJson,
     );
     if (keys.length > 0) {
-      return jsonResponse(
-        {
-          error: {
-            code: "unreferencable_images",
-            keys,
-            message: "The store identity names an image this shop cannot use",
-          },
-        },
-        400,
-      );
+      return unreferencableImagesResponse(keys);
     }
   }
 
   return jsonResponse({
     settings: await writeTenantSettings(env.DB, principal, parsed.input, Date.now()),
   });
+}
+
+function refusedKeysResponse(keys: string[]): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "refused_store_identity_keys",
+        keys,
+        message: "The store identity carries keys this route does not accept",
+      },
+    },
+    400,
+  );
+}
+
+function unreferencableImagesResponse(keys: string[]): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "unreferencable_images",
+        keys,
+        message: "The store identity names an image this shop cannot use",
+      },
+    },
+    400,
+  );
+}
+
+/** PATCH: the PUT's checks on the keys written, then the fenced write. */
+async function patchSettings(
+  env: Env,
+  principal: TenantAdminPrincipal,
+  request: Request,
+): Promise<Response> {
+  const parsed = parseStoreSettingsPatchInput(await readJsonBody(request));
+  if (parsed.status === "invalid") {
+    return invalidRequestResponse();
+  }
+  if (parsed.status === "refused") {
+    return refusedKeysResponse(parsed.keys);
+  }
+
+  // Only the images the PATCHED keys name: an untouched key is not re-checked.
+  if (parsed.input.identityPatchJson !== undefined) {
+    const keys = await unreferencableStoreIdentityImages(
+      env,
+      env.DB,
+      principal.tenantId,
+      parsed.input.identityPatchJson,
+    );
+    if (keys.length > 0) {
+      return unreferencableImagesResponse(keys);
+    }
+  }
+
+  const result = await patchTenantSettings(env.DB, principal, parsed.input, Date.now());
+  switch (result.status) {
+    case "ok":
+      return jsonResponse({ settings: result.settings });
+    case "stale":
+      return jsonResponse(
+        {
+          error: {
+            code: "conflict",
+            message: "The settings changed since they were read; read them again and retry",
+          },
+          settings: result.settings,
+        },
+        409,
+      );
+    case "invalid":
+      return invalidRequestResponse();
+  }
 }

@@ -44,8 +44,11 @@ import {
  * the path, the query or the body is looked at. Reads need no same-origin (as
  * for every platform read); every state change does.
  *
- *   GET    /v1/platform/tenants[?status&cursor&limit]      directory
- *   GET    /v1/platform/tenants/:tenantId                   detail
+ *   GET    /v1/platform/tenants[?status&cursor&limit&counts=1]
+ *                                                           directory; `counts=1` adds each
+ *                                                           row's { products, publishedProducts,
+ *                                                           orders } (CP5-WK, unit WI)
+ *   GET    /v1/platform/tenants/:tenantId                   detail (with `counts`)
  *   PATCH  /v1/platform/tenants/:tenantId                   shopName, supportEmail, vatRateBp, commissionBps
  *   POST   /v1/platform/tenants/:tenantId/publish           go-live gate on
  *   POST   /v1/platform/tenants/:tenantId/unpublish         go-live gate off

@@ -68,6 +68,38 @@ export interface ConnectAccountListing {
   complete: boolean;
 }
 
+/** One amount of a balance, as Stripe gives it: minor units of a lower-case ISO currency. */
+export interface ConnectBalanceAmount {
+  amountMinor: number;
+  currency: string;
+}
+
+/** The account's payout schedule as Stripe gives it (`settings.payouts.schedule`). */
+export interface ConnectPayoutSchedule {
+  /** Days a charge is held before it is paid out; null when Stripe gives none. */
+  delayDays: number | null;
+  /** `daily`, `weekly`, `monthly` or `manual` (any other Stripe word as given). */
+  interval: string;
+  /** Day of the month, monthly schedules only. */
+  monthlyAnchor: number | null;
+  /** Day of the week, weekly schedules only. */
+  weeklyAnchor: string | null;
+}
+
+/**
+ * CP5-WK (unit WF): the CONNECTED account's own balance — what Stripe holds
+ * for the shop, per currency — and its payout schedule. Nothing of the
+ * platform's balance, fee or reserve: `available` and `pending` only (not
+ * `connect_reserved`, which Stripe documents as funds the PLATFORM holds
+ * against connected accounts' negative balances; not `source_types`).
+ */
+export interface ConnectBalance {
+  available: ConnectBalanceAmount[];
+  /** null when Stripe's answer carried no readable schedule. */
+  payoutSchedule: ConnectPayoutSchedule | null;
+  pending: ConnectBalanceAmount[];
+}
+
 export interface ConnectGateway {
   readonly api: ConnectAccountsApi;
   createAccount(params: CreateConnectAccountParams): Promise<ConnectAccountFacts>;
@@ -84,6 +116,8 @@ export interface ConnectGateway {
    */
   findAccountsByTenant(tenantId: string): Promise<ConnectAccountListing>;
   retrieveAccount(accountId: string): Promise<ConnectAccountFacts>;
+  /** CP5-WK: the connected account's balance and payout schedule (two reads at Stripe). */
+  retrieveBalance(accountId: string): Promise<ConnectBalance>;
   updatePayoutDelay(params: { accountId: string; delayDays: number | "minimum" }): Promise<void>;
 }
 
@@ -93,6 +127,7 @@ const GATEWAY_METHODS = [
   "createOnboardingLink",
   "findAccountsByTenant",
   "retrieveAccount",
+  "retrieveBalance",
   "updatePayoutDelay",
 ] as const;
 
@@ -236,6 +271,99 @@ function accountIdOf(value: unknown): string {
   throw new ConnectGatewayError(false);
 }
 
+/** Currencies kept per balance list: far more than a Swedish shop's one. */
+export const MAX_BALANCE_CURRENCIES = 20;
+const CURRENCY_PATTERN = /^[a-z]{3}$/;
+const SCHEDULE_WORD_PATTERN = /^[a-z_]{1,32}$/;
+
+/**
+ * Stripe's balance list (`available` / `pending`) as kept: an entry with an
+ * integer amount and a three-letter currency, one per currency (Stripe sends
+ * one; a repeat is summed, never dropped), sorted by currency, at most
+ * MAX_BALANCE_CURRENCIES. Anything else in an entry (`source_types`) is not
+ * read. A list that is not an array is an unreadable answer: unknown.
+ */
+export function balanceAmountsFrom(value: unknown): ConnectBalanceAmount[] {
+  if (!Array.isArray(value)) {
+    throw new ConnectGatewayError(false);
+  }
+  const sums = new Map<string, number>();
+  for (const entry of value as unknown[]) {
+    const shape = typeof entry === "object" && entry !== null ? (entry as { amount?: unknown; currency?: unknown }) : {};
+    const currency = typeof shape.currency === "string" ? shape.currency.toLowerCase() : "";
+    const amount = shape.amount;
+    if (!CURRENCY_PATTERN.test(currency) || typeof amount !== "number" || !Number.isSafeInteger(amount)) {
+      throw new ConnectGatewayError(false);
+    }
+    const sum = (sums.get(currency) ?? 0) + amount;
+    if (!Number.isSafeInteger(sum)) {
+      throw new ConnectGatewayError(false);
+    }
+    sums.set(currency, sum);
+  }
+  return [...sums.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .slice(0, MAX_BALANCE_CURRENCIES)
+    .map(([currency, amountMinor]) => ({ amountMinor, currency }));
+}
+
+/** `settings.payouts.schedule` as kept, or null when it is missing or unreadable. */
+export function payoutScheduleFrom(value: unknown): ConnectPayoutSchedule | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const schedule = value as {
+    delay_days?: unknown;
+    interval?: unknown;
+    monthly_anchor?: unknown;
+    weekly_anchor?: unknown;
+  };
+  if (typeof schedule.interval !== "string" || !SCHEDULE_WORD_PATTERN.test(schedule.interval)) {
+    return null;
+  }
+  const delay = schedule.delay_days;
+  const monthly = schedule.monthly_anchor;
+  const weekly = schedule.weekly_anchor;
+  return {
+    delayDays: typeof delay === "number" && Number.isSafeInteger(delay) && delay >= 0 ? delay : null,
+    interval: schedule.interval,
+    monthlyAnchor:
+      typeof monthly === "number" && Number.isSafeInteger(monthly) && monthly >= 1 && monthly <= 31 ? monthly : null,
+    weeklyAnchor: typeof weekly === "string" && SCHEDULE_WORD_PATTERN.test(weekly) ? weekly : null,
+  };
+}
+
+/**
+ * The two v1 reads of a balance — `GET /v1/balance` AS the connected account
+ * (the `Stripe-Account` header), and the account for its schedule — shared
+ * by both adapters (on v2 they are v1 interop calls, unproven like the
+ * login link). Read-only: nothing is created, so every failure is just
+ * "unavailable".
+ */
+async function readBalance(
+  client: Pick<V1ConnectClient, "balance"> & { accounts: Pick<V1ConnectClient["accounts"], "retrieve"> },
+  accountId: string,
+): Promise<ConnectBalance> {
+  let balance: Stripe.Balance;
+  let account: Stripe.Account;
+  try {
+    [balance, account] = await Promise.all([
+      client.balance.retrieve({}, { stripeAccount: accountId }),
+      client.accounts.retrieve(accountId),
+    ]);
+  } catch (error) {
+    throw connectGatewayError(error);
+  }
+  if (accountIdOf(account.id) !== accountId) {
+    throw new ConnectGatewayError(false);
+  }
+  return {
+    available: balanceAmountsFrom(balance.available),
+    payoutSchedule: payoutScheduleFrom(account.settings?.payouts?.schedule ?? null),
+    pending: balanceAmountsFrom(balance.pending),
+  };
+}
+
 /** The metadata every account this worker creates carries (the recovery listing's key). */
 export function accountMetadata(params: { opId: string; tenantId: string }): Record<string, string> {
   return { onboarding_op_id: params.opId, tenant_id: params.tenantId };
@@ -270,6 +398,9 @@ export const MONTHLY_PAYOUT_SCHEDULE = { interval: "monthly", monthly_anchor: 1 
 export interface V1ConnectClient {
   accountLinks: {
     create(params: Stripe.AccountLinkCreateParams): Promise<Stripe.AccountLink>;
+  };
+  balance: {
+    retrieve(params: Stripe.BalanceRetrieveParams, options: Stripe.RequestOptions): Promise<Stripe.Balance>;
   };
   accounts: {
     create(params: Stripe.AccountCreateParams, options: Stripe.RequestOptions): Promise<Stripe.Account>;
@@ -360,6 +491,10 @@ export function createV1ConnectGateway(client: V1ConnectClient): ConnectGateway 
       return { url: httpsUrl(link.url) };
     },
 
+    retrieveBalance(accountId) {
+      return readBalance(client, accountId);
+    },
+
     async updatePayoutDelay(params) {
       // Firebase setConnectPayoutDelay, verbatim: only the hold window moves.
       try {
@@ -400,7 +535,8 @@ export function createV1ConnectGateway(client: V1ConnectClient): ConnectGateway 
 
 /** The narrow SDK surface the v2 adapter calls (v2 core + two v1 interop calls). */
 export interface V2ConnectClient {
-  accounts: Pick<V1ConnectClient["accounts"], "createLoginLink" | "update">;
+  accounts: Pick<V1ConnectClient["accounts"], "createLoginLink" | "retrieve" | "update">;
+  balance: V1ConnectClient["balance"];
   v2: {
     core: {
       accountLinks: {
@@ -472,9 +608,10 @@ function v2Facts(account: Stripe.V2.Core.Account): ConnectAccountFacts {
  *      and applies `charges_enabled` / `payouts_enabled`;
  *   3. the status mapping in v2Facts agrees with the v1 view of the SAME
  *      account (`GET /v1/accounts/{id}`) before, during and after onboarding;
- *   4. the two v1 interop calls work on a v2 account: `POST /v1/accounts/{id}/
- *      login_links` and `POST /v1/accounts/{id}` with `settings.payouts.
- *      schedule.delay_days`;
+ *   4. the v1 interop calls work on a v2 account: `POST /v1/accounts/{id}/
+ *      login_links`, `POST /v1/accounts/{id}` with `settings.payouts.
+ *      schedule.delay_days`, and (CP5-WK) `GET /v1/balance` with the
+ *      `Stripe-Account` header plus `GET /v1/accounts/{id}` for the schedule;
  *   5. `identity.country: "se"`, `dashboard: "express"` and the responsibility
  *      pair are accepted together, and `GET /v2/core/accounts` returns
  *      `metadata` (the recovery listing depends on it);
@@ -574,6 +711,11 @@ export function createV2ConnectGateway(client: V2ConnectClient): ConnectGateway 
         throw connectGatewayError(error);
       }
       return { url: httpsUrl(link.url) };
+    },
+
+    retrieveBalance(accountId) {
+      // The v1 balance and account reads (interop, unproven on a v2 account).
+      return readBalance(client, accountId);
     },
 
     async updatePayoutDelay(params) {

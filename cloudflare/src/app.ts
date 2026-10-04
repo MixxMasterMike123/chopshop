@@ -430,6 +430,21 @@ import {
 // CP5-IMPORTS-I — begin
 import { ADMIN_TAG_LIST_PATH, handleAdminTagListRoute } from "./routes/admin-products";
 // CP5-IMPORTS-I — end
+// CP5-IMPORTS-K — begin
+import {
+  ADMIN_CONNECT_BALANCE_PATH,
+  handleAdminConnectBalanceRoute,
+} from "./routes/connect-admin";
+import { productBodyRefusedResponse } from "./routes/admin-products";
+import {
+  ADMIN_MEMBER_RESEND_INVITE_ROUTE,
+  handleAdminMemberResendInviteRoute,
+} from "./routes/admin-members";
+import {
+  handlePlatformPrintJobListRoute,
+  PLATFORM_PRINT_JOBS_PATH,
+} from "./routes/print-jobs-platform";
+// CP5-IMPORTS-K — end
 // CP6-IMPORTS-P — begin
 import {
   handlePlatformPrintJobStatusRoute,
@@ -763,9 +778,11 @@ async function handleAdminProductRoute(
       return adminNotFoundResponse();
     }
 
-    const input = parseCreateProductInput(await readJsonBody(request));
+    const body = await readJsonBody(request);
+    const input = parseCreateProductInput(body);
     if (input === null) {
-      return invalidRequestResponse();
+      // CP5-WK: names `moreInfo` when its HTML is the only fault.
+      return productBodyRefusedResponse(body, parseCreateProductInput);
     }
 
     return adminResultResponse(
@@ -784,9 +801,11 @@ async function handleAdminProductRoute(
       return adminNotFoundResponse();
     }
 
-    const input = parseUpdateProductInput(await readJsonBody(request));
+    const body = await readJsonBody(request);
+    const input = parseUpdateProductInput(body);
     if (input === null) {
-      return invalidRequestResponse();
+      // CP5-WK: names `moreInfo` when its HTML is the only fault.
+      return productBodyRefusedResponse(body, parseUpdateProductInput);
     }
 
     return adminResultResponse(
@@ -2450,6 +2469,40 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     onMethods(["GET"], (c) => handleAdminTagListRoute(c.env, c.req.raw)),
   );
   // CP5-ROUTES-I — end
+  // CP5-ROUTES-K — begin
+  // The settings' fenced partial write (src/routes/admin-settings.ts, unit WD):
+  // PATCH only; GET and PUT fall through to the CP3-A mount below.
+  app.all(
+    ADMIN_SETTINGS_PATH,
+    onMethods(["PATCH"], (c) => handleAdminSettingsRoute(c.env, c.req.raw)),
+  );
+  // The connected account's balance (src/routes/connect-admin.ts, unit WF): an
+  // exact path no earlier route claims.
+  app.all(
+    ADMIN_CONNECT_BALANCE_PATH,
+    onMethods(["GET"], (c) => handleAdminConnectBalanceRoute(c.env, c.req.raw)),
+  );
+  // A member's new invite link (src/routes/admin-members.ts): an exact suffix
+  // beside CP5-ROUTES-C's revoke that no earlier route claims. The user
+  // segment is taken from the RAW pathname and decoded once by the handler.
+  app.all(
+    ADMIN_MEMBER_RESEND_INVITE_ROUTE,
+    onMethods(["POST"], (c) =>
+      handleAdminMemberResendInviteRoute(
+        c.env,
+        c.req.raw,
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
+  // The platform's list of print jobs (src/routes/print-jobs-platform.ts): the
+  // exact path, which CP6-ROUTES-P's `/:jobId/status` pattern never matches;
+  // GET only, every other method falls through to the opaque 404.
+  app.all(
+    PLATFORM_PRINT_JOBS_PATH,
+    onMethods(["GET"], (c) => handlePlatformPrintJobListRoute(c.env, c.req.raw)),
+  );
+  // CP5-ROUTES-K — end
   // CP6-ROUTES-P — begin
   // The printer's production status of one job = one order line
   // (src/routes/print-jobs-platform.ts, CP6-PS1): an exact pattern no earlier

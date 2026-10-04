@@ -124,13 +124,27 @@ function logInviteFailure(reason: string, error?: unknown): void {
  * else — suspended, print operator, ordinary, no identity at all — is
  * `not_invitable`. The eligibility is re-checked inside the batch that records
  * the invite, so an identity deactivated in between gets no invite.
+ *
+ * `options` (CP5-WK, the shop's resend; the platform passes none):
+ *   condition  a further SQL guard the caller's decision rests on, added to
+ *              that same re-check in all three statements, so the batch that
+ *              would supersede the person's live link and record a new one
+ *              does nothing — and the answer is `not_invitable` — once it no
+ *              longer holds;
+ *   audit      the shop the invite is sent for (the audit row's tenant) and
+ *              JSON merged into its metadata (e.g. an acting-as grant id).
  */
 export async function issueInvite(
   env: Env,
   principal: PlatformPrincipal | TenantAdminPrincipal,
   userId: string,
   now: number,
+  options: {
+    audit?: { metadataJson: string; tenantId: string };
+    condition?: { binds: unknown[]; sql: string };
+  } = {},
 ): Promise<InviteResult> {
+  const { audit, condition } = options;
   const origins = readCanonicalOrigins(env);
   const queue = env.EMAIL_QUEUE;
   if (origins === null || queue === undefined) {
@@ -187,6 +201,12 @@ export async function issueInvite(
     value: userId,
   });
 
+  // INVITABLE_TARGET_SQL, plus the caller's condition when it has one.
+  const targetGuard =
+    condition === undefined
+      ? { binds: [userId], sql: INVITABLE_TARGET_SQL }
+      : { binds: [userId, ...condition.binds], sql: `${INVITABLE_TARGET_SQL} AND (${condition.sql})` };
+
   const inviteId = crypto.randomUUID();
   const nowIso = new Date(now).toISOString();
   const expiresIso = new Date(expiresAt).toISOString();
@@ -208,16 +228,16 @@ export async function issueInvite(
              SELECT verification_id FROM identity_invites
              WHERE user_id = ? AND status = 'issued'
            )
-             AND ${INVITABLE_TARGET_SQL}`,
+             AND ${targetGuard.sql}`,
         )
-        .bind(userId, userId),
+        .bind(userId, ...targetGuard.binds),
       env.DB
         .prepare(
           `UPDATE identity_invites
            SET status = 'superseded', updated_at = MAX(updated_at, ?)
-           WHERE user_id = ? AND status = 'issued' AND ${INVITABLE_TARGET_SQL}`,
+           WHERE user_id = ? AND status = 'issued' AND ${targetGuard.sql}`,
         )
-        .bind(nowIso, userId, userId),
+        .bind(nowIso, userId, ...targetGuard.binds),
       env.DB
         .prepare(
           `INSERT INTO identity_invites (
@@ -225,7 +245,7 @@ export async function issueInvite(
             issued_by, expires_at, created_at, updated_at
           )
           SELECT ?, ?, ?, 'issued', ?, ?, ?, ?, ?, ?
-          WHERE ${INVITABLE_TARGET_SQL}`,
+          WHERE ${targetGuard.sql}`,
         )
         .bind(
           inviteId,
@@ -237,7 +257,7 @@ export async function issueInvite(
           expiresIso,
           nowIso,
           nowIso,
-          userId,
+          ...targetGuard.binds,
         ),
       // Never the address, the token or the link.
       env.DB
@@ -246,15 +266,17 @@ export async function issueInvite(
             event_id, tenant_id, actor_user_id, action, resource_type,
             resource_id, reason, request_id, metadata_json, created_at
           )
-          SELECT ?, NULL, ?, 'platform.user_invite', 'identity_access', ?, NULL, ?,
-            json_object(
-              'deliveryId', ?, 'expiresAt', ?, 'inviteId', ?, 'surface', ?
+          SELECT ?, ?, ?, 'platform.user_invite', 'identity_access', ?, NULL, ?,
+            json_patch(
+              json_object('deliveryId', ?, 'expiresAt', ?, 'inviteId', ?, 'surface', ?),
+              ?
             ),
             ?
           WHERE ${inviteRecorded.sql}`,
         )
         .bind(
           crypto.randomUUID(),
+          audit?.tenantId ?? null,
           principal.userId,
           userId,
           crypto.randomUUID(),
@@ -262,6 +284,7 @@ export async function issueInvite(
           expiresIso,
           inviteId,
           surface,
+          audit?.metadataJson ?? "{}",
           now,
           ...inviteRecorded.binds,
         ),
@@ -291,8 +314,9 @@ export async function issueInvite(
 
   // "Recorded" is changes > 0: D1's count includes rows a trigger writes.
   if ((results[2]?.meta.changes ?? 0) === 0) {
-    // The identity stopped being invitable between the read and the batch.
-    // The token was never sent anywhere; remove it anyway.
+    // The identity stopped being invitable (or the caller's condition stopped
+    // holding) between the read and the batch. The token was never sent
+    // anywhere; remove it anyway.
     await env.DB
       .prepare('DELETE FROM "verification" WHERE "id" = ?')
       .bind(verification.id)

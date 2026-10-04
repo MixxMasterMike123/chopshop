@@ -284,6 +284,17 @@ export async function handlePlatformPrinterListRoute(
 /**
  * `GET /v1/platform/printers/{id}` → `{ printer }`;
  * `PATCH` (parsePrinterPatchInput) → `{ printer, diff, suspendedMappings }`.
+ *
+ * CP5-WK — the PATCH's DRY RUN: the same body plus `dryRun: true` (a boolean;
+ * `false` or absent is the write, as before — the body flag, as the catalogue
+ * apply's `apply`). editPrinter computes the same diff — the mappings it would
+ * suspend, the products the next document prices under their floor — and
+ * writes nothing: no printer, tier or mapping change, no audit row. Answer
+ * `200 { dryRun: true, diff, revision, suspendedMappings }`, where `revision`
+ * is the printer's revision the diff was computed on: send it back as
+ * `expectedRevision` with the real PATCH and a printer changed in between is
+ * refused (409 revision_mismatch) instead of saved past the preview. Every
+ * refusal is the write's (400 invalid_tiers…, 409 revision_mismatch…, 404).
  */
 export async function handlePlatformPrinterRoute(
   env: Env,
@@ -300,21 +311,48 @@ export async function handlePlatformPrinterRoute(
     return printer === null ? routeNotFoundResponse() : jsonResponse({ printer });
   }
 
-  const input = parsePrinterPatchInput(await readJsonBody(request));
+  const body = await readJsonBody(request);
+  const flag = dryRunFlag(body);
+  if (flag === null) {
+    return invalidRequestResponse();
+  }
+  const input = parsePrinterPatchInput(flag.edit);
   if (input === null) {
     return invalidRequestResponse();
   }
   const result = await editPrinter(env.DB, guard.principal, printerId, input.edit, Date.now(), {
     action: "pod.printers.edit",
-    dryRun: false,
+    dryRun: flag.dryRun,
     ...(input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
     target: guard.target,
   });
   if (result.status !== "ok") {
     return editFailureResponse(result);
   }
+  if (flag.dryRun) {
+    return jsonResponse({
+      diff: result.diff,
+      dryRun: true,
+      revision: result.revision,
+      suspendedMappings: result.suspendedMappings,
+    });
+  }
   const printer = await getPlatformPrinter(env.DB, printerId);
   return jsonResponse({ diff: result.diff, printer, suspendedMappings: result.suspendedMappings });
+}
+
+/**
+ * The PATCH body's `dryRun` (a boolean, default false) and the body without
+ * it, which parsePrinterPatchInput then reads as before. null: `dryRun` is
+ * present and not a boolean. A body that is not an object passes through for
+ * the parser to refuse.
+ */
+function dryRunFlag(body: unknown): { dryRun: boolean; edit: unknown } | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body) || !Object.hasOwn(body, "dryRun")) {
+    return { dryRun: false, edit: body };
+  }
+  const { dryRun, ...edit } = body as Record<string, unknown>;
+  return typeof dryRun === "boolean" ? { dryRun, edit } : null;
 }
 
 /**

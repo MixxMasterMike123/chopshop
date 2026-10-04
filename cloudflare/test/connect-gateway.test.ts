@@ -178,8 +178,22 @@ function v1Account(overrides: Record<string, unknown> = {}): Stripe.Account {
   } as unknown as Stripe.Account;
 }
 
+/** CP5-WK: a connected account's balance as Stripe answers it (with what the read must not keep). */
+function v1Balance(overrides: Record<string, unknown> = {}): Stripe.Balance {
+  return {
+    available: [{ amount: 12_345, currency: "sek", source_types: { card: 12_345 } }],
+    connect_reserved: [{ amount: 999, currency: "sek" }],
+    instant_available: [{ amount: 1, currency: "sek" }],
+    livemode: false,
+    object: "balance",
+    pending: [{ amount: 500, currency: "sek", source_types: { card: 500 } }],
+    ...overrides,
+  } as unknown as Stripe.Balance;
+}
+
 function stubV1(options: {
   account?: Stripe.Account;
+  balance?: Stripe.Balance;
   fail?: unknown;
   linkUrl?: string;
   pages?: Array<{ data: Stripe.Account[]; has_more: boolean }>;
@@ -200,6 +214,10 @@ function stubV1(options: {
           expires_at: 1_900_000_000,
           url: options.linkUrl ?? "https://connect.stripe.com/setup/e/acct_test_v1one/abc",
         } as unknown as Stripe.AccountLink),
+    },
+    balance: {
+      retrieve: (params, requestOptions) =>
+        answer("balance.retrieve", [params, requestOptions], options.balance ?? v1Balance()),
     },
     accounts: {
       create: (params, requestOptions) => answer("accounts.create", [params, requestOptions], options.account ?? v1Account()),
@@ -441,12 +459,22 @@ function stubV2(
         recorded.push({ args: [id], method: "v1.accounts.createLoginLink" });
         return { url: "https://connect.stripe.com/express/v2" } as unknown as Stripe.LoginLink;
       },
+      retrieve: async (id) => {
+        recorded.push({ args: [id], method: "v1.accounts.retrieve" });
+        return v1Account({ id, settings: { payouts: { schedule: { delay_days: 7, interval: "monthly", monthly_anchor: 1 } } } });
+      },
       update: async (id, params) => {
         recorded.push({ args: [id, params], method: "v1.accounts.update" });
         if (options.updateFails !== undefined) {
           throw options.updateFails;
         }
         return {} as unknown as Stripe.Account;
+      },
+    },
+    balance: {
+      retrieve: async (params, requestOptions) => {
+        recorded.push({ args: [params, requestOptions], method: "v1.balance.retrieve" });
+        return v1Balance();
       },
     },
     v2: {

@@ -24,7 +24,7 @@ import {
   screeningStatementsFor,
   withScreeningRetry,
 } from "./screening";
-import { checkHtml } from "../content/html-refusal";
+import { checkHtml, type HtmlRefusal } from "../content/html-refusal";
 import { slugify } from "../storefront/addresses";
 
 // The admin product and its status moved to the read layer with CP4-A (the
@@ -415,6 +415,30 @@ function parseTags(value: unknown): string[] | undefined {
 function parseMoreInfo(value: unknown): string | null | undefined {
   const text = parseOptionalText(value, MORE_INFO_MAX_LENGTH, true);
   return typeof text === "string" && !checkHtml(text).ok ? undefined : text;
+}
+
+/**
+ * CP5-WK: WHY a create or update body was refused, when its only fault is the
+ * HTML of "Mer information" — so the answer can name the field, as a refused
+ * legal text names its page. The shape is judged first: `moreInfo` must be
+ * well-formed text (a string within its length, no control character) whose
+ * HTML html-refusal.ts refuses, AND the same body with `moreInfo` cleared must
+ * parse with `parse` (the route's own parser). Otherwise null: the plain
+ * invalid_request.
+ */
+export function moreInfoHtmlRefusal(body: unknown, parse: (body: unknown) => unknown): HtmlRefusal | null {
+  if (!isPlainObject(body)) {
+    return null;
+  }
+  const text = parseOptionalText(body.moreInfo, MORE_INFO_MAX_LENGTH, true);
+  if (typeof text !== "string") {
+    return null;
+  }
+  const check = checkHtml(text);
+  if (check.ok) {
+    return null;
+  }
+  return parse({ ...body, moreInfo: null }) === null ? null : check.reason;
 }
 
 function parseContentFields(body: Record<string, unknown>, input: ProductContentInput): boolean {

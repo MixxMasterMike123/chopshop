@@ -5,6 +5,8 @@ import type {
   ConnectAccountFacts,
   ConnectAccountListing,
   ConnectAccountsApi,
+  ConnectBalance,
+  ConnectBalanceAmount,
   ConnectGateway,
   ConnectLink,
   CreateConnectAccountParams,
@@ -40,6 +42,7 @@ export type FakeConnectMethod =
   | "createOnboardingLink"
   | "findAccountsByTenant"
   | "retrieveAccount"
+  | "retrieveBalance"
   | "updatePayoutDelay";
 
 export interface FakeConnectCall {
@@ -89,6 +92,8 @@ export class FakeConnectStripe implements ConnectGateway {
   failNext: Partial<Record<FakeConnectMethod, "rejected" | "unknown">> = {};
   onRetrieve: (() => Promise<void>) | null = null;
   onCreate: (() => Promise<void>) | null = null;
+  /** CP5-WK: what "Stripe" holds per account; an account without an entry holds 0 SEK. */
+  readonly balances = new Map<string, { available: ConnectBalanceAmount[]; pending: ConnectBalanceAmount[] }>();
   private held: { entered: () => void; gate: Promise<void> } | null = null;
   private counter = 0;
 
@@ -231,6 +236,30 @@ export class FakeConnectStripe implements ConnectGateway {
       await hook();
     }
     return facts;
+  }
+
+  /** The account's balance and its schedule: monthly on the 1st (the create's), the delay as set (SE minimum 7). */
+  async retrieveBalance(accountId: string): Promise<ConnectBalance> {
+    this.calls.push({ method: "retrieveBalance", params: accountId });
+    this.injected("retrieveBalance");
+    const account = this.accounts.get(accountId);
+    if (account === undefined) {
+      throw new ConnectGatewayError(true, "account_invalid");
+    }
+    const held = this.balances.get(accountId) ?? {
+      available: [{ amountMinor: 0, currency: "sek" }],
+      pending: [{ amountMinor: 0, currency: "sek" }],
+    };
+    return {
+      available: held.available.map((entry) => ({ ...entry })),
+      payoutSchedule: {
+        delayDays: typeof account.payoutDelayDays === "number" ? account.payoutDelayDays : 7,
+        interval: "monthly",
+        monthlyAnchor: 1,
+        weeklyAnchor: null,
+      },
+      pending: held.pending.map((entry) => ({ ...entry })),
+    };
   }
 
   async updatePayoutDelay(params: { accountId: string; delayDays: number | "minimum" }): Promise<void> {

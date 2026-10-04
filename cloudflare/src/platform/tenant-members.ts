@@ -1,5 +1,6 @@
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
+import type { IssuedInvite } from "./invites";
 import { issueInvite } from "./invites";
 import { createInvitedUser, parseEmail } from "./provision-users";
 import { ownPasswordSql } from "./user-directory";
@@ -55,6 +56,13 @@ import { ownPasswordSql } from "./user-directory";
  * account (a platform admin, a print operator, a customer, a suspended
  * identity, a user without an identity) is one refusal, `not_addable`, which
  * says nothing about which.
+ *
+ * ── THE RESEND (CP5-WK) ─────────────────────────────────────────────────────
+ * Re-adding an active member who is still `invited` answers `already_member`,
+ * so the link of someone whose 72 hours ran out (or whose mail failed) is
+ * re-sent on its own route: the same issueInvite, for a person the list shows
+ * (LISTED_MEMBER) whose `invited` is true (the same ownPasswordSql), both
+ * facts re-checked in the batch that would supersede the live link.
  */
 
 /** The most ACTIVE admins one shop may have (active membership, active identity). */
@@ -89,7 +97,9 @@ export type MemberRefusal =
   | "cannot_revoke_self"
   | "last_admin"
   | "member_limit"
-  | "not_addable";
+  | "not_addable"
+  | "not_invitable"
+  | "not_invited";
 
 export type InviteMemberResult =
   | { member: TenantMember; status: "ok" }
@@ -99,6 +109,21 @@ export type InviteMemberResult =
 export type RevokeMemberResult =
   | { status: "not_found" | "ok" }
   | { reason: MemberRefusal; status: "refused" };
+
+export type ResendInviteResult =
+  | { invite: IssuedInvite; status: "ok" }
+  | { reason: "not_invitable" | "not_invited"; status: "refused" }
+  | { status: "email_unavailable" | "not_found" };
+
+/**
+ * A person the list SHOWS: an active admin membership whose identity is a
+ * tenant admin (active or suspended). `m` is the membership alias, `a` the
+ * identity's. The list and the resend share it, so the resend reaches exactly
+ * the people the seller sees.
+ */
+const LISTED_MEMBER = `m.role = 'admin'
+  AND m.status = 'active'
+  AND a.account_type = 'tenant_admin'`;
 
 /**
  * An admin who COUNTS: an active admin membership of an active tenant-admin
@@ -177,9 +202,7 @@ export async function listTenantMembers(
        INNER JOIN "user" AS u ON u."id" = m.user_id
        INNER JOIN identity_access AS a ON a.user_id = m.user_id
        WHERE m.tenant_id = ?
-         AND m.role = 'admin'
-         AND m.status = 'active'
-         AND a.account_type = 'tenant_admin'
+         AND ${LISTED_MEMBER}
        ORDER BY m.created_at, m.membership_id
        LIMIT ?`,
     )
@@ -562,4 +585,86 @@ export async function revokeTenantMember(
   return (await isMember())
     ? { reason: "last_admin", status: "refused" }
     : { status: "not_found" };
+}
+
+/**
+ * The person `userId` as THIS shop's list shows them: their address (the
+ * recipient limiter's key; the list shows it to this shop already) and
+ * whether the link is still owed (`invited`, the list's own fact). null ⇒ not
+ * someone the list shows — unknown, another shop's admin, revoked — which the
+ * route answers with the revoke's opaque 404.
+ */
+export async function readInviteTarget(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  userId: string,
+): Promise<{ email: string; invited: boolean } | null> {
+  const row = await db
+    .prepare(
+      `SELECT u."email" AS email, ${ownPasswordSql("m.user_id")} AS own_password
+       FROM tenant_memberships AS m
+       INNER JOIN "user" AS u ON u."id" = m.user_id
+       INNER JOIN identity_access AS a ON a.user_id = m.user_id
+       WHERE m.tenant_id = ? AND m.user_id = ? AND ${LISTED_MEMBER}
+       LIMIT 1`,
+    )
+    .bind(principal.tenantId, userId)
+    .first<{ email: string; own_password: number }>();
+  return row === null ? null : { email: row.email, invited: row.own_password !== 1 };
+}
+
+/**
+ * `POST /v1/admin/members/:userId/resend-invite` (CP5-WK): a new 72-hour link
+ * for a member the list shows as `invited`. The caller has authorized the
+ * principal, checked the origin, the invite configuration and the limiters,
+ * and read the target (readInviteTarget) as listed and invited.
+ *
+ * Both facts that decision rests on — still someone this shop's list shows,
+ * still without a password of their own — are issueInvite's `condition`, so
+ * they are re-checked INSIDE the batch that supersedes the person's live link
+ * and records the new one. Revoked, or a password set, in between: the batch
+ * writes nothing, the live link stays live and no mail is queued. The refusal
+ * is then named by reading again (the write decided; the read only names it).
+ * An identity the platform suspended is refused by issueInvite itself.
+ *
+ * The invite's audit row (`platform.user_invite`) names this shop and, for an
+ * acting-as operator, the grant; never the address, the token or the link.
+ */
+export async function resendTenantMemberInvite(
+  env: Env,
+  principal: TenantAdminPrincipal,
+  userId: string,
+  now: number,
+): Promise<ResendInviteResult> {
+  const invite = await issueInvite(env, principal, userId, now, {
+    audit: {
+      metadataJson: auditMetadataJson(principal, { resend: true }) ?? "{}",
+      tenantId: principal.tenantId,
+    },
+    condition: {
+      binds: [principal.tenantId, userId, userId],
+      sql: `EXISTS (
+          SELECT 1 FROM tenant_memberships AS m
+          INNER JOIN identity_access AS a ON a.user_id = m.user_id
+          WHERE m.tenant_id = ? AND m.user_id = ? AND ${LISTED_MEMBER}
+        )
+        AND NOT ${ownPasswordSql("?")}`,
+    },
+  });
+
+  switch (invite.status) {
+    case "ok":
+      return { invite: invite.invite, status: "ok" };
+    case "email_unavailable":
+      return { status: "email_unavailable" };
+    case "not_found":
+      return { status: "not_found" };
+    case "not_invitable": {
+      const target = await readInviteTarget(env.DB, principal, userId);
+      if (target === null) {
+        return { status: "not_found" };
+      }
+      return { reason: target.invited ? "not_invitable" : "not_invited", status: "refused" };
+    }
+  }
 }

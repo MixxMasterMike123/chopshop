@@ -1,4 +1,5 @@
 import type { PlatformPrincipal } from "../auth/live-authorization";
+import { ELIGIBLE_PRODUCTS_FROM, PUBLIC_ELIGIBILITY_PREDICATE } from "../catalog/eligibility";
 import { readTenantLegalView, type TenantLegalView } from "../legal/legal-pages";
 import { MAX_DEFAULT_COMMISSION_BPS } from "./platform-settings";
 import {
@@ -40,6 +41,8 @@ const BPS_MAX = 10_000;
 const CLOSE_REASON_MAX_LENGTH = 500;
 
 export interface TenantListQuery {
+  /** CP5-WK (unit WI): `counts=1` adds each row's counts (one more query per page). */
+  counts: boolean;
   /** Keyset cursor: the last tenant id of the previous page. */
   cursor: string | null;
   limit: number;
@@ -49,9 +52,13 @@ export interface TenantListQuery {
 export function parseTenantListQuery(url: URL): TenantListQuery | null {
   const params = url.searchParams;
   for (const key of params.keys()) {
-    if (!["cursor", "limit", "status"].includes(key)) {
+    if (!["counts", "cursor", "limit", "status"].includes(key)) {
       return null;
     }
+  }
+  const countsRaw = params.getAll("counts");
+  if (countsRaw.length > 1 || (countsRaw.length === 1 && countsRaw[0] !== "1")) {
+    return null;
   }
   const limitRaw = params.get("limit");
   if (limitRaw !== null && !/^\d{1,3}$/.test(limitRaw)) {
@@ -69,10 +76,74 @@ export function parseTenantListQuery(url: URL): TenantListQuery | null {
   if (status !== null && !(TENANT_STATUSES as readonly string[]).includes(status)) {
     return null;
   }
-  return { cursor, limit, status: status as TenantStatus | null };
+  return { counts: countsRaw.length === 1, cursor, limit, status: status as TenantStatus | null };
+}
+
+// ── counts (CP5-WK, unit WI) ────────────────────────────────────────────────
+
+/**
+ * A shop's size, for the platform console's directory and detail:
+ *   products           its products the seller's own list shows (draft and
+ *                      active; an archived product is not counted)
+ *   publishedProducts  its products a visitor can see and buy NOW: THE public
+ *                      predicate (catalog/eligibility.ts), so 0 while the shop
+ *                      is unpublished or not active
+ *   orders             every order of the shop (an order exists once paid;
+ *                      refunded and cancelled ones are still orders)
+ * No customer count: there are no buyer accounts (D81).
+ */
+export interface TenantCounts {
+  orders: number;
+  products: number;
+  publishedProducts: number;
+}
+
+/**
+ * The counts of up to IN_CHUNK tenants per statement — ONE statement for a
+ * page of up to 90 tenants (two for a page of 100), never one per tenant.
+ * Each count is a correlated COUNT on a tenant-first index: products on
+ * products_tenant_status_idx (two equality probes, index only), the public
+ * count on product_publications_tenant_published_idx plus the predicate's
+ * joins per published product, orders on orders_tenant_status_idx (index
+ * only). Cost in rows read ≈ Σ over the page's tenants of (products +
+ * published products × the predicate's lookups + orders): it grows with the
+ * shops' size, which is why the list computes it only when asked.
+ */
+export async function readTenantCounts(
+  db: D1Database,
+  tenantIds: readonly string[],
+): Promise<Map<string, TenantCounts>> {
+  const counts = new Map<string, TenantCounts>();
+  for (let start = 0; start < tenantIds.length; start += IN_CHUNK) {
+    const ids = tenantIds.slice(start, start + IN_CHUNK);
+    const rows = await db
+      .prepare(
+        `SELECT t.tenant_id AS tenant_id,
+           (SELECT COUNT(*) FROM products AS counted
+            WHERE counted.tenant_id = t.tenant_id AND counted.status IN ('draft', 'active')) AS products,
+           (SELECT COUNT(*) ${ELIGIBLE_PRODUCTS_FROM}
+            WHERE publication.tenant_id = t.tenant_id AND ${PUBLIC_ELIGIBILITY_PREDICATE}) AS published_products,
+           (SELECT COUNT(*) FROM orders AS counted_order
+            WHERE counted_order.tenant_id = t.tenant_id) AS orders
+         FROM tenants AS t
+         WHERE t.tenant_id IN (${ids.map(() => "?").join(", ")})`,
+      )
+      .bind(...ids)
+      .all<{ orders: number; products: number; published_products: number; tenant_id: string }>();
+    for (const row of rows.results) {
+      counts.set(row.tenant_id, {
+        orders: row.orders,
+        products: row.products,
+        publishedProducts: row.published_products,
+      });
+    }
+  }
+  return counts;
 }
 
 export interface TenantListItem {
+  /** Only when the list was asked for `counts=1`. */
+  counts?: TenantCounts;
   domainCount: number;
   /** At most LIST_DOMAINS_PER_TENANT, ordered by hostname. */
   domains: Array<{ hostname: string; kind: string; status: string }>;
@@ -142,10 +213,17 @@ export async function listTenants(
     }
   }
 
+  const sizes = query.counts
+    ? await readTenantCounts(db, page.map((row) => row.tenant_id))
+    : null;
+
   const last = page.at(-1);
   return {
     nextCursor: rows.results.length > query.limit && last !== undefined ? last.tenant_id : null,
     tenants: page.map((row) => ({
+      ...(sizes === null
+        ? {}
+        : { counts: sizes.get(row.tenant_id) ?? { orders: 0, products: 0, publishedProducts: 0 } }),
       domainCount: counts.get(row.tenant_id) ?? 0,
       domains: domains.get(row.tenant_id) ?? [],
       published: row.published === 1,
@@ -157,6 +235,8 @@ export async function listTenants(
 }
 
 export interface TenantDetail {
+  /** CP5-WK (unit WI): the shop's size (TenantCounts). */
+  counts: TenantCounts;
   domains: DomainView[];
   /** True when the tenant has more domains than `domains` shows (use the domain route). */
   domainsTruncated: boolean;
@@ -236,7 +316,9 @@ export async function readTenantDetail(
   }
 
   const domainPage = await listTenantDomains(db, tenantId);
+  const sizes = await readTenantCounts(db, [tenantId]);
   return {
+    counts: sizes.get(tenantId) ?? { orders: 0, products: 0, publishedProducts: 0 },
     domains: domainPage?.domains ?? [],
     domainsTruncated: domainPage?.nextCursor !== null && domainPage?.nextCursor !== undefined,
     features: await readTenantFeatures(db, tenantId),

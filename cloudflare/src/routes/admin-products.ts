@@ -2,6 +2,7 @@ import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { authorizeTenantAdminRequest } from "../auth/request-authorization";
 import type { AdminRefusalCode } from "../catalog/admin-catalog";
 import {
+  moreInfoHtmlRefusal,
   parseProductOrderInput,
   setProductOrder,
   TENANT_REFUSAL_CODES,
@@ -270,5 +271,37 @@ export async function handleAdminProductImagesRoute(env: Env, request: Request):
   }
   return imagesResponse(
     await replaceProductImages(env, env.DB, principal, productId, input, Date.now()),
+  );
+}
+
+/**
+ * CP5-WK — the 400 of a product create or update body that `parse` refused
+ * (the handler in app.ts, POST /v1/admin/products and PATCH
+ * /v1/admin/products/:productId). When the only fault is the HTML of
+ * "Mer information" it names the field, as a refused legal text names its
+ * page (legal-admin.ts):
+ *
+ *   400 { error: { code: "invalid_request", message: "A text holds markup that
+ *         cannot be published", field: "moreInfo", reason: <HtmlRefusal> } }
+ *
+ * The code stays `invalid_request`, so a page that only reads the code is
+ * unchanged. Anything else wrong with the body (a malformed shape, refused
+ * HTML AND another fault) is the plain invalid_request, naming nothing.
+ */
+export function productBodyRefusedResponse(body: unknown, parse: (body: unknown) => unknown): Response {
+  const reason = moreInfoHtmlRefusal(body, parse);
+  if (reason === null) {
+    return invalidRequestResponse();
+  }
+  return jsonResponse(
+    {
+      error: {
+        code: "invalid_request",
+        field: "moreInfo",
+        message: "A text holds markup that cannot be published",
+        reason,
+      },
+    },
+    400,
   );
 }

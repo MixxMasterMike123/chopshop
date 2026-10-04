@@ -696,34 +696,58 @@ export function parseStoreSettingsInput(body: unknown): StoreSettingsParse {
   const input: StoreSettingsInput = {};
 
   if (Object.hasOwn(body, "storeIdentity")) {
-    const identity = body.storeIdentity;
-    if (!isPlainObject(identity)) {
-      return { status: "invalid" };
+    const identity = parseIdentityObject(body.storeIdentity);
+    if (identity.status !== "ok") {
+      return identity;
     }
-    const refused = refusedStoreIdentityKeys(identity);
-    if (refused.length > 0) {
-      return { keys: refused, status: "refused" };
-    }
-    if (depthOf(identity) > STORE_IDENTITY_MAX_DEPTH) {
-      return { status: "invalid" };
-    }
-    const json = JSON.stringify(identity);
-    if (new TextEncoder().encode(json).byteLength > STORE_IDENTITY_MAX_BYTES) {
-      return { status: "invalid" };
-    }
-    // CP4-D: an image is named by object id (null clears it) …
-    if (!imageKeysWellFormed(identity)) {
-      return { status: "invalid" };
-    }
-    // … and never by an address of the source system's storage, at any depth.
-    const storagePaths: string[] = [];
-    sourceStoragePaths(identity, "", storagePaths);
-    if (storagePaths.length > 0) {
-      return { keys: storagePaths, status: "refused" };
-    }
-    input.storeIdentityJson = json;
+    input.storeIdentityJson = identity.json;
   }
 
+  return parseGateFields(body, input);
+}
+
+/**
+ * The checks one identity object passes on every write (PUT: the whole
+ * identity; PATCH: the object of the top-level keys it replaces): no refused
+ * key, at most STORE_IDENTITY_MAX_DEPTH deep, at most STORE_IDENTITY_MAX_BYTES,
+ * image keys holding an object id or null, and no address of the source
+ * system's storage anywhere in it.
+ */
+function parseIdentityObject(
+  identity: unknown,
+): { json: string; status: "ok" } | { status: "invalid" } | { keys: string[]; status: "refused" } {
+  if (!isPlainObject(identity)) {
+    return { status: "invalid" };
+  }
+  const refused = refusedStoreIdentityKeys(identity);
+  if (refused.length > 0) {
+    return { keys: refused, status: "refused" };
+  }
+  if (depthOf(identity) > STORE_IDENTITY_MAX_DEPTH) {
+    return { status: "invalid" };
+  }
+  const json = JSON.stringify(identity);
+  if (new TextEncoder().encode(json).byteLength > STORE_IDENTITY_MAX_BYTES) {
+    return { status: "invalid" };
+  }
+  // CP4-D: an image is named by object id (null clears it) …
+  if (!imageKeysWellFormed(identity)) {
+    return { status: "invalid" };
+  }
+  // … and never by an address of the source system's storage, at any depth.
+  const storagePaths: string[] = [];
+  sourceStoragePaths(identity, "", storagePaths);
+  if (storagePaths.length > 0) {
+    return { keys: storagePaths, status: "refused" };
+  }
+  return { json, status: "ok" };
+}
+
+/** The four gate fields of a settings body (PUT and PATCH alike), into `input`. */
+function parseGateFields(
+  body: Record<string, unknown>,
+  input: StoreSettingsInput,
+): StoreSettingsParse {
   if (Object.hasOwn(body, "returnAddress")) {
     const parsed = parseOptionalText(body.returnAddress, RETURN_ADDRESS_MAX_LENGTH, true);
     if (!parsed.ok) {
@@ -852,37 +876,14 @@ export async function writeTenantSettings(
   now: number,
 ): Promise<StoreSettingsView> {
   const nowIso = new Date(now).toISOString();
+  const columns = settingsColumns(input);
 
-  const columns: Array<{ column: string; field: string; value: unknown }> = [];
-  if (input.storeIdentityJson !== undefined) {
-    columns.push({
-      column: "store_identity_json",
-      field: "storeIdentity",
-      value: input.storeIdentityJson,
-    });
-  }
-  if (input.returnAddress !== undefined) {
-    columns.push({ column: "return_address", field: "returnAddress", value: input.returnAddress });
-  }
-  if (input.vatRegistered !== undefined) {
-    columns.push({
-      column: "vat_registered",
-      field: "vatRegistered",
-      value: input.vatRegistered === null ? null : input.vatRegistered ? 1 : 0,
-    });
-  }
-  if (input.vatNumber !== undefined) {
-    columns.push({ column: "vat_number", field: "vatNumber", value: input.vatNumber });
-  }
-  if (input.sellerType !== undefined) {
-    columns.push({ column: "seller_type", field: "sellerType", value: input.sellerType });
-  }
-
-  // Column names come from the fixed list above, never from the request.
+  // Column names come from settingsColumns' fixed list, never from the request.
   const insertColumns = ["tenant_id", ...columns.map((entry) => entry.column), "updated_at", "updated_by"];
   const updateSet = [
     ...columns.map((entry) => `${entry.column} = excluded.${entry.column}`),
-    "updated_at = excluded.updated_at",
+    // CP5-WK: strictly forward, so the PATCH's fence sees every write.
+    `updated_at = ${nextUpdatedAtSql("excluded.updated_at")}`,
     "updated_by = excluded.updated_by",
   ];
 
@@ -918,4 +919,272 @@ export async function writeTenantSettings(
   ]);
 
   return readTenantSettings(db, principal.tenantId);
+}
+
+interface SettingsColumn {
+  column: string;
+  field: string;
+  value: unknown;
+}
+
+/** The present fields of a settings write, as (column, body field, value), in a fixed order. */
+function settingsColumns(input: StoreSettingsInput): SettingsColumn[] {
+  const columns: SettingsColumn[] = [];
+  if (input.storeIdentityJson !== undefined) {
+    columns.push({
+      column: "store_identity_json",
+      field: "storeIdentity",
+      value: input.storeIdentityJson,
+    });
+  }
+  if (input.returnAddress !== undefined) {
+    columns.push({ column: "return_address", field: "returnAddress", value: input.returnAddress });
+  }
+  if (input.vatRegistered !== undefined) {
+    columns.push({
+      column: "vat_registered",
+      field: "vatRegistered",
+      value: input.vatRegistered === null ? null : input.vatRegistered ? 1 : 0,
+    });
+  }
+  if (input.vatNumber !== undefined) {
+    columns.push({ column: "vat_number", field: "vatNumber", value: input.vatNumber });
+  }
+  if (input.sellerType !== undefined) {
+    columns.push({ column: "seller_type", field: "sellerType", value: input.sellerType });
+  }
+  return columns;
+}
+
+// ── the fenced partial write: PATCH /v1/admin/settings (CP5-WK, unit WD) ────
+//
+// The PUT replaces each field it names, the identity object WHOLE, with no
+// lock: a page that reads, changes one key and writes the whole identity back
+// overwrites whatever another tab, admin or operator wrote in between. The
+// PATCH sends only the top-level identity keys it changes, and the
+// `updatedAt` it read; the write happens only if the row is still at that
+// `updatedAt`, else 409 and nothing is written.
+//
+// MERGE = REPLACE AT THE TOP-LEVEL KEY. Each key the patch's `storeIdentity`
+// names replaces the stored key's value whole — an object (`theme`, `legal`,
+// `social`), an array (`menu`, `gallery`, `pickupLocations`) or a scalar; a
+// key set to null is stored as null (an image key's null clears the image, as
+// on the PUT); a key the patch does not name keeps its value. There is no
+// deep merge and no way to drop a key (the PUT does that). The page that
+// changes one leaf of `legal` computes the new `legal` from the one it read,
+// as it does today, and sends that key; the fence turns a write that landed
+// in between into a 409, after which it reads again and re-applies. The base
+// of the merge is the identity as the GET shows it (refused keys a non-route
+// writer stored are dropped), so the result is what a read-modify-write PUT
+// of the same keys would store.
+//
+// The same checks as the PUT, applied to the keys written: refused keys,
+// depth, image keys well-formed, no source-storage address; the merged
+// identity within STORE_IDENTITY_MAX_BYTES; and (in the route) the images the
+// PATCHED keys name must be this shop's (an image the patch does not touch is
+// not re-checked, so a removed logo no longer blocks an unrelated save).
+
+/**
+ * The next `updated_at` of an existing settings row, as SQL: the write's own
+ * time when it is later than the stored one, else one millisecond after the
+ * stored one. Every write moves `updated_at` strictly forward — two writes in
+ * one millisecond, or a clock that stepped back, never leave the same value
+ * twice — so it is a version the PATCH can fence on. `incoming` is the SQL of
+ * the write's ISO time (each occurrence is its own bind when it is `?`).
+ */
+function nextUpdatedAtSql(incoming: string): string {
+  return `CASE WHEN ${incoming} > tenant_settings.updated_at THEN ${incoming}
+    ELSE strftime('%Y-%m-%dT%H:%M:%fZ', tenant_settings.updated_at, '+0.001 seconds') END`;
+}
+
+/** What the GET answers as `updatedAt`: ISO-8601 UTC with milliseconds (the 0032 CHECK). */
+const UPDATED_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+const PATCH_SETTINGS_KEYS = [...SETTINGS_KEYS, "expectedUpdatedAt"] as const;
+
+export interface StoreSettingsPatchInput {
+  /** The `updatedAt` the caller read: the ISO time, or null for "no settings yet". */
+  expectedUpdatedAt: string | null;
+  /** The four gate fields the patch names (the PUT's rules). */
+  gates: StoreSettingsInput;
+  /** The top-level identity keys to replace (validated), and their canonical JSON. */
+  identityPatch?: Record<string, unknown>;
+  identityPatchJson?: string;
+}
+
+export type StoreSettingsPatchParse =
+  | { input: StoreSettingsPatchInput; status: "ok" }
+  | { status: "invalid" }
+  | { keys: string[]; status: "refused" };
+
+/**
+ * PATCH /v1/admin/settings body:
+ *   expectedUpdatedAt  REQUIRED: the `updatedAt` of the last GET (or write)
+ *                      answer — an ISO string, or null when it was null
+ *   storeIdentity      optional: an object of at least one top-level key, each
+ *                      replacing the stored key (see above)
+ *   returnAddress, vatRegistered, vatNumber, sellerType   optional, as the PUT
+ * At least one of the last five must change something: `storeIdentity` with a
+ * key, or a gate field.
+ */
+export function parseStoreSettingsPatchInput(body: unknown): StoreSettingsPatchParse {
+  if (
+    !isPlainObject(body) ||
+    !hasOnlyKeys(body, PATCH_SETTINGS_KEYS) ||
+    !Object.hasOwn(body, "expectedUpdatedAt")
+  ) {
+    return { status: "invalid" };
+  }
+  const expected = body.expectedUpdatedAt;
+  if (expected !== null && (typeof expected !== "string" || !UPDATED_AT_PATTERN.test(expected))) {
+    return { status: "invalid" };
+  }
+
+  const input: StoreSettingsPatchInput = { expectedUpdatedAt: expected, gates: {} };
+  if (Object.hasOwn(body, "storeIdentity")) {
+    const identity = body.storeIdentity;
+    if (!isPlainObject(identity) || Object.keys(identity).length === 0) {
+      return { status: "invalid" };
+    }
+    const parsed = parseIdentityObject(identity);
+    if (parsed.status !== "ok") {
+      return parsed;
+    }
+    input.identityPatch = identity;
+    input.identityPatchJson = parsed.json;
+  }
+
+  const gates = parseGateFields(body, {});
+  if (gates.status !== "ok") {
+    return gates;
+  }
+  input.gates = gates.input;
+  if (input.identityPatch === undefined && Object.keys(gates.input).length === 0) {
+    return { status: "invalid" };
+  }
+  return { input, status: "ok" };
+}
+
+export type PatchSettingsResult =
+  | { settings: StoreSettingsView; status: "ok" }
+  /** The row is not at `expectedUpdatedAt` (before, or by the time of, the write): nothing written. */
+  | { settings: StoreSettingsView; status: "stale" }
+  /** The merged identity is over STORE_IDENTITY_MAX_BYTES: nothing written. */
+  | { status: "invalid" };
+
+/**
+ * The fenced write. One read (the stored identity and its `updated_at`), the
+ * merge, then ONE batch: the audit row and the write, both conditioned on the
+ * row being exactly as read — `updated_at` unchanged, or still absent when
+ * `expectedUpdatedAt` is null — so a write that lands in between makes both a
+ * no-op (D1 runs the batch as one transaction). The audit row is the PUT's
+ * (`tenant.settings_update`, the fields written, never a value) plus the
+ * identity keys replaced; under acting-as it carries the grant id.
+ */
+export async function patchTenantSettings(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  input: StoreSettingsPatchInput,
+  now: number,
+): Promise<PatchSettingsResult> {
+  const tenantId = principal.tenantId;
+  const stale = async (): Promise<PatchSettingsResult> => ({
+    settings: await readTenantSettings(db, tenantId),
+    status: "stale",
+  });
+
+  const row = await db
+    .prepare("SELECT store_identity_json, updated_at FROM tenant_settings WHERE tenant_id = ? LIMIT 1")
+    .bind(tenantId)
+    .first<{ store_identity_json: string; updated_at: string }>();
+  if ((row?.updated_at ?? null) !== input.expectedUpdatedAt) {
+    return stale();
+  }
+
+  const write: StoreSettingsInput = { ...input.gates };
+  if (input.identityPatch !== undefined) {
+    const base = row === null ? {} : parseStoredIdentity(row.store_identity_json);
+    // Own properties only, key order kept: a replaced key stays where it was.
+    const merged = Object.fromEntries([
+      ...Object.entries(base),
+      ...Object.entries(input.identityPatch),
+    ]);
+    const json = JSON.stringify(merged);
+    if (new TextEncoder().encode(json).byteLength > STORE_IDENTITY_MAX_BYTES) {
+      return { status: "invalid" };
+    }
+    write.storeIdentityJson = json;
+  }
+  const columns = settingsColumns(write);
+  const nowIso = new Date(now).toISOString();
+
+  // "The row is as read", as SQL; the same guard for the audit row and the write.
+  const guard =
+    row === null
+      ? { binds: [tenantId], sql: "NOT EXISTS (SELECT 1 FROM tenant_settings WHERE tenant_id = ?)" }
+      : {
+          binds: [tenantId, row.updated_at],
+          sql: "EXISTS (SELECT 1 FROM tenant_settings WHERE tenant_id = ? AND updated_at = ?)",
+        };
+
+  const audit = db
+    .prepare(
+      `INSERT INTO audit_events (
+         event_id, tenant_id, actor_user_id, action, resource_type,
+         resource_id, request_id, metadata_json, created_at
+       )
+       SELECT ?, ?, ?, 'tenant.settings_update', 'tenant_settings', ?, ?, ?, ?
+       WHERE ${guard.sql}`,
+    )
+    .bind(
+      crypto.randomUUID(),
+      tenantId,
+      principal.userId,
+      tenantId,
+      crypto.randomUUID(),
+      auditMetadataJson(principal, {
+        fields: columns.map((entry) => entry.field),
+        ...(input.identityPatch === undefined
+          ? {}
+          : { identityKeys: Object.keys(input.identityPatch).sort() }),
+      }),
+      now,
+      ...guard.binds,
+    );
+
+  // Column names come from settingsColumns' fixed list, never from the request.
+  const change =
+    row === null
+      ? db
+          .prepare(
+            `INSERT INTO tenant_settings (
+               tenant_id, ${columns.map((entry) => entry.column).join(", ")}, updated_at, updated_by
+             )
+             SELECT ?, ${columns.map(() => "?").join(", ")}, ?, ?
+             WHERE ${guard.sql}`,
+          )
+          .bind(tenantId, ...columns.map((entry) => entry.value), nowIso, principal.userId, ...guard.binds)
+      : db
+          .prepare(
+            `UPDATE tenant_settings
+             SET ${columns.map((entry) => `${entry.column} = ?`).join(", ")},
+                 updated_at = ${nextUpdatedAtSql("?")},
+                 updated_by = ?
+             WHERE tenant_id = ? AND updated_at = ?`,
+          )
+          .bind(
+            ...columns.map((entry) => entry.value),
+            nowIso,
+            nowIso,
+            principal.userId,
+            tenantId,
+            row.updated_at,
+          );
+
+  const results = await db.batch([audit, change]);
+  // D1 counts rows a trigger wrote too (catalog_version): "nothing" is === 0.
+  if ((results[1]?.meta.changes ?? 0) === 0) {
+    return stale();
+  }
+  return { settings: await readTenantSettings(db, tenantId), status: "ok" };
 }
