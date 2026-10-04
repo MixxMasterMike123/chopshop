@@ -83,6 +83,7 @@ export const createMockupSession = () => {
  */
 export const renderMockup = async ({
   template, colorway, slot = 'front', artwork = null, placement = null, minDpi = null,
+  locked = false,
   scale = MOCKUP_SCALE, type = 'image/webp', quality = 0.92, background = '#ffffff',
   session = null,
 }) => {
@@ -93,11 +94,17 @@ export const renderMockup = async ({
 
   const areaRect = template.printAreas?.[slot];
   const ppm = pxPerMm(template, slot);
+  // `locked`: the placement is someone else's decision (where the server sizes
+  // the print, by the ARTWORK's own DPI floor): it is drawn exactly as given,
+  // so the mockup matches the preview and the print. Clamping it by the
+  // template's minDpi here would shrink and move it.
   const p = artwork && isComposable(artwork) && areaRect && ppm
-    ? clampPlacement(
-        placement || defaultPlacement(template, slot, artwork, minDpi),
-        template, slot, artwork, minDpi
-      )
+    ? (locked && placement
+        ? placement
+        : clampPlacement(
+            placement || defaultPlacement(template, slot, artwork, minDpi),
+            template, slot, artwork, minDpi
+          ))
     : null;
 
   // Photo templates may carry a registered fabric displacement map per view.

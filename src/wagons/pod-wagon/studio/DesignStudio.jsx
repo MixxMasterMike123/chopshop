@@ -653,6 +653,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           ({ blob, type } = await renderMockup({
             template: effTemplate, colorway: cw, slot: s, minDpi: profile?.min_dpi ?? null,
             artwork: art, placement: effectivePlacementFor(s, art),
+            // Server-sized placements are drawn as they are (no template clamp).
+            locked: !STUDIO_FLAGS.placementEditable,
             session: renderSession,
           }));
         } catch (e) {
