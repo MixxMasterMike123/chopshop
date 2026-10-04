@@ -348,3 +348,176 @@ export function reportPath(jobId: string, action: "complete" | "fail"): string {
 }
 
 export const ACQUIRE_PATH = "/v1/render/jobs/acquire";
+
+// ── CP6-PS2: the print canvas job (`pod.print_canvas`) ──────────────────────
+//
+// The same acquire path. This container names the job kinds it renders in the
+// acquire body; the API hands a canvas job ONLY to a caller that names it, so
+// an older image (no body) never receives one. In the other direction, an older
+// API never reads the body and never has a canvas job to hand out: this image
+// then simply gets artwork jobs, exactly as before. The artwork envelope, its
+// reports and their paths are unchanged, byte for byte.
+
+export const CANVAS_JOB_TYPE = "pod.print_canvas";
+
+/** The acquire body: every kind this image renders. */
+export const ACQUIRE_BODY = { jobTypes: [JOB_TYPE, CANVAS_JOB_TYPE] } as const;
+
+/**
+ * The largest print master downloaded for a canvas (the Worker's
+ * src/dispatch/print-canvas.ts CANVAS_MAX_INPUT_BYTES; the Worker suite pins
+ * the two equal). A noisy 10 000 px master can exceed the artwork path's
+ * 200 MB original ceiling.
+ */
+export const CANVAS_MAX_INPUT_BYTES = 512 * 1024 * 1024;
+
+/** The geometry the Worker computed and froze (src/dispatch/print-canvas.ts CanvasSpec). */
+export interface CanvasSpec {
+  background: "transparent";
+  canvasPx: { h: number; w: number };
+  dpi: number;
+  motifPx: { h: number; w: number };
+  offsetPx: { left: number; top: number };
+  sourcePx: { h: number; w: number };
+  version: number;
+}
+
+export interface CanvasLease extends LeaseClaim {
+  canvasPutUrl: string;
+  inputMaxBytes: number;
+  inputSha256: string;
+  inputUrl: string;
+  leaseUntil: string;
+  outputPrefix: string;
+  spec: CanvasSpec;
+}
+
+export type ParsedCanvasLease =
+  | { lease: CanvasLease; ok: true }
+  | { claim: LeaseClaim | null; ok: false };
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+/** Ours: never a canvas larger than this many pixels (the Worker's CANVAS_MAX_PIXELS). */
+const MAX_CANVAS_PIXELS = 40_000_000;
+
+function isBox(value: unknown): value is { h: number; w: number } {
+  return isPlainObject(value) && isPositiveSafeInt(value.w) && isPositiveSafeInt(value.h);
+}
+
+function isNonNegativeSafeInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** The spec, refused unless the motif lies wholly inside the canvas. */
+export function parseCanvasSpec(value: unknown): CanvasSpec | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const { background, canvasPx, dpi, motifPx, offsetPx, sourcePx, version } = value;
+  if (
+    background !== "transparent" ||
+    !isBox(canvasPx) ||
+    !isBox(motifPx) ||
+    !isBox(sourcePx) ||
+    !isPositiveSafeInt(dpi) ||
+    !isPositiveSafeInt(version) ||
+    !isPlainObject(offsetPx) ||
+    !isNonNegativeSafeInt(offsetPx.left) ||
+    !isNonNegativeSafeInt(offsetPx.top) ||
+    canvasPx.w * canvasPx.h > MAX_CANVAS_PIXELS ||
+    offsetPx.left + motifPx.w > canvasPx.w ||
+    offsetPx.top + motifPx.h > canvasPx.h
+  ) {
+    return null;
+  }
+  return {
+    background,
+    canvasPx: { h: canvasPx.h, w: canvasPx.w },
+    dpi,
+    motifPx: { h: motifPx.h, w: motifPx.w },
+    offsetPx: { left: offsetPx.left, top: offsetPx.top },
+    sourcePx: { h: sourcePx.h, w: sourcePx.w },
+    version,
+  };
+}
+
+/** The job kind an acquire answer carries (the artwork kind when it names none). */
+export function leaseJobType(body: unknown): string {
+  return isPlainObject(body) && typeof body.jobType === "string" ? body.jobType : JOB_TYPE;
+}
+
+/** The 200 body of acquire for a canvas job. */
+export function parseCanvasLease(body: unknown): ParsedCanvasLease {
+  if (!isPlainObject(body)) {
+    return { claim: null, ok: false };
+  }
+  const claim = parseClaim(body);
+  if (claim === null) {
+    return { claim: null, ok: false };
+  }
+  const { contract, input, jobType, leaseUntil, output, outputPrefix } = body;
+  const spec = parseCanvasSpec(body.spec);
+  if (
+    contract !== CONTRACT_VERSION ||
+    jobType !== CANVAS_JOB_TYPE ||
+    !isPlainObject(input) ||
+    !isAllowedStorageUrl(input.url) ||
+    !isPositiveSafeInt(input.maxBytes) ||
+    typeof input.sha256 !== "string" ||
+    !SHA256_PATTERN.test(input.sha256) ||
+    spec === null ||
+    !isPlainObject(output) ||
+    !isAllowedStorageUrl(output.canvasPngPutUrl) ||
+    typeof leaseUntil !== "string" ||
+    !Number.isFinite(Date.parse(leaseUntil)) ||
+    typeof outputPrefix !== "string" ||
+    outputPrefix.length === 0 ||
+    outputPrefix.length > MAX_OUTPUT_PREFIX_LENGTH ||
+    !outputPrefix.endsWith("/")
+  ) {
+    return { claim, ok: false };
+  }
+  return {
+    lease: {
+      ...claim,
+      canvasPutUrl: output.canvasPngPutUrl,
+      inputMaxBytes: input.maxBytes,
+      inputSha256: input.sha256,
+      inputUrl: input.url,
+      leaseUntil,
+      outputPrefix,
+      spec,
+    },
+    ok: true,
+  };
+}
+
+/** The canvas object's key, derived from the lease (the API compares it with its own). */
+export function canvasOutputKey(outputPrefix: string): string {
+  return `${outputPrefix}canvas.png`;
+}
+
+export type CanvasVerdict = { ok: true; output: OutputReport } | { ok: false; reasons: Notice[] };
+
+/** The canvas complete body, exactly the keys completeCanvasJob accepts. */
+export function canvasCompletionBody(
+  lease: CanvasLease,
+  verdict: CanvasVerdict,
+  metrics: Record<string, number>,
+): Record<string, unknown> {
+  const claim = { attempt: lease.attempt, leaseToken: lease.leaseToken };
+  const cleanMetrics = sanitizeMetrics(metrics);
+  if (!verdict.ok) {
+    return { ...claim, metrics: cleanMetrics, ok: false, reasons: verdict.reasons };
+  }
+  return {
+    ...claim,
+    metrics: cleanMetrics,
+    ok: true,
+    outputs: { canvasPng: { key: canvasOutputKey(lease.outputPrefix), ...verdict.output } },
+  };
+}
+
+export function canvasReportPath(jobId: string, action: "complete" | "fail"): string {
+  return `/v1/render/canvas-jobs/${jobId}/${action}`;
+}

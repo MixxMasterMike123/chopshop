@@ -32,6 +32,22 @@ import {
   parkForHold,
 } from "../commerce/dispatch-hold";
 import { readDispatchShipTo } from "../commerce/recipient";
+import { nudgeRenderJob } from "../pod/render-jobs";
+import {
+  ensureCanvasJobStatements,
+  type EnsureCanvasSlot,
+  lineCanvasPendingSql,
+  readLineCanvases,
+} from "../pod/print-canvas-jobs";
+import {
+  CANVAS_HOLD_UNTIL_MS,
+  CANVAS_MAX_INPUT_BYTES,
+  canvasSpec,
+  decidePrintFiles,
+  type FrameMm,
+  PRINT_CANVAS_PENDING,
+  printCanvasEnabled,
+} from "./print-canvas";
 import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-wire";
 
 /**
@@ -52,8 +68,10 @@ import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-
  *     human-action alert; it is never re-submitted (that could create the job
  *     the buyer just cancelled).
  *  2. build the job (validation failures are terminal + alert: resubmitting
- *     cannot fix data), check each print file exists with the snapshot's sha256,
- *     presign it.
+ *     cannot fix data), choose each slot's file (printFilesForPrinter: the
+ *     artwork's print PNG, or with PRINT_CANVAS_ENABLED the line's print
+ *     canvas — CP6-PS2; a canvas not yet made PARKS the row until it is),
+ *     check each print file exists with its recorded sha256, presign it.
  *  3. claimed → submitting, atomically refused if a cancellation landed
  *     meanwhile (the re-check "before the HTTP call").
  *  4. submit with the STABLE job id `{orderId}-{lineNo}`:
@@ -124,10 +142,48 @@ interface PrintFile {
   sha256: string;
 }
 
+/**
+ * A slot as the line froze it: the file, plus what the print canvas is made
+ * from (CP6-PS2). The canvas fields are OPTIONAL here: a line frozen before
+ * CP6-PS2 has none, and the artwork path never reads them. canvasSpec refuses
+ * a slot that lacks them.
+ */
+interface FrozenSlot extends PrintFile {
+  frameMm?: FrameMm;
+  frameProvisional?: boolean;
+  sourcePx?: { h: number; w: number };
+  widthMm: number;
+}
+
 interface BuiltJob {
-  printFiles: PrintFile[];
+  printFiles: FrozenSlot[];
   quantity: number;
   sku: string;
+}
+
+function isPositiveInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+/** The frozen canvas facts of one slot, each kept only when well formed. */
+function frozenCanvasFields(entry: Record<string, unknown>): Omit<FrozenSlot, keyof PrintFile> {
+  const { frameMm, frameProvisional, sourcePx, widthMm } = entry;
+  const fields: Omit<FrozenSlot, keyof PrintFile> = { widthMm: isPositiveInt(widthMm) ? widthMm : 0 };
+  if (isRecord(frameMm) && isPositiveInt(frameMm.w) && isPositiveInt(frameMm.h)) {
+    fields.frameMm =
+      frameMm.offsetTopMm === undefined
+        ? { h: frameMm.h, w: frameMm.w }
+        : typeof frameMm.offsetTopMm === "number"
+          ? { h: frameMm.h, offsetTopMm: frameMm.offsetTopMm, w: frameMm.w }
+          : { h: frameMm.h, w: frameMm.w };
+  }
+  if (typeof frameProvisional === "boolean") {
+    fields.frameProvisional = frameProvisional;
+  }
+  if (isRecord(sourcePx) && isPositiveInt(sourcePx.w) && isPositiveInt(sourcePx.h)) {
+    fields.sourcePx = { h: sourcePx.h, w: sourcePx.w };
+  }
+  return fields;
 }
 
 type Build<T> = { error: string; ok: false } | { ok: true; value: T };
@@ -235,7 +291,7 @@ export function buildDispatchJob(
   }
 
   const prefix = `pod/${tenantId}/`;
-  const files: PrintFile[] = [];
+  const files: FrozenSlot[] = [];
   for (const entry of production.printFiles as unknown[]) {
     if (!isRecord(entry)) {
       return { error: "production_line_invalid", ok: false };
@@ -258,39 +314,188 @@ export function buildDispatchJob(
     if (files.some((file) => file.location === slot)) {
       return { error: "production_line_invalid", ok: false };
     }
-    files.push({ location: slot as PrintLocation, r2Key, sha256 });
+    files.push({ location: slot as PrintLocation, r2Key, sha256, ...frozenCanvasFields(entry) });
   }
 
   files.sort((a, b) => LOCATIONS.indexOf(a.location) - LOCATIONS.indexOf(b.location));
   return { ok: true, value: { printFiles: files, quantity, sku } };
 }
 
+type PrintFilesResult =
+  | { files: PrintFile[]; kind: "ready" }
+  | { error: string; kind: "retry" | "terminal" }
+  | { kind: "parked"; outcome: OutboxRunOutcome };
+
 /**
  * THE PS2 SEAM (LAUNCH_TODO A5): the file the printer receives for each print
- * slot of ONE line. Today it is the artwork's stored print PNG, exactly as the
- * line's production snapshot froze it (key + sha256); the caller then checks
- * it in the private bucket and presigns it. PS2 replaces this one function: a
- * PNG of the printer's whole frame with the motif at its placement offset,
- * rendered per line (render container; waits on C2/C3) and stored under the
- * order in the shop's server-owned print path, returned here as that file's
- * key and sha256 per slot. Nothing else in the dispatch needs to change.
+ * slot of ONE line (src/dispatch/print-canvas.ts decidePrintFiles):
+ *   - the line's completed print canvases, when every slot has one (whatever
+ *     the switch: a re-dispatch after a lost answer gets the same file), each
+ *     checked to have been made from the very print master the line froze;
+ *   - the artwork's stored print PNG exactly as the snapshot froze it, when
+ *     the switch is off or the row was already submitted without canvases
+ *     (the file sent for one job id never changes);
+ *   - terminal `print_canvas_failed` when a canvas of the line failed for good;
+ *   - otherwise the canvases are ENSURED and the row PARKED (ensureAndPark).
+ * The caller then checks every file in the private bucket against its recorded
+ * sha256 and presigns it, as before.
  */
-function printFilesForPrinter(job: BuiltJob): PrintFile[] {
-  return job.printFiles;
+async function printFilesForPrinter(
+  ctx: EffectContext,
+  tenantId: string,
+  payload: DispatchPayload,
+  line: { orderItemId: string; tenantId: string },
+  job: BuiltJob,
+): Promise<PrintFilesResult> {
+  for (let pass = 0; pass < 2; pass += 1) {
+    const canvases = await readLineCanvases(ctx.env.DB, tenantId, payload.orderId, payload.lineNo);
+    const decision = decidePrintFiles({
+      canvases,
+      slots: job.printFiles.map((file) => file.location),
+      submitted: ctx.row.submitted_at !== null,
+      switchOn: printCanvasEnabled(ctx.env),
+    });
+    switch (decision.kind) {
+      case "artwork":
+        return { files: job.printFiles.map(({ location, r2Key, sha256 }) => ({ location, r2Key, sha256 })), kind: "ready" };
+      case "terminal":
+        return { error: decision.error, kind: "terminal" };
+      case "canvas": {
+        const madeFromFrozen = job.printFiles.every((file) =>
+          canvases.some(
+            (canvas) =>
+              canvas.slot === file.location && canvas.inputKey === file.r2Key && canvas.inputSha256 === file.sha256,
+          ),
+        );
+        return madeFromFrozen
+          ? { files: decision.files, kind: "ready" }
+          : { error: "print_canvas_input_mismatch", kind: "terminal" };
+      }
+      case "ensure": {
+        const ensured = await ensureAndPark(ctx, tenantId, payload, line, job);
+        if (ensured !== "settled") {
+          return ensured;
+        }
+        // Every canvas settled between the read and the park: decide again.
+      }
+    }
+  }
+  return { error: PRINT_CANVAS_PENDING, kind: "retry" };
+}
+
+/**
+ * Ensure the line's canvas jobs and park the row while they render, in ONE
+ * batch. The artwork files are checked first exactly as the artwork path
+ * checks them (a missing or wrong master is terminal there too), which also
+ * gives each job its input size; each slot's geometry is computed and frozen
+ * (canvasSpec refuses a line it cannot make honestly: terminal).
+ *
+ * The park (the same shape as parkForPrinter) applies under the claim's fence,
+ * only while an attempt remains, and ONLY while one of the line's canvases is
+ * still queued or leased. A job's settling batch releases the parked row
+ * (print-canvas-jobs.ts); because both statements read the same rows under
+ * D1's single writer, a row is never parked after its last canvas settled.
+ * No attempt is spent while it waits; reconciliation's dispatch_stranded_30m
+ * names it after 30 minutes.
+ *
+ * "settled": nothing pending was left to wait for (decide again).
+ */
+async function ensureAndPark(
+  ctx: EffectContext,
+  tenantId: string,
+  payload: DispatchPayload,
+  line: { orderItemId: string; tenantId: string },
+  job: BuiltJob,
+): Promise<PrintFilesResult | "settled"> {
+  const { claim, env, row } = ctx;
+  const storage = await checkPrintFiles(env, job.printFiles);
+  if (storage.kind !== "ok") {
+    return { error: storage.error, kind: storage.kind };
+  }
+
+  const slots: EnsureCanvasSlot[] = [];
+  for (const [index, file] of job.printFiles.entries()) {
+    const spec = canvasSpec(file);
+    if (!spec.ok) {
+      return { error: spec.error, kind: "terminal" };
+    }
+    const inputBytes = storage.sizes[index] ?? 0;
+    if (inputBytes < 1 || inputBytes > CANVAS_MAX_INPUT_BYTES) {
+      return { error: "print_canvas_input_too_large", kind: "terminal" };
+    }
+    slots.push({ inputBytes, inputKey: file.r2Key, inputSha256: file.sha256, location: file.location, spec: spec.spec });
+  }
+
+  const now = ctx.clock();
+  const ensured = ensureCanvasJobStatements(env.DB, {
+    lineNo: payload.lineNo,
+    now,
+    orderId: payload.orderId,
+    slots,
+    tenantId,
+  });
+  const fence = fenceGuard(claim, now);
+  const pending = lineCanvasPendingSql();
+  const pendingBinds = [tenantId, payload.orderId, payload.lineNo];
+  const parkable = `${fence.sql} AND status = 'claimed' AND attempts < max_attempts AND ${pending}`;
+  const results = await env.DB.batch([
+    ...ensured.statements,
+    env.DB.prepare(
+      `UPDATE order_items
+       SET dispatch_state = CASE WHEN dispatch_state = 'submitting' THEN 'pending'
+                                 ELSE dispatch_state END
+       WHERE order_item_id = ? AND tenant_id = ?
+         AND EXISTS (SELECT 1 FROM outbox_events WHERE ${parkable})`,
+    ).bind(line.orderItemId, line.tenantId, ...fence.binds, ...pendingBinds),
+    env.DB.prepare(
+      `UPDATE outbox_events
+       SET status = 'pending',
+           next_attempt_at = ${CANVAS_HOLD_UNTIL_MS},
+           last_error = '${PRINT_CANVAS_PENDING}',
+           claimed_by = NULL, claim_expires_at = NULL,
+           updated_at = MAX(updated_at, ?)
+       WHERE ${parkable}
+       RETURNING outbox_id`,
+    ).bind(now, ...fence.binds, ...pendingBinds),
+  ]);
+
+  if ((results[results.length - 1]?.results.length ?? 0) === 1) {
+    // One nudge wakes the singleton container, which drains every queued job.
+    const firstId = ensured.jobIds[0];
+    if (firstId !== undefined) {
+      await nudgeRenderJob(env, firstId);
+    }
+    return { kind: "parked", outcome: { delayMs: CANVAS_HOLD_UNTIL_MS - now, kind: "retry" } };
+  }
+
+  // Not parked: the claim is gone, the last attempt is running, or nothing is
+  // pending any more.
+  const current = await readOutboxRow(env.DB, row.outbox_id);
+  if (current === null || current.status !== "claimed" || current.claimed_by !== claim.claimedBy) {
+    return { kind: "parked", outcome: { kind: "lost_claim" } };
+  }
+  const canvases = await readLineCanvases(env.DB, tenantId, payload.orderId, payload.lineNo);
+  if (canvases.some((canvas) => canvas.state === "queued" || canvas.state === "leased")) {
+    // The last attempt: it cannot be parked (it could never be claimed again).
+    // retryLater fails it with its alert, the unchanged CP2 rule.
+    return { error: PRINT_CANVAS_PENDING, kind: "retry" };
+  }
+  return "settled";
 }
 
 function hex(buffer: ArrayBuffer): string {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-type StorageCheck = { error: string; kind: "retry" | "terminal" } | { kind: "ok" };
+type StorageCheck = { error: string; kind: "retry" | "terminal" } | { kind: "ok"; sizes: number[] };
 
-/** Every print file exists in the private bucket and is the snapshot's bytes. */
-async function checkPrintFiles(env: Env, files: PrintFile[]): Promise<StorageCheck> {
+/** Every print file exists in the private bucket and is the recorded bytes. */
+async function checkPrintFiles(env: Env, files: readonly PrintFile[]): Promise<StorageCheck> {
   const bucket = env.PRIVATE_BUCKET;
   if (bucket === undefined || !isR2PresignerConfigured(env)) {
     return { error: "storage_not_configured", kind: "retry" };
   }
+  const sizes: number[] = [];
   for (const file of files) {
     let object: R2Object | null;
     try {
@@ -310,8 +515,9 @@ async function checkPrintFiles(env: Env, files: PrintFile[]): Promise<StorageChe
     if (hex(stored) !== file.sha256) {
       return { error: "print_file_mismatch", kind: "terminal" };
     }
+    sizes.push(object.size);
   }
-  return { kind: "ok" };
+  return { kind: "ok", sizes };
 }
 
 // ── statements committed with a transition ─────────────────────────────────
@@ -643,7 +849,16 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     return failTerminal(ctx, built.error, lineRef);
   }
 
-  const printFiles = printFilesForPrinter(built.value);
+  const chosen = await printFilesForPrinter(ctx, tenantId, payload, lineRef, built.value);
+  if (chosen.kind === "parked") {
+    return chosen.outcome;
+  }
+  if (chosen.kind !== "ready") {
+    return chosen.kind === "terminal"
+      ? failTerminal(ctx, chosen.error, lineRef)
+      : retryLater(ctx, chosen.error, lineRef);
+  }
+  const printFiles = chosen.files;
   const storage = await checkPrintFiles(env, printFiles);
   if (storage.kind !== "ok") {
     return storage.kind === "terminal"

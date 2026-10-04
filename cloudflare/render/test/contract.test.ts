@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACQUIRE_BODY,
+  CANVAS_JOB_TYPE,
+  CANVAS_MAX_INPUT_BYTES,
+  canvasCompletionBody,
+  canvasOutputKey,
+  canvasReportPath,
   completionBody,
   failureBody,
   isAllowedStorageUrl,
+  JOB_TYPE,
+  leaseJobType,
+  parseCanvasLease,
   parseLease,
   sanitizeMetrics,
   type RenderLease,
@@ -145,5 +154,89 @@ describe("report bodies", () => {
     expect(kept).not.toHaveProperty("_lead");
     expect(kept).not.toHaveProperty("nan");
     expect(kept).not.toHaveProperty("inf");
+  });
+});
+
+describe("CP6-PS2: the canvas lease", () => {
+  const base = "https://testaccount.eu.r2.cloudflarestorage.com/chopshop-test-private";
+  function canvasBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      attempt: 1,
+      contract: 1,
+      input: { maxBytes: 5_000, sha256: "a".repeat(64), url: `${base}/pod/t/print/art.png?X-Amz-Signature=s` },
+      jobId: "0f8fad5b-d9cb-469f-a165-70867728950e",
+      jobType: "pod.print_canvas",
+      leaseToken: "A".repeat(43),
+      leaseUntil: "2026-10-04T12:00:00.000Z",
+      output: { canvasPngPutUrl: `${base}/pod/t/render/canvas/o/1/front/attempt-1/canvas.png?X-Amz-Signature=s` },
+      outputPrefix: "pod/t/render/canvas/o/1/front/attempt-1/",
+      spec: {
+        background: "transparent",
+        canvasPx: { h: 5_787, w: 4_606 },
+        dpi: 300,
+        motifPx: { h: 4_134, w: 2_953 },
+        offsetPx: { left: 826, top: 826 },
+        sourcePx: { h: 4_134, w: 2_953 },
+        version: 1,
+      },
+      ...overrides,
+    };
+  }
+
+  it("accepts the API's canvas acquire body and keeps exactly what a job needs", () => {
+    const parsed = parseCanvasLease(canvasBody());
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(Object.keys(parsed.lease).sort()).toEqual([
+        "attempt", "canvasPutUrl", "inputMaxBytes", "inputSha256", "inputUrl", "jobId",
+        "leaseToken", "leaseUntil", "outputPrefix", "spec",
+      ]);
+      expect(canvasOutputKey(parsed.lease.outputPrefix)).toBe("pod/t/render/canvas/o/1/front/attempt-1/canvas.png");
+    }
+    expect(leaseJobType(canvasBody())).toBe(CANVAS_JOB_TYPE);
+    expect(leaseJobType({ jobType: undefined })).toBe(JOB_TYPE);
+  });
+
+  it("refuses a canvas envelope it cannot honestly execute, keeping the claim to report it", () => {
+    const spec = canvasBody().spec as Record<string, unknown>;
+    for (const overrides of [
+      { jobType: "pod.process_artwork" },
+      { contract: 2 },
+      { input: { maxBytes: 5_000, sha256: "x", url: `${base}/a` } },
+      { input: { maxBytes: 5_000, sha256: "a".repeat(64), url: "https://evil.test/a" } },
+      { output: { canvasPngPutUrl: "http://169.254.169.254/" } },
+      { spec: { ...spec, offsetPx: { left: 2_000, top: 826 } } },
+      { spec: { ...spec, background: "white" } },
+      { spec: { ...spec, canvasPx: { h: 9_000, w: 9_000 } } },
+      { spec: { ...spec, offsetPx: { left: -1, top: 0 } } },
+      { outputPrefix: "no-slash" },
+    ]) {
+      const parsed = parseCanvasLease(canvasBody(overrides));
+      expect(parsed.ok, JSON.stringify(overrides)).toBe(false);
+      expect(parsed.ok ? null : parsed.claim?.jobId).toBe("0f8fad5b-d9cb-469f-a165-70867728950e");
+    }
+    expect(parseCanvasLease({ jobType: "pod.print_canvas" })).toEqual({ claim: null, ok: false });
+  });
+
+  it("a canvas completion names the key derived from the lease; a refusal only its reasons", () => {
+    const parsed = parseCanvasLease(canvasBody());
+    if (!parsed.ok) throw new Error("fixture");
+    expect(canvasCompletionBody(parsed.lease, { ok: true, output: { bytes: 9, sha256: "b".repeat(64) } }, { wallMs: 5 })).toEqual({
+      attempt: 1,
+      leaseToken: "A".repeat(43),
+      metrics: { wallMs: 5 },
+      ok: true,
+      outputs: { canvasPng: { bytes: 9, key: "pod/t/render/canvas/o/1/front/attempt-1/canvas.png", sha256: "b".repeat(64) } },
+    });
+    expect(canvasCompletionBody(parsed.lease, { ok: false, reasons: [{ code: "dims_mismatch", message: "x" }] }, {})).toEqual({
+      attempt: 1,
+      leaseToken: "A".repeat(43),
+      metrics: {},
+      ok: false,
+      reasons: [{ code: "dims_mismatch", message: "x" }],
+    });
+    expect(canvasReportPath("j", "complete")).toBe("/v1/render/canvas-jobs/j/complete");
+    expect(ACQUIRE_BODY).toEqual({ jobTypes: ["pod.process_artwork", "pod.print_canvas"] });
+    expect(CANVAS_MAX_INPUT_BYTES).toBe(536_870_912);
   });
 });

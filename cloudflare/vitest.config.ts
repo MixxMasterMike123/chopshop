@@ -86,6 +86,11 @@ export default defineConfig({
             // configuration.
             DISPATCH_TARGET: "fake-printer",
             FAKE_PRINTER_TOKEN: "test-only-fake-printer-token-32-characters",
+            // CP6-PS2: staging's wrangler.jsonc turns the print canvas ON. The
+            // suites keep the pre-PS2 default (the artwork file) and turn it on
+            // where they test it (test/print-canvas*.test.ts), so every older
+            // dispatch suite still proves the artwork path byte for byte.
+            PRINT_CANVAS_ENABLED: "false",
             RENDER_FARM_URL:
               "https://render-farm.test.invalid/renderFarmProcessArtwork",
             TEST_MIGRATIONS: migrations,

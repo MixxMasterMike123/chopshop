@@ -21,6 +21,8 @@ interface Report {
   body: Record<string, unknown>;
   deadlineMs: number;
   jobId: string;
+  /** Present only when the worker names it (a canvas report, CP6-PS2). */
+  kind?: "artwork" | "canvas";
 }
 
 /**
@@ -57,8 +59,15 @@ function fakeApi(leases: unknown[], statusFor: (report: Report) => ReportStatus 
         action: "complete" | "fail",
         body: unknown,
         deadlineMs: number,
+        kind?: "artwork" | "canvas",
       ): Promise<ReportStatus> {
-        const report = { action, body: body as Record<string, unknown>, deadlineMs, jobId };
+        const report = {
+          action,
+          body: body as Record<string, unknown>,
+          deadlineMs,
+          jobId,
+          ...(kind === undefined ? {} : { kind }),
+        };
         reports.push(report);
         return statusFor(report);
       },
@@ -493,5 +502,106 @@ describe("the lease hold", () => {
     start(api.api, fakeR2(Buffer.alloc(10)), { reportMarginMs: 10_000, runPipeline: quickRejection });
     await until(() => api.reports.length === 1);
     expect(api.reports[0]?.deadlineMs).toBe(Date.parse(leaseUntil) - 10_000);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CP6-PS2: a `pod.print_canvas` job.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function canvasLeaseBody(input: Buffer, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const base = "https://testaccount.eu.r2.cloudflarestorage.com/chopshop-test-private";
+  const prefix = "pod/tenant-a/render/canvas/order-a/1/front/attempt-1/";
+  return {
+    attempt: 1,
+    contract: 1,
+    input: { maxBytes: input.length, sha256: sha(input), url: `${base}/pod/tenant-a/print/art.png?X-Amz-Signature=sig` },
+    jobId: "6f1c5e3a-2b7d-4c8e-9a0f-1d2e3f4a5b6c",
+    jobType: "pod.print_canvas",
+    leaseToken: "C".repeat(43),
+    leaseUntil: new Date(Date.now() + 600_000).toISOString(),
+    output: { canvasPngPutUrl: `${base}/${prefix}canvas.png?X-Amz-Signature=sig` },
+    outputPrefix: prefix,
+    spec: {
+      background: "transparent",
+      canvasPx: { h: 400, w: 300 },
+      dpi: 300,
+      motifPx: { h: 100, w: 200 },
+      offsetPx: { left: 50, top: 150 },
+      sourcePx: { h: 200, w: 400 },
+      version: 1,
+    },
+    ...overrides,
+  };
+}
+
+describe("a canvas job, end to end", () => {
+  it("downloads the master, renders, PUTs the canvas and completes on the canvas path with what it PUT", async () => {
+    const input = await transparentPng(400, 200);
+    const lease = canvasLeaseBody(input);
+    const api = fakeApi([lease]);
+    const r2 = fakeR2(input);
+    const { lines, log } = recorder();
+    start(api.api, r2, { log });
+
+    await until(() => api.reports.length === 1);
+    const [report] = api.reports;
+    expect(report).toMatchObject({ action: "complete", jobId: lease.jobId, kind: "canvas" });
+    const put = r2.puts.get(`${lease.outputPrefix as string}canvas.png`);
+    expect(put?.headers["content-type"]).toBe("image/png");
+    expect(report?.body).toMatchObject({
+      attempt: 1,
+      leaseToken: lease.leaseToken,
+      ok: true,
+      outputs: {
+        canvasPng: { bytes: put?.bytes.length, key: `${lease.outputPrefix as string}canvas.png`, sha256: sha(put?.bytes ?? Buffer.alloc(0)) },
+      },
+    });
+    expect(Object.keys(report?.body ?? {}).sort()).toStrictEqual(["attempt", "leaseToken", "metrics", "ok", "outputs"]);
+    const logged = lines.join("\n");
+    expect(logged).not.toContain("X-Amz");
+    expect(logged).not.toContain(lease.leaseToken as string);
+  });
+
+  it("a master that is not the frozen file is a refusal on the canvas path, and nothing is PUT", async () => {
+    const input = await transparentPng(400, 200);
+    const api = fakeApi([canvasLeaseBody(input, { input: { maxBytes: input.length, sha256: "0".repeat(64), url: "https://testaccount.eu.r2.cloudflarestorage.com/b/pod/a.png" } })]);
+    const r2 = fakeR2(input);
+    start(api.api, r2);
+    await until(() => api.reports.length === 1);
+    expect(api.reports[0]).toMatchObject({
+      action: "complete",
+      body: { ok: false, reasons: [{ code: "input_mismatch" }] },
+      kind: "canvas",
+    });
+    expect(r2.puts.size).toBe(0);
+  });
+
+  it("a failed download is a fail code on the canvas path", async () => {
+    const input = await transparentPng(400, 200);
+    const api = fakeApi([canvasLeaseBody(input)]);
+    start(api.api, fakeR2(input, { getStatus: 403 }));
+    await until(() => api.reports.length === 1);
+    expect(api.reports[0]).toMatchObject({ action: "fail", kind: "canvas" });
+    expect(api.reports[0]?.body.error).toMatch(/^input_/);
+  });
+
+  it("a malformed canvas envelope with an intact claim → fail invalid_envelope on the canvas path", async () => {
+    const input = await transparentPng(400, 200);
+    const api = fakeApi([canvasLeaseBody(input, { spec: { background: "white" } })]);
+    const r2 = fakeR2(input);
+    start(api.api, r2);
+    await until(() => api.reports.length === 1);
+    expect(api.reports[0]).toMatchObject({ action: "fail", body: { error: "invalid_envelope" }, kind: "canvas" });
+    expect(r2.gets).toBe(0);
+  });
+
+  it("an artwork lease after a canvas lease still goes to the artwork path", async () => {
+    const canvasInput = await transparentPng(400, 200);
+    const api = fakeApi([canvasLeaseBody(canvasInput), leaseBody()]);
+    start(api.api, fakeR2(canvasInput));
+    await until(() => api.reports.length === 2);
+    expect(api.reports[0]?.kind).toBe("canvas");
+    expect(api.reports[1]?.kind).toBeUndefined();
   });
 });

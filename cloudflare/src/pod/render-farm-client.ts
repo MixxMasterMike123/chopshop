@@ -55,7 +55,7 @@ import { AwsClient } from "aws4fetch";
 // against them: a silent drift between the two sides is the one failure this
 // seam cannot detect at build time.
 const CONTRACT_VERSION = 1;
-const JOB_TYPE = "pod.process_artwork";
+export const JOB_TYPE = "pod.process_artwork";
 
 /**
  * The farm's own hard ceiling (HARD_MAX_INPUT_BYTES in processArtworkJob.ts).

@@ -45,6 +45,15 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 export interface PrintFileSpec {
+  /**
+   * CP6-PS2: the print-canvas facts checkout freezes beside the slot (frame,
+   * stand-in flag, artwork pixels). Absent ⇒ a line frozen before CP6-PS2.
+   */
+  canvas?: {
+    frameMm?: { h: number; offsetTopMm?: number; w: number };
+    frameProvisional?: boolean;
+    sourcePx?: { h: number; w: number };
+  };
   /** Written to the private bucket unless false (a missing file). */
   present?: boolean;
   r2Key?: string;
@@ -133,6 +142,7 @@ export async function seedOrder(
           sha256: spec.sha256 ?? digest,
           slot: spec.slot,
           widthMm: 250,
+          ...(spec.canvas ?? {}),
         });
       }
       production = {

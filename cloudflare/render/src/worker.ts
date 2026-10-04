@@ -35,6 +35,13 @@
  * that stays up; the durable backstop, for one that does not, is the CP2
  * 15-minute sweeper re-nudging expired-lease jobs (PLAN §2.2).
  *
+ * ── A CANVAS JOB (CP6-PS2, `pod.print_canvas`) ───────────────────────────────
+ *   input GET (the line's print master) → file → render/src/canvas.ts (verify the
+ *   sha256 and the pixels, place the motif on the transparent frame) → one PUT
+ *   (streamed, hashed) → complete on /v1/render/canvas-jobs/{id}/complete. A
+ *   mismatch is a completion with `ok: false` (the API ends the job: retrying
+ *   cannot fix it); a transfer or render failure is a fail code, as above.
+ *
  * Logs are JSON lines: job id, attempt, codes, sizes, timings. Never the token,
  * never a URL, never a response body.
  */
@@ -43,13 +50,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { type AcquireResult, isUnsettled, type RenderApi, type ReportStatus } from "./api.ts";
+import { renderCanvas } from "./canvas.ts";
 import {
   API_LEASE_MS,
+  CANVAS_JOB_TYPE,
+  CANVAS_MAX_INPUT_BYTES,
+  canvasCompletionBody,
   completionBody,
   failureBody,
   type FailureCode,
   HARD_MAX_INPUT_BYTES,
   type LeaseClaim,
+  leaseJobType,
+  parseCanvasLease,
   parseLease,
   type RenderLease,
 } from "./contract.ts";
@@ -88,6 +101,8 @@ export interface RenderWorkerOptions {
   pollIntervalMs?: number;
   /** Default REPORT_DEADLINE_MARGIN_MS. */
   reportMarginMs?: number;
+  /** Swappable for tests; the canvas renderer is the real one by default. */
+  runCanvas?: typeof renderCanvas;
   /** Swappable for tests; the pipeline is the real one by default. */
   runPipeline?: typeof runArtworkPipeline;
   sleep?: (ms: number) => Promise<void>;
@@ -119,6 +134,7 @@ export class RenderWorker {
   readonly #now: () => number;
   readonly #pollIntervalMs: number;
   readonly #reportMarginMs: number;
+  readonly #runCanvas: typeof renderCanvas;
   readonly #runPipeline: typeof runArtworkPipeline;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #startedAt: number;
@@ -147,6 +163,7 @@ export class RenderWorker {
     this.#now = options.now ?? Date.now;
     this.#pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
     this.#reportMarginMs = options.reportMarginMs ?? REPORT_DEADLINE_MARGIN_MS;
+    this.#runCanvas = options.runCanvas ?? renderCanvas;
     this.#runPipeline = options.runPipeline ?? runArtworkPipeline;
     this.#sleep = options.sleep ?? realSleep;
     this.#startedAt = this.#now();
@@ -239,7 +256,11 @@ export class RenderWorker {
 
       if (result.kind === "lease") {
         this.#lastActivityAt = this.#now();
-        const job = this.#runJob(result.body, started)
+        const job = (
+          leaseJobType(result.body) === CANVAS_JOB_TYPE
+            ? this.#runCanvasJob(result.body, started)
+            : this.#runJob(result.body, started)
+        )
           .catch((error: unknown) => {
             // Only the unforeseen reaches here (every report path catches its own
             // failures); the job goes unreported, so hold until its lease expires.
@@ -446,11 +467,12 @@ export class RenderWorker {
   }
 
   async #complete(
-    lease: RenderLease,
+    lease: LeaseClaim,
     body: Record<string, unknown>,
     leaseEndMs: number,
+    kind: "artwork" | "canvas" = "artwork",
   ): Promise<void> {
-    const status = await this.#report(lease, "complete", body, leaseEndMs);
+    const status = await this.#report(lease, "complete", body, leaseEndMs, undefined, kind);
     if (status === 200) {
       this.#jobsCompleted += 1;
       return;
@@ -461,12 +483,17 @@ export class RenderWorker {
     // the API (gone, someone else's, recorded as a failed attempt); an unsettled
     // status was abandoned and is held in #report.
     if (status === 400) {
-      await this.#fail(lease, "completion_invalid", leaseEndMs);
+      await this.#fail(lease, "completion_invalid", leaseEndMs, kind);
     }
   }
 
-  async #fail(claim: LeaseClaim, code: FailureCode, leaseEndMs: number): Promise<void> {
-    await this.#report(claim, "fail", failureBody(claim, code), leaseEndMs, code);
+  async #fail(
+    claim: LeaseClaim,
+    code: FailureCode,
+    leaseEndMs: number,
+    kind: "artwork" | "canvas" = "artwork",
+  ): Promise<void> {
+    await this.#report(claim, "fail", failureBody(claim, code), leaseEndMs, code, kind);
   }
 
   /** One report, retried until the lease runs short; an abandoned one is held. */
@@ -476,13 +503,12 @@ export class RenderWorker {
     body: unknown,
     leaseEndMs: number,
     code?: FailureCode,
+    kind: "artwork" | "canvas" = "artwork",
   ): Promise<ReportStatus> {
-    const status = await this.#api.report(
-      claim.jobId,
-      action,
-      body,
-      leaseEndMs - this.#reportMarginMs,
-    );
+    const status =
+      kind === "canvas"
+        ? await this.#api.report(claim.jobId, action, body, leaseEndMs - this.#reportMarginMs, "canvas")
+        : await this.#api.report(claim.jobId, action, body, leaseEndMs - this.#reportMarginMs);
     this.#logReport(action, claim, status, code);
     if (isUnsettled(status)) {
       this.#holdForLease(leaseEndMs, `report_${action}_abandoned`, {
@@ -494,10 +520,11 @@ export class RenderWorker {
   }
 
   async #failTransfer(
-    lease: RenderLease,
+    lease: LeaseClaim,
     error: unknown,
     fallback: FailureCode,
     leaseEndMs: number,
+    kind: "artwork" | "canvas" = "artwork",
   ): Promise<void> {
     this.#jobsFailed += 1;
     const code = error instanceof TransferError ? error.code : fallback;
@@ -507,7 +534,101 @@ export class RenderWorker {
       detail: error instanceof TransferError ? error.detail : "unknown",
       jobId: lease.jobId,
     });
-    await this.#fail(lease, code, leaseEndMs);
+    await this.#fail(lease, code, leaseEndMs, kind);
+  }
+
+  /** A `pod.print_canvas` job: see A CANVAS JOB above. */
+  async #runCanvasJob(body: unknown, acquiredAt: number): Promise<void> {
+    const parsed = parseCanvasLease(body);
+    const assumedLeaseEnd = acquiredAt + this.#assumedLeaseMs;
+    if (!parsed.ok) {
+      this.#jobsFailed += 1;
+      if (parsed.claim === null) {
+        this.#log("error", "job_envelope_unusable", { jobType: CANVAS_JOB_TYPE });
+        this.#holdForLease(assumedLeaseEnd, "envelope_unusable");
+        return;
+      }
+      this.#log("error", "job_envelope_invalid", {
+        attempt: parsed.claim.attempt,
+        jobId: parsed.claim.jobId,
+        jobType: CANVAS_JOB_TYPE,
+      });
+      await this.#fail(parsed.claim, "invalid_envelope", assumedLeaseEnd, "canvas");
+      return;
+    }
+
+    const lease = parsed.lease;
+    const leaseEnd = Date.parse(lease.leaseUntil);
+    const ids = { attempt: lease.attempt, jobId: lease.jobId, jobType: CANVAS_JOB_TYPE };
+    const peakIsPerJob = this.#inFlight.size === 0 && resetPeakRss();
+    this.#log("info", "job_started", ids);
+
+    const dir = await mkdtemp(join(tmpdir(), "canvas-job-"));
+    const paths = { canvas: join(dir, "canvas.png"), input: join(dir, "input") };
+    const timings: Record<string, number> = {};
+    const mark = (name: string, since: number) => {
+      timings[name] = this.#now() - since;
+    };
+
+    try {
+      let stage = this.#now();
+      let inputBytes: number;
+      try {
+        inputBytes = await downloadToFile(
+          this.#fetch,
+          lease.inputUrl,
+          Math.min(lease.inputMaxBytes, CANVAS_MAX_INPUT_BYTES),
+          paths.input,
+        );
+      } catch (error) {
+        await this.#failTransfer(lease, error, "input_fetch_failed", leaseEnd, "canvas");
+        return;
+      }
+      mark("fetchMs", stage);
+
+      stage = this.#now();
+      let result: Awaited<ReturnType<typeof renderCanvas>>;
+      try {
+        result = await this.#runCanvas({ path: paths.input, sha256: lease.inputSha256 }, lease.spec, paths.canvas);
+      } catch (error) {
+        this.#log("error", "pipeline_crashed", {
+          ...ids,
+          error: error instanceof Error ? error.name : "unknown",
+          inputBytes,
+        });
+        await this.#fail(lease, "pipeline_crashed", leaseEnd, "canvas");
+        return;
+      }
+      mark("pipelineMs", stage);
+
+      if (!result.ok) {
+        const metrics = this.#metrics(acquiredAt, timings, { inputBytes }, peakIsPerJob);
+        this.#log("info", "job_rejected", { ...ids, ...metrics, reasonCodes: result.reasons.map((r) => r.code) });
+        await this.#complete(lease, canvasCompletionBody(lease, result, metrics), leaseEnd, "canvas");
+        return;
+      }
+
+      stage = this.#now();
+      let canvasPng: { bytes: number; sha256: string };
+      try {
+        canvasPng = await putFile(this.#fetch, lease.canvasPutUrl, paths.canvas, "image/png");
+      } catch (error) {
+        await this.#failTransfer(lease, error, "output_put_failed", leaseEnd, "canvas");
+        return;
+      }
+      mark("uploadMs", stage);
+
+      const metrics = this.#metrics(acquiredAt, timings, { canvasBytes: canvasPng.bytes, inputBytes }, peakIsPerJob);
+      this.#log("info", "job_ok", { ...ids, ...metrics });
+      await this.#complete(
+        lease,
+        canvasCompletionBody(lease, { ok: true, output: canvasPng }, metrics),
+        leaseEnd,
+        "canvas",
+      );
+    } finally {
+      await rm(dir, { force: true, recursive: true }).catch(() => undefined);
+    }
   }
 
   #logReport(

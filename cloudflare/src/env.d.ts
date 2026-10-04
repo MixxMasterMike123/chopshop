@@ -183,6 +183,15 @@ interface Env {
   // Worker SECRET, production only: sent as `x-api-token`. Never logged.
   SNAPWEAR_API_TOKEN?: string;
 
+  // ── THE PRINT CANVAS (CP6-PS2, LAUNCH_TODO A5) ────────────────────────────
+  // Plain var. Exactly "true" ⇒ each print slot of a line is sent to the
+  // printer as a PNG of the printer's whole frame with the motif placed in it,
+  // rendered by the render container (src/dispatch/print-canvas.ts). Anything
+  // else ⇒ the artwork's stored print PNG, as before. Staging: "true" (it
+  // reaches only the fake printer). Production: unset until SnapWear has
+  // answered C1–C3 (docs/cf-port/CP6_PS2_REPORT.md).
+  PRINT_CANVAS_ENABLED?: string;
+
   // ── THE RENDER CONTAINER (CP1-D, DECISIONS D6) ────────────────────────────
   // Durable Object namespace of the Container-enabled class RenderContainer
   // (src/render/render-container.ts; the image is cloudflare/render/). The

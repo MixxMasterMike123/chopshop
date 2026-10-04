@@ -167,3 +167,22 @@ describe("acquire: may a lease have been made?", () => {
     expect(await h.api.acquire()).toMatchObject({ code: "acquire_rate_limited", retryAfterMs: 7_000 });
   });
 });
+
+describe("CP6-PS2: the canvas job on the wire", () => {
+  it("acquire names both job kinds in its body; an artwork report keeps its path, a canvas report has its own", async () => {
+    const h = harness([{ status: 204 }, { status: 200 }, { status: 200 }]);
+    expect(await h.api.acquire()).toEqual({ kind: "empty" });
+    expect(h.requests[0]?.url).toBe("https://api.test/v1/render/jobs/acquire");
+    expect(JSON.parse(h.requests[0]?.body ?? "null")).toEqual({
+      jobTypes: ["pod.process_artwork", "pod.print_canvas"],
+    });
+    expect(h.requests[0]?.headers["content-type"]).toBe("application/json");
+
+    await h.api.report(JOB, "complete", { attempt: 1 }, h.clock + 60_000);
+    await h.api.report(JOB, "fail", { attempt: 1 }, h.clock + 60_000, "canvas");
+    expect(h.requests.slice(1).map((request) => request.url)).toEqual([
+      `https://api.test/v1/render/jobs/${JOB}/complete`,
+      `https://api.test/v1/render/canvas-jobs/${JOB}/fail`,
+    ]);
+  });
+});

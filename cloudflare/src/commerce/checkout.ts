@@ -983,8 +983,15 @@ export interface CheckoutOptions {
  * checkouts.production_snapshot_json, migrations/0023):
  *
  *   { printer, lines: [{ lineNo, sku, quantity, printFiles: [{ slot, r2Key,
- *     sha256, widthMm, heightMm }], productionCostMinor, withholdMinor }],
+ *     sha256, widthMm, heightMm, frameMm, frameProvisional, sourcePx? }],
+ *     productionCostMinor, withholdMinor }],
  *     totals: { productionCostMinor, withholdMinor } }
+ *
+ * CP6-PS2 added `frameMm` ({ w, h, offsetTopMm? }, the printer's frame for the
+ * slot), `frameProvisional` and `sourcePx` ({ w, h }, the artwork's pixels) to
+ * each print file. They are production facts for the print canvas
+ * (src/dispatch/print-canvas.ts) and touch no amount: every money field below
+ * is computed exactly as before.
  *
  * PRODUCTION ELIGIBILITY IS RECOMPUTED HERE FROM CURRENT FACTS (PLAN §2.3) —
  * resolveProductionLines re-proves every POD line's mapping, printer, capability,
@@ -1062,6 +1069,12 @@ async function freezeProductionSnapshot(
         sha256: file.sha256,
         widthMm: file.widthMm,
         heightMm: file.heightMm,
+        frameMm:
+          file.frameMm.offsetTopMm === undefined
+            ? { w: file.frameMm.w, h: file.frameMm.h }
+            : { w: file.frameMm.w, h: file.frameMm.h, offsetTopMm: file.frameMm.offsetTopMm },
+        frameProvisional: file.frameProvisional,
+        ...(file.sourcePx === undefined ? {} : { sourcePx: { w: file.sourcePx.w, h: file.sourcePx.h } }),
       })),
       productionCostMinor: production.productionCostMinor,
       withholdMinor: withholdMinorFor(production.productionCostMinor),

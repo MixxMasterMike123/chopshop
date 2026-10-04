@@ -6,7 +6,7 @@
  * time. Nothing here ever logs the token, a URL, or a response body: the acquire
  * body carries a lease token and three capability URLs.
  */
-import { ACQUIRE_PATH, reportPath } from "./contract.ts";
+import { ACQUIRE_BODY, ACQUIRE_PATH, canvasReportPath, reportPath } from "./contract.ts";
 import type { FetchLike } from "./transfer.ts";
 
 /** Per request. The API answers in milliseconds; a hung connection must not. */
@@ -126,7 +126,9 @@ export class RenderApi {
   async acquire(): Promise<AcquireResult> {
     let response: Response;
     try {
-      response = await this.#post(ACQUIRE_PATH, undefined);
+      // CP6-PS2: names the kinds this image renders; an API before CP6-PS2
+      // ignores the body and serves artwork jobs as it always has.
+      response = await this.#post(ACQUIRE_PATH, ACQUIRE_BODY);
     } catch (error) {
       const sent = mayHaveBeenSent(error);
       return {
@@ -184,13 +186,15 @@ export class RenderApi {
     action: "complete" | "fail",
     body: unknown,
     deadlineMs: number,
+    kind: "artwork" | "canvas" = "artwork",
   ): Promise<ReportStatus> {
+    const path = kind === "canvas" ? canvasReportPath(jobId, action) : reportPath(jobId, action);
     for (let attempt = 0; ; attempt += 1) {
       const backoff = REPORT_BACKOFF_MS[Math.min(attempt, REPORT_BACKOFF_MS.length - 1)] as number;
       let status: ReportStatus;
       let waitMs = backoff;
       try {
-        const response = await this.#post(reportPath(jobId, action), body);
+        const response = await this.#post(path, body);
         await response.body?.cancel().catch(() => undefined);
         status = response.status;
         if (status === 429) {

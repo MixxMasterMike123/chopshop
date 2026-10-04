@@ -93,7 +93,12 @@
         // checks it). "fake-printer" exists only in staging; production is always "snapwear".
         "DISPATCH_TARGET": "fake-printer",
         // Recipient of the 15-minute alert digest (D40). A var, not a secret: an address. Absent ⇒ no digest.
-        "PLATFORM_ALERT_EMAIL": "micke.ohlen@gmail.com"
+        "PLATFORM_ALERT_EMAIL": "micke.ohlen@gmail.com",
+        // CP6-PS2: the print canvas per line (src/dispatch/print-canvas.ts). Exactly "true" ⇒ each
+        // print slot goes to the printer as a frame-sized PNG made by the render container. STAGING
+        // ONLY: it reaches the fake printer alone. Production gets no such var until SnapWear has
+        // answered C1–C3 (docs/cf-port/CP6_PS2_REPORT.md).
+        "PRINT_CANVAS_ENABLED": "true"
       },
       "d1_databases": [
         {

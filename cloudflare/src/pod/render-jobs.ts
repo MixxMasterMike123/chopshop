@@ -86,7 +86,7 @@ export const INITIAL_RENDER_VERSION = 1;
 export const MINIMUM_FARM_TOKEN_LENGTH = 32;
 
 const LEASE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,100}$/;
+export const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,100}$/;
 const METRIC_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const MAX_METRICS = 20;
 
@@ -445,17 +445,20 @@ export async function acquireRenderJob(
 }
 
 // ── reports: shared parsing and fencing ─────────────────────────────────────
+// CP6-PS2: parseLeaseClaim, parseMetrics, promote and ERROR_CODE_PATTERN are
+// exported, unchanged, for the print canvas jobs (src/pod/print-canvas-jobs.ts),
+// which lease, report and promote exactly as these jobs do.
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-interface LeaseClaim {
+export interface LeaseClaim {
   attempt: number;
   leaseToken: string;
 }
 
-function parseLeaseClaim(
+export function parseLeaseClaim(
   body: unknown,
   allowedKeys: readonly string[],
 ): LeaseClaim | null {
@@ -704,7 +707,7 @@ function parseCompletionReport(
   return result;
 }
 
-function parseMetrics(value: unknown): Record<string, number> | null | undefined {
+export function parseMetrics(value: unknown): Record<string, number> | null | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -728,7 +731,7 @@ function parseMetrics(value: unknown): Record<string, number> | null | undefined
   return value as Record<string, number>;
 }
 
-type PromotionOutcome = "conflict" | "present" | "promoted" | "unverified";
+export type PromotionOutcome = "conflict" | "present" | "promoted" | "unverified";
 
 /**
  * Copy one verified attempt object to its canonical key.
@@ -764,7 +767,7 @@ function sameOutput(object: R2Object, report: JobOutputReport): boolean {
   );
 }
 
-async function promote(
+export async function promote(
   bucket: R2Bucket,
   fromKey: string,
   toKey: string,

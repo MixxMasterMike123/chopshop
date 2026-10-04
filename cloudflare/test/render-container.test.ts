@@ -14,12 +14,24 @@ import {
   renderContainerEnvVars,
 } from "../src/render/render-container";
 import {
+  ACQUIRE_BODY,
   API_LEASE_MS,
+  CANVAS_JOB_TYPE as CONTAINER_CANVAS_JOB_TYPE,
+  CANVAS_MAX_INPUT_BYTES as CONTAINER_CANVAS_MAX_INPUT_BYTES,
+  canvasCompletionBody,
+  canvasOutputKey,
+  canvasReportPath,
   completionBody,
   failureBody,
+  JOB_TYPE as CONTAINER_JOB_TYPE,
   outputKeys,
+  parseCanvasLease,
   parseLease,
 } from "../render/src/contract";
+import { CANVAS_MAX_INPUT_BYTES } from "../src/dispatch/print-canvas";
+import { CANVAS_JOB_TYPE, ensureCanvasJobStatements } from "../src/pod/print-canvas-jobs";
+import { JOB_TYPE } from "../src/pod/render-farm-client";
+import { seedOrder, seedTenant } from "./dispatch-fixtures";
 
 /**
  * CP1-D, the Worker's half of the render container:
@@ -513,5 +525,96 @@ describe("a draining container is not woken (Codex P2)", () => {
 describe("the container's assumed lease matches the API's", () => {
   it("API_LEASE_MS (render/src/contract.ts) === RENDER_JOB_LEASE_MS (src/pod/render-jobs.ts)", () => {
     expect(API_LEASE_MS).toBe(RENDER_JOB_LEASE_MS);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CP6-PS2: the canvas job through the container's own wire module.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("the canvas job: the container's wire module against the real routes", () => {
+  const CANVAS_TENANT = "tenant-rendercontainer-canvas";
+
+  async function seedCanvasJob(): Promise<{ jobId: string; orderId: string }> {
+    await seedTenant(CANVAS_TENANT);
+    const order = await seedOrder(CANVAS_TENANT);
+    const { jobIds, statements } = ensureCanvasJobStatements(env.DB, {
+      lineNo: 1,
+      now: Date.now(),
+      orderId: order.orderId,
+      slots: [{
+        inputBytes: 1234,
+        inputKey: `pod/${CANVAS_TENANT}/print/motif.png`,
+        inputSha256: "a".repeat(64),
+        location: "front",
+        spec: {
+          background: "transparent",
+          canvasPx: { h: 5_787, w: 4_606 },
+          dpi: 300,
+          motifPx: { h: 4_134, w: 2_953 },
+          offsetPx: { left: 826, top: 826 },
+          sourcePx: { h: 4_134, w: 2_953 },
+          version: 1,
+        },
+      }],
+      tenantId: CANVAS_TENANT,
+    });
+    await env.DB.batch(statements);
+    return { jobId: jobIds[0] as string, orderId: order.orderId };
+  }
+
+  it("pins the two deploy units' shared values equal", () => {
+    expect(CONTAINER_JOB_TYPE).toBe(JOB_TYPE);
+    expect(CONTAINER_CANVAS_JOB_TYPE).toBe(CANVAS_JOB_TYPE);
+    expect(CONTAINER_CANVAS_MAX_INPUT_BYTES).toBe(CANVAS_MAX_INPUT_BYTES);
+  });
+
+  it("an OLD container (no acquire body) is never handed the canvas job; the new one parses it and completes it", async () => {
+    const { jobId } = await seedCanvasJob();
+    expect((await call("/v1/render/jobs/acquire")).status).toBe(204);
+
+    const response = await call("/v1/render/jobs/acquire", ACQUIRE_BODY);
+    expect(response.status).toBe(200);
+    const parsed = parseCanvasLease(await response.json());
+    if (!parsed.ok) {
+      throw new Error("the container refused the API's own canvas acquire response");
+    }
+    expect(parsed.lease.jobId).toBe(jobId);
+    expect(new URL(parsed.lease.inputUrl).hostname).toMatch(/\.eu\.r2\.cloudflarestorage\.com$/);
+    expect(parsed.lease.inputMaxBytes).toBe(1234);
+
+    const canvas = new TextEncoder().encode("canvas-bytes-from-the-container");
+    await env.PRIVATE_BUCKET.put(canvasOutputKey(parsed.lease.outputPrefix), canvas);
+    const done = await call(
+      canvasReportPath(parsed.lease.jobId, "complete"),
+      canvasCompletionBody(parsed.lease, { ok: true, output: { bytes: canvas.length, sha256: await sha256Hex(canvas) } }, { wallMs: 900 }),
+    );
+    expect(done.status).toBe(200);
+    await expect(done.json()).resolves.toStrictEqual({ status: "completed" });
+    const row = await env.DB.prepare("SELECT state, canvas_sha256 FROM print_canvas_jobs WHERE id = ?")
+      .bind(jobId)
+      .first();
+    expect(row).toStrictEqual({ canvas_sha256: await sha256Hex(canvas), state: "completed" });
+  });
+
+  it("every failure code the container sends on the canvas path is accepted and requeues the job; a refusal ends it", async () => {
+    const { jobId } = await seedCanvasJob();
+    const take = async () => {
+      const parsed = parseCanvasLease(await (await call("/v1/render/jobs/acquire", ACQUIRE_BODY)).json());
+      if (!parsed.ok) throw new Error("unparsable canvas lease");
+      return parsed.lease;
+    };
+    const first = await take();
+    expect(first.jobId).toBe(jobId);
+    const failed = await call(canvasReportPath(first.jobId, "fail"), failureBody(first, "input_fetch_failed"));
+    await expect(failed.json()).resolves.toStrictEqual({ status: "queued" });
+    const second = await take();
+    const refused = await call(
+      canvasReportPath(second.jobId, "complete"),
+      canvasCompletionBody(second, { ok: false, reasons: [{ code: "dims_mismatch", message: "x" }] }, {}),
+    );
+    expect(refused.status).toBe(200);
+    const row = await env.DB.prepare("SELECT state, error FROM print_canvas_jobs WHERE id = ?").bind(jobId).first();
+    expect(row).toStrictEqual({ error: "dims_mismatch", state: "failed" });
   });
 });

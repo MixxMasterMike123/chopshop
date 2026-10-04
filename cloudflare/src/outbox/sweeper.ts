@@ -1,6 +1,7 @@
 import { PRINTER_HOLD_UNTIL_MS } from "../dispatch/dispatch-effect";
 import { resolvePrinterClient } from "../dispatch/printer-client";
 import { nudgeRenderJob } from "../pod/render-jobs";
+import { releaseSettledCanvasHolds, staleCanvasJobId } from "../pod/print-canvas-jobs";
 import { processNextOutboxRow } from "./effects";
 import { nudgeOutbox } from "./nudge";
 import { iso, OUTBOX_EFFECT_TYPES } from "./outbox";
@@ -26,6 +27,11 @@ import { iso, OUTBOX_EFFECT_TYPES } from "./outbox";
  *   5. RE-NUDGE THE RENDER CONTAINER when a render job has waited in `queued`
  *      longer than RENDER_STALE_MS or holds an expired lease (CP1-D open
  *      question 4): one nudge wakes the container, which drains everything.
+ *      (CP6-PS2) The same for a print canvas job waiting that long.
+ *   0b. (CP6-PS2) CANVAS HOLDS, a backstop. A dispatch row parked while its
+ *      line's print canvases render is released in the batch that settles the
+ *      last of them (src/pod/print-canvas-jobs.ts); any row still parked with
+ *      nothing left pending becomes due here, before the drain.
  *   0. (first, CP6-PS1) PRINTER HOLDS. Dispatch rows held because the
  *      environment had no printer client become due as soon as a client
  *      resolves, and step 2 sends them. That covers `pending` rows
@@ -44,6 +50,8 @@ export const RENDER_STALE_MS = 5 * 60 * 1_000;
 export interface OutboxSweepSummary {
   processed: number;
   nudged: number;
+  /** Canvas-parked dispatch rows the backstop released (normally 0). */
+  canvasReleased: number;
   /** Printer-parked dispatch rows released this sweep (a client resolved). */
   printerReleased: number;
   renderNudged: boolean;
@@ -176,6 +184,12 @@ async function dueOutboxIds(db: D1Database, now: number): Promise<string[]> {
 }
 
 async function renudgeStaleRenderJob(env: Env, now: number): Promise<boolean> {
+  // One nudge wakes the singleton container, which drains both kinds of job.
+  const staleCanvas = await staleCanvasJobId(env.DB, now, RENDER_STALE_MS);
+  if (staleCanvas !== null) {
+    await nudgeRenderJob(env, staleCanvas);
+    return true;
+  }
   const stale = await env.DB.prepare(
     `SELECT id FROM render_jobs
      WHERE (state = 'queued' AND updated_at <= ?)
@@ -202,6 +216,7 @@ export async function runOutboxSweep(env: Env, now: number): Promise<OutboxSweep
   // Before the drain, so a released job goes out in this very sweep.
   const printerReleased =
     resolvePrinterClient(env) === null ? 0 : await releasePrinterHolds(env.DB, clock());
+  const canvasReleased = (await releaseSettledCanvasHolds(env.DB, clock(), SWEEP_NUDGE_LIMIT)).length;
 
   let processed = 0;
   while (processed < SWEEP_INLINE_LIMIT) {
@@ -232,6 +247,7 @@ export async function runOutboxSweep(env: Env, now: number): Promise<OutboxSweep
   const renderNudged = await renudgeStaleRenderJob(env, clock());
 
   const summary = {
+    canvasReleased,
     nudged: due.length,
     printerReleased,
     processed,

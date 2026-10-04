@@ -42,7 +42,7 @@ sharp.concurrency(1);
 const MM_PER_INCH = 25.4;
 // Hard ceiling on source pixels (spec §8) — protects this process's memory.
 const MAX_SOURCE_PX = 10_000;
-const DECODE_PIXEL_LIMIT = (MAX_SOURCE_PX + 2_000) * (MAX_SOURCE_PX + 2_000);
+export const DECODE_PIXEL_LIMIT = (MAX_SOURCE_PX + 2_000) * (MAX_SOURCE_PX + 2_000);
 const PREVIEW_MAX_EDGE = 800;
 // Alpha thresholds: <250 counts as "not fully opaque" (parity with the legacy
 // client probe); trim threshold ~5% alpha; semi band = 5%..95%.

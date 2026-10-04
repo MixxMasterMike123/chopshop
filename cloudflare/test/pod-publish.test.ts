@@ -347,8 +347,17 @@ describe("checkout freezes the production snapshot", () => {
           sku: TEE_S,
           quantity: 2,
           printFiles: [
-            { slot: "front", r2Key: printKeyFront, sha256: hex64("b"), widthMm: 299, heightMm: 399 },
-            { slot: "back", r2Key: printKeyBack, sha256: hex64("b"), widthMm: 299, heightMm: 399 },
+            // CP6-PS2: + the frozen frame, its stand-in flag and the artwork's pixels.
+            {
+              slot: "front", r2Key: printKeyFront, sha256: hex64("b"), widthMm: 299, heightMm: 399,
+              frameMm: { w: 300, h: 400, offsetTopMm: 30 }, frameProvisional: false,
+              sourcePx: { w: 3_543, h: 4_724 },
+            },
+            {
+              slot: "back", r2Key: printKeyBack, sha256: hex64("b"), widthMm: 299, heightMm: 399,
+              frameMm: { w: 300, h: 450, offsetTopMm: 40 }, frameProvisional: false,
+              sourcePx: { w: 3_543, h: 4_724 },
+            },
           ],
           productionCostMinor: 36_000,
           withholdMinor: 45_000,

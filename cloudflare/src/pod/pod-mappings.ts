@@ -1182,10 +1182,22 @@ async function deleteMappingOnce(
 // ── checkout: production eligibility + the frozen line ─────────────────────
 
 export interface PrintFile {
+  /**
+   * CP6-PS2 (additive; nothing reads these for money): the printer's frame
+   * for this slot as it stood at checkout, whether that frame is a stand-in
+   * (the model's `provisional` flag), and the artwork's pixel size. The print
+   * canvas (src/dispatch/print-canvas.ts) is built from these frozen facts,
+   * never from the catalogue at dispatch time. `sourcePx` is absent only for an
+   * artwork row without measured pixels, which no 'ready' artwork lacks today;
+   * the canvas then refuses the line rather than checkout refusing the cart.
+   */
+  frameMm: PrintArea;
+  frameProvisional: boolean;
   heightMm: number;
   r2Key: string;
   sha256: string;
   slot: PrintSlot;
+  sourcePx?: { h: number; w: number };
   widthMm: number;
 }
 
@@ -1200,12 +1212,18 @@ export interface ProductionLine {
 }
 
 interface ProductionRow extends MappingRow {
+  artwork_height_px: number | null;
   artwork_status: string | null;
+  artwork_width_px: number | null;
   print_object_key: string | null;
   print_sha256: string | null;
 }
 
 const SLOT_ORDER = new Map<PrintSlot, number>(PRINT_SLOTS.map((slot, index) => [slot, index]));
+
+function isPositivePx(value: number | null): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
 
 /**
  * Production eligibility for ONE checkout line, recomputed from current facts
@@ -1297,7 +1315,9 @@ function productionReadStatements(
                 mapping.printer_id, mapping.sku, mapping.slots_json, mapping.status,
                 mapping.suspended_reason, mapping.created_at, mapping.updated_at,
                 artwork.status AS artwork_status,
-                artwork.print_object_key, artwork.print_sha256
+                artwork.print_object_key, artwork.print_sha256,
+                artwork.width_px AS artwork_width_px,
+                artwork.height_px AS artwork_height_px
          FROM pod_mappings AS mapping
          LEFT JOIN pod_artwork AS artwork
            ON artwork.artwork_id = mapping.artwork_id
@@ -1369,6 +1389,9 @@ function decideProductionLine(
   }
 
   const printPrefix = `pod/${tenantId}/print/`;
+  // CP6-PS2: frozen beside each slot, never a reason to refuse the cart.
+  const frameProvisional =
+    printer.capabilities.models[printer.capabilities.skus[routing.sku]?.model ?? ""]?.provisional === true;
   const printFiles: PrintFile[] = [];
   for (const mapping of set) {
     const row = rows.get(mapping.mappingId);
@@ -1387,10 +1410,15 @@ function decideProductionLine(
         return null;
       }
       printFiles.push({
+        frameMm: frame,
+        frameProvisional,
         heightMm: slot.heightMm,
         r2Key: row.print_object_key,
         sha256: row.print_sha256,
         slot: slot.slot,
+        ...(isPositivePx(row.artwork_width_px) && isPositivePx(row.artwork_height_px)
+          ? { sourcePx: { h: row.artwork_height_px, w: row.artwork_width_px } }
+          : {}),
         widthMm: slot.widthMm,
       });
     }
