@@ -1,6 +1,6 @@
 import { isPrinterId } from "../pod/printers";
 import { parseTenantIdPathSegment } from "../platform/provision-tenants";
-import { isProductionState, type ProductionState } from "./production-status";
+import { isProductionState, type PrinterException, type ProductionState } from "./production-status";
 import { parsePrinterJobId, printerJobId } from "./snapwear-wire";
 
 /**
@@ -9,12 +9,13 @@ import { parsePrinterJobId, printerJobId } from "./snapwear-wire";
  * ONE printer line (`{orderId}-{lineNo}`, PLAN §2.3): an order line with a
  * production snapshot, in any shop.
  *
- *   GET /v1/platform/print-jobs[?state][&dispatchState][&tenantId][&printerId]
- *                              [&cursor][&limit=1..100]
+ *   GET /v1/platform/print-jobs[?state][&dispatchState][&exception][&tenantId]
+ *                              [&printerId][&cursor][&limit=1..100]
  *
  * ── WHAT A ROW CARRIES ──────────────────────────────────────────────────────
- * What the status route needs (the job id, the production state and the
- * printer's tracking, named as that route's `job` names them) and what a
+ * What the status route needs (the job id, the production state, the
+ * printer's tracking and, CP6-PS3, the printer's exception and its
+ * resolution, named as that route's `job` names them) and what a
  * person needs to recognise the line (the shop, the order number, the
  * product, the quantity, the printer, the dispatch state). Named columns
  * only. NEVER selected: `production_json` (the line's frozen production cost,
@@ -42,15 +43,16 @@ import { parsePrinterJobId, printerJobId } from "./snapwear-wire";
  *                              it has `limit + 1` matches — at worst every
  *                              order line (CP5_WK_REPORT: the index that would
  *                              make these selective needs a migration)
- * `state` and `printerId` are never in an index (the printer is inside the
- * order's snapshot): they are checked on the rows the path above yields.
+ * `state`, `exception` and `printerId` are never in an index (the printer is
+ * inside the order's snapshot): they are checked on the rows the path above
+ * yields.
  * order_items is the outer loop (CROSS JOIN pins it); the order, the shop and
  * the variant are primary-key lookups.
  */
 
 export const PRINT_JOB_LIST_LIMIT = 50;
 const MAX_PRINT_JOB_LIST_LIMIT = 100;
-const QUERY_KEYS = ["cursor", "dispatchState", "limit", "printerId", "state", "tenantId"] as const;
+const QUERY_KEYS = ["cursor", "dispatchState", "exception", "limit", "printerId", "state", "tenantId"] as const;
 
 /** The line's dispatch states (0022's CHECK). */
 export const LINE_DISPATCH_STATES = [
@@ -71,6 +73,8 @@ export interface PrintJobListQuery {
   cursor: { lineNo: number; orderId: string } | null;
   /** The line's dispatch state; `none` = no dispatch recorded (queued, or held for a printer before its first call). */
   dispatchState: Filter<LineDispatchState>;
+  /** CP6-PS3: the printer's exception (resolved or not); `none` = the printer reported none. */
+  exception: Filter<PrinterException>;
   limit: number;
   printerId: string | null;
   /** The line's production state; `none` = the printer has reported nothing yet. */
@@ -92,6 +96,10 @@ function isLineDispatchState(value: string): value is LineDispatchState {
   return (LINE_DISPATCH_STATES as readonly string[]).includes(value);
 }
 
+function isPrinterException(value: string): value is PrinterException {
+  return value === "out_of_stock";
+}
+
 /**
  * Every key optional; an unknown key, a repeated key or a malformed value is a
  * 400, never ignored: a typo in a filter must not turn into "every job".
@@ -106,7 +114,8 @@ export function parsePrintJobListQuery(url: URL): PrintJobListQuery | null {
 
   const state = parseFilter(params.get("state"), isProductionState);
   const dispatchState = parseFilter(params.get("dispatchState"), isLineDispatchState);
-  if (state === undefined || dispatchState === undefined) {
+  const exception = parseFilter(params.get("exception"), isPrinterException);
+  if (state === undefined || dispatchState === undefined || exception === undefined) {
     return null;
   }
 
@@ -133,7 +142,7 @@ export function parsePrintJobListQuery(url: URL): PrintJobListQuery | null {
     return null;
   }
 
-  return { cursor, dispatchState, limit, printerId, state, tenantId };
+  return { cursor, dispatchState, exception, limit, printerId, state, tenantId };
 }
 
 export interface PrintJobListItem {
@@ -142,6 +151,10 @@ export interface PrintJobListItem {
   createdAt: string;
   dispatchedAt: string | null;
   dispatchState: LineDispatchState | null;
+  /** CP6-PS3: what the printer reported after accepting the job, or null. */
+  exception: PrinterException | null;
+  /** CP6-PS3: when a human closed the exception without the printer sending the line (ISO), or null. */
+  exceptionResolvedAt: string | null;
   jobId: string;
   lineNo: number;
   /** The product's name as frozen on the line. */
@@ -178,6 +191,8 @@ interface PrintJobRow {
   order_number: string;
   order_status: string;
   printer_carrier: string | null;
+  printer_exception: PrinterException | null;
+  printer_exception_resolved_at: string | null;
   printer_id: string | null;
   printer_job_ref: string | null;
   printer_tracking_number: string | null;
@@ -211,6 +226,12 @@ export function printJobListSql(query: PrintJobListQuery): { binds: unknown[]; s
     where.push("i.production_state = ?");
     binds.push(query.state);
   }
+  if (query.exception === "none") {
+    where.push("i.printer_exception IS NULL");
+  } else if (query.exception !== null) {
+    where.push("i.printer_exception = ?");
+    binds.push(query.exception);
+  }
   if (query.printerId !== null) {
     where.push("json_extract(o.production_snapshot_json, '$.printer') = ?");
     binds.push(query.printerId);
@@ -232,6 +253,7 @@ export function printJobListSql(query: PrintJobListQuery): { binds: unknown[]; s
             i.printer_job_ref, i.dispatch_state, i.dispatched_at,
             i.production_state, i.printer_tracking_number,
             i.printer_tracking_url, i.printer_carrier,
+            i.printer_exception, i.printer_exception_resolved_at,
             i.created_at, i.updated_at
      FROM order_items AS i
      CROSS JOIN orders AS o ON o.order_id = i.order_id AND o.tenant_id = i.tenant_id
@@ -259,6 +281,8 @@ export async function listPrintJobs(
       createdAt: new Date(row.created_at).toISOString(),
       dispatchedAt: row.dispatched_at,
       dispatchState: row.dispatch_state,
+      exception: row.printer_exception,
+      exceptionResolvedAt: row.printer_exception_resolved_at,
       jobId: printerJobId(row.order_id, row.item_index + 1),
       lineNo: row.item_index + 1,
       name: row.name,

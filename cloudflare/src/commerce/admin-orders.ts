@@ -34,15 +34,19 @@ import type { FulfilmentState } from "./fulfilment";
  *   none           not a print-on-demand line (no production snapshot)
  *   sent           the printer has sent it
  *   in_production  the printer has it (accepted), or it is being made
- *   failed         the printer refused it; the platform is on it
+ *   failed         the printer refused it, or (CP6-PS3) reports it cannot
+ *                  make it (out of stock, resolved or not); the platform is on it
  *   cancelled      it was cancelled before it reached the printer
  *   queued         not yet at the printer (or its answer is being checked)
+ * The printer's exception itself is never named: the word is all the seller
+ * reads of it.
  */
 export type PodState = "cancelled" | "failed" | "in_production" | "none" | "queued" | "sent";
 
 const POD_STATE_SQL = `CASE
     WHEN i.production_json IS NULL THEN 'none'
     WHEN i.production_state = 'shipped' THEN 'sent'
+    WHEN i.printer_exception IS NOT NULL THEN 'failed'
     WHEN i.production_state IN ('in_production', 'produced') THEN 'in_production'
     WHEN i.dispatch_state = 'cancelled' THEN 'cancelled'
     WHEN i.dispatch_state = 'failed' THEN 'failed'

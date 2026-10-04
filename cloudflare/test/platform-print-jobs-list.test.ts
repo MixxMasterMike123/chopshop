@@ -35,6 +35,8 @@ const ROW_KEYS = [
   "createdAt",
   "dispatchState",
   "dispatchedAt",
+  "exception",
+  "exceptionResolvedAt",
   "jobId",
   "lineNo",
   "name",
@@ -59,6 +61,8 @@ interface JobRow {
   createdAt: string;
   dispatchState: string | null;
   dispatchedAt: string | null;
+  exception: string | null;
+  exceptionResolvedAt: string | null;
   jobId: string;
   lineNo: number;
   name: string;
@@ -384,6 +388,8 @@ describe("the row", () => {
       createdAt: new Date(shippedCreatedAt).toISOString(),
       dispatchState: "accepted",
       dispatchedAt: "2026-10-04T08:00:00.000Z",
+      exception: null,
+      exceptionResolvedAt: null,
       jobId: jobs.aShipped,
       lineNo: 3,
       name: "Tröja Tre",
@@ -622,6 +628,7 @@ describe("the index each filter path uses", () => {
   const base: PrintJobListQuery = {
     cursor: null,
     dispatchState: null,
+    exception: null,
     limit: 50,
     printerId: null,
     state: null,

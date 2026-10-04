@@ -976,6 +976,15 @@ export interface CheckoutOptions {
    *                 only the environment's own seed can have created.
    */
   dispatchTarget?: "fake-printer" | "snapwear" | null;
+  /**
+   * CP6-PS3: true while the print canvas is on (the route passes
+   * src/dispatch/print-canvas.ts printCanvasEnabled). A POD line whose
+   * printer frame is a stand-in (the model's `provisional` flag) is then
+   * refused like any line that cannot be produced: dispatch would refuse to
+   * print it (canvasFrame), after the buyer paid. Absent or false = the
+   * stand-in flag is only frozen, as before.
+   */
+  refuseStandInFrames?: boolean;
 }
 
 /**
@@ -995,7 +1004,8 @@ export interface CheckoutOptions {
  *
  * PRODUCTION ELIGIBILITY IS RECOMPUTED HERE FROM CURRENT FACTS (PLAN §2.3) —
  * resolveProductionLines re-proves every POD line's mapping, printer, capability,
- * artwork and price — and ANY miss refuses the whole checkout: a line that
+ * artwork and price (and, with `refuseStandInFrames`, that the frame is not a
+ * stand-in: CP6-PS3) — and ANY miss refuses the whole checkout: a line that
  * cannot be produced must not be paid for.
  *
  * Money (LAUNCH_TODO A1, productionWithholding.ts): a line's cost is
@@ -1017,6 +1027,7 @@ async function freezeProductionSnapshot(
   currency: string,
   totalMinor: number,
   dispatchTarget: string | null | undefined,
+  refuseStandInFrames: boolean,
 ): Promise<{ json: string | null } | null> {
   const podLines = lines.filter((line) => line.isPod);
   if (podLines.length === 0) {
@@ -1042,6 +1053,7 @@ async function freezeProductionSnapshot(
       variantId: line.variantId,
     })),
     dispatchTarget ?? null,
+    refuseStandInFrames,
   );
   for (const [index, line] of podLines.entries()) {
     const production = productions[index] ?? null;
@@ -1189,6 +1201,7 @@ export async function createCheckout(
     currency,
     quote.totalMinor,
     options.dispatchTarget,
+    options.refuseStandInFrames === true,
   );
   if (snapshot === null) {
     return { status: "invalid_items" };

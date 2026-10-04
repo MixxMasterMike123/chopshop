@@ -101,6 +101,7 @@ import {
 } from "./auth/request-authorization";
 import { handleAuthRoute } from "./auth/auth-routes";
 import { dispatchTargetOf } from "./pod/printers";
+import { printCanvasEnabled } from "./dispatch/print-canvas";
 import { handlePublicStorefrontRequest } from "./storefront/public-routes";
 import { isSameOriginRequest } from "./lib/same-origin";
 import { resolveRequestTenant } from "./tenancy/resolve-tenant";
@@ -480,7 +481,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0053_print_canvas_jobs.sql";
+const REQUIRED_MIGRATION = "0054_printer_exception.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -1199,6 +1200,9 @@ async function handleCheckoutRoute(
 
   const result = await createCheckout(env.DB, tenant, input, now, {
     dispatchTarget: dispatchTargetOf(env),
+    // CP6-PS3: with the print canvas on, a stand-in frame is refused here,
+    // before payment, rather than failing at dispatch after it.
+    refuseStandInFrames: printCanvasEnabled(env),
   });
   if (result.status === "ok") {
     // A replay answers 200 rather than 201: the checkout already existed, and

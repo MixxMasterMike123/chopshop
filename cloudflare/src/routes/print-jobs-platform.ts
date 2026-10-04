@@ -24,6 +24,7 @@ export const PLATFORM_PRINT_JOBS_PATH = "/v1/platform/print-jobs";
  * indexes):
  *   ?state=none|in_production|produced|shipped        the line's production state
  *   &dispatchState=none|pending|submitting|accepted|unknown|failed|cancelled
+ *   &exception=none|out_of_stock                       the printer's exception (CP6-PS3)
  *   &tenantId=…  &printerId=…  &cursor=<last jobId>  &limit=1..100 (50)
  *   200 { jobs: [PrintJobListItem], nextCursor: string | null }
  *   400 invalid_request   an unknown or repeated key, a malformed value
@@ -33,7 +34,9 @@ export const PLATFORM_PRINT_JOBS_PATH = "/v1/platform/print-jobs";
  * takes ONE value. "Needs a human" is `dispatchState=accepted` with
  * `state=none`, then `in_production`, then `produced` (the printer has it and
  * has not shipped it); a job whose answer was lost is `dispatchState=unknown`,
- * resolved through /v1/platform/dispatch (by its outbox id), not here.
+ * resolved through /v1/platform/dispatch (by its outbox id), not here. A job
+ * the printer could not make is `exception=out_of_stock` (open while its row's
+ * `exceptionResolvedAt` is null and its `state` is not shipped).
  */
 export async function handlePlatformPrintJobListRoute(
   env: Env,
@@ -55,11 +58,17 @@ export async function handlePlatformPrintJobListRoute(
  * `POST /v1/platform/print-jobs/{orderId}-{lineNo}/status` (CP6-PS1)
  *   body { state: "in_production" | "produced" | "shipped",
  *          trackingNumber?, trackingUrl?, carrier? }   (tracking: shipped only)
+ *   body { exception: "out_of_stock" }   (CP6-PS3, A7) the printer reports
+ *        the blank out of stock after accepting the job: recorded once, with
+ *        its alert; afterwards only "shipped" (a restock) may follow
+ *   body { exception: "resolved" }       (CP6-PS3) a human closed it without
+ *        the printer sending the line; the line stops holding the order back
  *   200 { job: PrintJobStatusView, changed: true, orderShipped: boolean }
  *   200 { job: PrintJobStatusView, changed: false, orderShipped: false }
- *       — the same state with the same facts again (idempotent no-op)
+ *       — the same state (or exception) with the same facts again (idempotent no-op)
  *   409 { error: { code: "print_job_status_not_allowed", reason, message } }
  *       reason ∈ not_accepted | cancelled | refunded | backwards | tracking_differs
+ *                | out_of_stock | exception_resolved | no_exception | produced
  *   409 { error: { code: "conflict", … } }   lost a race twice; retry
  *   400 invalid_request                      the body is not exactly the shape above
  *   404 (opaque)  no session, not a platform user, an X-Shop-Id header, a
@@ -68,9 +77,11 @@ export async function handlePlatformPrintJobListRoute(
  *
  * Thin on purpose: the rules are recordProductionStatus's, which a future
  * automated source (SnapWear webhook, mail parser) calls the same way.
- * Recorded with who/when in audit_events (`print_job.status`). When the
- * change also shipped the order (an all-printer parcel order's last line),
- * the buyer's mail is nudged now rather than at the next sweep.
+ * Recorded with who/when in audit_events (`print_job.status`,
+ * `print_job.exception`, `print_job.exception_resolved`). When the change also
+ * shipped the order (an all-printer parcel order's last line, or the
+ * resolution of its last unsent one), the buyer's mail is nudged now rather
+ * than at the next sweep.
  */
 export async function handlePlatformPrintJobStatusRoute(
   env: Env,

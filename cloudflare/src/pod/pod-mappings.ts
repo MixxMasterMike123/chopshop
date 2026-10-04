@@ -1237,7 +1237,13 @@ function isPositivePx(value: number | null): value is number {
  *     large enough for the print it was sized for (A3/A4);
  *   - every artwork 'ready' with a print master under this tenant's own
  *     `pod/{tenant}/print/` prefix (artworkDeliverable's containment rule);
- *   - the SKU priced for every slot (A1).
+ *   - the SKU priced for every slot (A1);
+ *   - when `refuseStandInFrames` (CP6-PS3: the checkout passes the print
+ *     canvas switch, src/dispatch/print-canvas.ts printCanvasEnabled), the
+ *     SKU's model has real frames, not a stand-in (`provisional`): with the
+ *     canvas on, dispatch refuses to print a stand-in frame (canvasFrame), so
+ *     such a line must not be paid for. False = the stand-in flag is only
+ *     frozen beside each slot, as before.
  *
  * The scope's set is read COMPLETE (Codex CP2 P2): the variant's own set, else
  * the product-level set, each queried exactly — never a product-wide page that
@@ -1346,6 +1352,7 @@ function decideProductionLine(
   tenantId: string,
   item: ProductionItem,
   dispatchTarget: string | null,
+  refuseStandInFrames: boolean,
   results: ReadonlyArray<D1Result<unknown> | undefined>,
 ): ProductionLine | null {
   const [mappingResult, printerResult, tierResult] = results;
@@ -1389,9 +1396,13 @@ function decideProductionLine(
   }
 
   const printPrefix = `pod/${tenantId}/print/`;
-  // CP6-PS2: frozen beside each slot, never a reason to refuse the cart.
+  // CP6-PS2: frozen beside each slot. CP6-PS3: a reason to refuse the cart
+  // only when the caller says the print canvas is on.
   const frameProvisional =
     printer.capabilities.models[printer.capabilities.skus[routing.sku]?.model ?? ""]?.provisional === true;
+  if (refuseStandInFrames && frameProvisional) {
+    return null;
+  }
   const printFiles: PrintFile[] = [];
   for (const mapping of set) {
     const row = rows.get(mapping.mappingId);
@@ -1455,13 +1466,14 @@ function decideProductionLine(
  * tiers for all lines together (reviewer P3): a routing edit (a tier price, a
  * frame) can never land between line 1 and line 2 and freeze a price list that
  * mixes the old and the new. Index-aligned with `items`; null = that line is
- * not producible.
+ * not producible. `refuseStandInFrames`: see decideProductionLine's header.
  */
 export async function resolveProductionLines(
   db: D1Database,
   tenantId: string,
   items: readonly ProductionItem[],
   dispatchTarget: string | null,
+  refuseStandInFrames: boolean,
 ): Promise<Array<ProductionLine | null>> {
   if (items.length === 0) {
     return [];
@@ -1474,19 +1486,23 @@ export async function resolveProductionLines(
       tenantId,
       item,
       dispatchTarget,
+      refuseStandInFrames,
       results.slice(index * STATEMENTS_PER_LINE, (index + 1) * STATEMENTS_PER_LINE),
     ),
   );
 }
 
-/** One line on its own (its own snapshot) — see resolveProductionLines. */
+/**
+ * One line on its own (its own snapshot) — see resolveProductionLines. A
+ * stand-in frame is never a refusal here (its behaviour before CP6-PS3).
+ */
 export async function resolveProductionLine(
   db: D1Database,
   tenantId: string,
   item: ProductionItem,
   dispatchTarget: string | null,
 ): Promise<ProductionLine | null> {
-  const [line] = await resolveProductionLines(db, tenantId, [item], dispatchTarget);
+  const [line] = await resolveProductionLines(db, tenantId, [item], dispatchTarget, false);
   return line ?? null;
 }
 

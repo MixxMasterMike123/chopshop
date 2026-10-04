@@ -97,6 +97,8 @@ interface StatusBody {
   changed: boolean;
   job: {
     carrier: string | null;
+    exception: string | null;
+    exceptionResolvedAt: string | null;
     jobId: string;
     lineNo: number;
     orderId: string;
@@ -257,6 +259,8 @@ describe("the rules", () => {
         changed: true,
         job: {
           carrier: step.carrier ?? null,
+          exception: null,
+          exceptionResolvedAt: null,
           jobId: job(order.orderId),
           lineNo: 1,
           orderId: order.orderId,
@@ -421,6 +425,8 @@ describe("the rules", () => {
       cancelled: false,
       carrier: null,
       dispatchState: "accepted",
+      exception: null,
+      exceptionResolvedAt: null,
       refunded: true,
       state: "shipped" as const,
       trackingNumber: null,

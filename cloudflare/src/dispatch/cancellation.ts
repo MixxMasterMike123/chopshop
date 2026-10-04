@@ -110,6 +110,12 @@ export function parseCancelOrderInput(body: unknown): { reason: string } | null 
  * shipped or ready for pickup — nor, therefore, further
  * (src/commerce/fulfilment.ts `printer_ships`); a sent line is
  * `production_state` 'shipped', which all three guards already read.
+ * One exception (CP6-PS3): a line whose printer exception a platform operator
+ * RESOLVED no longer holds the seller back, and it is never shipped. For such
+ * an order the refund's dispatch stop may still queue a printer cancellation
+ * for that line's accepted job where this guard refuses: a redundant
+ * human-action alert for a job the operator already settled, and no money
+ * (the job was accepted, so the withholding is never released).
  */
 export const RETURN_CASE_FULFILMENT_STATES = [
   "shipped",

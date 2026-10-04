@@ -41,16 +41,20 @@ import { auditMetadataJson } from "../auth/live-authorization";
  *                      (`order_items.production_state` 'shipped', written by
  *                      the platform's side, not by this route:
  *                      src/dispatch/production-status.ts). A line whose
- *                      dispatch was cancelled does not count. `processing` is
- *                      always open to the seller.
+ *                      dispatch was cancelled does not count, nor (CP6-PS3)
+ *                      one whose printer exception a platform operator
+ *                      resolved; an OPEN exception counts (unsentPodLinesSql).
+ *                      `processing` is always open to the seller.
  *
  * ── THE ONE CHANGE NOT MADE BY THE SELLER (CP6-PS1) ─────────────────────────
  * An order that is NOTHING but printer lines and goes by PARCEL has nothing
  * left for the seller to send: when the printer sends its last line, that
  * line's batch also records the order `shipped` — the same history row, audit
  * row, buyer's mail (`email.order_status`) and update as the seller's change,
- * once (printerShippedOrderStatements below). Every other order (a pickup, or
- * one with a line the seller sends) waits for the seller, exactly as above.
+ * once (printerShippedOrderStatements below). So does the batch that resolves
+ * the order's last unsent line's printer exception (CP6-PS3). Every other
+ * order (a pickup, or one with a line the seller sends) waits for the seller,
+ * exactly as above.
  *
  * ── ONE BATCH ───────────────────────────────────────────────────────────────
  * The history row, the shipment, the audit row (with the acting-as grant), the
@@ -185,13 +189,20 @@ export function decideFulfilment(
   return null;
 }
 
-/** A POD line (`production_json` set) the printer has not sent, of alias `o`. */
+/**
+ * A POD line (`production_json` set) the printer has not sent, of alias `o`.
+ * CP6-PS3: a line whose printer exception (out of stock) is still OPEN counts
+ * — so neither the seller nor the auto-ship can tell the buyer "shipped" for
+ * a parcel missing it — and one a platform operator RESOLVED does not (the
+ * printer will never send it; a human settled it with the shop and buyer).
+ */
 function unsentPodLinesSql(o: string): string {
   return `SELECT COUNT(*) FROM order_items AS u
           WHERE u.order_id = ${o}.order_id AND u.tenant_id = ${o}.tenant_id
             AND u.production_json IS NOT NULL
             AND u.production_state IS NOT 'shipped'
-            AND u.dispatch_state IS NOT 'cancelled'`;
+            AND u.dispatch_state IS NOT 'cancelled'
+            AND u.printer_exception_resolved_at IS NULL`;
 }
 
 /**
@@ -527,8 +538,9 @@ export async function changeFulfilment(
 
 /**
  * The order's `shipped`, recorded in the batch that moves a printer line to
- * 'shipped' (src/dispatch/production-status.ts), when — evaluated AFTER that
- * line's update, inside the batch — ALL of these hold:
+ * 'shipped', or resolves a line's printer exception (CP6-PS3;
+ * src/dispatch/production-status.ts), when — evaluated AFTER that line's
+ * update, inside the batch — ALL of these hold:
  *   - `after` holds (the caller's proof that THIS batch moved the line);
  *   - the order goes by parcel (the printer sent it to the buyer; a pickup
  *     order's print went to the shop, and the seller makes it ready);
