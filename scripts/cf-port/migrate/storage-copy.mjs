@@ -7,6 +7,8 @@
  *
  *   node scripts/cf-port/migrate/storage-copy.mjs --env staging --bundle <dir>
  *        --out <dir outside the repo> [--shop <id>] [--limit <n>] [--dry-run]
+ *   node scripts/cf-port/migrate/storage-copy.mjs --env production --confirm production
+ *        --bundle <dir> --out <another dir outside the repo> [--shop <id>] [--limit <n>] [--dry-run]
  *
  * Per distinct (shop, address), in a fixed order:
  *   1. GET the address from the source (read-only; 3 tries on a timeout, a
@@ -32,8 +34,21 @@
  * anything else. Exit 0 when nothing is `failed`, 1 otherwise, 2 on a refusal
  * to run. Prints counts, shop ids, object ids and reasons only.
  *
- * Staging only: production is refused, and the API origin is the pinned
- * staging origin (lib/api-session.mjs).
+ * The target (lib/api-session.mjs apiTarget): staging, the pinned staging
+ * origin. Production (CP7-T1) needs `--confirm production`, takes the API
+ * origin of cloudflare/pinned.production.json (refused while it is null) and
+ * the credentials of the environment or ~/.config/chopshop/secrets.production.env
+ * only, and in addition:
+ *   - /health must say production and /ready be on 0052 or later (the
+ *     catalogue plan this copy feeds needs 0052 to land);
+ *   - every shop the run copies for must already be a tenant on the API: the
+ *     copy acts as each shop, so the platform import (import.mjs) comes first.
+ *     A missing shop refuses the run before any file is fetched;
+ *   - the shops that are archived (D21) are not imported, so their files are
+ *     not copied;
+ *   - the acting-as reason names the cutover, not the design review.
+ * A manifest in --out written for another environment or API is refused, so
+ * a production copy never continues a staging one.
  */
 
 import { createHash } from 'node:crypto';
@@ -56,14 +71,16 @@ import {
 } from './lib/copy-manifest.mjs';
 import { collectCopySources, fetchAddressOf, isFetchable, loadWorkerModule } from './lib/copy-sources.mjs';
 import {
+  apiTarget,
+  confirmationProblem,
   createApiSession,
-  platformCredentials,
+  credentialsFor,
   preflight,
   RefusedError,
   REPO_ROOT,
-  stagingTarget,
 } from './lib/api-session.mjs';
 import { isInsideRepo } from './lib/outside-repo.mjs';
+import { ARCHIVED_SHOP_IDS } from './lib/transform-shops.mjs';
 
 export const PENDING_FILE = 'copy-pending.json';
 export const PUBLIC_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
@@ -73,8 +90,12 @@ const TRIES = 3;
 const SOURCE_TIMEOUT_MS = 60_000;
 // 0039: the public-object admission (reserve of product_media / shop_branding).
 export const REQUIRED_MIGRATION = '0039';
+// 0052: production imports its catalogue as a second run of its own kind.
+export const PRODUCTION_REQUIRED_MIGRATION = '0052';
 export const ACTING_AS_REASON =
   'CP4 staging import for the design review: storage-copy.mjs copies the source images of this shop';
+export const PRODUCTION_ACTING_AS_REASON =
+  'CP7 cutover: storage-copy.mjs copies the source images of this shop from the frozen export';
 
 const STATUSES_IN_ORDER = ['copied', 'refused', 'missing', 'failed'];
 
@@ -97,6 +118,7 @@ export function parseArgs(argv) {
       if (!/^[1-9]\d{0,6}$/.test(raw)) throw new RefusedError('--limit must be a positive integer');
       out.limit = Number(raw);
     } else if (arg === '--dry-run') out.dryRun = true;
+    else if (arg === '--confirm') out.confirm = value();
     else throw new RefusedError(`unknown argument ${arg}`);
   }
   if (out.env === null) throw new RefusedError('--env is required (staging)');
@@ -245,19 +267,19 @@ async function withTries(fn, sleep) {
  * grant. A 404 can mean the grant ran out or was revoked: the grant is minted
  * again and the request made once more.
  */
-async function adminRequest(session, shopId, method, route, options, sleep) {
+async function adminRequest(session, shopId, method, route, options, sleep, reason) {
   const attempt = () => session.request(method, route, { ...options, shop: shopId });
   let result = await withTries(attempt, sleep);
   if (result.status === 404) {
     session.dropActingAs(shopId);
-    await session.ensureActingAs(shopId, ACTING_AS_REASON);
+    await session.ensureActingAs(shopId, reason);
     result = await withTries(attempt, sleep);
   }
   return result;
 }
 
-async function readObject(session, shopId, objectId, sleep) {
-  const result = await adminRequest(session, shopId, 'GET', `/v1/admin/objects/${encodeURIComponent(objectId)}`, {}, sleep);
+async function readObject(session, shopId, objectId, sleep, reason) {
+  const result = await adminRequest(session, shopId, 'GET', `/v1/admin/objects/${encodeURIComponent(objectId)}`, {}, sleep, reason);
   return result.status === 200 && result.json?.object ? result.json.object : null;
 }
 
@@ -295,7 +317,7 @@ function entryOf(source, fields) {
  * index by (kind, sha256).
  */
 async function copyOne(source, context) {
-  const { fetchSourceImpl, pending, pendingFile, session, sleep, sniff, sameBytes } = context;
+  const { fetchSourceImpl, pending, pendingFile, reason, session, sleep, sniff, sameBytes } = context;
   const pendingKey = pendingKeyOf(source);
   if (!isFetchable(source.address)) return entryOf(source, { reason: 'not_fetchable' });
 
@@ -325,13 +347,13 @@ async function copyOne(source, context) {
     return copied(shared.objectId);
   }
 
-  await session.ensureActingAs(source.shopId, ACTING_AS_REASON);
+  await session.ensureActingAs(source.shopId, reason);
 
   // A reservation of an earlier run that stopped before its manifest entry.
   let objectId = null;
   const earlier = pending[pendingKey];
   if (earlier && earlier.sha256 === sha256 && earlier.sizeBytes === sizeBytes && earlier.contentType === contentType) {
-    const object = await readObject(session, source.shopId, earlier.objectId, sleep);
+    const object = await readObject(session, source.shopId, earlier.objectId, sleep, reason);
     if (activeWith(object, sha256, sizeBytes)) {
       context.stats.resumedObjects += 1;
       return copied(earlier.objectId);
@@ -348,6 +370,7 @@ async function copyOne(source, context) {
       '/v1/admin/objects',
       { json: { contentType, fileName, kind, sha256, sizeBytes } },
       sleep,
+      reason,
     );
     if (reserved.status === 0) return entryOf(source, { ...known, contentType, reason: reserved.failure });
     if (reserved.status === 400) {
@@ -372,13 +395,14 @@ async function copyOne(source, context) {
     `/v1/admin/objects/${encodeURIComponent(objectId)}/content`,
     { bytes, headers: { 'content-type': contentType } },
     sleep,
+    reason,
   );
   if (uploaded.status === 200 && activeWith(uploaded.json?.object ?? null, sha256, sizeBytes)) return copied(objectId);
   if (uploaded.status === 400 || uploaded.status === 413) {
     return entryOf(source, { ...known, contentType, reason: workerReason(uploaded), status: 'refused' });
   }
   // A lost answer, a conflict or an unverified success: what the Worker holds decides.
-  const object = await readObject(session, source.shopId, objectId, sleep);
+  const object = await readObject(session, source.shopId, objectId, sleep, reason);
   if (activeWith(object, sha256, sizeBytes)) return copied(objectId);
   return entryOf(source, {
     ...known,
@@ -425,6 +449,25 @@ function sourceCountsByShopUse(sources) {
 }
 
 /**
+ * Production: every shop of the run must already be a tenant on the API (the
+ * platform import comes first; the copy acts as each shop). Refuses the run,
+ * naming the missing shops, before any file is fetched.
+ */
+async function requireTenants(session, sources) {
+  const missing = [];
+  for (const shopId of [...new Set(sources.map((source) => source.shopId))].sort()) {
+    const result = await session.request('GET', `/v1/platform/tenants/${encodeURIComponent(shopId)}`);
+    if (result.status === 404) missing.push(shopId);
+    else if (result.status !== 200) throw new RefusedError(`tenant ${shopId} could not be read: HTTP ${result.status}`);
+  }
+  if (missing.length > 0) {
+    throw new RefusedError(
+      `the platform import is not applied: ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not a tenant on the API (apply import.mjs's plan first; the copy acts as each shop)`,
+    );
+  }
+}
+
+/**
  * The whole run, with its dependencies injectable for the tests:
  *   apiOrigin        the API (the CLI takes the pinned staging origin)
  *   credentials      { email, password } (the CLI reads them from env / file)
@@ -433,6 +476,9 @@ function sourceCountsByShopUse(sources) {
  * Answers { exitCode, counts, manifestPath }.
  */
 export async function runStorageCopy(args, deps) {
+  const confirmation = confirmationProblem(args.env, args.confirm);
+  if (confirmation !== null) throw new RefusedError(confirmation);
+  const production = args.env === 'production';
   const log = deps.log ?? ((line) => console.log(line));
   const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const outDir = path.resolve(args.out);
@@ -444,7 +490,11 @@ export async function runStorageCopy(args, deps) {
   if (!existsSync(bundleManifest)) throw new RefusedError('--bundle holds no manifest.json');
   const bundleManifestSha256 = sha256Hex(readFileSync(bundleManifest));
 
-  const { counts: referenceCounts, sources: allSources } = collectCopySources(bundleDir, { shop: args.shop });
+  const collected = collectCopySources(bundleDir, { shop: args.shop });
+  const referenceCounts = collected.counts;
+  // Production imports no archived shop (D21): its files have no row to name them.
+  const archivedLeftOut = production ? collected.sources.filter((source) => ARCHIVED_SHOP_IDS.has(source.shopId)) : [];
+  const allSources = production ? collected.sources.filter((source) => !ARCHIVED_SHOP_IDS.has(source.shopId)) : collected.sources;
   const manifestPath = path.join(outDir, COPY_MANIFEST_FILE);
   const pendingFile = path.join(outDir, PENDING_FILE);
 
@@ -479,6 +529,12 @@ export async function runStorageCopy(args, deps) {
   );
   if (notFetchable.length > 0) log(`source addresses that cannot be fetched: ${notFetchable.join(', ')}`);
   log(`page attachments in the bundle (not copied, not imported): ${referenceCounts.pageAttachments}`);
+  if (production) {
+    const byShop = {};
+    for (const source of archivedLeftOut) byShop[source.shopId] = (byShop[source.shopId] ?? 0) + 1;
+    const cells = Object.entries(byShop).map(([shopId, n]) => `${shopId} ${n}`);
+    log(`archived shops (D21, not imported), files not copied: ${cells.length === 0 ? 'none' : cells.join(', ')}`);
+  }
   log(`already copied (skipped): ${alreadyCopied}; to try now: ${selected.length}${args.limit !== null ? ` (--limit ${args.limit} of ${todo.length})` : ''}`);
 
   if (args.dryRun) {
@@ -498,9 +554,16 @@ export async function runStorageCopy(args, deps) {
   }
 
   const session = createApiSession({ apiOrigin: deps.apiOrigin, fetchImpl: deps.fetchApiImpl, now: deps.now, sleep });
-  await preflight(session, { requiredMigration: REQUIRED_MIGRATION });
+  await preflight(session, {
+    environment: args.env,
+    requiredMigration: production ? PRODUCTION_REQUIRED_MIGRATION : REQUIRED_MIGRATION,
+  });
   await session.signIn(deps.credentials);
   log('signed in as the platform user');
+  if (production) {
+    await requireTenants(session, selected);
+    log('every shop of the run is a tenant on the API');
+  }
 
   const sniff = await loadWorkerModule('storage/image-sniff.ts', { repoRoot: deps.repoRoot ?? REPO_ROOT });
   const pending = readPending(pendingFile);
@@ -517,6 +580,7 @@ export async function runStorageCopy(args, deps) {
     fetchSourceImpl: deps.fetchSourceImpl ?? globalThis.fetch,
     pending,
     pendingFile,
+    reason: production ? PRODUCTION_ACTING_AS_REASON : ACTING_AS_REASON,
     sameBytes,
     session,
     sleep,
@@ -571,8 +635,8 @@ export async function runStorageCopy(args, deps) {
 async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
-    const { apiOrigin } = stagingTarget({ env: args.env });
-    const credentials = args.dryRun ? null : platformCredentials();
+    const { apiOrigin } = apiTarget({ confirm: args.confirm, env: args.env });
+    const credentials = args.dryRun ? null : credentialsFor(args.env);
     const { exitCode } = await runStorageCopy(args, { apiOrigin, credentials });
     process.exitCode = exitCode;
   } catch (error) {

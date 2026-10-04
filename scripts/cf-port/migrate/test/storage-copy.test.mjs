@@ -4,10 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { parseArgs, PENDING_FILE, runStorageCopy } from '../storage-copy.mjs';
+import { parseArgs, PENDING_FILE, PRODUCTION_ACTING_AS_REASON, runStorageCopy } from '../storage-copy.mjs';
 import { COPY_MANIFEST_FILE, objectKeyOf, readCopyManifest, sourceKeyOf } from '../lib/copy-manifest.mjs';
 import { RefusedError, REPO_ROOT } from '../lib/api-session.mjs';
 import { startFakeSource, startFakeStagingApi, writeTestBundle } from './fake-staging-api.mjs';
+import { cliInProductionMode } from './cli-production.mjs';
 
 const BUCKET_PATH = '/v0/b/test-bucket.firebasestorage.app/o';
 
@@ -32,7 +33,7 @@ function scratch() {
  * favicon (not of the source's storage), a page with an image inside its
  * HTML. shop-b: one product image.
  */
-async function world({ sourceOverrides = {}, apiOptions = {}, identityOfShopA = null } = {}) {
+async function world({ sourceOverrides = {}, apiOptions = {}, identityOfShopA = null, extraProducts = [] } = {}) {
   const files = {
     [`${BUCKET_PATH}/a-main.png`]: { body: png('main'), type: 'image/png' },
     [`${BUCKET_PATH}/a-gallery.jpg`]: { body: jpeg('gallery'), type: 'image/jpeg' },
@@ -72,6 +73,7 @@ async function world({ sourceOverrides = {}, apiOptions = {}, identityOfShopA = 
         id: 'p-a',
       },
       { data: { b2cImageUrl: at('b-main.png'), shopId: 'shop-b' }, id: 'p-b' },
+      ...extraProducts.map((make) => make(at)),
     ],
     shops: [
       { data: { storeIdentity: identityOfShopA ? identityOfShopA(at) : { faviconUrl: '/images/favicon.ico', logoUrl: at('a-logo.svg') } }, id: 'shop-a' },
@@ -414,3 +416,133 @@ test('the Worker refusing the bytes is recorded with its reason', async () => {
     await w.close();
   }
 });
+
+// ── production (CP7-T1) ─────────────────────────────────────────────────────
+
+const PRODUCTION_API = { environment: 'production', migration: '0052_import_run_kinds.sql' };
+
+/** The world of the staging tests, its API the fake of a production API, the run in production mode. */
+async function productionWorld(options = {}) {
+  const w = await world({ ...options, apiOptions: { ...PRODUCTION_API, ...(options.apiOptions ?? {}) } });
+  w.args = { ...w.args, confirm: 'production', env: 'production' };
+  return w;
+}
+
+test('parseArgs: --confirm takes a value; without it the staging shape is unchanged', () => {
+  assert.equal(parseArgs(['--env', 'production', '--confirm', 'production', '--bundle', 'b', '--out', 'o']).confirm, 'production');
+  assert.equal('confirm' in parseArgs(['--env', 'staging', '--bundle', 'b', '--out', 'o']), false);
+  assert.throws(() => parseArgs(['--env', 'production', '--confirm', '--bundle', 'b', '--out', 'o']), /--confirm needs a value/);
+});
+
+test('production: refused before any request without --confirm production; --confirm on staging is refused too', async () => {
+  const w = await productionWorld();
+  try {
+    for (const confirm of [undefined, 'yes']) {
+      await assert.rejects(runStorageCopy({ ...w.args, confirm }, w.deps), (error) => error instanceof RefusedError && /needs --confirm production/.test(error.message));
+    }
+    await assert.rejects(runStorageCopy({ ...w.args, confirm: 'production', env: 'staging' }, w.deps), /belongs to --env production only/);
+    assert.equal(w.api.state.log.length, 0);
+    assert.equal(w.source.hits.size, 0);
+  } finally {
+    await w.close();
+  }
+});
+
+test('production: /health must say production and /ready be on 0052 or later', async () => {
+  const staging = await productionWorld({ apiOptions: { environment: 'staging' } });
+  const old = await productionWorld({ apiOptions: { migration: '0051_print_job_status.sql' } });
+  try {
+    await assert.rejects(runStorageCopy(staging.args, staging.deps), /\/health does not say production/);
+    await assert.rejects(runStorageCopy(old.args, old.deps), /\/ready is not on migration 0052 or later/);
+    for (const w of [staging, old]) {
+      assert.equal(w.source.hits.size, 0);
+      assert.equal(w.api.state.log.filter((entry) => entry.path === '/v1/admin/objects').length, 0);
+    }
+  } finally {
+    await staging.close();
+    await old.close();
+  }
+});
+
+test('production: a shop that is not yet a tenant refuses the run before any file is fetched', async () => {
+  const w = await productionWorld({ apiOptions: { tenants: { 'shop-a': {} } } });
+  try {
+    await assert.rejects(
+      runStorageCopy(w.args, w.deps),
+      (error) => error instanceof RefusedError && error.message === "the platform import is not applied: shop-b is not a tenant on the API (apply import.mjs's plan first; the copy acts as each shop)",
+    );
+    assert.equal(w.source.hits.size, 0);
+    assert.equal(w.api.state.log.filter((entry) => entry.path === '/v1/admin/objects' || entry.path.endsWith('/acting-as')).length, 0);
+    // --shop narrows the check to the shops of the run.
+    const result = await runStorageCopy({ ...w.args, shop: 'shop-a' }, w.deps);
+    assert.equal(result.exitCode, 0);
+  } finally {
+    await w.close();
+  }
+});
+
+test('production: copies under the cutover reason, records production in the manifest, and never continues a staging manifest', async () => {
+  const w = await productionWorld();
+  try {
+    const result = await runStorageCopy(w.args, w.deps);
+    assert.equal(result.exitCode, 0, w.lines.join('\n'));
+    const manifest = readCopyManifest(path.join(w.args.out, COPY_MANIFEST_FILE));
+    assert.equal(manifest.env, 'production');
+    assert.equal(manifest.apiOrigin, w.api.origin);
+    assert.equal(entryFor(manifest, 'shop-a', w.at('a-main.png')).status, 'copied');
+    const grants = w.api.state.audit.filter((a) => a.action === 'acting_as.granted');
+    assert.ok(grants.length > 0 && grants.every((a) => a.reason === PRODUCTION_ACTING_AS_REASON));
+    assert.ok(w.lines.includes('every shop of the run is a tenant on the API'));
+    assert.ok(w.lines.includes('archived shops (D21, not imported), files not copied: none'));
+
+    // The same --out under staging: refused, and the other way round.
+    await assert.rejects(runStorageCopy({ ...w.args, confirm: undefined, env: 'staging' }, w.deps), /written for another environment or API/);
+    const s = await world();
+    try {
+      await runStorageCopy({ ...s.args, limit: 1 }, s.deps);
+      await assert.rejects(runStorageCopy({ ...s.args, confirm: 'production', env: 'production' }, s.deps), /written for another environment or API/);
+    } finally {
+      await s.close();
+    }
+  } finally {
+    await w.close();
+  }
+});
+
+test('production: the files of an archived shop (D21) are not copied; staging still copies them', async () => {
+  const archived = (at) => ({ data: { b2cImageUrl: at('b-main.png', '?alt=media&token=r'), shopId: 'robowatz' }, id: 'p-r' });
+  const w = await productionWorld({ apiOptions: { tenants: { robowatz: {}, 'shop-a': {}, 'shop-b': {} } }, extraProducts: [archived] });
+  try {
+    const result = await runStorageCopy(w.args, w.deps);
+    assert.equal(result.exitCode, 0);
+    const manifest = readCopyManifest(path.join(w.args.out, COPY_MANIFEST_FILE));
+    assert.equal(manifest.entries.some((entry) => entry.shopId === 'robowatz'), false);
+    assert.ok(w.lines.includes('archived shops (D21, not imported), files not copied: robowatz 1'));
+    assert.equal(w.api.state.log.some((entry) => entry.path === '/v1/platform/tenants/robowatz'), false);
+  } finally {
+    await w.close();
+  }
+  const s = await world({ apiOptions: { tenants: { robowatz: {}, 'shop-a': {}, 'shop-b': {} } }, extraProducts: [archived] });
+  try {
+    await runStorageCopy({ ...s.args, shop: 'robowatz' }, s.deps);
+    assert.equal(readCopyManifest(path.join(s.args.out, COPY_MANIFEST_FILE)).entries[0].shopId, 'robowatz');
+  } finally {
+    await s.close();
+  }
+});
+
+test('production: the sign-in waits out a 429 (HANDOVER 2026-09-28)', async () => {
+  const w = await productionWorld({
+    apiOptions: { faults: [{ method: 'POST', path: /^\/api\/auth\/sign-in\/email$/, retryAfter: 30, status: 429, times: 2 }] },
+  });
+  try {
+    const result = await runStorageCopy({ ...w.args, shop: 'shop-b' }, w.deps);
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(w.sleeps.slice(0, 2), [30_000, 30_000]);
+    assert.ok(w.lines.some((line) => line.includes('waits on 429: 2')));
+  } finally {
+    await w.close();
+  }
+});
+
+test('the CLI in production mode refuses before any request, and never takes staging\'s credentials', cliInProductionMode(path.join(REPO_ROOT, 'scripts/cf-port/migrate/storage-copy.mjs'), 'STORAGE COPY'));

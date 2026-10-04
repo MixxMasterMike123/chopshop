@@ -1,7 +1,7 @@
 /**
- * scripts/cf-port/migrate/lib/api-session.mjs — the staging API as the CP4
- * scripts (storage-copy.mjs, staging-legal.mjs) call it: the flow of
- * scripts/cf-port/seed-staging-slice.mjs, in one place.
+ * scripts/cf-port/migrate/lib/api-session.mjs — the API as the CP4 scripts
+ * (storage-copy.mjs, staging-legal.mjs, import-studio-assets.mjs) call it:
+ * the flow of scripts/cf-port/seed-staging-slice.mjs, in one place.
  *
  *   stagingTarget({ env })   refuses anything but `staging`; the API origin is
  *                            cloudflare/pinned.staging.json origins.api (an
@@ -9,6 +9,16 @@
  *   platformCredentials()    CHOPSHOP_PLATFORM_EMAIL + CHOPSHOP_PLATFORM_PASSWORD,
  *                            the password falling back to PLATFORM_ADMIN_PASSWORD
  *                            of ~/.config/chopshop/secrets.staging.env
+ *   productionTarget()       CP7-T1: `--env production` AND `--confirm
+ *                            production`; the API origin is
+ *                            cloudflare/pinned.production.json origins.api,
+ *                            refused while it is null (an explicit
+ *                            CHOPSHOP_API_URL must equal it)
+ *   productionCredentials()  the same names, from the environment or
+ *                            ~/.config/chopshop/secrets.production.env only
+ *                            (mode 600; never the staging file, never a file
+ *                            named by CHOPSHOP_SECRETS_FILE)
+ *   apiTarget()              the target of `--env`: one of the two above
  *   createApiSession()       sign-in (Better Auth, POST /api/auth/sign-in/email),
  *                            acting-as (POST /v1/platform/tenants/:id/acting-as,
  *                            renewed before it runs out), and ONE request helper:
@@ -22,13 +32,14 @@
  * a route, never a credential.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 export const DEFAULT_SECRETS_FILE = path.join(homedir(), '.config', 'chopshop', 'secrets.staging.env');
+export const PRODUCTION_SECRETS_FILE = path.join(homedir(), '.config', 'chopshop', 'secrets.production.env');
 
 const ACTING_AS_RENEW_MS = 10 * 60 * 1_000;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -59,6 +70,65 @@ export function stagingTarget({ env, environment = process.env, repoRoot = REPO_
     }
   }
   return { apiOrigin: pinnedOrigin, pinned };
+}
+
+/**
+ * The confirmation of a production run, or null when there is nothing to
+ * refuse: `--env production` needs `--confirm production`, and `--confirm`
+ * names production only. Every tool here asks this before anything else.
+ */
+export function confirmationProblem(env, confirm) {
+  if (env === 'production') {
+    return confirm === 'production'
+      ? null
+      : '--env production needs --confirm production (the explicit confirmation of a production run)';
+  }
+  if (confirm !== undefined && confirm !== null) return '--confirm production belongs to --env production only';
+  return null;
+}
+
+/**
+ * The production target: `--confirm production`, and the API origin of
+ * cloudflare/pinned.production.json, refused while that pin is null. An
+ * explicit CHOPSHOP_API_URL must equal it.
+ */
+export function productionTarget({ confirm, environment = process.env, repoRoot = REPO_ROOT } = {}) {
+  const refusal = confirmationProblem('production', confirm);
+  if (refusal !== null) throw new RefusedError(refusal);
+  const pinnedPath = path.join(repoRoot, 'cloudflare', 'pinned.production.json');
+  if (!existsSync(pinnedPath)) throw new RefusedError('cloudflare/pinned.production.json does not exist');
+  const pinned = JSON.parse(readFileSync(pinnedPath, 'utf8'));
+  const configured = pinned?.origins?.api ?? null;
+  if (configured === null) {
+    throw new RefusedError('cloudflare/pinned.production.json origins.api is null: production has no pinned API origin yet');
+  }
+  let pinnedOrigin;
+  try {
+    pinnedOrigin = new URL(configured).origin;
+  } catch {
+    throw new RefusedError('cloudflare/pinned.production.json origins.api is not a URL');
+  }
+  const explicit = environment.CHOPSHOP_API_URL?.trim();
+  if (explicit) {
+    let url;
+    try {
+      url = new URL(explicit);
+    } catch {
+      throw new RefusedError('CHOPSHOP_API_URL is not a URL');
+    }
+    if (url.origin !== pinnedOrigin) {
+      throw new RefusedError('CHOPSHOP_API_URL is not the pinned production API origin');
+    }
+  }
+  return { apiOrigin: pinnedOrigin, pinned };
+}
+
+/** The target of `--env`: production (with its confirmation) or staging. */
+export function apiTarget({ env, confirm, environment = process.env, repoRoot = REPO_ROOT } = {}) {
+  if (env === 'production') return productionTarget({ confirm, environment, repoRoot });
+  const refusal = confirmationProblem(env, confirm);
+  if (refusal !== null) throw new RefusedError(refusal);
+  return stagingTarget({ env, environment, repoRoot });
 }
 
 /** KEY=VALUE lines (an optional `export `, optional quotes); comments and blanks ignored. */
@@ -104,6 +174,65 @@ export function platformCredentials({ environment = process.env, secretsFile = D
     throw new RefusedError('no platform password: set CHOPSHOP_PLATFORM_PASSWORD or PLATFORM_ADMIN_PASSWORD in the secrets file');
   }
   return { email, password };
+}
+
+function shownPath(filePath) {
+  const home = homedir();
+  return filePath.startsWith(`${home}${path.sep}`) ? `~${filePath.slice(home.length)}` : filePath;
+}
+
+/**
+ * The platform user's credentials for a production run: the names of
+ * platformCredentials(), from the environment or from the production secrets
+ * file, and from nowhere else. The file, when it exists, must be the
+ * production file (not the staging file under another name) and readable by
+ * its owner only (mode 600). CHOPSHOP_SECRETS_FILE, which can point staging's
+ * tools at another file, is refused unless it names this very file.
+ */
+export function productionCredentials({
+  environment = process.env,
+  secretsFile = PRODUCTION_SECRETS_FILE,
+  stagingSecretsFile = DEFAULT_SECRETS_FILE,
+} = {}) {
+  const shown = shownPath(secretsFile);
+  const named = environment.CHOPSHOP_SECRETS_FILE?.trim();
+  if (named && path.resolve(named) !== path.resolve(secretsFile)) {
+    throw new RefusedError(`CHOPSHOP_SECRETS_FILE is set: production reads its credentials only from the environment or ${shown}`);
+  }
+  let file = {};
+  if (existsSync(secretsFile)) {
+    if (existsSync(stagingSecretsFile) && realpathSync(secretsFile) === realpathSync(stagingSecretsFile)) {
+      throw new RefusedError(`${shown} is the staging secrets file: production never reads staging's credentials`);
+    }
+    const mode = statSync(secretsFile).mode & 0o777;
+    if ((mode & 0o077) !== 0) {
+      throw new RefusedError(`${shown} can be read by others (mode ${mode.toString(8)}): chmod 600 it`);
+    }
+    file = parseEnvFile(readFileSync(secretsFile, 'utf8'));
+  }
+  const value = (names) => {
+    for (const name of names) {
+      const fromEnvironment = environment[name]?.trim();
+      if (fromEnvironment) return fromEnvironment;
+    }
+    for (const name of names) {
+      const fromFile = file[name]?.trim();
+      if (fromFile) return fromFile;
+    }
+    return null;
+  };
+  const email = value(['CHOPSHOP_PLATFORM_EMAIL']);
+  const password = value(['CHOPSHOP_PLATFORM_PASSWORD', 'PLATFORM_ADMIN_PASSWORD']);
+  if (email === null) throw new RefusedError(`CHOPSHOP_PLATFORM_EMAIL is not set in the environment or in ${shown}`);
+  if (password === null) {
+    throw new RefusedError(`no production platform password: set CHOPSHOP_PLATFORM_PASSWORD or PLATFORM_ADMIN_PASSWORD in ${shown}`);
+  }
+  return { email, password };
+}
+
+/** The credentials of `--env`: production's or staging's. */
+export function credentialsFor(env, options = {}) {
+  return env === 'production' ? productionCredentials(options) : platformCredentials(options);
 }
 
 function cookiesOf(response) {
@@ -273,13 +402,14 @@ export function createApiSession({
 }
 
 /**
- * /health must say staging and /ready must be on `requiredMigration` or later
- * (a 4-digit prefix). Throws RefusedError otherwise.
+ * /health must say `environment` (staging unless told otherwise) and /ready
+ * must be on `requiredMigration` or later (a 4-digit prefix). Throws
+ * RefusedError otherwise.
  */
-export async function preflight(session, { requiredMigration }) {
+export async function preflight(session, { requiredMigration, environment = 'staging' }) {
   const health = await session.request('GET', '/health', { anonymous: true });
-  if (health.status !== 200 || health.json?.environment !== 'staging') {
-    throw new RefusedError(`/health does not say staging (HTTP ${health.status})`);
+  if (health.status !== 200 || health.json?.environment !== environment) {
+    throw new RefusedError(`/health does not say ${environment} (HTTP ${health.status})`);
   }
   const ready = await session.request('GET', '/ready', { anonymous: true });
   const migration = ready.status === 200 ? String(ready.json?.migration ?? '') : '';

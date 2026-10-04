@@ -7,12 +7,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { runImport } from '../import.mjs';
-import { buildApplyMd, buildTargetState, readPinned, runImportCatalogue, targetQueries } from '../import-catalogue.mjs';
-import { actualQueries, buildActualState, liftedShopGate, runChecks } from '../verify-catalogue.mjs';
+import { buildApplyMd, buildTargetState, productionPinProblems, readPinned, REPO_ROOT, runImportCatalogue, targetQueries } from '../import-catalogue.mjs';
+import { actualQueries, buildActualState, envProblem, liftedShopGate, runChecks } from '../verify-catalogue.mjs';
 import { loadWorkerRules } from '../lib/worker-rules.mjs';
 import { scanForbiddenStatements } from '../lib/sql.mjs';
 import { FIREBASE_STORAGE_HOSTS } from '../lib/scrub.mjs';
@@ -46,10 +47,10 @@ async function setup({ patch = null, statusOf, manifestPatch = null, objectFilte
   return { base, bundleDir, db, emailMapPath, manifest, manifestPath, targetPath };
 }
 
-function readTarget(db, base, name) {
+function readTarget(db, base, name, env = 'staging') {
   const dir = path.join(base, `${name}-queries`);
   mkdirSync(dir, { recursive: true });
-  writeQueryResults(db, targetQueries('staging'), dir);
+  writeQueryResults(db, targetQueries(env), dir);
   const file = path.join(base, `${name}-state.json`);
   writeFileSync(file, JSON.stringify(buildTargetState(dir)));
   return file;
@@ -71,15 +72,198 @@ const objectOf = (manifest, address) => manifest.entries.find((e) => e.shopId ==
 
 // ── refusals ────────────────────────────────────────────────────────────────
 
-test('refuses production: 0033 completes one production run, so the catalogue cannot land there as a second plan', { skip }, async () => {
-  const s = await setup();
+// ── production (CP7-T1) ─────────────────────────────────────────────────────
+
+// Injected, as the tests inject every origin: cloudflare/pinned.production.json
+// is never edited. `https://api.invalid` is the invented manifest's API.
+const PRODUCTION_PINS = Object.freeze({ origins: { api: 'https://api.invalid' }, r2: { publicBaseUrl: 'https://img.example.test' } });
+
+/** The production platform plan applied, the copy's objects in place, the target state read. */
+async function setupProduction({ manifestPatch = null, statusOf } = {}) {
+  const base = tmpDir('cfport-catalogue-prod-');
+  const bundleDir = path.join(base, 'bundle');
+  await buildCatalogueBundle(bundleDir);
+  const cp3 = runImport({ bundleDir, env: 'production' });
+  assert.equal(cp3.ok, true, JSON.stringify(cp3.problems));
+  const db = migratedDb();
+  db.exec(cp3.planText);
+  const manifest = inventCopyManifest(bundleDir, { env: 'production', statusOf });
+  if (manifestPatch) manifestPatch(manifest);
+  const manifestPath = path.join(base, 'copy-manifest.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  insertCopiedObjects(db, manifest);
+  const targetPath = readTarget(db, base, 'target', 'production');
+  return { base, bundleDir, cp3, db, manifest, manifestPath, targetPath };
+}
+
+const runProduction = (s, extra = {}) =>
+  runImportCatalogue({ bundleDir: s.bundleDir, confirm: 'production', copyManifestPath: s.manifestPath, env: 'production', pinned: PRODUCTION_PINS, targetStatePath: s.targetPath, ...extra });
+
+test('production: refused without --confirm production; --confirm belongs to production only', { skip }, async () => {
+  const s = await setupProduction();
   try {
-    const result = await run(s, { env: 'production' });
-    assert.equal(result.ok, false);
-    assert.match(result.problems.join('\n'), /--env must be staging/);
+    for (const confirm of [null, undefined, 'yes', 'staging']) {
+      const result = await runProduction(s, { confirm });
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.problems, ['REFUSED: --env production needs --confirm production (the explicit confirmation of a production run)']);
+    }
+    const staging = await runImportCatalogue({ bundleDir: s.bundleDir, confirm: 'production', copyManifestPath: s.manifestPath, env: 'staging', targetStatePath: s.targetPath });
+    assert.deepEqual(staging.problems, ['REFUSED: --confirm production belongs to --env production only']);
+    assert.deepEqual((await runProduction(s, { env: 'prod' })).problems, ['REFUSED: --env must be staging or production']);
   } finally {
     rmDir(s.base);
   }
+});
+
+test('production: each null pin of cloudflare/pinned.production.json is its own refusal; the CLI reads the real file', { skip }, async () => {
+  const s = await setupProduction();
+  try {
+    assert.deepEqual((await runProduction(s, { pinned: null })).problems, ['REFUSED: cloudflare/pinned.production.json does not exist']);
+    assert.deepEqual((await runProduction(s, { pinned: { ...PRODUCTION_PINS, origins: { api: null } } })).problems, [
+      'REFUSED: cloudflare/pinned.production.json origins.api is null: the copy manifest cannot be checked against the production API',
+    ]);
+    assert.deepEqual((await runProduction(s, { pinned: { ...PRODUCTION_PINS, r2: { publicBaseUrl: null } } })).problems, [
+      'REFUSED: cloudflare/pinned.production.json r2.publicBaseUrl is null: a page image would have no public address',
+    ]);
+    // Without an injected pin the file itself is read (never written): whatever it lacks today is refused.
+    const today = productionPinProblems(readPinned('production'));
+    if (today.length > 0) {
+      const result = await runImportCatalogue({ bundleDir: s.bundleDir, confirm: 'production', copyManifestPath: s.manifestPath, env: 'production', targetStatePath: s.targetPath });
+      assert.deepEqual(result.problems, today);
+    }
+  } finally {
+    rmDir(s.base);
+  }
+});
+
+test('production: --email-map and --scrub-unmapped are staging options', { skip }, async () => {
+  const s = await setupProduction();
+  try {
+    assert.match((await runProduction(s, { scrubUnmapped: true })).problems.join('\n'), /--scrub-unmapped is a staging option/);
+    assert.match((await runProduction(s, { emailMapPath: s.manifestPath })).problems.join('\n'), /--email-map is a staging option/);
+  } finally {
+    rmDir(s.base);
+  }
+});
+
+test('production: the copy manifest must be of production, of the pinned API, without a failed file, and cover every file', { skip }, async () => {
+  const s = await setupProduction();
+  try {
+    const manifest = JSON.parse(readFileSync(s.manifestPath, 'utf8'));
+    const refused = async (patched, pattern) => {
+      writeFileSync(s.manifestPath, JSON.stringify(patched));
+      const result = await runProduction(s);
+      assert.equal(result.ok, false);
+      assert.match(result.problems.join('\n'), pattern);
+    };
+    await refused({ ...manifest, env: 'staging' }, /the copy manifest is of staging, not production/);
+    await refused({ ...manifest, apiOrigin: 'https://chopshop-api-stg.example.test' }, /written against another API than the pinned production API/);
+    const failed = structuredClone(manifest);
+    Object.assign(failed.entries.find((e) => e.use === 'product_image' && e.status === 'copied'), { contentType: null, objectId: null, reason: 'timeout', sha256: null, sizeBytes: 0, status: 'failed' });
+    await refused(failed, /the copy manifest holds 1 failed file\(s\): run storage-copy\.mjs again until none is failed/);
+    await refused({ ...manifest, entries: manifest.entries.slice(1) }, /1 file\(s\) of the export have no entry in the copy manifest/);
+    writeFileSync(s.manifestPath, JSON.stringify(manifest));
+    const ok = await runProduction(s);
+    assert.equal(ok.ok, true, JSON.stringify(ok.problems));
+    // A refused or missing file is a final result of the copy: the plan is made without it.
+    const missing = structuredClone(manifest);
+    Object.assign(missing.entries.find((e) => e.use === 'product_image'), { contentType: null, objectId: null, reason: 'http_404', sha256: null, sizeBytes: 0, status: 'missing' });
+    writeFileSync(s.manifestPath, JSON.stringify(missing));
+    assert.equal((await runProduction(s)).ok, true);
+  } finally {
+    rmDir(s.base);
+  }
+});
+
+test('production: the target must hold the completed platform run of this export, and no completed catalogue run', { skip }, async () => {
+  const s = await setupProduction();
+  try {
+    const state = JSON.parse(readFileSync(s.targetPath, 'utf8'));
+    const noRun = path.join(s.base, 'no-run.json');
+    writeFileSync(noRun, JSON.stringify({ ...state, importRuns: [] }));
+    assert.match((await runProduction(s, { targetStatePath: noRun })).problems.join('\n'), /no completed CP3 import run of this bundle: apply CP3 first/);
+    const other = path.join(s.base, 'other-export.json');
+    writeFileSync(other, JSON.stringify({ ...state, importRuns: state.importRuns.map((r) => ({ ...r, bundleSha: 'f'.repeat(64) })) }));
+    assert.match((await runProduction(s, { targetStatePath: other })).problems.join('\n'), /no completed CP3 import run of this bundle/);
+    // A completed catalogue run of ANY export: production imports its catalogue once.
+    const done = path.join(s.base, 'catalogue-done.json');
+    writeFileSync(done, JSON.stringify({ ...state, importRuns: [...state.importRuns, { bundleSha: 'f'.repeat(64), env: 'production', runId: 'catalogue_production_x', status: 'completed' }] }));
+    const result = await runProduction(s, { targetStatePath: done });
+    assert.deepEqual(result.problems.filter((p) => /catalogue run/.test(p)), ['REFUSED: production already holds a completed catalogue run: the catalogue is imported once (0052)']);
+  } finally {
+    rmDir(s.base);
+  }
+});
+
+test('production: the plan names its kind, applies after the platform run, verifies, and is refused a second time', { skip }, async () => {
+  const s = await setupProduction();
+  try {
+    const result = await runProduction(s);
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    assert.match(result.runId, /^catalogue_production_[0-9a-f]{16}_[0-9a-f]{16}$/);
+    assert.equal(result.planJson.kind, 'catalogue');
+    assert.equal(result.planJson.env, 'production');
+    const first = result.planText.split('\n').find((line) => line.startsWith('INSERT INTO import_runs'));
+    assert.match(first, /^INSERT INTO import_runs \(run_id, env, kind, bundle_sha,/);
+    assert.ok(first.includes("'production', 'catalogue', "));
+    assert.equal(result.planText.includes('shopowner@example.com'), true, 'production carries an address inside a text as it is');
+    assert.match(buildApplyMd({ env: 'production', planSha: result.planSha, runId: result.runId }), /verify-catalogue\.mjs --env production --confirm production --bundle/);
+
+    s.db.exec(result.planText);
+    assert.deepEqual(all(s.db, 'SELECT kind, status FROM import_runs ORDER BY kind').map((r) => ({ ...r })), [
+      { kind: 'catalogue', status: 'completed' },
+      { kind: 'platform', status: 'completed' },
+    ]);
+    const checks = runChecks({ actualState: readActual(s.db, s.base), bundleVerified: true, planJson: result.planJson, rules });
+    assert.deepEqual(checks.filter((c) => !c.ok), []);
+    // A shop that is not live yet: production says what makes it live, not staging's review step.
+    s.db.exec("UPDATE tenants SET published = 0 WHERE tenant_id = 'test-shop-a';");
+    const hidden = runChecks({ actualState: readActual(s.db, s.base, 'hidden'), bundleVerified: true, planJson: result.planJson, rules });
+    assert.deepEqual(hidden.filter((c) => !c.ok), []);
+    assert.match(hidden.find((c) => c.name === 'public test-shop-a: the projection now (the shop is not live yet)').note, /adopted the legal pages.*CP7 runbook/);
+
+    // The same file again: refused by its first statement.
+    assert.throws(() => s.db.exec(result.planText), /an import run starts running, once, one at a time/);
+    // A new plan read from the target after the apply: refused by the tool.
+    const after = readTarget(s.db, s.base, 'after', 'production');
+    const again = await runProduction(s, { targetStatePath: after });
+    assert.equal(again.ok, false);
+    assert.match(again.problems.join('\n'), /production already holds a completed catalogue run/);
+  } finally {
+    rmDir(s.base);
+  }
+});
+
+test('the CLIs: production needs --confirm production, for the queries and for the run alike', () => {
+  const MIGRATE = path.join(REPO_ROOT, 'scripts', 'cf-port', 'migrate');
+  const cli = (tool, ...args) => spawnSync(process.execPath, [path.join(MIGRATE, tool), ...args], { encoding: 'utf8' });
+  const confirmRefusal = /REFUSED: --env production needs --confirm production/;
+  for (const [tool, label] of [['import-catalogue.mjs', 'IMPORT-CATALOGUE'], ['verify-catalogue.mjs', 'VERIFY-CATALOGUE']]) {
+    const queries = cli(tool, '--print-queries', '--env', 'production');
+    assert.equal(queries.status, 1, `${tool}: ${queries.stderr}`);
+    assert.match(queries.stderr, new RegExp(`${label} REFUSED: --env production needs --confirm production`));
+    const confirmed = cli(tool, '--print-queries', '--env', 'production', '--confirm', 'production');
+    assert.equal(confirmed.status, 0, `${tool}: ${confirmed.stderr}`);
+    assert.match(confirmed.stdout, /scripts\/cf-preflight\.sh production -- d1 execute chopshop-prod --remote --json/);
+    const staging = cli(tool, '--print-queries', '--env', 'staging', '--confirm', 'production');
+    assert.equal(staging.status, 1);
+    assert.match(staging.stderr, /--confirm production belongs to --env production only/);
+  }
+  const verifyRun = cli('verify-catalogue.mjs', '--env', 'production', '--bundle', '/nonexistent', '--plan', '/nonexistent', '--actual-state', '/nonexistent');
+  assert.equal(verifyRun.status, 1);
+  assert.match(verifyRun.stderr, confirmRefusal);
+  const importRun = cli('import-catalogue.mjs', '--env', 'production', '--bundle', '/nonexistent', '--copy-manifest', '/nonexistent', '--target-state', '/nonexistent', '--out', '/nonexistent-out');
+  assert.equal(importRun.status, 1);
+  assert.match(importRun.stdout, confirmRefusal);
+});
+
+test('verify-catalogue: --env production needs --confirm production; --confirm belongs to production only', () => {
+  assert.equal(envProblem('staging', null), null);
+  assert.equal(envProblem('production', 'production'), null);
+  assert.equal(envProblem('production', null), '--env production needs --confirm production (the explicit confirmation of a production run)');
+  assert.equal(envProblem('staging', 'production'), '--confirm production belongs to --env production only');
+  assert.equal(envProblem('prod', 'production'), '--env must be staging or production');
+  assert.equal(envProblem(null, null), '--env must be staging or production');
 });
 
 test('refuses without a target state, and a target without CP3\'s completed run of this bundle', { skip }, async () => {

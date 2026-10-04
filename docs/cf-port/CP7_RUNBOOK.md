@@ -79,7 +79,7 @@ Nothing in Firebase is deleted. It becomes a read-only archive (§9), and any de
 
 **Point of no return: the first order created on Cloudflare.** That is the smoke purchase in §7.3, or a buyer's order if the shop opens before it.
 - **Until then:** the rollback in §8.1 brings Firebase back.
-- **After it:** forward-fix only (§8.2). The importer refuses a second import once orders exist (`MIGRATION_MANIFEST.md` §d P2, P7). Migration 0033 refuses a second completed production import run in any case.
+- **After it:** forward-fix only (§8.2). Migration 0052 refuses every production import run once production holds an order, a payment event or a checkout (`MIGRATION_MANIFEST.md` §d P2, P7), and a second completed run of either kind (platform, catalogue) in any case.
 
 **Go/no-go list.** Every line must be "yes" before §4 starts. Mikael ticks it in the cutover log.
 
@@ -467,21 +467,22 @@ scripts/cf-preflight.sh production --bootstrap -- d1 execute chopshop-prod --rem
 | `verify-catalogue.mjs` | **41 PASS, 0 FAIL**. melodie-mc shows 6 public products now, because it is published in the source; the other three show 0 until published |
 | The catalogue plan applied again | refused |
 | Local times | migrations 0.5 s · CP3 plan 0.2 s · apply 0.9 s · verify 0.2 s · catalogue plan 1.1 s · apply 4.9 s · verify 0.5 s |
-| **The second production run** (`import-once-check.mjs` beside the driver; an in-memory database; no tool run) | a first `env='production'` run is completed, then a second one is inserted: **refused, "an import run starts running, once, one at a time"** (0033). This is blocker 3, proven |
+| **The second production run** (`import-once-check.mjs` beside the driver; an in-memory database; no tool run) | a first `env='production'` run is completed, then a second one is inserted: **refused, "an import run starts running, once, one at a time"** (0033). This was blocker 3; migration 0052 closes it (§3.5) |
 | `node --test "scripts/cf-port/migrate/test/*.test.mjs"` | **454 pass, 0 fail** |
 
 The staging run imported **684** images, not 709: 21 files were missing at the source (sillmans, 404), and the invented manifest marks every file as copied. Staging's catalogue plan therefore had 4 838 statements.
 
-### 3.3 What the rehearsal does not prove
+### 3.3 What the rehearsals do not prove
 
-- **The production-mode plan.** It was not built: the brief forbade `--env production`, even offline. What production mode changes, read from the code:
-  - addresses are carried as they are, and `--email-map` / `--scrub-unmapped` are refused (`lib/scrub.mjs:68-84`);
+- **§3.2 is staging mode.** The production-mode plans were rehearsed afterwards (§3.5). What production mode changes, read from the code:
+  - addresses are carried as they are, and `--email-map` / `--scrub-unmapped` are refused (`lib/scrub.mjs:68-84`; the catalogue too since CP7-T1);
   - live Connect ids and flags are carried **verbatim** (`lib/scrub.mjs:205-207`);
   - `snapwear` is imported **active** and is the default printer (`lib/transform-printers.mjs`, `lib/transform-print-defaults.mjs`; D59, D66);
   - melodie-mc's commission **refuses the plan** unless `--commission-default-for melodie-mc` is passed (`lib/transform-shops.mjs:192`; D75).
 - D1's own limits. Only a real D1 shows them.
-- The file copy, studio assets, legal steps, re-screen, printer apply and Connect refresh. All of them go through the Worker.
-- **The combined production run** (blocker 3). No tool exists for it yet.
+- **The Worker.** §3.5 runs the copy against the repository's fake API (`scripts/cf-port/migrate/test/fake-staging-api.mjs`), not a Worker, and every source file is answered by the driver itself, never fetched. The studio assets, the legal steps, the re-screen, the printer apply and the Connect refresh go through the Worker and are not rehearsed offline.
+- **The real pins.** §3.5 injects `origins.api` and `r2.publicBaseUrl` into the run (a temporary copy of the pinned file outside the repository). The real `cloudflare/pinned.production.json` has `r2.publicBaseUrl` null today, so the catalogue's command refuses (blocker 16), and its `origins.api` host has no address (blocker 2).
+- The bootstrap adoption of decision 1.11 (blocker 19).
 
 ### 3.4 To repeat it with a fresh export — LOCAL after the export
 
@@ -506,7 +507,40 @@ The staging run imported **684** images, not 709: 21 files were missing at the s
    - the counts differ from §3.2 only by what changed in the source since 2026-09-27 (new products, new users), and each difference is explained.
 
    The number of checks may grow with the data. The rule is zero FAIL.
-5. **Once blocker 3 is built:** the same driver with `--env production --commission-default-for melodie-mc`. That is still offline, but it is a script with `--env production`, so ask Mikael first. Also rehearse the bootstrap adoption of decision 1.11: insert a platform admin with the operator's address into the scratch database before the target-state queries, and check that the plan adopts it (blocker 19).
+5. **Production mode** (§3.5): copy `~/chopshop-export/rehearsal-cp7t1-2026-10-04/rehearse-cp7t1.mjs` into a new `~/chopshop-export/rehearsal-cp7t1-<date>/`, set `B` and `R` at its top, and run `node rehearse-cp7t1.mjs | tee run.txt`. It is offline, but it runs scripts with `--env production`, so ask Mikael first.
+   - **"Passed" means:** in section 0 every command ends in a `REFUSED` line, except the `--dry-run`, which exits 0; `import.mjs` exits 0 and `verify.mjs` reports 0 FAIL; the copy is refused before the platform import (3a) and exits 0 after it with every entry `copied` (3b); `import-catalogue.mjs` is `ok true`; `verify-catalogue.mjs` reports 0 FAIL; every line of section 5 says `REFUSED`, each with the sentence §3.5 shows.
+   - Also rehearse the bootstrap adoption of decision 1.11: insert a platform admin with the operator's address into the scratch database before the target-state queries, and check that the plan adopts it (blocker 19).
+
+### 3.5 Run 2026-10-04, production mode (CP7-T1) — the result
+
+**Driver:** `~/chopshop-export/rehearsal-cp7t1-2026-10-04/rehearse-cp7t1.mjs`, outside the repository; its output is `run.txt` and `logs/` beside it. It calls the repository's command-line tools where they can run offline, and their run functions in process where a pin must be injected. Nothing reaches a real host:
+- the commands that read the real `cloudflare/pinned.production.json` run with an empty `HOME` and no credentials, and each refuses before any request (or is a `--dry-run`);
+- the copy runs against the fake API on 127.0.0.1 with `/health` saying production and `/ready` on 0052. Its production target is built by `productionTarget()` from a temporary repository root that holds a pinned file with the fake's origin, and its credentials by `productionCredentials()` from a mode-600 production secrets file of the fake's invented user. Every source file is answered by the driver (a PNG made from the address), and `fetch` refuses any address but the fake's.
+- **Bundle:** `~/chopshop-export/export-2026-09-27T15-02-15.414Z`. **Target:** a fresh, empty `scratch.sqlite` with every migration.
+
+| Step | Result |
+|---|---|
+| Migrations | 50 applied: `0001` … `0052`, without `0020` and `0047` |
+| The commands on the real pinned file | `storage-copy.mjs` and `import-studio-assets.mjs` without `--confirm`: exit 2, `--env production needs --confirm production (the explicit confirmation of a production run)`. `storage-copy.mjs` with `CHOPSHOP_API_URL=http://127.0.0.1:9`: exit 2, `CHOPSHOP_API_URL is not the pinned production API origin`. Both with `--confirm production` and no production secrets file: exit 2, `CHOPSHOP_PLATFORM_EMAIL is not set in the environment or in ~/.config/chopshop/secrets.production.env`. `import-catalogue.mjs` without `--confirm`: exit 1, the same confirmation sentence; with it: exit 1, `cloudflare/pinned.production.json r2.publicBaseUrl is null: a page image would have no public address`. `verify-catalogue.mjs` without `--confirm`: exit 1, the confirmation sentence |
+| `storage-copy.mjs --dry-run` (production, no request) | exit 0; 524 distinct files; `not of the source's storage (never copied): robowatz/branding 1`; `archived shops (D21, not imported), files not copied: none` |
+| `import.mjs --env production --commission-default-for melodie-mc` | exit 0; 864 statements; 287 109 bytes; plan sha256 `a9cabd60eba8…`. Tenants with domains, settings and features 18 rows · users, accounts, identities, memberships, id map 13 · printers, tiers, catalogue 325 · print defaults 1 · pod profiles 8 · screening terms and settings 65 · platform defaults 1 · legal acceptances 0 · audit events 0 |
+| Apply, then `verify.mjs --env production` | no statement refused; **16 PASS, 0 FAIL, 9 DEFERRED** |
+| The copy before the platform import is on the API | refused before any file was read: `the platform import is not applied: gif-sundsvall, melodie-mc, ninetone, sillmans are not a tenant on the API (apply import.mjs's plan first; the copy acts as each shop)` |
+| The copy after it | exit 0; manifest `env` production; 524 entries, **524 copied**; 524 objects, all active; 1 063 API requests; 4 acting-as grants, each with the cutover's reason; 0 objects shared (the driver answers distinct bytes per address; staging shared 23) |
+| `import-catalogue.mjs --env production --confirm production` (pins injected) | ok; 4 888 statements; 1 683 472 bytes; plan sha256 `a17e6f75b150…`; the first statement names kind `catalogue`. Products 217, variants 971, tags 26, images 709, publications 205, screening 205, collections 19, members 86, pages 1, store identities 4. Public: 205 in the source, 6 POD, **199 once every shop is live** (gif-sundsvall 113, melodie-mc 6, ninetone 58, sillmans 22) |
+| Apply, then `verify-catalogue.mjs --env production --confirm production` | no statement refused; **41 PASS, 0 FAIL**. `import_runs`: one completed `platform` run, one completed `catalogue` run |
+| The catalogue plan again (the same file) | refused: `an import run starts running, once, one at a time` |
+| A catalogue plan rebuilt from the target after the apply | refused by the tool: `production already holds a completed catalogue run: the catalogue is imported once (0052)`, and every row it would write is already there |
+| A second catalogue plan with another run id, applied | refused by the database: `an import run starts running, once, one at a time` |
+| The platform plan again (the same file) | refused: `an import run starts running, once, one at a time` |
+| A second platform plan with another run id, applied | refused by the database: `an import run starts running, once, one at a time` |
+| The catalogue plan on a database without the platform run | refused: `the catalogue is imported after the platform import of the same export` |
+| The catalogue plan once an order exists (after the platform import) | refused: `production holds orders: nothing is imported after the first order` |
+| The platform plan once a payment event exists | refused: the same sentence |
+| Rows at the end | tenants 4, users 3, identities 3, printers 1, products 217, variants 971, images 709, collections 19, pages 1, stored objects 524, orders 0 |
+| Local times | migrations 0.4 s · CP3 plan 0.1 s · apply 0.3 s · verify 0.1 s · copy 1.0 s · catalogue plan 0.2 s · apply 2.3 s · verify 0.2 s |
+
+The 709 images (not staging's 684) are because the driver answers every file; production's copy will report the 21 files the source no longer holds as `missing`, and the catalogue then writes 684 images, as on staging.
 
 ---
 
@@ -659,13 +693,13 @@ Each step below names the tool's state in production **today**. Where a tool ref
 | Tool | Production today | Before the cutover |
 |---|---|---|
 | `scripts/cf-port/migrate/export.mjs` | reads production by design; read-only (`:15-20`, test `no-write-calls.test.mjs`) | run from a clean tree; P3 is proven with a double export (§5.2) |
-| `import.mjs` | **accepts** `--env production` (`:108`). Refuses the staging scrub options there. Needs `--commission-default-for melodie-mc`. Does **not** check the manifest's P1 (`--confirm`, `--expect-tenants`), P3 (freeze evidence), P4 (open payments) or P5 (re-pull Connect flags) | the combined run (blocker 3); P1/P3/P4/P5 by hand (blocker 9) |
+| `import.mjs` | **accepts** `--env production` (`:108`). Refuses the staging scrub options there. Needs `--commission-default-for melodie-mc`. Its plan is the production **platform** run (0052: one per kind). Does **not** check the manifest's P1 (`--confirm`, `--expect-tenants`), P3 (freeze evidence), P4 (open payments) or P5 (re-pull Connect flags) | P1/P3/P4/P5 by hand (blocker 9) |
 | `state-from-queries.mjs` | prints production queries **without `--bootstrap`**, so they are launch-gated (`:113`) | add `--bootstrap` by hand, or fix (blocker 11) |
 | `verify.mjs` | accepts production; expects `snapwear` active and the default printer, and 2 platform admins plus 1 shop admin (`:63-64, 123-125`); leaves 9 items DEFERRED | check the deferred items by hand (§5.9; blocker 10) |
-| `storage-copy.mjs` | **REFUSES** production (`lib/api-session.mjs:45`; staging origin pinned) | production mode (blocker 4) |
-| `import-catalogue.mjs` | **REFUSES** production (`:300-302`), and 0033 would refuse its run anyway | the combined run (blocker 3) |
-| `verify-catalogue.mjs` | **REFUSES** production (`:275, 294`) | production mode (blocker 5) |
-| `import-studio-assets.mjs` | **REFUSES** production (`:41, 101`; `api-session.mjs:45`) | production mode, needed only for the studio and POD (blocker 6) |
+| `storage-copy.mjs` | **production mode** (CP7-T1): `--env production --confirm production`; the API origin of the pinned file; credentials from the environment or `~/.config/chopshop/secrets.production.env` only; refuses a shop that is not yet a tenant (§5.5) | the address of the production API (blocker 2) and the production secrets file |
+| `import-catalogue.mjs` | **production mode** (CP7-T1): `--confirm production`; its plan is the production **catalogue** run (0052); refuses while `r2.publicBaseUrl` is null (§5.6) | `r2.publicBaseUrl` pinned (blocker 16) |
+| `verify-catalogue.mjs` | **production mode** (CP7-T1): `--confirm production`, for the queries and the checks (§5.6) | none |
+| `import-studio-assets.mjs` | **production mode** (CP7-T1): as `storage-copy.mjs` (§5.11); needed only for the studio and POD | the address of the production API (blocker 2) and the production secrets file |
 | `staging-legal.mjs` | **REFUSES** production by design: the seller adopts the pages himself (`:5-6`) | only its step (a), the archived terms text, is needed in production (blocker 7) |
 | `reconcile-staging.mjs` | **REFUSES** a non-staging origin or a non-sandbox account (`:82-83, 198-199`) | production mode (blocker 8) |
 | `restore-archive.mjs` | **REFUSES** production (`:119-128`) | after the cutover only |
@@ -728,7 +762,7 @@ node scripts/cf-port/build-locales.mjs --bundle "$B" --out $W/locales && diff -r
 
    - **Expect** (§3.2 and staging): about 864 statements, about 286 KB; 4 tenants (gif-sundsvall, melodie-mc, ninetone, sillmans; robowatz is archived, D21); 2 platform admins and 1 shop admin (melodie-mc), with the operator's admin **adopted**, not created (1.11); `snapwear` with 323 article tiers; 63 screening terms; 8 POD profiles.
    - **If it refuses:** read every `REFUSED:` line. A commission, an unknown address or a collision means stop and ask.
-   - **Not today:** this plan alone would be the one completed production run, and the catalogue could then never land (blocker 3). Run this step only in the shape blocker 3 decides.
+   - This plan is the production **platform** run. Migration 0052 lets production complete one run of each kind, so the catalogue (§5.6) is the second run, of kind `catalogue` (blocker 3, closed).
 3. **Apply.** NEEDS MIKAEL'S GO:
 
    ```
@@ -757,37 +791,124 @@ node scripts/cf-port/build-locales.mjs --bundle "$B" --out $W/locales && diff -r
      - #15 status, published and `pod` equal to the plan;
      - #17 the bundle verifies.
 
-### 5.5 The file copy — NEEDS MIKAEL'S GO — **REFUSES production today (blocker 4)**
+### 5.5 The file copy — NEEDS MIKAEL'S GO
 
-**The shape it must take:**
-```
-node scripts/cf-port/migrate/storage-copy.mjs --env production --bundle "$B" --out $W/copy
-```
 It runs as the platform user, acting as each shop, through the Worker's object routes. It downloads from the source's storage, which stays readable because nothing in Firebase is deleted.
 
-- **Expect** (staging, 2026-09-28, `$HOME/chopshop-export/copy-staging-2026-09-28/run-1.log`):
-  - 524 distinct files: **503 copied, 21 missing** (sillmans product images the source no longer holds, 404), 0 refused, 0 failed;
-  - 480 objects (23 files identical to another of the same shop);
-  - about 309 MB;
-  - 969 API requests;
-  - about 7 minutes.
-- **Read one back:** fetch a copied file from the public address; its size and sha256 must equal the manifest entry.
-- **Known:** the sign-in of `lib/api-session.mjs` must wait out a 429 from the sign-in rate limit (HANDOVER 2026-09-28: two shops failed in one run and passed when run alone).
+**Before it.** The tool checks each of these and refuses with its own sentence (exit 2) before it copies anything:
+- §5.4 is applied: every shop of the export is a tenant on the API. The copy acts as each shop.
+- The production API answers `/health` with `production`, and `/ready` is on `0052_import_run_kinds.sql` or later (the catalogue that follows needs 0052).
+- `cloudflare/pinned.production.json` `origins.api` is the production API's address. Today it is the workers.dev host, which has no address in production (blocker 2).
+- `~/.config/chopshop/secrets.production.env` exists with mode 600 and holds `CHOPSHOP_PLATFORM_EMAIL` and `PLATFORM_ADMIN_PASSWORD` (or `CHOPSHOP_PLATFORM_PASSWORD`) of the production platform admin (decision 1.11). The same names in the environment win over the file. The staging file is never read. `CHOPSHOP_SECRETS_FILE` must be unset, or name that same file.
+- `$W/copy` is a new directory. A manifest written for staging, or for another API, is refused there.
 
-### 5.6 The catalogue — NEEDS MIKAEL'S GO — **REFUSES production today (blocker 3)**
+1. **Dry run** (LOCAL; it makes no request and writes nothing):
 
-**Staging's sequence** (`CP4_S2_REPORT.md` §9):
-1. bookmark;
-2. catalogue target queries;
-3. `import-catalogue.mjs --env … --bundle "$B" --copy-manifest $W/copy/copy-manifest.json --target-state … --out $W/catalogue-plan`;
-4. apply through the preflight;
-5. re-screen (§5.7);
-6. verify.
+   ```
+   node scripts/cf-port/migrate/storage-copy.mjs --env production --confirm production --bundle "$B" --out $W/copy --dry-run
+   ```
 
-- **Expect** (staging):
-  - 4 838 statements, about 1.67 MB, applied first try;
-  - 217 products, 971 variants, 26 tags, 684 images, 205 publications, 205 screening rows, 19 collections with 86 members, 1 page, 4 store identities.
-- **Once all four shops are live, the public projection is 199:** gif-sundsvall 113, ninetone 58, sillmans 22, melodie-mc 6. Only melodie-mc is published in the source, so production shows **6** at first.
+   - **Expect** (rehearsal, §3.5): `sources: 524 distinct files (shop, address)`, then files and references per shop and use, `not of the source's storage (never copied): robowatz/branding 1`, `archived shops (D21, not imported), files not copied: none`, `dry run: no request made, nothing written`, exit 0.
+
+2. **The copy.** NEEDS MIKAEL'S GO:
+
+   ```
+   node scripts/cf-port/migrate/storage-copy.mjs --env production --confirm production --bundle "$B" --out $W/copy | tee $W/copy.log
+   ```
+
+   - **Expect:** the dry run's lines, then `signed in as the platform user`, `every shop of the run is a tenant on the API`, a count every 25 files, `result (per shop and use):`, `API requests: …; waits on 429: …`, `manifest: copy-manifest.json in --out (524 entries, 0 failed)`, exit 0.
+   - **Expect** (staging, 2026-09-28, `$HOME/chopshop-export/copy-staging-2026-09-28/run-1.log`):
+     - 524 distinct files: **503 copied, 21 missing** (sillmans product images the source no longer holds, 404), 0 refused, 0 failed;
+     - 480 objects (23 files identical to another of the same shop);
+     - about 309 MB;
+     - 969 API requests;
+     - about 7 minutes.
+   - **Exit 1** means some files are `failed` (a timeout or a 5xx, after three tries). Run the same command again: it skips every file already copied and tries the rest. Repeat until the last line says `0 failed`. The catalogue plan refuses a manifest that holds a failed file. `missing` and `refused` are final results; the catalogue is written without those images.
+   - **Exit 2** is a refusal. Nothing was copied. Each sentence names its cause:
+     - `--env production needs --confirm production (the explicit confirmation of a production run)`;
+     - `cloudflare/pinned.production.json origins.api is null: production has no pinned API origin yet`;
+     - `CHOPSHOP_API_URL is not the pinned production API origin`;
+     - `CHOPSHOP_SECRETS_FILE is set: production reads its credentials only from the environment or ~/.config/chopshop/secrets.production.env`;
+     - `~/.config/chopshop/secrets.production.env is the staging secrets file: production never reads staging's credentials`;
+     - `~/.config/chopshop/secrets.production.env can be read by others (mode 644): chmod 600 it`;
+     - `CHOPSHOP_PLATFORM_EMAIL is not set in the environment or in ~/.config/chopshop/secrets.production.env`, or `no production platform password: …`;
+     - `/health does not say production (HTTP …)`, or `/ready is not on migration 0052 or later (HTTP …)`;
+     - `sign-in failed: HTTP …`;
+     - `the platform import is not applied: <shops> is/are not a tenant on the API (apply import.mjs's plan first; the copy acts as each shop)`;
+     - `the manifest in --out was written for another environment or API`, or `… from another bundle`.
+   - **The rate limit:** the sign-in and every request wait out a 429 (`Retry-After`, at most five waits; `lib/api-session.mjs`, since `2c154012`). HANDOVER 2026-09-28 found `staging-legal.mjs` failing two shops on the sign-in's limit; the wait is proven by test for a production copy (`test/storage-copy.test.mjs`).
+   - **Read one back:** fetch a copied file from the public address; its size and sha256 must equal the manifest entry. The public address needs `r2.publicBaseUrl` (blocker 16).
+   - **Undo:** restore D1 to the §5.1 bookmark: that removes the `stored_objects` rows. The files stay in `chopshop-prod-public` under `shops/<tenant>/…`, named by no row. No tool deletes them (not needed for a rollback; **not verified** how to remove them).
+
+### 5.6 The catalogue — NEEDS MIKAEL'S GO
+
+The plan is the production run of kind `catalogue` (migration 0052). It is additive to §5.4 and names objects only from §5.5's manifest.
+
+**Before it.** `import-catalogue.mjs` refuses (exit 1, `▸ REFUSED — problems found`, one `! REFUSED: …` line each) unless:
+- `--confirm production` is given;
+- `cloudflare/pinned.production.json` has `origins.api` and `r2.publicBaseUrl`. **Today `r2.publicBaseUrl` is null, so the command refuses** (blocker 16): a page image is written as its public address;
+- `--email-map` and `--scrub-unmapped` are absent (production carries every address as it is);
+- the copy manifest is of production, was written against the pinned API, holds no `failed` file, and has an entry for every file of the four shops (the copy ran without `--shop` and `--limit`);
+- the target holds the completed platform run of this export (§5.4) and no completed catalogue run at all.
+
+1. **Bookmark.** NEEDS MIKAEL'S GO:
+
+   ```
+   scripts/cf-preflight.sh production --bootstrap -- d1 time-travel info chopshop-prod > $W/bookmark-before-catalogue.txt
+   ```
+
+2. **Target state** (READ-ONLY on production), after the copy:
+
+   ```
+   node scripts/cf-port/migrate/import-catalogue.mjs --print-queries --env production --confirm production
+   ```
+
+   Run each printed command **with `--bootstrap` added after `production`** (blocker 11), into `$W/q-cat-target/<name>.json`. Then:
+
+   ```
+   node scripts/cf-port/migrate/import-catalogue.mjs --state-from $W/q-cat-target --state-out $W/catalogue-target-state.json
+   ```
+
+3. **Plan** (LOCAL):
+
+   ```
+   node scripts/cf-port/migrate/import-catalogue.mjs --env production --confirm production --bundle "$B" --copy-manifest $W/copy/copy-manifest.json --target-state $W/catalogue-target-state.json --out $W/catalogue-plan
+   ```
+
+   - **Expect** (rehearsal, §3.5, every file copied): 4 888 statements, about 1.68 MB; 217 products, 971 variants, 26 tags, 709 images, 205 publications, 205 screening rows, 19 collections with 86 members, 1 page, 4 store identities. With the 21 files the source no longer holds `missing`, the images are 684 and the statements 4 838, as on staging (2026-09-28, applied first try).
+   - `$W/catalogue-plan/apply.md` names the run id and the kind.
+
+4. **Apply.** NEEDS MIKAEL'S GO:
+
+   ```
+   scripts/cf-preflight.sh production --bootstrap -- d1 execute chopshop-prod --remote --file=$W/catalogue-plan/plan.sql
+   ```
+
+   - **Expect:** success with no error.
+   - **The database refuses the plan's first statement** (0052), and so nothing is written, when:
+     - a catalogue run has already completed, or another run is in flight: `an import run starts running, once, one at a time`;
+     - the platform run of the same export has not completed: `the catalogue is imported after the platform import of the same export`;
+     - production holds an order, a payment event or a checkout: `production holds orders: nothing is imported after the first order`.
+   - **If it stops halfway:** `apply.md` §2 says how to complete the same run.
+   - **Undo:** restore to the step 1 bookmark.
+
+5. **Re-screen at once** (§5.7).
+
+6. **Verify** (READ-ONLY, then LOCAL):
+
+   ```
+   node scripts/cf-port/migrate/verify-catalogue.mjs --print-queries --env production --confirm production
+   ```
+
+   Run each printed command with `--bootstrap` added after `production`, into `$W/q-cat-actual/<name>.json`. Then:
+
+   ```
+   node scripts/cf-port/migrate/verify-catalogue.mjs --state-from $W/q-cat-actual --state-out $W/catalogue-actual-state.json
+   node scripts/cf-port/migrate/verify-catalogue.mjs --env production --confirm production --bundle "$B" --plan $W/catalogue-plan --actual-state $W/catalogue-actual-state.json | tee $W/verify-catalogue.txt
+   ```
+
+   - **Expect:** `PASS: 41 checks, nothing failed` (the rehearsal's count; it grows with the data). The rule is zero FAIL.
+   - **Once all four shops are live, the public projection is 199:** gif-sundsvall 113, ninetone 58, sillmans 22, melodie-mc 6. Only melodie-mc is published in the source, so production shows **6** at first. A shop that is not live yet is PASS with 0, and its note says what makes it live (§6.5, §6.6).
 
 ### 5.7 Re-screen at once — NEEDS MIKAEL'S GO
 
@@ -852,14 +973,28 @@ Run each query through `scripts/cf-preflight.sh production --bootstrap -- d1 exe
   - 15 are duplicate colour groups on "The Return": one variant per printer article per product (`cloudflare/migrations/0023_pod_printers_mappings.sql:149`, `UNIQUE (product_id, artwork_id, printer_id, sku)`).
 - The garment (unisex tee, model 64000) and the colour table were **assumed** on staging and need Kent's confirmation (decision 1.6).
 
-### 5.11 Studio assets — NEEDS MIKAEL'S GO — **REFUSES production today (blocker 6)**; needed only for the studio
+### 5.11 Studio assets — NEEDS MIKAEL'S GO — needed only for the studio
 
-The shape is `CP5_WH_REPORT.md`'s run book with `--env production`:
-- a dry run first;
-- `--hosting-dir public`;
-- **expect** 86 files (74 from the hosting directory, 12 from the source's storage), 8 templates, 6 3D models, 0 mismatches, about 41 s (`~/chopshop-export/studio-import-2026-10-04-run1.log`).
+The shape is `CP5_WH_REPORT.md`'s run book with `--env production --confirm production`. The tool refuses, before any request, on the same conditions and with the same sentences as the copy (§5.5), except that `/ready` must be on `0049` or later and it needs no tenant (the files are the platform's own).
 
-The 3D originals are not carried: 6 colourways.
+1. **Dry run** (LOCAL; no request):
+
+   ```
+   node scripts/cf-port/migrate/import-studio-assets.mjs --env production --confirm production --bundle "$B" --out $W/studio --hosting-dir public --dry-run
+   ```
+
+   - **Expect:** `templates: 8 to write (…)`, the models, `files: 86 distinct (74 from the hosting directory, 12 from the source's storage)`, `hosting paths that --hosting-dir does not hold: 0`.
+
+2. **The run.** NEEDS MIKAEL'S GO:
+
+   ```
+   node scripts/cf-port/migrate/import-studio-assets.mjs --env production --confirm production --bundle "$B" --out $W/studio --hosting-dir public | tee $W/studio.log
+   ```
+
+   - **Expect** (staging, `~/chopshop-export/studio-import-2026-10-04-run1.log`): 86 files copied, 8 templates, 6 3D models, `verify: … 0 mismatches`, exit 0, about 41 s.
+   - The 3D originals are not carried: 6 colourways.
+   - **Exit 1:** a file or an item is named as not copied or not written; run again (it is idempotent). **Exit 2:** a refusal, as in §5.5.
+   - **Undo:** restore D1 to a bookmark taken just before the run (as §5.1). The files stay in R2 under `platform/studio/`, named by no row (**not verified** how to remove them).
 
 ---
 
@@ -1026,7 +1161,7 @@ Run in this order. Each step reverses one earlier step.
 5. `gcloud scheduler jobs resume <job> …` for the three jobs (§4.6).
 6. Firebase platform console: set melodie-mc back to published (§4.3).
 7. Cloudflare: `POST /_api/v1/platform/tenants/melodie-mc/unpublish`, so that two storefronts do not both claim the shop (D57: unpublished = closed).
-   - **To make a second cutover attempt possible:** restore production D1 to the §5.1 bookmark. The import-once rule (0033) refuses a second completed run otherwise. Time Travel keeps 30 days:
+   - **To make a second cutover attempt possible:** restore production D1 to the §5.1 bookmark. The import-once rule (0052: one completed run of each kind) refuses a second run otherwise. Time Travel keeps 30 days:
 
      ```
      printf 'y\n' | scripts/cf-preflight.sh production --bootstrap -- d1 time-travel restore chopshop-prod --bookmark=<§5.1 bookmark>
@@ -1145,21 +1280,19 @@ Each blocker has an owner and the smallest next step. "Blocks" says **cutover** 
    - Owner: Mikael (domain, 1.1); the port (preflight support for one pinned custom-domain route per Worker, or for workers.dev).
    - Next step: decide the domain.
    - Blocks: **cutover**.
-3. **The production catalogue cannot be imported.**
-   - `import-catalogue.mjs` refuses production (`:300-302`).
-   - Migration 0033 allows ONE completed production import run (`import_runs_production_once_idx`, trigger `import_runs_insert_guard`), and CP3's plan would be that run. Proven offline today: the second run is refused (§3.2).
-   - The order is also tangled: the copy needs the tenants (from CP3), and the catalogue plan needs the copy's manifest.
-   - Owner: the port.
-   - Next step: choose between (a) one run that stays `running` across CP3 → copy → catalogue and is closed by the catalogue plan, and (b) a migration that allows one completed run per kind. Then build it, rehearse it offline in production mode, and get Codex on it (`CP4_S2_REPORT.md` §8 Q2).
-   - Blocks: **cutover**.
-4. **`storage-copy.mjs` refuses production.**
-   - `lib/api-session.mjs:45`; the staging origin is pinned.
-   - Its sign-in does not wait out a 429 (HANDOVER 2026-09-28).
-   - Owner: the port.
-   - Next step: a production mode with the pinned production origin, an explicit confirmation flag, and a sign-in that waits out 429.
-   - Blocks: **cutover**.
-5. **`verify-catalogue.mjs` refuses production** (`:275, 294`). Owner: the port. Next step: production mode. Blocks: **cutover**.
-6. **`import-studio-assets.mjs` refuses production** (`:41, 101`). Owner: the port. Next step: production mode. Blocks: **POD-on** (the studio).
+3. **The production catalogue cannot be imported. — CLOSED by CP7-T1 (commit to come), option (b); `docs/cf-port/CP7_T1_REPORT.md`.**
+   - Migration `0052_import_run_kinds.sql` gives `import_runs` a `kind`: `platform` (the CP3 plan, and every run that names no kind) and `catalogue` (the catalogue plan names it in its first statement). Production completes one run **per kind**; still one run in flight at a time; a catalogue run only after the completed platform run of the same export; and no run starts or completes once production holds an order, a payment event or a checkout (manifest §d P2, P7, which 0033 left to the operator).
+   - `import-catalogue.mjs --env production --confirm production` builds the production plan (§5.6). The order of the day is enforced by the tools: the copy refuses a shop that is not yet a tenant (§5.5), and the catalogue plan refuses a manifest that is not complete, not of production or not of the pinned API, and a target without the platform run.
+   - Rehearsed offline in production mode (§3.5): both plans land, and every second run is refused.
+   - **Still open:** `r2.publicBaseUrl` must be pinned before the plan can be built (blocker 16); Codex on 0052 and the tools; the reviewer applies 0052 on staging before the next API deploy (`REQUIRED_MIGRATION` is 0052).
+   - Blocks: **cutover** until the commit is reviewed.
+4. **`storage-copy.mjs` refuses production. — CLOSED by CP7-T1 (commit to come).**
+   - `--env production --confirm production`; the API origin of `cloudflare/pinned.production.json` (refused while null; an explicit `CHOPSHOP_API_URL` must equal it); credentials from the environment or `~/.config/chopshop/secrets.production.env` only (mode 600; never the staging file; `CHOPSHOP_SECRETS_FILE` refused); `/health` must say production and `/ready` be on 0052; every shop must already be a tenant; a manifest of another environment or API is refused. Each refusal is tested and mutation-checked.
+   - The sign-in has waited out a 429 since `2c154012`; a production copy's wait is now proven by test.
+   - **Still open:** the production API has no address (blocker 2); the production secrets file does not exist yet (Mikael). It has never run against a real host.
+   - Blocks: **cutover** until the commit is reviewed.
+5. **`verify-catalogue.mjs` refuses production. — CLOSED by CP7-T1 (commit to come).** `--env production --confirm production` for the queries and the checks (§5.6). Rehearsed: 41 PASS, 0 FAIL (§3.5). Blocks: nothing once reviewed.
+6. **`import-studio-assets.mjs` refuses production. — CLOSED by CP7-T1 (commit to come).** The same target and refusals as the copy (§5.11). **Still open:** blocker 2 and the production secrets file, as for 4. Blocks: **POD-on** (the studio) until reviewed.
 7. **The platform terms' archived text has no production path.**
    - `staging-legal.mjs` step (a) is staging-only.
    - There is no terms-versions page: FL is not built.

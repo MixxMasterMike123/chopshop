@@ -8,6 +8,8 @@
  *   node scripts/cf-port/migrate/import-studio-assets.mjs --env staging
  *        --bundle <export dir> --out <dir outside the repo>
  *        [--hosting-dir <dir>] [--only templates|models] [--dry-run]
+ *   node scripts/cf-port/migrate/import-studio-assets.mjs --env production --confirm production
+ *        --bundle <export dir> --out <another dir outside the repo> [...the same options]
  *
  * Sources: the export's `settings/podMockupTemplates` (row 71) and
  * `pod3dModels` (row 42), read with lib/bundle-reader.mjs and shaped by
@@ -17,8 +19,8 @@
  * directory those paths were served from: the old build's `public/`).
  *
  * The run, in order:
- *   1. /health says staging and /ready is on 0049 or later; sign in as the
- *      platform user (lib/api-session.mjs);
+ *   1. /health says the environment of --env and /ready is on 0049 or later;
+ *      sign in as the platform user (lib/api-session.mjs);
  *   2. every distinct file address, in a fixed order, unless the manifest
  *      already has it `copied`: read it (at most 15 MiB), prove its type
  *      from its bytes with the Worker's own image-sniff.ts (PNG, JPEG, WebP or
@@ -38,7 +40,13 @@
  * Idempotent and resumable: a second run uploads nothing and writes nothing
  * (every PUT answers `changed: false`). Prints counts, ids and reasons only —
  * never an address, a cookie or a body. Exit 0 when everything was written
- * and verified, 1 otherwise, 2 on a refusal to run. Staging only.
+ * and verified, 1 otherwise, 2 on a refusal to run.
+ *
+ * The target is lib/api-session.mjs apiTarget: staging, or (CP7-T1)
+ * production with `--confirm production`, the API origin of
+ * cloudflare/pinned.production.json (refused while it is null), and the
+ * credentials of the environment or ~/.config/chopshop/secrets.production.env
+ * only. A manifest in --out written for another environment or API is refused.
  */
 
 import { createHash } from 'node:crypto';
@@ -51,12 +59,13 @@ import { readCollection, readSettingsDocs } from './lib/bundle-reader.mjs';
 import { sourceKeyOf } from './lib/copy-manifest.mjs';
 import { fetchAddressOf, isFetchable, loadWorkerModule } from './lib/copy-sources.mjs';
 import {
+  apiTarget,
+  confirmationProblem,
   createApiSession,
-  platformCredentials,
+  credentialsFor,
   preflight,
   RefusedError,
   REPO_ROOT,
-  stagingTarget,
 } from './lib/api-session.mjs';
 import { isInsideRepo } from './lib/outside-repo.mjs';
 import {
@@ -96,6 +105,7 @@ export function parseArgs(argv) {
       if (!ONLY.includes(only)) throw new RefusedError('--only must be templates or models');
       out.only = only;
     } else if (arg === '--dry-run') out.dryRun = true;
+    else if (arg === '--confirm') out.confirm = value();
     else throw new RefusedError(`unknown argument ${arg}`);
   }
   if (out.env === null) throw new RefusedError('--env is required (staging)');
@@ -377,6 +387,8 @@ function printPlan(log, plan) {
  * Answers { exitCode, result }.
  */
 export async function runStudioImport(args, deps) {
+  const confirmation = confirmationProblem(args.env, args.confirm);
+  if (confirmation !== null) throw new RefusedError(confirmation);
   const log = deps.log ?? ((line) => console.log(line));
   const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const outDir = path.resolve(args.out);
@@ -427,7 +439,7 @@ export async function runStudioImport(args, deps) {
   }
 
   const session = createApiSession({ apiOrigin: deps.apiOrigin, fetchImpl: deps.fetchApiImpl, now: deps.now, sleep });
-  await preflight(session, { requiredMigration: REQUIRED_MIGRATION });
+  await preflight(session, { environment: args.env, requiredMigration: REQUIRED_MIGRATION });
   await session.signIn(deps.credentials);
   log('signed in as the platform user');
 
@@ -532,8 +544,8 @@ export async function runStudioImport(args, deps) {
 async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
-    const { apiOrigin } = stagingTarget({ env: args.env });
-    const credentials = args.dryRun ? null : platformCredentials();
+    const { apiOrigin } = apiTarget({ confirm: args.confirm, env: args.env });
+    const credentials = args.dryRun ? null : credentialsFor(args.env);
     const { exitCode } = await runStudioImport(args, { apiOrigin, credentials });
     process.exitCode = exitCode;
   } catch (error) {

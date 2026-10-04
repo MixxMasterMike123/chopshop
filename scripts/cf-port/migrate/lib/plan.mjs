@@ -71,7 +71,10 @@ export function carriedRow(table, pk, statement, contentSha) {
  *
  * `sections` is an ordered array of { name, rows: carriedRow[] }.
  * `run` is { runId, env, bundleSha, planShaPlaceholder: false, startedAt,
- * finishedAt }. planSha is computed by the CALLER after this function returns
+ * finishedAt, kind? }. `kind` (0052: 'platform' | 'catalogue') is written into
+ * the run's first statement when given; a plan that gives none (import.mjs,
+ * restore-archive.mjs) is unchanged and its run is a platform run by the
+ * column's default. planSha is computed by the CALLER after this function returns
  * (it hashes the text this function produces) and is not embedded in the text
  * itself — the run's own INSERT/UPDATE bind plan_sha as an argument the
  * caller supplies once known (see import.mjs's two-pass build).
@@ -83,15 +86,17 @@ export function buildPlanSql(run, sections, planSha) {
   lines.push('-- Every statement below is INSERT, INSERT OR IGNORE, UPDATE or SELECT.');
   lines.push('');
   lines.push('-- ── import_runs: begin ──');
+  const withKind = run.kind !== undefined;
   lines.push(
     insertStatement(
       'import_runs',
-      ['run_id', 'env', 'bundle_sha', 'plan_sha', 'started_at', 'finished_at', 'status', 'counts_json'],
+      ['run_id', 'env', ...(withKind ? ['kind'] : []), 'bundle_sha', 'plan_sha', 'started_at', 'finished_at', 'status', 'counts_json'],
       {
         bundle_sha: run.bundleSha,
         counts_json: null,
         env: run.env,
         finished_at: null,
+        ...(withKind ? { kind: run.kind } : {}),
         plan_sha: planSha,
         run_id: run.runId,
         started_at: run.startedAt,

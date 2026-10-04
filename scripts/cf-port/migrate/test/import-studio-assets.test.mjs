@@ -13,6 +13,7 @@ import { loadWorkerModule } from '../lib/copy-sources.mjs';
 import { readStudioCopyManifest, STUDIO_COPY_MANIFEST_FILE } from '../lib/studio-copy-manifest.mjs';
 import { garmentOf, transformModels, transformTemplates, withFileIds } from '../lib/transform-studio-assets.mjs';
 import { startFakeSource, writeTestBundle } from './fake-staging-api.mjs';
+import { cliInProductionMode } from './cli-production.mjs';
 
 /**
  * CP5-WH: import-studio-assets.mjs against a fake of the Worker's studio
@@ -110,7 +111,7 @@ function workerAnswer(kind, input) {
   return out;
 }
 
-async function startFakeStudioApi({ refuseTemplate = null } = {}) {
+async function startFakeStudioApi({ refuseTemplate = null, environment = 'staging' } = {}) {
   const sniff = await loadWorkerModule('storage/image-sniff.ts');
   const state = {
     files: new Map(), // sha256 → file
@@ -139,7 +140,7 @@ async function startFakeStudioApi({ refuseTemplate = null } = {}) {
     const signedIn = [...state.sessions].some((token) => cookie.includes(token));
     const platformOk = (write) => signedIn && req.headers['x-shop-id'] === undefined && (!write || sameOrigin);
 
-    if (url.pathname === '/health') return send(200, { environment: 'staging' });
+    if (url.pathname === '/health') return send(200, { environment });
     if (url.pathname === '/ready') return send(200, { migration: '0049_pod_studio_assets.sql' });
     if (url.pathname === '/api/auth/sign-in/email' && method === 'POST') {
       const input = JSON.parse(body.toString('utf8'));
@@ -344,9 +345,9 @@ async function startBreakingSource(files, breaks) {
   };
 }
 
-async function world({ breaks = null, refuseTemplate = null, withHosting = true, sourceFiles = null } = {}) {
+async function world({ breaks = null, refuseTemplate = null, withHosting = true, sourceFiles = null, environment = 'staging' } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'studio-import-'));
-  const api = await startFakeStudioApi({ refuseTemplate });
+  const api = await startFakeStudioApi({ environment, refuseTemplate });
   const sourcePath = (name) => `/v0/b/test-bucket.firebasestorage.app/o/${name}`;
   const files = sourceFiles ?? {
     [sourcePath('white-map')]: { body: png('map'), type: 'image/png' },
@@ -666,3 +667,45 @@ test('a source body that always breaks midway is recorded as failed; the other f
     await w.close();
   }
 });
+
+// ── production (CP7-T1) ─────────────────────────────────────────────────────
+
+test('parseArgs: --confirm takes a value; without it the staging shape is unchanged', () => {
+  assert.equal(parseArgs(['--env', 'production', '--confirm', 'production', '--bundle', 'b', '--out', 'o']).confirm, 'production');
+  assert.equal('confirm' in parseArgs(['--env', 'staging', '--bundle', 'b', '--out', 'o']), false);
+});
+
+test('production: refused before any request without --confirm production; /health must say production', async () => {
+  const w = await world({ environment: 'production' });
+  const staging = await world();
+  try {
+    for (const confirm of [undefined, 'yes']) {
+      await assert.rejects(runStudioImport({ ...w.args, confirm, env: 'production' }, w.deps), (error) => error instanceof RefusedError && /needs --confirm production/.test(error.message));
+    }
+    await assert.rejects(runStudioImport({ ...w.args, confirm: 'production' }, w.deps), /belongs to --env production only/);
+    assert.equal(w.api.state.log.length, 0);
+    await assert.rejects(runStudioImport({ ...staging.args, confirm: 'production', env: 'production' }, staging.deps), /\/health does not say production/);
+    assert.equal(staging.api.state.files.size, 0);
+  } finally {
+    await w.close();
+    await staging.close();
+  }
+});
+
+test('production: with --confirm production against a production API, the run is the staging run, and its manifest is production\'s', async () => {
+  const w = await world({ environment: 'production' });
+  try {
+    const args = { ...w.args, confirm: 'production', env: 'production' };
+    const first = await runStudioImport(args, w.deps);
+    assert.equal(first.exitCode, 0, w.lines.join('\n'));
+    assert.deepEqual(first.result.rows, { created: 4, failed: 0, notWritten: 0, refused: 0, unchanged: 0, updated: 0 });
+    const manifest = readStudioCopyManifest(path.join(w.args.out, STUDIO_COPY_MANIFEST_FILE));
+    assert.equal(manifest.env, 'production');
+    assert.equal(manifest.apiOrigin, w.api.origin);
+    await assert.rejects(runStudioImport({ ...w.args, env: 'staging' }, w.deps), /written for another environment or API/);
+  } finally {
+    await w.close();
+  }
+});
+
+test('the CLI in production mode refuses before any request, and never takes staging\'s credentials', cliInProductionMode(path.join(REPO_ROOT, 'scripts/cf-port/migrate/import-studio-assets.mjs'), 'STUDIO IMPORT'));

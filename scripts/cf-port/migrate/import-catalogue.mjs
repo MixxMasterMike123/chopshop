@@ -6,7 +6,10 @@
  *   node scripts/cf-port/migrate/import-catalogue.mjs --env staging --bundle <dir>
  *        --copy-manifest <file> --target-state <file> --out <dir outside the repo>
  *        [--email-map <file>] [--scrub-unmapped]
+ *   node scripts/cf-port/migrate/import-catalogue.mjs --env production --confirm production
+ *        --bundle <dir> --copy-manifest <file> --target-state <file> --out <dir outside the repo>
  *   node scripts/cf-port/migrate/import-catalogue.mjs --print-queries --env staging
+ *        (or --env production --confirm production)
  *   node scripts/cf-port/migrate/import-catalogue.mjs --state-from <dir> --state-out <file>
  *
  * Writes plan.sql, plan.json (with `expected`, which verify-catalogue.mjs
@@ -27,9 +30,25 @@
  * (lib/plan-checks.mjs) and is deterministic: the clock is the bundle's
  * exportedAt, every id is kept or derived (lib/ids.mjs).
  *
- * STAGING ONLY: 0033 lets production complete ONE import run, so a second
- * plan cannot land there; the production cutover imports everything in one
- * run (open question in docs/cf-port/CP4_S2_REPORT.md).
+ * The run is of kind `catalogue` (0052): its first statement names the kind.
+ *
+ * PRODUCTION (CP7-T1). 0052 lets production complete one run per kind, and a
+ * catalogue run only after the platform run of the same export. On top of the
+ * staging checks, the production plan is refused unless:
+ *   - `--confirm production` is given;
+ *   - cloudflare/pinned.production.json has `origins.api` (the copy manifest
+ *     must have been written against that API) and `r2.publicBaseUrl` (a page
+ *     image is written as its public address); each null pin is its own refusal;
+ *   - `--email-map` and `--scrub-unmapped` are absent (production carries
+ *     every address as it is);
+ *   - the copy manifest is of production, of the pinned API, holds no `failed`
+ *     entry, and has an entry for every file of the plan's shops (the copy ran
+ *     over the whole export);
+ *   - the target holds the completed platform run of this export and no
+ *     completed catalogue run at all.
+ * The order on the day is therefore enforced, not left to the operator: the
+ * platform import, then the copy (storage-copy.mjs refuses a shop that is not
+ * yet a tenant), then this plan.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -43,9 +62,11 @@ import { planSafetyProblems } from './lib/plan-checks.mjs';
 import { writeFileSecure, ensureDir } from './lib/bundle-writer.mjs';
 import { isInsideRepo } from './lib/outside-repo.mjs';
 import { canonicalStringify } from './lib/typed-json.mjs';
-import { emailMapFor } from './lib/scrub.mjs';
+import { emailMapFor, scrubOptionsProblem } from './lib/scrub.mjs';
 import { ARCHIVED_SHOP_IDS } from './lib/transform-shops.mjs';
-import { indexCopyManifest, objectKeyOf, readCopyManifest } from './lib/copy-manifest.mjs';
+import { indexCopyManifest, kindOfUse, lookupEntry, objectKeyOf, readCopyManifest } from './lib/copy-manifest.mjs';
+import { collectCopySources } from './lib/copy-sources.mjs';
+import { confirmationProblem } from './lib/api-session.mjs';
 import { loadWorkerRules } from './lib/worker-rules.mjs';
 import { extractJsonArray, resultsOf } from './state-from-queries.mjs';
 import { makeTextScrubber, newReport, transformProducts } from './lib/transform-products.mjs';
@@ -74,6 +95,9 @@ export const DEFERRED = [
   { reason: 'podMappings: not imported (D83); the POD products are imported without a mapping and stay off the storefront until mapped', row: 44 },
   { reason: 'infringementReports: the export holds none (D72)', row: 33 },
 ];
+
+/** The run kind of this plan (0052). */
+export const RUN_KIND = 'catalogue';
 
 const PLAN_HEADER_CP3 = '-- scripts/cf-port/migrate/import.mjs — generated import plan.';
 const PLAN_HEADER = '-- scripts/cf-port/migrate/import-catalogue.mjs — generated catalogue plan (CP4 S2), additive to the CP3 import.';
@@ -288,17 +312,44 @@ function objectProblems(usedObjects, state) {
 
 // ── the run ─────────────────────────────────────────────────────────────────
 
-export async function runImportCatalogue({ bundleDir, copyManifestPath, emailMapPath = null, env, now = null, scrubUnmapped = false, targetStatePath }) {
+/**
+ * The refusals of a production plan that need no file but the pins ([] when
+ * nothing is refused). `pinned` is cloudflare/pinned.production.json's content.
+ */
+export function productionPinProblems(pinned) {
+  if (pinned === null || typeof pinned !== 'object') return ['REFUSED: cloudflare/pinned.production.json does not exist'];
+  const problems = [];
+  if ((pinned.origins?.api ?? null) === null) {
+    problems.push('REFUSED: cloudflare/pinned.production.json origins.api is null: the copy manifest cannot be checked against the production API');
+  }
+  if ((pinned.r2?.publicBaseUrl ?? null) === null) {
+    problems.push('REFUSED: cloudflare/pinned.production.json r2.publicBaseUrl is null: a page image would have no public address');
+  }
+  return problems;
+}
+
+/**
+ * `pinned` is injectable for the tests (never by editing a pinned file); the
+ * CLI reads cloudflare/pinned.<env>.json.
+ */
+export async function runImportCatalogue({ bundleDir, confirm = null, copyManifestPath, emailMapPath = null, env, now = null, pinned, scrubUnmapped = false, targetStatePath }) {
   try {
-    return await runUnsafe({ bundleDir, copyManifestPath, emailMapPath, env, now, scrubUnmapped, targetStatePath });
+    return await runUnsafe({ bundleDir, confirm, copyManifestPath, emailMapPath, env, now, pinned: pinned === undefined ? readPinned(env) : pinned, scrubUnmapped, targetStatePath });
   } catch (error) {
     return { ok: false, problems: [error?.message ?? String(error)] };
   }
 }
 
-async function runUnsafe({ bundleDir, copyManifestPath, emailMapPath, env, now, scrubUnmapped, targetStatePath }) {
-  if (env !== 'staging') {
-    return { ok: false, problems: ['REFUSED: --env must be staging. 0033 completes ONE production import run; the catalogue of production is imported in that one run (see the report)'] };
+async function runUnsafe({ bundleDir, confirm, copyManifestPath, emailMapPath, env, now, pinned, scrubUnmapped, targetStatePath }) {
+  if (env !== 'staging' && env !== 'production') return { ok: false, problems: ['REFUSED: --env must be staging or production'] };
+  const confirmation = confirmationProblem(env, confirm);
+  if (confirmation !== null) return { ok: false, problems: [`REFUSED: ${confirmation}`] };
+  const production = env === 'production';
+  if (production) {
+    const pinProblems = productionPinProblems(pinned);
+    if (pinProblems.length > 0) return { ok: false, problems: pinProblems };
+    const scrubProblem = scrubOptionsProblem(env, { emailMapGiven: emailMapPath !== null, scrubUnmapped });
+    if (scrubProblem !== null) return { ok: false, problems: [scrubProblem] };
   }
   const verify = verifyBundle(bundleDir);
   if (!verify.ok) return { ok: false, problems: ['bundle verification failed', ...verify.checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`)] };
@@ -321,6 +372,13 @@ async function runUnsafe({ bundleDir, copyManifestPath, emailMapPath, env, now, 
   if (copyManifest.bundleManifestSha256 !== sha256Hex(readFileSync(path.join(bundleDir, 'manifest.json'), 'utf8'))) {
     problems.push('REFUSED: the copy manifest was not made from this bundle (bundleManifestSha256 differs)');
   }
+  if (production) {
+    if (copyManifest.apiOrigin !== new URL(pinned.origins.api).origin) {
+      problems.push('REFUSED: the copy manifest was written against another API than the pinned production API (cloudflare/pinned.production.json origins.api)');
+    }
+    const failed = copyManifest.entries.filter((entry) => entry.status === 'failed').length;
+    if (failed > 0) problems.push(`REFUSED: the copy manifest holds ${failed} failed file(s): run storage-copy.mjs again until none is failed`);
+  }
 
   // The target state: CP3's run of this bundle, and no run of our own.
   if (!targetStatePath) return { ok: false, problems: ['--target-state is required: the plan is additive to the applied CP3 import'] };
@@ -340,7 +398,11 @@ async function runUnsafe({ bundleDir, copyManifestPath, emailMapPath, env, now, 
   if (cp3 === undefined) problems.push('REFUSED: the target holds no completed CP3 import run of this bundle: apply CP3 first (import.mjs)');
   if (state.importRuns.some((run) => run.runId === runId)) problems.push('REFUSED: the target already holds this plan\'s run id: it was applied before');
   if (state.importRuns.some((run) => run.env === env && run.status === 'running')) problems.push('REFUSED: an import run is still running on the target: close it first (apply.md of CP3, step 4)');
-  if (state.importRuns.some((run) => run.env === env && run.status === 'completed' && run.bundleSha === bSha && run.runId.startsWith('catalogue_'))) {
+  if (production) {
+    if (state.importRuns.some((run) => run.env === env && run.status === 'completed' && run.runId.startsWith('catalogue_'))) {
+      problems.push('REFUSED: production already holds a completed catalogue run: the catalogue is imported once (0052)');
+    }
+  } else if (state.importRuns.some((run) => run.env === env && run.status === 'completed' && run.bundleSha === bSha && run.runId.startsWith('catalogue_'))) {
     problems.push('REFUSED: the target already holds a completed catalogue run of this bundle');
   }
 
@@ -357,15 +419,25 @@ async function runUnsafe({ bundleDir, copyManifestPath, emailMapPath, env, now, 
     tenantEntries.push([doc.id, { currency: tenant.currency }]);
   }
   const tenants = new Map(tenantEntries.sort(([a], [b]) => (a < b ? -1 : 1)));
+  const index = indexCopyManifest(copyManifest);
+
+  if (production) {
+    // The copy must have run over every file of the shops this plan writes.
+    const uncovered = collectCopySources(bundleDir).sources.filter(
+      (source) => tenants.has(source.shopId) && lookupEntry(index, source.shopId, source.sourceKey, kindOfUse(source.use)) === null,
+    ).length;
+    if (uncovered > 0) {
+      problems.push(`REFUSED: ${uncovered} file(s) of the export have no entry in the copy manifest: run storage-copy.mjs over the whole export (no --shop, no --limit)`);
+    }
+  }
 
   const rules = await loadWorkerRules();
-  const pinned = readPinned(env);
   const publicBase = rules.publicObjectBase({ PUBLIC_OBJECT_BASE_URL: pinned?.r2?.publicBaseUrl });
   const scrubber = makeTextScrubber({ emailMap, scrubUnmapped });
   const report = newReport();
   const ctx = {
     env,
-    index: indexCopyManifest(copyManifest),
+    index,
     nowMillis,
     problems,
     publicBase,
@@ -391,7 +463,7 @@ async function runUnsafe({ bundleDir, copyManifestPath, emailMapPath, env, now, 
 
   const sections = SECTION_ORDER.map((name) => ({ name, rows: bySection[name] ?? [] }));
   const build = (planSha) => {
-    const built = buildPlanSql({ bundleSha: bSha, env, finishedAt: nowIso, planSha, runId, startedAt: nowIso }, sections, planSha);
+    const built = buildPlanSql({ bundleSha: bSha, env, finishedAt: nowIso, kind: RUN_KIND, planSha, runId, startedAt: nowIso }, sections, planSha);
     if (!built.text.startsWith(`${PLAN_HEADER_CP3}\n`)) throw new Error('INTERNAL: lib/plan.mjs changed its header; re-read it');
     return { counts: built.counts, text: `${PLAN_HEADER}\n${built.text.slice(PLAN_HEADER_CP3.length + 1)}` };
   };
@@ -468,6 +540,7 @@ async function runUnsafe({ bundleDir, copyManifestPath, emailMapPath, env, now, 
     deferred,
     env,
     expected,
+    kind: RUN_KIND,
     longestStatementBytes,
     planSha,
     problems,
@@ -482,15 +555,18 @@ async function runUnsafe({ bundleDir, copyManifestPath, emailMapPath, env, now, 
 
 export function buildApplyMd({ env, planSha, runId }) {
   const dbName = readPinned(env)?.d1?.name ?? `<DATABASE_NAME from cloudflare/pinned.${env}.json>`;
+  const confirmFlag = env === 'production' ? ' --confirm production' : '';
   return `# Apply the catalogue plan (CP4 S2)
 
 **Environment:** ${env}
 **Plan sha256:** ${planSha}
-**Run id:** ${runId}
+**Run id:** ${runId} (kind \`${RUN_KIND}\`, 0052)
 **Database:** ${dbName}
 
 This plan is ADDITIVE: it runs after CP3's applied import and after the file
-copy (storage-copy.mjs), whose manifest it names objects from.
+copy (storage-copy.mjs), whose manifest it names objects from. In production
+the database refuses its first statement unless CP3's run of the same export
+has completed, no catalogue run has completed, and no order exists (0052).
 
 ## 1. Record a Time Travel bookmark first
 
@@ -528,21 +604,22 @@ storefront); a hit becomes \`flagged\` (public, in the review queue).
 ## 4. Verify
 
 \`\`\`
-node scripts/cf-port/migrate/verify-catalogue.mjs --print-queries --env ${env}
+node scripts/cf-port/migrate/verify-catalogue.mjs --print-queries --env ${env}${confirmFlag}
 \`\`\`
 prints the read-only queries; run them into a directory outside the repository, then
 \`\`\`
 node scripts/cf-port/migrate/verify-catalogue.mjs --state-from <that directory> --state-out <actual-state file>
-node scripts/cf-port/migrate/verify-catalogue.mjs --env ${env} --bundle <bundle dir> --plan <this plan dir> --actual-state <actual-state file>
+node scripts/cf-port/migrate/verify-catalogue.mjs --env ${env}${confirmFlag} --bundle <bundle dir> --plan <this plan dir> --actual-state <actual-state file>
 \`\`\`
 `;
 }
 
 function parseArgs(argv) {
-  const out = { bundle: null, copyManifest: null, emailMap: null, env: null, out: null, printQueries: false, scrubUnmapped: false, stateFrom: null, stateOut: null, targetState: null };
+  const out = { bundle: null, confirm: null, copyManifest: null, emailMap: null, env: null, out: null, printQueries: false, scrubUnmapped: false, stateFrom: null, stateOut: null, targetState: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--env') out.env = argv[++i] ?? die('--env needs a value');
+    else if (arg === '--confirm') out.confirm = argv[++i] ?? die('--confirm needs a value');
     else if (arg === '--bundle') out.bundle = argv[++i] ?? die('--bundle needs a value');
     else if (arg === '--copy-manifest') out.copyManifest = argv[++i] ?? die('--copy-manifest needs a value');
     else if (arg === '--target-state') out.targetState = argv[++i] ?? die('--target-state needs a value');
@@ -560,7 +637,9 @@ function parseArgs(argv) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.printQueries) {
-    if (args.env !== 'staging') die('--print-queries needs --env staging');
+    if (args.env !== 'staging' && args.env !== 'production') die('--print-queries needs --env staging or --env production');
+    const confirmation = confirmationProblem(args.env, args.confirm);
+    if (confirmation !== null) die(confirmation);
     console.log(printQueryCommands(targetQueries(args.env), { env: args.env, kind: 'catalogue-target', tool: 'import-catalogue.mjs' }));
     return;
   }
@@ -584,6 +663,7 @@ async function main() {
   if (isInsideRepo(out, REPO_ROOT)) die(`--out ${out} resolves inside the repository (${REPO_ROOT}); the plan must be written OUTSIDE it`);
   const result = await runImportCatalogue({
     bundleDir: path.resolve(args.bundle),
+    confirm: args.confirm,
     copyManifestPath: path.resolve(args.copyManifest),
     emailMapPath: args.emailMap ? path.resolve(args.emailMap) : null,
     env: args.env,

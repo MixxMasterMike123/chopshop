@@ -17,6 +17,9 @@
  * Fault injection: `faults` is a list of { method, path (RegExp), status,
  * times, retryAfter?, afterEffect? } consumed in order; `afterEffect: true`
  * lets the route do its work and then answers the fault status (a lost answer).
+ *
+ * `environment` (default `staging`) is what /health answers: `production`
+ * makes it the fake of a production API for the tools' production mode (CP7-T1).
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -128,7 +131,7 @@ export async function startFakeStagingApi(options = {}) {
     };
 
     // ── health (src/app.ts readinessResponse) ──
-    if (url.pathname === '/health' && method === 'GET') return send(200, { environment: 'staging', service: 'fake' });
+    if (url.pathname === '/health' && method === 'GET') return send(200, { environment: options.environment ?? 'staging', service: 'fake' });
     if (url.pathname === '/ready' && method === 'GET') return send(200, { database: 'ready', migration: state.migration, status: 'ok' });
 
     // ── Better Auth sign-in ──

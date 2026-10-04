@@ -8,6 +8,8 @@
  *   node scripts/cf-port/migrate/verify-catalogue.mjs --state-from <dir> --state-out <file>
  *   node scripts/cf-port/migrate/verify-catalogue.mjs --env staging --bundle <dir>
  *        --plan <plan dir> --actual-state <file>
+ *   production (CP7-T1): --env production --confirm production, for
+ *   --print-queries and for the checks alike; the plan must be a production plan
  *
  * NEVER talks to D1: the actual state is a file a person makes from read-only
  * queries after the apply. TWO SIDES, NEVER ONE: what the target holds comes
@@ -52,6 +54,7 @@ import { writeFileSecure, ensureDir } from './lib/bundle-writer.mjs';
 import { isInsideRepo } from './lib/outside-repo.mjs';
 import { SOURCE_STORAGE_MARKERS } from './lib/copy-sources.mjs';
 import { loadWorkerRules } from './lib/worker-rules.mjs';
+import { confirmationProblem } from './lib/api-session.mjs';
 import { COUNTS_2_SQL, COUNTS_SQL, countsOf, printQueryCommands, readResultFile, REPO_ROOT } from './import-catalogue.mjs';
 
 const COUNTED = ['products', 'podProducts', 'variants', 'tags', 'images', 'publications', 'screening', 'collections', 'collectionMembers', 'pages'];
@@ -204,7 +207,7 @@ export function runChecks({ actualState: actual, bundleVerified, planJson, rules
     const live = tenant?.status === 'active' && tenant?.published === true;
     const now = ofThePlan(actual.publicNow[shop], want);
     record(checks, `public ${shop}: the projection now (${live ? 'the shop is live' : 'the shop is not live yet'})`, live ? sameList(now, wantPublic) : now.length === 0, live ? wantPublic.length : 0, now.length,
-      live ? '' : 'published for the review by staging-legal.mjs --publish-for-review');
+      live ? '' : planJson.env === 'production' ? 'live once its admin has adopted the legal pages and the platform publishes it (CP7 runbook §6.5, §6.6)' : 'published for the review by staging-legal.mjs --publish-for-review');
     const bad = actual.badObjects[shop] ?? {};
     record(checks, `objects ${shop}: no image, cover or page image without the shop's own active public object`, Object.values(bad).every((n) => n === 0), 0, bad);
     record(checks, `storage ${shop}: no product or page text names the source's storage`, (actual.storageTexts[shop] ?? 0) === 0, 0, actual.storageTexts[shop] ?? 0);
@@ -253,10 +256,11 @@ export function runChecks({ actualState: actual, bundleVerified, planJson, rules
 }
 
 function parseArgs(argv) {
-  const out = { actualState: null, bundle: null, env: null, plan: null, printQueries: false, stateFrom: null, stateOut: null };
+  const out = { actualState: null, bundle: null, confirm: null, env: null, plan: null, printQueries: false, stateFrom: null, stateOut: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--env') out.env = argv[++i] ?? die('--env needs a value');
+    else if (arg === '--confirm') out.confirm = argv[++i] ?? die('--confirm needs a value');
     else if (arg === '--bundle') out.bundle = argv[++i] ?? die('--bundle needs a value');
     else if (arg === '--plan') out.plan = argv[++i] ?? die('--plan needs a value');
     else if (arg === '--actual-state') out.actualState = argv[++i] ?? die('--actual-state needs a value');
@@ -268,11 +272,18 @@ function parseArgs(argv) {
   return out;
 }
 
+/** The refusal of --env / --confirm for the queries and the checks, or null. */
+export function envProblem(env, confirm) {
+  if (env !== 'staging' && env !== 'production') return '--env must be staging or production';
+  return confirmationProblem(env, confirm);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const rules = await loadWorkerRules();
   if (args.printQueries) {
-    if (args.env !== 'staging') die('--print-queries needs --env staging');
+    const refusal = envProblem(args.env, args.confirm);
+    if (refusal !== null) die(refusal);
     console.log(printQueryCommands(actualQueries(rules), { env: args.env, kind: 'catalogue-actual', tool: 'verify-catalogue.mjs' }));
     return;
   }
@@ -291,7 +302,8 @@ async function main() {
     console.log(`wrote: ${out}`);
     return;
   }
-  if (args.env !== 'staging') die('--env must be staging');
+  const refusal = envProblem(args.env, args.confirm);
+  if (refusal !== null) die(refusal);
   if (!args.bundle || !args.plan || !args.actualState) die('--bundle, --plan and --actual-state are required (or --print-queries / --state-from)');
   const planJsonPath = path.join(path.resolve(args.plan), 'plan.json');
   if (!existsSync(planJsonPath)) die(`no plan.json in ${path.resolve(args.plan)}`);
