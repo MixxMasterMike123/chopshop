@@ -312,15 +312,24 @@ export type PrintFilesDecision =
   | { error: string; kind: "terminal" };
 
 /**
- * The one rule (docs/cf-port/CP6_PS2_REPORT.md §3):
+ * The one rule (docs/cf-port/CP6_PS2_REPORT.md §3). The file sent under one
+ * job id must never change, and nothing records which file a first submission
+ * carried, so the choice must be one that every later run re-derives the same:
  *   1. every slot has a completed canvas   → those canvases, whatever the switch
  *      (a re-dispatch after a lost answer gets the same file);
- *   2. the row was already submitted       → the artwork files: the job was
- *      first sent without a canvas, and the file sent for one job id never
- *      changes;
- *   3. switch off                          → the artwork files (pre-PS2);
- *   4. a canvas of the line failed         → terminal `print_canvas_failed`;
- *   5. otherwise                           → ensure the jobs and wait.
+ *   2. the row was already submitted       → the artwork files: it was first
+ *      sent without canvases, and none can be made for it afterwards (jobs are
+ *      ensured only for a row not yet submitted);
+ *   3. the line HAS canvas jobs            → it finishes on the canvas path,
+ *      WHATEVER THE SWITCH: a failed one is terminal `print_canvas_failed`,
+ *      a pending one is waited for. (Were a line with pending canvases sent
+ *      its artwork because the switch went off, the canvases could complete
+ *      afterwards and rule 1 would hand a retry a different file.) The switch
+ *      therefore decides only whether a NEW line enters the canvas path;
+ *   4. no canvas job, switch off           → the artwork files (pre-PS2);
+ *   5. no canvas job, switch on            → ensure the jobs and wait.
+ * So artwork is sent only for a line with no canvas job at all, and such a
+ * line never gets one once it is submitted.
  */
 export function decidePrintFiles(input: {
   canvases: readonly CanvasJobView[];
@@ -343,11 +352,13 @@ export function decidePrintFiles(input: {
       kind: "canvas",
     };
   }
-  if (input.submitted || !input.switchOn) {
+  if (input.submitted) {
     return { kind: "artwork" };
   }
-  if (input.slots.some((slot) => bySlot.get(slot)?.state === "failed")) {
-    return { error: "print_canvas_failed", kind: "terminal" };
+  if (input.slots.some((slot) => bySlot.has(slot))) {
+    return input.slots.some((slot) => bySlot.get(slot)?.state === "failed")
+      ? { error: "print_canvas_failed", kind: "terminal" }
+      : { kind: "ensure" };
   }
-  return { kind: "ensure" };
+  return input.switchOn ? { kind: "ensure" } : { kind: "artwork" };
 }

@@ -294,11 +294,52 @@ describe("decidePrintFiles: which file a line sends", () => {
     });
   });
 
-  it("switch off: the artwork files, even with canvases half made", () => {
+  it("switch off: the artwork files, for a line with no canvas job at all", () => {
     expect(decidePrintFiles({ canvases: [], slots, submitted: false, switchOn: false })).toEqual({ kind: "artwork" });
-    expect(decidePrintFiles({ canvases: [done("front"), queued("back")], slots, submitted: false, switchOn: false })).toEqual({
+    // A canvas of a slot the line does not print is not this line's canvas path.
+    expect(decidePrintFiles({ canvases: [queued("back")], slots: ["front"], submitted: false, switchOn: false })).toEqual({
       kind: "artwork",
     });
+  });
+
+  it("a line that has canvas jobs finishes on the canvas path whatever the switch: one job id never gets two files", () => {
+    // The switch went off while the canvases were rendering: the line WAITS
+    // for them. Sending the artwork now would let a retry after a lost answer
+    // send the canvases, completed meanwhile, under the same job id.
+    for (const switchOn of [true, false]) {
+      expect(decidePrintFiles({ canvases: [queued("front"), queued("back")], slots, submitted: false, switchOn })).toEqual({
+        kind: "ensure",
+      });
+      expect(decidePrintFiles({ canvases: [done("front"), queued("back")], slots, submitted: false, switchOn })).toEqual({
+        kind: "ensure",
+      });
+      expect(decidePrintFiles({ canvases: [done("front"), failed("back")], slots, submitted: false, switchOn })).toEqual({
+        error: "print_canvas_failed",
+        kind: "terminal",
+      });
+    }
+    // Every history of one line, replayed: whatever was sent first is what a
+    // retry (submitted) sends, with the canvases settling in between or not.
+    const first = (canvases: CanvasJobView[], switchOn: boolean) =>
+      decidePrintFiles({ canvases, slots, submitted: false, switchOn }).kind;
+    const retry = (canvases: CanvasJobView[], switchOn: boolean) =>
+      decidePrintFiles({ canvases, slots, submitted: true, switchOn }).kind;
+    for (const switchAtRetry of [true, false]) {
+      // Sent as artwork: only ever with no canvas job, and none can appear afterwards.
+      expect(first([], false)).toBe("artwork");
+      expect(retry([], switchAtRetry)).toBe("artwork");
+      // Sent as canvases: only with the complete set, which is final.
+      expect(first([done("front"), done("back")], switchAtRetry)).toBe("canvas");
+      expect(retry([done("front"), done("back")], switchAtRetry)).toBe("canvas");
+    }
+    // And no state with a canvas job ever answers "artwork" for a first submission.
+    for (const switchOn of [true, false]) {
+      for (const front of [done, queued, failed]) {
+        for (const back of [done, queued, failed]) {
+          expect(first([front("front"), back("back")], switchOn)).not.toBe("artwork");
+        }
+      }
+    }
   });
 
   it("switch on: a failed canvas is terminal; anything else is ensured and waited for", () => {
