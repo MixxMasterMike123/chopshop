@@ -6,9 +6,11 @@ import {
 } from "../email/auth-email-job";
 import { prepareAuthEmailDeliveryRecord } from "../email/email-delivery-store";
 import {
+  ADMIN_SHOP_ID_PATTERN,
   createOrderEmailJob,
   mailText,
   MAX_ORDER_MAIL_LINES,
+  MAX_PICKUP_ADDRESS_LENGTH,
   type OrderEmailContent,
   type OrderEmailKind,
   realShopAddress,
@@ -346,12 +348,19 @@ async function shopNoticeAddress(env: Env, tenantId: string, supportEmail: strin
   return realShopAddress(admin?.email);
 }
 
-function adminOrderUrl(env: Env, orderId: string): string | null {
+/**
+ * The admin's order page with the order's shop selected (`?shopId=`, which the
+ * admin build ranks first when it picks the active shop): an admin of several
+ * shops opens the notice in the shop that owns the order.
+ */
+function adminOrderUrl(env: Env, orderId: string, tenantId: string): string | null {
   const admin = readCanonicalOrigins(env)?.admin;
-  if (admin === undefined || !/^[A-Za-z0-9_-]{1,128}$/.test(orderId)) {
+  if (admin === undefined || !/^[A-Za-z0-9_-]{1,128}$/.test(orderId) || !ADMIN_SHOP_ID_PATTERN.test(tenantId)) {
     return null;
   }
-  return new URL(`/admin/orders/${orderId}`, admin).href;
+  const url = new URL(`/admin/orders/${orderId}`, admin);
+  url.searchParams.set("shopId", tenantId);
+  return url.href;
 }
 
 function buildShopNotice(ctx: EffectContext, orderId: string, tenantId: string): Promise<Built> {
@@ -381,7 +390,7 @@ function buildShopNotice(ctx: EffectContext, orderId: string, tenantId: string):
           : null;
       return {
         content: {
-          adminUrl: adminOrderUrl(env, orderId),
+          adminUrl: adminOrderUrl(env, orderId, tenantId),
           currency: order.currency,
           deliveryMethod: order.delivery_method,
           discountMinor: order.discount_minor,
@@ -521,7 +530,9 @@ async function buildStatusUpdate(
           additionalParcel: step === "shipped" && change.from_status === "shipped",
           carrier: mailText(shipment?.carrier),
           orderNumber: order.order_number,
-          pickupPlaceAddress: pickup ? mailText(recipientRow?.pickup_location_address) : null,
+          pickupPlaceAddress: pickup
+            ? mailText(recipientRow?.pickup_location_address, MAX_PICKUP_ADDRESS_LENGTH)
+            : null,
           pickupPlaceName: pickup ? mailText(recipientRow?.pickup_location_name) : null,
           recipientName,
           shopName: mailText(order.shop_name),

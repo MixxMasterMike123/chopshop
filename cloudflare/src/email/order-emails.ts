@@ -64,7 +64,7 @@ export interface OrderNoticeLine {
 }
 
 export interface OrderNoticeContent {
-  /** `<admin origin>/admin/orders/<orderId>`, or null without an admin origin. */
+  /** `<admin origin>/admin/orders/<orderId>?shopId=<tenantId>`, or null without an admin origin. */
   adminUrl: string | null;
   currency: string;
   deliveryMethod: "pickup" | "shipping";
@@ -122,6 +122,10 @@ const CLOCK_SKEW_MS = 5 * 60 * 1_000;
 
 export const MAX_ORDER_MAIL_LINES = 100;
 export const MAX_TEXT_LENGTH = 200;
+/** A pickup place's address: what the recipient schema (0045) and the store identity allow. */
+export const MAX_PICKUP_ADDRESS_LENGTH = 500;
+/** The tenant id the admin build accepts in `?shopId=` (src/admin-app/providers/activeShopStore.js). */
+export const ADMIN_SHOP_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const MAX_ORDER_NUMBER_LENGTH = 64;
 const MAX_URL_LENGTH = 500;
 
@@ -204,7 +208,13 @@ function isOptionalEmail(value: unknown): value is string | null {
   }
 }
 
-function isAdminUrl(value: unknown): value is string | null {
+/**
+ * `https://<admin>/admin/orders/<orderId>?shopId=<tenantId>`: the admin's own
+ * order page, with the order's shop selected (an admin of several shops lands
+ * in the right one). `shopId` is the only parameter and must be the job's own
+ * tenant.
+ */
+function isAdminUrl(value: unknown, tenantId: string): value is string | null {
   if (value === null) {
     return true;
   }
@@ -217,7 +227,10 @@ function isAdminUrl(value: unknown): value is string | null {
       url.protocol === "https:" &&
       url.username === "" &&
       url.password === "" &&
-      url.search === "" &&
+      ADMIN_SHOP_ID_PATTERN.test(tenantId) &&
+      url.search === `?shopId=${tenantId}` &&
+      [...url.searchParams.keys()].length === 1 &&
+      url.searchParams.get("shopId") === tenantId &&
       url.hash === "" &&
       /^\/admin\/orders\/[A-Za-z0-9_-]{1,128}$/.test(url.pathname) &&
       url.href === value
@@ -242,7 +255,7 @@ function validatedStatus(value: Record<string, unknown>): OrderStatusContent {
     !isOptionalText(value.trackingNumber, MAX_TEXT_LENGTH) ||
     !isOptionalText(value.carrier, MAX_TEXT_LENGTH) ||
     !isOptionalText(value.pickupPlaceName, MAX_TEXT_LENGTH) ||
-    !isOptionalText(value.pickupPlaceAddress, MAX_TEXT_LENGTH) ||
+    !isOptionalText(value.pickupPlaceAddress, MAX_PICKUP_ADDRESS_LENGTH) ||
     // Shipment facts belong to `shipped`, the place to `ready_for_pickup`.
     (value.status !== "shipped" &&
       (value.trackingNumber !== null || value.carrier !== null || value.additionalParcel)) ||
@@ -265,7 +278,7 @@ function validatedStatus(value: Record<string, unknown>): OrderStatusContent {
   };
 }
 
-function validatedNotice(value: Record<string, unknown>): OrderNoticeContent {
+function validatedNotice(value: Record<string, unknown>, tenantId: string): OrderNoticeContent {
   const items = value.items;
   if (
     !isText(value.orderNumber, MAX_ORDER_NUMBER_LENGTH) ||
@@ -278,7 +291,7 @@ function validatedNotice(value: Record<string, unknown>): OrderNoticeContent {
         !/^[A-Z]{2}$/.test(value.shippingCountry) ||
         value.pickupPlaceName !== null) ||
     !isOptionalText(value.shopName, MAX_TEXT_LENGTH) ||
-    !isAdminUrl(value.adminUrl) ||
+    !isAdminUrl(value.adminUrl, tenantId) ||
     !isMinor(value.subtotalMinor) ||
     !isMinor(value.shippingMinor) ||
     !isMinor(value.discountMinor) ||
@@ -349,7 +362,7 @@ function validatedRefund(value: Record<string, unknown>): RefundNoticeContent {
   };
 }
 
-function validatedContent(kind: OrderEmailKind, value: unknown): OrderEmailContent {
+function validatedContent(kind: OrderEmailKind, value: unknown, tenantId: string): OrderEmailContent {
   if (!isRecord(value)) {
     invalid();
   }
@@ -357,7 +370,7 @@ function validatedContent(kind: OrderEmailKind, value: unknown): OrderEmailConte
     case "order_status_update":
       return validatedStatus(value);
     case "order_notice_shop":
-      return validatedNotice(value);
+      return validatedNotice(value, tenantId);
     case "refund_notice":
       return validatedRefund(value);
   }
@@ -397,7 +410,7 @@ function validatedFrame(input: Record<string, unknown>, now: number): OrderEmail
 
 function assemble(value: Record<string, unknown>): OrderEmailJob {
   const frame = validatedFrame(value, Date.now());
-  return { ...frame, content: validatedContent(frame.kind, value.content) } as OrderEmailJob;
+  return { ...frame, content: validatedContent(frame.kind, value.content, frame.tenantId) } as OrderEmailJob;
 }
 
 /**

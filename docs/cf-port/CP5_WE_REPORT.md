@@ -161,3 +161,46 @@ These are the same two values the password reset and invite mails already wait f
 6. **No legal identity or footer** in the three mails. Firebase's templates had none either. The shop's name and support address are included, and the support address is the buyer mails' Reply-To.
 7. **The refund notice does not mention a withdrawal.** Firebase's said "Detta slutför din utövade ångerrätt" when the order had a withdrawal. That needs a `withdrawals` read in the builder: small, but left out.
 8. **Stale comment.** `src/commerce/fulfilment.ts`'s comment "the consumer and the template are unit WE's, so this row waits" (around line 436) is now stale. That file is WB's, so I did not edit it.
+
+## Codex round 1
+
+This round started from HEAD `a0034343`, which includes the reviewer's nudges in `routes/admin-orders.ts` and `routes/money-orders.ts`, `pendingOrderMailIds` in `outbox/nudge.ts`, and its extra test. I touched none of those, and none of the other builder's files (`pod/studio-files.ts`, `test/pod-studio-assets.test.ts`, `scripts/cf-port/migrate/**`).
+
+1. **[P2] The notice's admin link now selects the order's shop.**
+   - **The link.** `adminOrderUrl(env, orderId, tenantId)` builds `<admin>/admin/orders/<orderId>?shopId=<tenantId>`. The admin build ranks `?shopId=` first when it picks the active shop (`src/admin-app/providers/ActiveShop.jsx`, `activeShopStore.js` `shopIdOnArrival`). An admin of several shops therefore opens the order in the shop that owns it, and its requests carry the right `X-Shop-Id`.
+   - **When there is no link.** A tenant id that does not fit the admin's own shape (`/^[a-z0-9][a-z0-9-]{0,62}$/`, exported as `ADMIN_SHOP_ID_PATTERN`) gets no link. The notice then says "Hantera ordern under Ordrar i butikens admin."
+   - **The validator.** The job validator `isAdminUrl(value, tenantId)` is now told the job's tenant. It permits exactly one parameter, `shopId`, and its value must be the job's own tenant id in that shape. These are refused:
+     - another shop's id;
+     - a second parameter or a repeated `shopId`;
+     - a fragment;
+     - an encoded or uppercase value;
+     - the old link without `shopId`.
+2. **[P2] A pickup address keeps its full 500 characters.**
+   - `MAX_PICKUP_ADDRESS_LENGTH = 500` (`order-emails.ts`) is the limit of the recipient schema (0045) and of the store identity's places. It is used by the builder (`mailText(…, MAX_PICKUP_ADDRESS_LENGTH)` in `email-effect.ts`) and by the matching `validatedStatus` check.
+   - The place's name and the other texts keep 200, which is what their sources allow.
+
+**Tests (`test/order-emails.test.ts`):**
+- The notice test now expects the `?shopId=` link in the job, the HTML and the text.
+- The admin-link test accepts the own-shop link and refuses the seven bad shapes listed above.
+- A new test, "names a pickup address of the full 500 characters whole", runs a 500-character address through the real fulfilment route. It is checked in the job, in the rendered text, and after a round trip through the consumer's parser.
+
+Each fix was reverted once, and each reversion fails its test:
+
+| Reverted | Fails |
+|---|---|
+| Link without `shopId` (builder and validator) | the notice test and the admin-link test |
+| Validator accepts any `shopId` | the admin-link test |
+| Builder cuts the address at 200 | the 500-character test |
+| Validator caps the address at 200 | the 500-character test |
+
+**Gates:**
+- tsc main, web and admin: clean.
+- `npx vitest run test/order-emails.test.ts`: 27 passed (26 at HEAD plus 1).
+- Full `npx vitest run`: **Test Files 102 passed (102), Tests 4321 passed (4321)**, nothing skipped. HEAD's 4318 plus this round's 1 makes 4319; the other 2 come from the builder working in parallel.
+- `node guard/guards.test.mjs`: **exit 0, PASS**. FN1's stale allowlist entry from round 0 has since been resolved.
+
+Files changed this round:
+- `cloudflare/src/email/order-emails.ts`
+- `cloudflare/src/outbox/email-effect.ts`
+- `cloudflare/test/order-emails.test.ts`
+- this report

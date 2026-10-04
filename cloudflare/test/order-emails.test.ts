@@ -170,7 +170,15 @@ function plainOrder(tenantId: string, deliveryMethod: "pickup" | "shipping") {
   return seedOrder(tenantId, { deliveryMethod, lines: [{ name: "Tröja <svart>", production: "none" }] });
 }
 
-async function addRecipient(orderId: string, tenantId: string, deliveryMethod: "pickup" | "shipping") {
+/** A pickup place's address at the full length the recipient schema allows (0045: 500). */
+const LONG_PICKUP_ADDRESS = `Götgatan 1, Stockholm. ${"Ingång från gården, ring på porttelefonen. ".repeat(20)}`.slice(0, 499) + "!";
+
+async function addRecipient(
+  orderId: string,
+  tenantId: string,
+  deliveryMethod: "pickup" | "shipping",
+  pickupAddress = "Götgatan 1, Stockholm",
+) {
   await env.DB.prepare(
     `INSERT INTO order_recipients (
        order_id, tenant_id, delivery_method, name, address_line1, postal_code, city, country,
@@ -187,7 +195,7 @@ async function addRecipient(orderId: string, tenantId: string, deliveryMethod: "
       deliveryMethod === "shipping" ? "SE" : null,
       deliveryMethod === "pickup" ? "place-1" : null,
       deliveryMethod === "pickup" ? "Butiken <Söder>" : null,
-      deliveryMethod === "pickup" ? "Götgatan 1, Stockholm" : null,
+      deliveryMethod === "pickup" ? pickupAddress : null,
       new Date().toISOString(),
     )
     .run();
@@ -426,7 +434,7 @@ describe("order_notice_shop: the effect and the mail", () => {
       tenantId: TENANT_A,
     });
     expect(job.content).toMatchObject({
-      adminUrl: `https://admin.test.invalid/admin/orders/${orderId}`,
+      adminUrl: `https://admin.test.invalid/admin/orders/${orderId}?shopId=${TENANT_A}`,
       deliveryMethod: "pickup",
       items: [{ lineTotalMinor: CHARGE_MINOR, name: "Tee 0", quantity: 1 }],
       shopName: "Melodie <MC> & Co",
@@ -455,7 +463,12 @@ describe("order_notice_shop: the effect and the mail", () => {
     expect(mail.text).not.toMatch(/avgift|provision|utbetal|tryck|inköp/i);
     expect(mail.html).toContain("Melodie &lt;MC&gt; &amp; Co");
     expect(mail.html).not.toContain("<MC>");
-    expect(mail.html).toContain(`<a href="https://admin.test.invalid/admin/orders/${orderId}">Hantera order</a>`);
+    // The link selects the order's own shop (Codex round 1): an admin of
+    // several shops lands in the shop the order belongs to.
+    expect(mail.html).toContain(
+      `<a href="https://admin.test.invalid/admin/orders/${orderId}?shopId=${TENANT_A}">Hantera order</a>`,
+    );
+    expect(mail.text).toContain(`Hantera order: https://admin.test.invalid/admin/orders/${orderId}?shopId=${TENANT_A}`);
   });
 
   it("falls back to the shop's oldest active admin when it has no support address", async () => {
@@ -703,6 +716,21 @@ describe("order_status_update: the consumer of CP5-WB's rows", () => {
     expect(rendered.html).toContain("Butiken &lt;Söder&gt;");
   });
 
+  it("names a pickup address of the full 500 characters whole (Codex round 1)", async () => {
+    expect(LONG_PICKUP_ADDRESS).toHaveLength(500);
+    const order = await plainOrder(TENANT_A, "pickup");
+    await addRecipient(order.orderId, TENANT_A, "pickup", LONG_PICKUP_ADDRESS);
+
+    const { jobs, result } = await runRow(await fulfil(order.orderId, { to: "ready_for_pickup" }));
+
+    expect(result).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(jobs[0]!.content).toMatchObject({ pickupPlaceAddress: LONG_PICKUP_ADDRESS });
+    const rendered = renderAuthEmail(jobs[0]!);
+    expect(rendered.text).toContain(`Adress: ${LONG_PICKUP_ADDRESS}`);
+    // …and the consumer's parser accepts it unchanged.
+    expect(parseAuthEmailJob(JSON.parse(JSON.stringify(jobs[0])), env.AUTH_BASE_URL)).toEqual(jobs[0]);
+  });
+
   it("answers to the shop: Reply-To is its support address", async () => {
     const order = await plainOrder(TENANT_A, "shipping");
     const { jobs } = await runRow(await fulfil(order.orderId, { to: "processing" }));
@@ -913,7 +941,7 @@ describe("the jobs and their templates", () => {
 
   it("a notice's admin link must be the admin's own order page", async () => {
     const content = {
-      adminUrl: "https://admin.test.invalid/admin/orders/abc",
+      adminUrl: `https://admin.test.invalid/admin/orders/abc?shopId=${TENANT_A}`,
       currency: "SEK",
       deliveryMethod: "pickup" as const,
       discountMinor: 0,
@@ -935,10 +963,18 @@ describe("the jobs and their templates", () => {
         recipient: "shop@example.test",
       });
     await expect(make(null)).resolves.toBeDefined();
+    await expect(make(`https://admin.test.invalid/admin/orders/abc?shopId=${TENANT_A}`)).resolves.toBeDefined();
     for (const bad of [
       "javascript:alert(1)",
-      "http://admin.test.invalid/admin/orders/abc",
+      `http://admin.test.invalid/admin/orders/abc?shopId=${TENANT_A}`,
+      "https://admin.test.invalid/admin/orders/abc",
       "https://admin.test.invalid/admin/orders/abc?x=1",
+      // Only the job's own shop, and nothing beside it.
+      `https://admin.test.invalid/admin/orders/abc?shopId=${TENANT_B}`,
+      `https://admin.test.invalid/admin/orders/abc?shopId=${TENANT_A}&x=1`,
+      `https://admin.test.invalid/admin/orders/abc?shopId=${TENANT_A}&shopId=${TENANT_B}`,
+      `https://admin.test.invalid/admin/orders/abc?shopId=${TENANT_A}#x`,
+      "https://admin.test.invalid/admin/orders/abc?shopId=Tenant%20A",
       'https://admin.test.invalid/admin/orders/"><script>',
     ]) {
       await expect(make(bad), bad).rejects.toThrow();
