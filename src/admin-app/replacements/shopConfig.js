@@ -41,7 +41,8 @@
 // is not its). A save asked for by a page whose baseline a later load replaced
 // is refused, never diffed against a form it was not built on. A page whose
 // load failed has no baseline, and its save is refused: diffing the defaults
-// it shows against the stored settings would overwrite them.
+// it shows against the stored settings would overwrite them. That holds after
+// an earlier page's load succeeded too: each load starts by dropping the baseline.
 
 import { adminRequest, getRequestShopId, notAvailable } from '../../api/admin/client.js';
 import { getSettings, patchSettings } from '../../api/admin/settings.js';
@@ -74,6 +75,10 @@ export const loadShopConfig = async (shopId) => {
   const key = keyOf(shopId);
   const entry = key ? heldOf(key) : null;
   const generation = entry ? ++entry.generation : 0;
+  // The page that loads now owns the baseline, and has none until its own read
+  // answers: a load that fails must not leave the page before's settings as the
+  // baseline of a form that shows defaults.
+  if (entry) entry.settings = null;
   const option = shopOption(shopId);
   const [settings, shop] = await Promise.all([
     adminRequest('GET', '/v1/admin/settings', option).then(({ data }) => data?.settings ?? null),

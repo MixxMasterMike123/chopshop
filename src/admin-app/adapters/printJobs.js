@@ -123,6 +123,18 @@ export function keepsJob(filters, job) {
   return ({ ...DEFAULT_FILTERS, ...filters }).state !== 'open' || stateOf(job) !== 'shipped';
 }
 
+/**
+ * What an empty view says. `more`: the list has pages not read yet (the
+ * default view reads ahead a few pages of shipped jobs and may stop before
+ * the list ends), so nothing is said to be absent and the page offers to go on.
+ */
+export function emptyViewText(filters, more) {
+  if (more) return 'Inget tryckjobb att visa bland de som lästs hittills. Listan fortsätter: sök vidare.';
+  return isDefaultFilters(filters)
+    ? 'Inga tryckjobb att hantera: tryckeriet har inget mottaget jobb som inte är skickat.'
+    : 'Inga tryckjobb matchar filtret.';
+}
+
 export const isDefaultFilters = (filters) =>
   Object.entries(DEFAULT_FILTERS).every(([key, value]) => (filters?.[key] ?? value) === value);
 

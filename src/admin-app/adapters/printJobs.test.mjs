@@ -8,6 +8,7 @@ import {
   REFUSED_ORDER_STATUSES,
   actionBlockText,
   cursorBefore,
+  emptyViewText,
   isDefaultFilters,
   keepsJob,
   listParams,
@@ -68,6 +69,13 @@ describe('the filters', () => {
     assert.deepEqual(listParams({ state: 'none', dispatchState: 'all', tenantId: 'test-shop-c', printerId: 'fake-printer' }),
       { state: 'none', dispatchState: undefined, tenantId: 'test-shop-c', printerId: 'fake-printer' });
     assert.equal(isDefaultFilters({ ...DEFAULT_FILTERS, tenantId: 'x' }), false);
+    // An empty view says "none" only when the list was read to its end.
+    assert.match(emptyViewText(DEFAULT_FILTERS, false), /Inga tryckjobb att hantera/);
+    assert.match(emptyViewText({ ...DEFAULT_FILTERS, tenantId: 'x' }, false), /matchar filtret/);
+    for (const filters of [DEFAULT_FILTERS, { ...DEFAULT_FILTERS, tenantId: 'x' }]) {
+      assert.match(emptyViewText(filters, true), /Listan fortsätter/);
+      assert.doesNotMatch(emptyViewText(filters, true), /Inga tryckjobb/);
+    }
   });
 });
 

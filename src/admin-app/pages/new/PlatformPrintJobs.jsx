@@ -23,7 +23,7 @@ import {
   STATE_FILTERS,
   STATE_LABEL,
   actionBlockText,
-  isDefaultFilters,
+  emptyViewText,
   nextStates,
   sameJobFacts,
   statusBody,
@@ -277,7 +277,12 @@ export default function PlatformPrintJobs() {
         ) : jobs.length === 0 ? (
           <div className="py-16 text-center text-gray-500">
             <QueueListIcon className="mx-auto mb-3 h-10 w-10 text-gray-700" />
-            {isDefaultFilters(filters) ? 'Inga tryckjobb att hantera: tryckeriet har inget mottaget jobb som inte är skickat.' : 'Inga tryckjobb matchar filtret.'}
+            <p>{emptyViewText(filters, nextCursor !== null)}</p>
+            {nextCursor && (
+              <button type="button" className={`${btnQuiet} mt-4`} disabled={loadingMore || busy} onClick={loadMore}>
+                {loadingMore ? 'Läser…' : 'Sök vidare'}
+              </button>
+            )}
           </div>
         ) : (
           <>

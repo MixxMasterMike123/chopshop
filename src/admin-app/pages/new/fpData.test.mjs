@@ -107,6 +107,23 @@ describe('the settings: the fenced partial write', () => {
     assert.equal(storedIdentity().tagline, 'Invented goods for testing.');
   });
 
+  it('a load that fails after an earlier page loaded leaves NO baseline: its form of defaults saves nothing', async () => {
+    await loadShopConfig('test-shop-a'); // an earlier page of this tab
+    const before = JSON.stringify(storedIdentity());
+    const routed = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => (String(url).includes('/v1/admin/settings') && (init.method || 'GET') === 'GET'
+      ? new Response(JSON.stringify({ error: { code: 'internal_error', message: 'x' } }), { status: 500 })
+      : routed(url, init));
+    await assert.rejects(loadShopConfig('test-shop-a')); // this page's load fails: it shows defaults
+    globalThis.fetch = routed;
+    await assert.rejects(saveShopConfig(formFromSaved(null), 'test-shop-a'), (e) => /kunde inte läsas när sidan öppnades/.test(e.userMessage));
+    assert.equal(patches().length, 0);
+    assert.equal(JSON.stringify(storedIdentity()), before);
+    // A load that succeeds gives the page its baseline again.
+    const form = formFromSaved(await loadShopConfig('test-shop-a'));
+    assert.equal((await saveShopConfig({ ...form, tagline: 'Efter omladdning' }, 'test-shop-a')).saved.tagline, 'Efter omladdning');
+  });
+
   it('a refusal is passed on as it is, and the next save still goes through', async () => {
     await loadShopConfig('test-shop-a');
     await assert.rejects(saveShopConfig({ tagline: 'x'.repeat(70_000) }, 'test-shop-a'), (e) => e.code === 'invalid_request');
@@ -263,6 +280,28 @@ describe('the print jobs', () => {
     // No cost and no buyer in a row.
     assert.deepEqual(Object.keys(jobs[0]).sort(), ['carrier', 'createdAt', 'dispatchState', 'dispatchedAt', 'jobId', 'lineNo', 'name', 'orderId', 'orderNumber',
       'orderStatus', 'printerId', 'printerJobRef', 'quantity', 'shopName', 'sku', 'state', 'tenantId', 'trackingNumber', 'trackingUrl', 'updatedAt', 'variantLabel']);
+  });
+
+  it('the default view past its read-ahead: no job to show AND a cursor, so the page can go on to the open job behind', async () => {
+    const order = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const job = (n, jobState) => ({ jobId: `${order(n)}-1`, orderId: order(n), lineNo: 1, tenantId: 'test-shop-a', state: jobState, dispatchState: 'accepted', orderStatus: 'paid' });
+    const routed = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      const at = new URL(url, 'http://dev.invalid');
+      if (!at.pathname.endsWith('/v1/platform/print-jobs')) return routed(url, init);
+      sent.push({ url, method: 'GET' });
+      const cursor = at.searchParams.get('cursor');
+      const page = cursor === null ? 0 : Number(cursor.slice(24, 36)) / 50; // 50 shipped jobs a page
+      const jobs = page < 5
+        ? Array.from({ length: 50 }, (_, i) => job(page * 50 + i + 1, 'shipped'))
+        : [job(251, 'in_production')];
+      return new Response(JSON.stringify({ jobs, nextCursor: page < 5 ? jobs.at(-1).jobId : null }), { status: 200 });
+    };
+    const first = await loadJobs(DEFAULT_FILTERS);
+    assert.deepEqual([first.jobs.length, first.nextCursor], [0, `${order(250)}-1`]); // five pages read, all shipped
+    assert.equal(sent.filter((s) => String(s.url).includes('print-jobs')).length, 5);
+    const more = await loadJobs(DEFAULT_FILTERS, first.nextCursor);
+    assert.deepEqual([more.jobs.map((j) => j.jobId), more.nextCursor], [[`${order(251)}-1`], null]);
   });
 
   it('filters and "Visa fler"', async () => {
