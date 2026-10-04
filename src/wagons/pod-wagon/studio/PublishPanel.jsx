@@ -17,8 +17,16 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HelpPopover from './HelpPopover';
-import { sellerProfitInkl, sellerMargin, priceFloor, priceForMargin, roundUpTo9, inklMoms, FEE_RATE, FEE_FIXED } from '../podPricing';
-import { screeningNotice } from '../../../utils/contentScreening';
+// The pricing and screening sources come through ./publishPanelData (the
+// older build: podPricing.js + the client blocklist notice, as before). The
+// Cloudflare admin's build swaps that module (vite.admin.config.js; CP5 unit
+// FN1): there the floor and Inköp are the SERVER's quote per printer article
+// (useServerPricing), the client formula answers nothing, and the tools that
+// only the formula could feed (profit, margin, price from margin) are hidden.
+import {
+  sellerProfitInkl, sellerMargin, priceFloor, priceForMargin, roundUpTo9, inklMoms, FEE_RATE, FEE_FIXED,
+  SERVER_PRICED, PANEL_TEXT, resultScreeningText, useServerPricing,
+} from './publishPanelData';
 
 // XS first (2026-08-27) — the printer's runs start at XS, and a size the seller
 // never sees is a size they never sell. Per-colourway opt-outs subtract from here.
@@ -71,6 +79,11 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
  *   initialTargetProductId — preselects target='existing' with this product
  *                     (the ?designFor deep link from the product form)
  *   onReset()      — clear name/price after a success ("Skapa en till")
+ *   errorField     — 'price' when `error` concerns the price (shown at it), else null
+ *   locked         — a save runs: the form is read-only until it answers
+ *   production     — the Cloudflare admin only: the printer + model chosen in
+ *                    the studio, with its articles ({ printerId, articles,
+ *                    … }); null in the older build
  */
 const PublishPanel = ({
   mockups = [],
@@ -91,6 +104,9 @@ const PublishPanel = ({
   onUpdateExisting,
   initialTargetProductId = null,
   onReset,
+  errorField = null,
+  locked = false,
+  production = null,
 }) => {
   // Colourways that actually have ≥1 generated mockup (the only publishable set).
   const availableColorways = useMemo(() => {
@@ -125,8 +141,24 @@ const PublishPanel = ({
   const selectedColorways = availableColorways;
   const selectedColorwayIds = selectedColorways.map((c) => c.id);
 
-  // The effective sizes for a colourway (global sizes minus its opt-outs).
-  const sizesFor = (cwId) => sizes.filter((s) => sizeOptOut[cwId]?.[s] !== true);
+  // The SERVER's numbers per printer article (the Cloudflare admin; null in
+  // the older build, which prices against `cost` with podPricing.js).
+  const sp = useServerPricing({
+    shopId,
+    production,
+    template,
+    colorways: availableColorways,
+    sizes,
+    slots: printSummary.map((p) => p.slot),
+    target,
+    targetProduct: products.find((p) => p.id === targetProductId) || null,
+  });
+
+  // The effective sizes for a colourway (global sizes minus its opt-outs; with
+  // server pricing: the sizes that have a printer article).
+  const sizesFor = (cwId) => (sp
+    ? sizes.filter((s) => sp.articleFor(cwId, s))
+    : sizes.filter((s) => sizeOptOut[cwId]?.[s] !== true));
 
   const toggleSizeCell = (cwId, size) =>
     setSizeOptOut((prev) => ({
@@ -162,18 +194,23 @@ const PublishPanel = ({
   // seller is inkl. moms (Mikael 2026-08-30), converted here at the edge.
   const profitFor = (priceInkl) => sellerProfitInkl(priceInkl, cost ?? NaN, vatRate);
   const marginFor = (priceInkl) => sellerMargin(priceInkl, cost ?? NaN, vatRate);
-  const floor = cost == null ? null : priceFloor(cost, vatRate);
+  const floor = sp ? sp.floor : (cost == null ? null : priceFloor(cost, vatRate));
   const costInkl = inklMoms(cost, vatRate);
 
   const validName = name.trim().length > 0;
-  const validPrice = priceNum > 0 && (floor == null || priceNum >= floor);
+  // With server pricing the floor must be KNOWN (a pending or failed quote is never "no floor").
+  const validPrice = sp
+    ? priceNum > 0 && floor != null && priceNum >= floor
+    : priceNum > 0 && (floor == null || priceNum >= floor);
+  const rowFloorOf = (cwId) => (sp ? (sp.row(cwId).summary.state === 'ok' ? sp.row(cwId).summary.floorKr : null) : floor);
   // Per-colourway override prices must respect the floor too — an override row
   // below break-even would undercut the platform's base revenue on that colour.
   const belowFloorColorways = floor == null ? [] : selectedColorways.filter((c) => {
     const rp = (rowPrices[c.id] || '').trim();
     if (rp === '') return false;
     const n = parseFloat(rp);
-    return Number.isFinite(n) && n > 0 && n < floor;
+    const rowFloor = rowFloorOf(c.id);
+    return Number.isFinite(n) && n > 0 && rowFloor != null && n < rowFloor;
   });
   const hasColorways = selectedColorwayIds.length > 0;
   // A colour with EVERY size unchecked is almost always an accident — block it
@@ -192,7 +229,8 @@ const PublishPanel = ({
   // Success + validity gates. Review is the LAST gate — everything else keeps its
   // priority so the hint only surfaces once the form is otherwise publishable.
   const canPublish =
-    !publishing && validName && validPrice && hasColorways && hasArtwork && !!shopId && allReviewed && !anySizeless && belowFloorColorways.length === 0;
+    !publishing && validName && validPrice && hasColorways && hasArtwork && !!shopId && allReviewed && !anySizeless && belowFloorColorways.length === 0
+    && !sp?.blocker;
 
   const targetProduct = products.find((p) => p.id === targetProductId) || null;
   const targetHasSku = Boolean(targetProduct?.hasSku);
@@ -200,7 +238,8 @@ const PublishPanel = ({
     targetProduct?.sku && products.some((p) => p.id !== targetProduct.id && p.hasSku && p.sku === targetProduct.sku)
   );
   const canUpdate =
-    !publishing && !!targetProductId && targetHasSku && !targetSkuConflict && hasColorways && hasArtwork && !!shopId && allReviewed;
+    !publishing && !!targetProductId && targetHasSku && !targetSkuConflict && hasColorways && hasArtwork && !!shopId && allReviewed
+    && !sp?.blocker;
 
   const publishBlocker = (() => {
     if (!shopId) return 'Välj en butik och öppna Designstudion från butikens admin.';
@@ -210,15 +249,19 @@ const PublishPanel = ({
     if (target === 'existing' && !targetProductId) return 'Välj produkten som ska uppdateras.';
     if (target === 'existing' && !targetHasSku) return 'Ge produkten en unik SKU under Produkter och försök igen.';
     if (target === 'existing' && targetSkuConflict) return `SKU ”${targetProduct.sku}” används av flera produkter. Ge varje produkt en unik SKU under Produkter.`;
+    if (target === 'existing' && sp?.blocker) return sp.blocker;
     if (target === 'new' && !validName) return 'Ange ett produktnamn.';
     if (target === 'new' && anySizeless) return 'Välj minst en storlek för varje färg.';
+    if (target === 'new' && sp?.blocker) return sp.blocker;
     if (target === 'new' && !validPrice) {
       return floor != null && priceNum > 0 && priceNum < floor
         ? `Priset måste vara minst prisgolvet ${floor} kr — under det tjänar du 0 kr.`
         : 'Ange ett pris större än 0 kr.';
     }
     if (target === 'new' && belowFloorColorways.length > 0) {
-      return `Priset för ${belowFloorColorways.map((c) => c.label).join(', ')} ligger under prisgolvet ${floor} kr.`;
+      return sp
+        ? `Priset för ${belowFloorColorways.map((c) => `${c.label} (prisgolv ${sp.row(c.id).floor})`).join(', ')} ligger under prisgolvet.`
+        : `Priset för ${belowFloorColorways.map((c) => c.label).join(', ')} ligger under prisgolvet ${floor} kr.`;
     }
     return null;
   })();
@@ -229,6 +272,7 @@ const PublishPanel = ({
       productId: targetProductId,
       selectedColorwayIds,
       replaceImages,
+      ...(sp ? { articlesByScope: sp.articlesByScope() } : {}),
     });
   };
 
@@ -247,6 +291,7 @@ const PublishPanel = ({
       selectedColorwayIds,
       sizesByColorway,
       perColorwayPrices,
+      ...(sp ? { articlesByColorway: sp.articlesByColorway() } : {}),
     });
   };
 
@@ -266,12 +311,13 @@ const PublishPanel = ({
         Kontrollera uppgifterna nedan. En ny produkt blir köpbar direkt när du skapar den.
       </p>
       <div className="mt-3 rounded-[var(--radius-admin-el)] bg-admin-success-bg px-3 py-2 text-[12px] text-admin-success-text">
-        Tryckkoppling ingår. Motivet och placeringen kopplas automatiskt till just den här produkten och följer med till Printkön vid beställning.
+        {PANEL_TEXT.connectionNote ?? 'Tryckkoppling ingår. Motivet och placeringen kopplas automatiskt till just den här produkten och följer med till Printkön vid beställning.'}
       </div>
 
       {mockups.length === 0 ? (
         <p className="mt-3 text-[12px] text-admin-text-muted">Generera mockuper först.</p>
       ) : (
+        <fieldset disabled={locked} className="contents">
         <div className="mt-4 space-y-5">
           {/* 1. What gets printed — the trycklista receipt. The seller confirms
               position + motif per print BEFORE naming/pricing (slot-aware
@@ -332,11 +378,43 @@ const PublishPanel = ({
                     Produkten saknar SKU. Ge den en unik SKU under Produkter innan du fortsätter.
                   </p>
                 )}
+                {/* No product image is written in the Cloudflare admin yet (unit FN2). */}
+                {!sp && (
                 <label className="flex cursor-pointer items-center gap-2 text-[13px] text-admin-text">
                   <input type="checkbox" checked={replaceImages}
                     onChange={(e) => setReplaceImages(e.target.checked)} className={checkboxCls} />
                   Ersätt även befintlig huvudbild/variantbilder (annars fylls bara tomma)
                 </label>
+                )}
+                {sp && targetProduct && (
+                  <div>
+                    <span className={labelCls}>{PANEL_TEXT.scopeTitle}</span>
+                    <div className="overflow-x-auto">
+                      <table className="text-[12px] text-admin-text">
+                        <tbody>
+                          {sp.scopeRows.map((r) => (
+                            <tr key={r.key} className="border-t border-admin-border-soft">
+                              <td className="px-2 py-1 text-admin-text">{r.label}</td>
+                              <td className="px-2 py-1">
+                                <select
+                                  value={sp.scopeArticle(r)}
+                                  onChange={(e) => sp.setScopeArticle(r.key, e.target.value)}
+                                  aria-label={`${r.label}, artikel hos tryckeriet`}
+                                  className={smallInputCls}
+                                >
+                                  <option value="">Välj artikel…</option>
+                                  {sp.articleOptions.map((a) => (
+                                    <option key={a.sku} value={a.sku}>{a.text}</option>
+                                  ))}
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -380,7 +458,7 @@ const PublishPanel = ({
           <div>
             <label className={labelCls}>Storlekar</label>
             <p className="mb-2 text-[12px] text-admin-text-muted">
-              Alla storlekar erbjuds från början. Avmarkera en kombination som inte ska säljas. Det ändrar inte lagersaldo.
+              {PANEL_TEXT.articleHelp ?? 'Alla storlekar erbjuds från början. Avmarkera en kombination som inte ska säljas. Det ändrar inte lagersaldo.'}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               {sizes.map((s) => (
@@ -428,6 +506,19 @@ const PublishPanel = ({
                         <td className="px-2 py-1 text-admin-text">{c.label}</td>
                         {sizes.map((s) => (
                           <td key={s} className="px-2 py-1 text-center">
+                            {sp ? (
+                              <select
+                                value={sp.articleFor(c.id, s)}
+                                onChange={(e) => sp.setArticle(c.id, s, e.target.value)}
+                                aria-label={`${c.label}, storlek ${s}, artikel hos tryckeriet`}
+                                className={smallInputCls}
+                              >
+                                <option value="">{PANEL_TEXT.notSold}</option>
+                                {sp.articleOptions.map((a) => (
+                                  <option key={a.sku} value={a.sku}>{a.text}</option>
+                                ))}
+                              </select>
+                            ) : (
                             <input
                               type="checkbox"
                               aria-label={`${c.label}, storlek ${s}, erbjuds`}
@@ -435,6 +526,7 @@ const PublishPanel = ({
                               onChange={() => toggleSizeCell(c.id, s)}
                               className={checkboxCls}
                             />
+                            )}
                           </td>
                         ))}
                       </tr>
@@ -452,6 +544,32 @@ const PublishPanel = ({
               <p className="mt-2 text-[12px] text-admin-text-muted">
                 Inga storlekar — produkten publiceras i en storlek (en variant per färg).
               </p>
+            )}
+            {sp && sizes.length === 0 && selectedColorways.length > 0 && (
+              <div className="mt-2 overflow-x-auto">
+                <table className="text-[12px] text-admin-text">
+                  <tbody>
+                    {selectedColorways.map((c) => (
+                      <tr key={c.id} className="border-t border-admin-border-soft">
+                        <td className="px-2 py-1 text-admin-text">{c.label}</td>
+                        <td className="px-2 py-1">
+                          <select
+                            value={sp.articleFor(c.id, '')}
+                            onChange={(e) => sp.setArticle(c.id, '', e.target.value)}
+                            aria-label={`${c.label}, artikel hos tryckeriet`}
+                            className={smallInputCls}
+                          >
+                            <option value="">Välj artikel…</option>
+                            {sp.articleOptions.map((a) => (
+                              <option key={a.sku} value={a.sku}>{a.text}</option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
           )}
@@ -471,6 +589,7 @@ const PublishPanel = ({
                 placeholder="0"
                 className={`${inputCls} w-32`}
               />
+              {!SERVER_PRICED && (<>
               <span className="text-admin-text-muted">·</span>
               <span className="flex items-center gap-0.5 text-[12px] text-admin-text-muted">
                 Marginal
@@ -499,14 +618,24 @@ const PublishPanel = ({
               >
                 Sätt pris från marginal
               </button>
+              </>)}
             </div>
-            {floor != null && (
+            {errorField === 'price' && error && (
+              <p className="mt-1 text-[12px] text-admin-critical-text" role="alert">{error}</p>
+            )}
+            {floor != null && !sp && (
               <p className="mt-1 text-[12px] text-admin-text-muted">
                 Prisgolv: <span className="font-medium text-admin-text">{floor} kr</span> — vid det priset tjänar du 0 kr
                 (produktionskostnad {fmtSek(costInkl)} kr inkl. moms + avgift {Math.round(FEE_RATE * 100)} % + {FEE_FIXED} kr är inräknade).
               </p>
             )}
-            {!validPrice && (
+            {floor != null && sp && (
+              <p className="mt-1 text-[12px] text-admin-text-muted">
+                Prisgolv: <span className="font-medium text-admin-text">{sp.floorText}</span> — vid det priset tjänar du 0 kr.
+                {' '}Inköp: <span className="font-medium text-admin-text">{sp.inkopText}</span> inkl. moms.
+              </p>
+            )}
+            {!validPrice && !(sp && floor == null && priceNum > 0) && (
               <p className="mt-1 text-[12px] text-admin-caution-text">
                 {floor != null && priceNum > 0 && priceNum < floor
                   ? `Priset måste vara minst prisgolvet ${floor} kr.`
@@ -518,6 +647,14 @@ const PublishPanel = ({
             <div className="mt-3 overflow-x-auto">
               <table className="w-full min-w-[520px] text-[12px]">
                 <thead>
+                  {sp ? (
+                  <tr className="text-left text-admin-text-muted">
+                    <th className="px-2 py-1 font-medium">Färg</th>
+                    <th className="px-2 py-1 font-medium">Inköp (inkl. moms)</th>
+                    <th className="px-2 py-1 font-medium">Prisgolv</th>
+                    <th className="px-2 py-1 font-medium">Pris</th>
+                  </tr>
+                  ) : (
                   <tr className="text-left text-admin-text-muted">
                     <th className="px-2 py-1 font-medium">Färg</th>
                     <th className="px-2 py-1 font-medium">Produktionskostnad (inkl. moms)</th>
@@ -525,6 +662,7 @@ const PublishPanel = ({
                     <th className="px-2 py-1 font-medium">Vinst</th>
                     <th className="px-2 py-1 font-medium">Marginal</th>
                   </tr>
+                  )}
                 </thead>
                 <tbody>
                   {selectedColorways.map((c) => {
@@ -534,7 +672,12 @@ const PublishPanel = ({
                     return (
                       <tr key={c.id} className="border-t border-admin-border-soft text-admin-text">
                         <td className="px-2 py-1.5">{c.label}</td>
+                        {sp ? (<>
+                        <td className="px-2 py-1.5 text-admin-text-muted">{sp.row(c.id).inkop}</td>
+                        <td className="px-2 py-1.5 text-admin-text-muted">{sp.row(c.id).floor}</td>
+                        </>) : (
                         <td className="px-2 py-1.5 text-admin-text-muted">{costInkl == null ? '—' : `${fmtSek(costInkl)} kr`}</td>
+                        )}
                         <td className="px-2 py-1.5">
                           <input
                             type="number"
@@ -544,22 +687,33 @@ const PublishPanel = ({
                             aria-label={`Pris för ${c.label}`}
                             onChange={(e) => setRowPrices((prev) => ({ ...prev, [c.id]: e.target.value }))}
                             placeholder={validPrice ? fmtSek(priceNum) : '—'}
-                            className={`${smallInputCls} w-24 ${floor != null && rp !== '' && parseFloat(rp) > 0 && parseFloat(rp) < floor ? 'border-admin-critical-dot' : ''}`}
+                            className={`${smallInputCls} w-24 ${rowFloorOf(c.id) != null && rp !== '' && parseFloat(rp) > 0 && parseFloat(rp) < rowFloorOf(c.id) ? 'border-admin-critical-dot' : ''}`}
                           />
                         </td>
+                        {!sp && (<>
                         <td className="px-2 py-1.5 text-admin-text-muted">{fmtKr(profitFor(effective))}</td>
                         <td className="px-2 py-1.5 text-admin-text-muted">{fmtPct(marginFor(effective))}</td>
+                        </>)}
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
             </div>
-            {cost == null && (
+            {cost == null && !sp && (
               <p className="mt-1.5 text-[12px] text-admin-text-muted">
                 {costPending
                   ? 'Hämtar produktionskostnaden…'
                   : 'Produktionskostnad saknas för den här mallen — vinst och marginal visas när priset är satt av tryckeriet.'}
+              </p>
+            )}
+            {sp && sp.overall.state === 'pending' && (
+              <p className="mt-1.5 text-[12px] text-admin-text-muted">Hämtar inköpspris och prisgolv…</p>
+            )}
+            {sp && sp.overall.state === 'failed' && (
+              <p className="mt-1.5 text-[12px] text-admin-caution-text">
+                {sp.overall.message || 'Inköpspriset kunde inte hämtas just nu.'}{' '}
+                <button type="button" onClick={sp.retry} className="font-medium underline">Försök igen</button>
               </p>
             )}
           </div>
@@ -570,7 +724,9 @@ const PublishPanel = ({
             <div className="rounded-[var(--radius-admin)] border border-admin-success-dot/40 bg-admin-success-bg px-4 py-3">
               <p className="text-[13px] font-medium text-admin-success-text">
                 {result.updated
-                  ? `Produkten ”${result.name}” uppdaterades med dina mockuper och trycket kopplades automatiskt.`
+                  ? (PANEL_TEXT.updated
+                    ? `Produkten ”${result.name}” ${PANEL_TEXT.updated}`
+                    : `Produkten ”${result.name}” uppdaterades med dina mockuper och trycket kopplades automatiskt.`)
                   : `Produkten ”${result.name}” skapades.`}
               </p>
               <p className="mt-1 text-[12px] text-admin-success-text">
@@ -578,10 +734,13 @@ const PublishPanel = ({
               </p>
               {/* Brand screening (SnapWear A11): published anyway, but the seller
                   is told plainly that the platform reviews it and why. */}
-              {result.screeningHits?.length > 0 && (
+              {resultScreeningText(result) && (
                 <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] leading-relaxed text-admin-caution-text" role="status">
-                  {screeningNotice(result.screeningHits)}
+                  {resultScreeningText(result)}
                 </p>
+              )}
+              {result.note && (
+                <p className="mt-2 text-[12px] text-admin-success-text">{result.note}</p>
               )}
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 <Link to="/admin/products" className="text-[12px] font-medium text-admin-info-text hover:underline">
@@ -614,7 +773,7 @@ const PublishPanel = ({
                     : (target === 'existing' ? 'Uppdatera produkten' : 'Skapa produkt')}
                 </button>
               )}
-              {error && (
+              {error && !(errorField === 'price' && target === 'new') && (
                 <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
                   {error}
                 </p>
@@ -627,6 +786,7 @@ const PublishPanel = ({
             </div>
           )}
         </div>
+        </fieldset>
       )}
     </div>
   );

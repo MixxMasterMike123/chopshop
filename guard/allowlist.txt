@@ -301,8 +301,8 @@ src/wagons/dining-wagon/utils/mentionUtils.js
 src/wagons/pod-wagon/components/artworkLibraryData.js
 src/wagons/pod-wagon/components/artworkUploadData.js
 src/wagons/pod-wagon/components/productMappingData.js
-src/wagons/pod-wagon/studio/DesignStudio.jsx
 src/wagons/pod-wagon/studio/mockupUpload.js
+src/wagons/pod-wagon/studio/studioData.js
 src/wagons/writers-wagon/WagonManifest.js
 stripe-review-export/MD_specs/README.md
 stripe-review-export/MD_specs/VERIFICATION_RESULTS.md

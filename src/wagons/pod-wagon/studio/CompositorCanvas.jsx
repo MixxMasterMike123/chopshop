@@ -146,6 +146,10 @@ const CompositorCanvas = ({
   // no free placement). Renders the default placement read-only: no drag,
   // resize, nudge or cm fields; readout + DPI verdict stay.
   locked = false,
+  // lockedNote: the line under a locked canvas (null: the pocket's own copy).
+  // The Cloudflare admin locks every slot (the server sizes the print) and
+  // names that instead (CP5 unit FN1, STUDIO_TEXT.canvasLockedNote).
+  lockedNote = null,
   // ghostAreas: other DESIGNED slots on the SAME flat — [{ slot, label, rect,
   // artwork, placement }] (rect in viewBox px, placement in mm). Their artwork
   // COMPOSITES on the flat (a designed print never disappears when another row
@@ -497,7 +501,7 @@ const CompositorCanvas = ({
 
           {locked ? (
             <p className="mt-2 text-[12px] text-admin-text-muted">
-              Fast tryckyta — motivet placeras automatiskt (contain, centrerat). Välj position ovan.
+              {lockedNote ?? 'Fast tryckyta — motivet placeras automatiskt (contain, centrerat). Välj position ovan.'}
             </p>
           ) : (
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">

@@ -48,22 +48,15 @@ import ColorwayStrip from './ColorwayStrip';
 import MockupPanel from './MockupPanel';
 import PublishPanel from './PublishPanel';
 import Studio3DSection from './Studio3DSection';
-// Publish (slice 4) — create the real product + variants + POD mappings. These
-// are the ONLY Firebase-touching imports in the studio; PublishPanel stays
-// Firebase-free (presentational) so the dev harness can mount it standalone.
-import { collection, addDoc, getDocs, query, where, serverTimestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '../../../firebase/config';
-import { withShopId } from '../../../config/withShopId';
-import { skuFromName, uniqueSku } from '../../../utils/productUrls';
-import { deriveVariantsFromGroups } from '../../../utils/variantDerivation';
-import { setMapping } from '../../../utils/podMappings';
-import { priceFloor } from '../podPricing';
 import { resolvePrinterUid } from '../printRouting';
 import { STORE } from '../../../config/store';
-import { orderedVariantMockupUrls } from './mockupVariantImages';
-import { screenProduct } from '../../../utils/contentScreening';
-import { loadScreeningBlocklist } from '../../../utils/loadContentScreening';
+// Publish (slice 4) — create the real product + variants + POD mappings. The
+// publish and update-existing work (Firebase in the older build) lives in
+// ./studioData.js, which the Cloudflare admin's build swaps for its own
+// (vite.admin.config.js; CP5 unit FN1), together with what that build does
+// differently (STUDIO_FLAGS, STUDIO_TEXT). The studio itself imports no
+// Firebase; PublishPanel stays presentational.
+import { STUDIO_FLAGS, STUDIO_TEXT, publishDesign, updateProductFromDesign, useStudioEnv } from './studioData';
 
 // Validation is ADVISORY (podValidation's contract: "WARN/FAIL never blocks — it
 // guides the seller; the printer decides"). The studio therefore selects ANY
@@ -71,10 +64,6 @@ import { loadScreeningBlocklist } from '../../../utils/loadContentScreening';
 // picker thumb. Only non-composable files (no raster preview/dims — PDF/SVG)
 // are unselectable, because the compositor literally has nothing to draw.
 const isSelectableArtwork = (art) => isComposable(art);
-
-// Publish/update refuse to write when the server cost quote could not be
-// fetched (A13) — see freshQuoteFor.
-const QUOTE_FAILED_MSG = 'Produktionskostnaden kunde inte hämtas. Kontrollera anslutningen och försök igen.';
 
 // The wizard page where colours are REVIEWED (6 · Godkänn). Seeing a colourway
 // only counts as a review while this page is on screen — that is where the big
@@ -98,7 +87,8 @@ const GarmentThumb = ({ template, colorway }) => (
 // garment whose every frame was cleared), so applyPrinterAreas leaves no slot
 // to place a motif on.
 const templateOffered = (template, routing, printersById) => {
-  if (Object.keys(printersById || {}).length === 0) return true;
+  // (The Cloudflare admin offers nothing no printer can make: STUDIO_FLAGS.)
+  if (Object.keys(printersById || {}).length === 0) return STUDIO_FLAGS.offerUnrouted;
   const garment = garmentOfTemplate(template);
   const uid = resolvePrinterUid(garment, routing, printersById);
   if (uid == null) return false;
@@ -122,6 +112,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // these: it comes from the server as one number (quotePodCost, below).
   const [routing, setRouting] = useState({ byGarment: {}, defaultPrinterUid: null });
   const [printersById, setPrintersById] = useState({});
+  // Every printer + model per garment the seller may choose from (the
+  // Cloudflare admin's loader; null in the older build: the platform routes).
+  const [production, setProduction] = useState(null);
+  const studioEnv = useStudioEnv();
 
   // TRYCKLISTAN (slice A, 2026-08-08): the design = an ordered list of PRINTS,
   // one row per physical position: { slot, artworkId|null }. A row without a
@@ -166,6 +160,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // Publish (slice 4): the "Skapa produkt" step. result = { name, sku } on success.
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState(null);
+  // The field a refusal concerns ('price': shown at the price), or null.
+  const [publishErrorField, setPublishErrorField] = useState(null);
   const [publishResult, setPublishResult] = useState(null);
   // Object URLs owned by the current mockup set — revoked on replace/unmount.
   const objectUrlsRef = useRef([]);
@@ -187,6 +183,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     setHeroKey(null);
     setMockupError(null);
     setPublishError(null);
+    setPublishErrorField(null);
     setPublishResult(null);
     replaceObjectUrls([]);
     resetReviews();
@@ -207,6 +204,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         setModels3d(m3d);
         setRouting(routed.routing);
         setPrintersById(routed.printersById);
+        setProduction(routed.production ?? null);
         setMeta(getPodMockupTemplatesMeta());
         // Default-select the first OFFERED template + its first colourway so
         // the canvas isn't empty on open (never a garment no printer makes).
@@ -552,7 +550,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // with another aspect/resolution must not inherit an out-of-area or sub-DPI
   // rect), else the compositor default. Same function feeds the mockup
   // renderer AND the publish readouts so they can never disagree.
-  const effectivePlacementFor = (s, art) => (s === 'pocket'
+  // (Where the print is sized by the server — STUDIO_FLAGS.placementEditable
+  // false — every slot is locked to that contain-fit placement, as the pocket.)
+  const effectivePlacementFor = (s, art) => (s === 'pocket' || !STUDIO_FLAGS.placementEditable
     ? containPlacement(effTemplate, s, art, profile?.min_dpi ?? null)
     : (placements[s]
         ? clampPlacement(placements[s], effTemplate, s, art, profile?.min_dpi ?? null)
@@ -708,27 +708,46 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   };
 
   // ── PUBLISH (slice 4) ───────────────────────────────────────────────────
-  // Turn the generated mockups into a real, immediately-sellable product +
-  // variants + POD mappings. PublishPanel is presentational and calls this with
-  // the operator's picks; ALL Firebase work lives here (studio owns the state).
-  //
-  // Write order (mirrors ProductForm's save path where they overlap):
-  //   validate → resolve per-shop-unique sku → upload hero + every mockup blob to
-  //   the PUBLIC product path (the pod-artwork drafts are admin-read-only) → build
-  //   resolved variant groups (selected colourways, per-colourway FRONT mockup as
-  //   primary + BACK as secondary, chosen sizes, explicit per-row price or '') →
-  //   deriveVariantsFromGroups → build the product doc EXACTLY like ProductForm →
-  //   addDoc → setMapping parent rows (one per designed slot) → setMapping override
-  //   rows (one per slot×overridden-colourway) → success.
-  //
-  // NO rollback: if a later step fails after the doc was created, we surface an
-  // honest "created but images/mappings may be incomplete" message.
-  const uploadBlobToPublicPath = async (objectUrl, type, path, name) => {
-    // Object URLs are same-session; fetch the blob and upload it RAW (it is already
-    // a rendered WebP/PNG — no compression pipeline, matching mockupUpload.js).
-    const blob = await (await fetch(objectUrl)).blob();
-    const snap = await uploadBytes(storageRef(storage, `${path}/${name}`), blob, { contentType: type });
-    return getDownloadURL(snap.ref);
+  // Turn the design into a real product + variants + POD mappings.
+  // PublishPanel is presentational and calls this with the operator's picks;
+  // the studio validates (below), holds the in-flight latch and the
+  // `publishing` flag, and ./studioData.js does the work (Firebase in the
+  // older build: mockup uploads, the product doc, podMappings; the Cloudflare
+  // admin's module: the product, variant and mapping routes). The data module
+  // reads the design from studioContext() — a snapshot taken at the click, so
+  // an edit made while the save runs does not reach it — and answers
+  // { result } or { error, field?, changed? }.
+  const studioContext = () => ({
+    shopId,
+    env: studioEnv,
+    selectedTemplate,
+    effTemplate,
+    prints,
+    overrides,
+    mockups,
+    heroKey,
+    pocketPosition,
+    publishSlots: designedSlots(selectedTemplate),
+    printArtwork,
+    artworkById,
+    resolveArtwork,
+    effectivePlacementFor,
+    labelForSlot,
+    freshQuoteFor,
+    publishedArtworkNames,
+    production: routedPrinterUid ? printersById[routedPrinterUid] || null : null,
+  });
+
+  const settlePublish = (outcome) => {
+    if (outcome?.result) {
+      setPublishResult(outcome.result);
+      onChanged?.();
+      return;
+    }
+    setPublishError(outcome?.error || 'Publiceringen misslyckades.');
+    setPublishErrorField(outcome?.field || null);
+    // Something was written before the failure (a draft): the library shows it.
+    if (outcome?.changed) onChanged?.();
   };
 
   // Synchronous in-flight latch: the `publishing` STATE doesn't update between
@@ -737,9 +756,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // two live products sharing one SKU. The ref flips synchronously.
   const publishingRef = useRef(false);
 
-  const publish = async ({ name, price, selectedColorwayIds, sizesByColorway, perColorwayPrices }) => {
+  const publish = async (form) => {
+    const { name, price, selectedColorwayIds } = form;
     if (publishing || publishingRef.current) return;
     setPublishError(null);
+    setPublishErrorField(null);
     setPublishResult(null);
 
     // Validate (belt-and-suspenders; PublishPanel gates the button too).
@@ -768,242 +789,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
     publishingRef.current = true;
     setPublishing(true);
-    let docCreated = false;
     try {
-      const stampQuote = await freshQuoteFor(publishSlots);
-      // A FAILED quote is not "unpriced": creating the product now would skip
-      // the price floor and stamp no cost. Nothing is written yet — refuse.
-      if (stampQuote.failed) throw new Error(QUOTE_FAILED_MSG);
-      // PRISGOLV — authoritative re-check in the handler (the UI enforces it
-      // too, but the handler is the gate that actually creates a sellable
-      // product; podPricing.js is the single formula source).
-      {
-        // Same cost basis as the stamp below and as PublishPanel's readout: the
-        // DESIGNED slots decide the print cost, so the gate can't enforce a
-        // cheaper floor than the one the seller was just shown. Re-quoted just
-        // above (fresh) and reused for the stamp, so gate and stamp are one number.
-        const costP = stampQuote.costSek;
-        const floorP = costP != null ? priceFloor(costP) : null;
-        if (floorP != null) {
-          if (!(parseFloat(price) >= floorP)) {
-            throw new Error(`Priset måste vara minst prisgolvet ${floorP} kr — under det tjänar säljaren 0 kr.`);
-          }
-          const lowCw = Object.values(perColorwayPrices || {})
-            .filter((v) => String(v).trim() !== '')
-            .map((v) => parseFloat(v))
-            .filter((n) => Number.isFinite(n) && n < floorP);
-          if (lowCw.length > 0) {
-            throw new Error(`Ett färgpris ligger under prisgolvet ${floorP} kr.`);
-          }
-        }
-      }
-      // 1. Resolve a per-shop-UNIQUE sku (same logic as ProductForm).
-      const requestedSku = skuFromName(cleanName);
-      const skuSnap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
-      const takenSkus = [];
-      skuSnap.forEach((d) => { const s = (d.data().sku || '').trim(); if (s) takenSkus.push(s); });
-      const resolvedSku = uniqueSku(requestedSku, takenSkus);
-
-      // 2. Upload the hero + mockup blobs to the PUBLIC product image path — ONLY
-      // for the SELECTED colourways: an unchecked colourway must not appear in the
-      // product gallery (it isn't sellable — showing it would be a surprise).
-      // productId is the STORAGE path id only (the Firestore doc id comes from
-      // addDoc — they differ by design, same as ProductForm).
-      const pubMockups = mockups.filter((m) => selectedSet.has(m.colorwayId));
-      if (pubMockups.length === 0) {
-        setPublishError('Inga mockuper för de valda färgerna — generera om.');
-        setPublishing(false);
-        return;
-      }
-      const productId = `prod_${Date.now()}`;
-      const publicPath = `products/${shopId}/${productId}`;
-      // Hero must be a PUBLISHED colourway's mockup; fall back to the first one.
-      const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
-
-      const heroUrl = await uploadBlobToPublicPath(hero.objectUrl, hero.type, publicPath, 'b2c_main');
-
-      // Upload the published mockups (in mockups-array order → gallery order).
-      // Parallel uploads — Promise.all preserves input order, so galleryUrls[i]
-      // still corresponds to pubMockups[i] (the index-join below depends on it).
-      const galleryUrls = await Promise.all(pubMockups.map((m) =>
-        uploadBlobToPublicPath(m.objectUrl, m.type, publicPath, `mockup_${m.colorwayId}_${m.slot}`)
-      ));
-      // 3. Build resolved variant groups — one per SELECTED colourway. Front is
-      // primary and the matching back is secondary when both were designed.
-      const colorwayLabel = (id) =>
-        (selectedTemplate?.colorways || []).find((c) => c.id === id)?.label || id;
-      // publishedIds order defines resolvedGroups order — and the derivation
-      // processes groups 1:1 in order, so cleanGroups[i] ↔ publishedIds[i].
-      // That index join (not labels) keys the override→group-sku lookup below.
-      const publishedIds = (selectedColorwayIds || []).filter((id) => selectedSet.has(id));
-      const resolvedGroups = publishedIds
-        .map((id) => {
-          const images = orderedVariantMockupUrls({
-            colorwayId: id, mockups: pubMockups, urls: galleryUrls, fallbackUrl: heroUrl,
-          });
-          const explicit = (perColorwayPrices?.[id] ?? '').toString().trim();
-          return {
-            label: colorwayLabel(id),
-            sku: '',                                   // auto-derive from product sku + label
-            price: explicit === '' ? '' : explicit,    // '' inherits the product price
-            images,
-            sizes: sizesByColorway?.[id] || [],
-          };
-        });
-
-      // 4. Derive the cleaned rail + sellable rows (byte-identical to ProductForm).
-      const { cleanGroups, cleanVariants } = deriveVariantsFromGroups(resolvedGroups, {
-        productSku: resolvedSku,
-        productPrice,
-        skuFromName,
-      });
-      const hasVariants = cleanVariants.length > 0;
-
-      // 5. POD mappings — written BEFORE the product doc goes live (P1 fix
-      // 2026-08-15: the old order created a LIVE product first and connected it
-      // after; a failed mapping write left a live-but-unprintable product. This
-      // order can at worst leave orphan mapping rows for a product that was
-      // never created — harmless, visible in Avancerat, overwritten on retry).
-      // PARENT row per DESIGNED slot: keyed on the product sku,
-      // its placement is the cm readout of the slot's EFFECTIVE placement (stored
-      // placement, else the compositor default). The print pipeline resolves
-      // longest-prefix within a slot, so per-colourway group-sku rows override the
-      // parent for that colourway's sizes.
-      // Group sku per COLORWAY ID (index-aligned with publishedIds) — an id join,
-      // not a label join, so duplicate colorway labels can never cross-target.
-      const groupSkuByColorwayId = new Map(publishedIds.map((id, i) => [id, cleanGroups[i]?.sku]));
-      // All mapping rows in PARALLEL: every setMapping call targets a distinct
-      // upsert key (shopId, sku, slot) — parent rows use the product sku,
-      // override rows a group sku — so the read-then-write upserts can't race
-      // each other. Was a serial O(slots × colorways) round-trip chain.
-      const mappingWrites = [];
-      // The garment this design is printed on — persisted per mapping row so
-      // the print pipeline can route the production line to the printer that
-      // makes this garment. null (unknown template) → the default printer.
-      const publishGarment = garmentOfTemplate(selectedTemplate);
-      for (const s of publishSlots) {
-        const baseArt = printArtwork(s);
-        const effective = effectivePlacementFor(s, baseArt);
-        const readout = placementReadout(effective, effTemplate, s, baseArt);
-        const isPocket = s === 'pocket';
-        const posLabel = pocketPositionLabel(pocketPosition);
-        mappingWrites.push(setMapping({
-          shopId,
-          sku: resolvedSku,
-          artworkId: baseArt.id,
-          profileId: selectedTemplate.profileId,
-          garment: publishGarment,
-          slotLabel: labelForSlot(s),
-          // Pocket rows carry the discrete position FIRST — that's the printer's
-          // primary instruction for this slot ("Ficka — Vänster · 2 cm uppifrån…").
-          placement: isPocket ? `${posLabel} · ${readout}` : readout,
-          placementSlot: s,
-          ...(isPocket ? { position: pocketPosition } : {}),
-        }));
-
-        // OVERRIDE row per (designed slot, colourway that has an override AND is
-        // published): targets that colourway's GROUP sku so it wins over the parent.
-        const slotOverrides = overrides[s] || {};
-        for (const [cwId, overrideArtworkId] of Object.entries(slotOverrides)) {
-          if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
-          const groupSku = groupSkuByColorwayId.get(cwId);
-          if (!groupSku) continue;
-          const overrideArt = artworkById(overrideArtworkId) || printArtwork(s);
-          const effectiveO = effectivePlacementFor(s, overrideArt);
-          const readoutO = placementReadout(effectiveO, effTemplate, s, overrideArt);
-          mappingWrites.push(setMapping({
-            shopId,
-            sku: groupSku,
-            artworkId: overrideArtworkId,
-            profileId: selectedTemplate.profileId,
-            garment: publishGarment,
-            slotLabel: labelForSlot(s),
-            placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
-            placementSlot: s,
-            ...(isPocket ? { position: pocketPosition } : {}),
-          }));
-        }
-      }
-      await Promise.all(mappingWrites);
-
-      // 6. Build the product doc EXACTLY like ProductForm (studio-relevant field
-      // set). Single price → BOTH b2cPrice + basePrice. Empty weight/dimensions/
-      // shipping shapes copied verbatim from ProductForm's emptyForm.
-      // Prices are stored INKL. moms (see STORE.vatRate — VAT is display-only in
-      // the Publish step's profit columns, not applied to the stored number).
-      const data = {
-        name: cleanName,
-        sku: resolvedSku,
-        category: '',
-        tags: [],
-        hasVariants,
-        variantGroups: cleanGroups,
-        options: [],
-        variants: cleanVariants,
-        b2cPrice: productPrice,
-        basePrice: productPrice,          // keep in sync for the `b2cPrice || basePrice` fallback
-        isActive: true,
-        featured: false,
-        imageUrl: heroUrl,
-        b2cImageUrl: heroUrl,
-        b2cImageGallery: galleryUrls,
-        availability: { b2c: true },
-        descriptions: { b2c: '', b2cMoreInfo: '' },
-        // LEGAL FIREWALL: studio-authored products are NEVER personalized. The
-        // 14-day withdrawal right stays; isPersonalized is order-flow-derived only.
-        isPersonalized: false,
-        // POD marker + economics: lets the product form gate "live" on a print
-        // connection and compute the break-even price floor (podPricing.js)
-        // without loading the template. The cost is computed from the DESIGNED
-        // slots — plagg + ett tryckpris per tryckt yta + plattformsuttaget — så
-        // fram+bak stämplar mer än bara fram.
-        isPodProduct: true,
-        // podPrinterUid records WHICH printer the frozen cost was quoted for, so
-        // the product form and any later audit can see the basis without
-        // re-resolving today's routing — rerouting must never silently restate
-        // an existing product's economics. podCostSek is the ONE quoted number
-        // (A13); nothing here says how it is made up.
-        ...(stampQuote.costSek != null
-          ? { podCostSek: stampQuote.costSek, podPrinterUid: stampQuote.printerUid }
-          : {}),
-        sizeGuide: '',
-        weight: { value: 0, unit: 'g' },
-        dimensions: {
-          length: { value: 0, unit: 'mm' },
-          width: { value: 0, unit: 'mm' },
-          height: { value: 0, unit: 'mm' },
-        },
-        shipping: {
-          sweden: { cost: 0, service: 'Standard' },
-          nordic: { cost: 0, service: 'Nordic' },
-          eu: { cost: 0, service: 'EU' },
-          worldwide: { cost: 0, service: 'International' },
-        },
-        delivery: { shipping: true, pickup: true },
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-      };
-      await addDoc(collection(db, 'products'), withShopId(data, shopId));
-      docCreated = true;
-
-      // Brand screening notice (A11). Advisory only: publishing is NOT blocked
-      // (that would just invite renaming around the list); the server trigger
-      // stamps `screening` and the platform reviews. The client never writes it.
-      const screeningHits = screenProduct(
-        data,
-        await loadScreeningBlocklist(),
-        publishedArtworkNames(publishSlots, selectedSet),
-      );
-
-      setPublishResult({ name: cleanName, sku: resolvedSku, screeningHits });
-      onChanged?.();
-    } catch (e) {
-      console.error('DesignStudio: publish failed', e);
-      setPublishError(
-        docCreated
-          ? 'Produkten skapades men bilder/kopplingar kan vara ofullständiga — kontrollera under Produkter.'
-          : (e?.message || 'Publiceringen misslyckades.')
-      );
+      settlePublish(await publishDesign(studioContext(), form));
     } finally {
       publishingRef.current = false;
       setPublishing(false);
@@ -1016,9 +803,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // EXACT colourway-label matches — and, the part that makes it PRINTABLE,
   // the same podMappings rows the create flow writes, keyed on the product's
   // own sku. Variants/prices/copy stay untouched (no variant surgery in v1).
-  const updateProduct = async ({ productId, selectedColorwayIds, replaceImages }) => {
+  const updateProduct = async (form) => {
+    const { selectedColorwayIds } = form;
     if (publishing || publishingRef.current) return;
     setPublishError(null);
+    setPublishErrorField(null);
     setPublishResult(null);
     if (!shopId) { setPublishError('Ingen butik är vald.'); return; }
     const publishSlots = designedSlots(selectedTemplate);
@@ -1038,210 +827,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
     publishingRef.current = true;
     setPublishing(true);
-    let docTouched = false;
     try {
-      // Fresh authoritative read — the library listing is a projection and the
-      // doc may have changed since it loaded.
-      const prodRef = doc(db, 'products', productId);
-      const prodSnap = await getDoc(prodRef);
-      if (!prodSnap.exists()) throw new Error('Produkten finns inte längre.');
-      const prod = prodSnap.data();
-      if (prod.shopId !== shopId) throw new Error('Produkten tillhör en annan butik.');
-      if (!String(prod.sku || '').trim()) {
-        throw new Error('Produkten saknar SKU. Ge den en unik SKU under Produkter innan du fortsätter.');
-      }
-      // A mapping is keyed by SKU. Two products sharing one SKU would also share
-      // one artwork in Printkön, violating the studio's product-specific contract.
-      // Re-check authoritatively at submit time; the picker data may be stale.
-      const productSnap = await getDocs(query(collection(db, 'products'), where('shopId', '==', shopId)));
-      const duplicateSku = productSnap.docs.some((d) =>
-        d.id !== productId && String(d.data()?.sku || '').trim() === String(prod.sku).trim());
-      if (duplicateSku) {
-        throw new Error(`SKU ”${prod.sku}” används av flera produkter. Ge varje produkt en unik SKU under Produkter.`);
-      }
-      const norm = (x) => String(x || '').trim().toLowerCase();
-      const groupSkuByLabel = new Map(
-        (Array.isArray(prod.variantGroups) ? prod.variantGroups : [])
-          .filter((g) => g?.sku && g?.label)
-          .map((g) => [norm(g.label), g.sku])
-      );
-      const cwLabelOf = (id) =>
-        (selectedTemplate?.colorways || []).find((c) => c.id === id)?.label || null;
-      // A colour-specific motif must have an exact variant-group target. Block
-      // before uploads rather than publish a mockup that differs from Printkön.
-      const missingOverrideLabels = new Set();
-      for (const s of publishSlots) {
-        for (const [cwId, overrideArtworkId] of Object.entries(overrides[s] || {})) {
-          if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
-          if (!groupSkuByLabel.has(norm(cwLabelOf(cwId)))) {
-            missingOverrideLabels.add(cwLabelOf(cwId) || cwId);
-          }
-        }
-      }
-      if (missingOverrideLabels.size > 0) {
-        throw new Error(`Motivet för ${[...missingOverrideLabels].join(', ')} kan inte kopplas eftersom färgnamnet saknas på produkten. Uppdatera produktens färger eller skapa en ny produkt.`);
-      }
-      // No PRISGOLV gate here: updating an existing product only refreshes
-      // mockup images/artwork. Pricing is owned by the Products page —
-      // ProductForm blocks any save below the floor (podPricing.js).
-      // costU is still needed to stamp podCostSek on the product below — a
-      // FRESH server quote (A13), never the memoised one the panel showed.
-      const { costSek: costU, printerUid: printerUidU, failed: quoteFailedU } = await freshQuoteFor(publishSlots);
-      if (quoteFailedU) throw new Error(QUOTE_FAILED_MSG); // before any upload/write
-      const publicPath = `products/${shopId}/${productId}`;
-      const hero = pubMockups.find((m) => m.key === heroKey) || pubMockups[0];
-      // 'studio_' prefix + deterministic (colorway, slot) names: re-running the
-      // update replaces this flow's own files instead of accumulating copies.
-      const galleryUrls = await Promise.all(pubMockups.map((m) =>
-        uploadBlobToPublicPath(m.objectUrl, m.type, publicPath, `studio_${m.colorwayId}_${m.slot}`)
-      ));
-      const heroUrl = galleryUrls[pubMockups.indexOf(hero)];
-
-      // Gallery merge deduped on storage PATH — download tokens differ between
-      // uploads of the same object, so URL equality would stack duplicates.
-      const pathOf = (u) => { try { return new URL(u).pathname; } catch { return u; } };
-      const existingGallery = Array.isArray(prod.b2cImageGallery) ? prod.b2cImageGallery : [];
-      const keptGallery = existingGallery.filter((u) => !galleryUrls.some((n) => pathOf(n) === pathOf(u)));
-      const updates = {
-        b2cImageGallery: [...keptGallery, ...galleryUrls],
-        updatedAt: serverTimestamp(),
-      };
-      // Main image: fill when missing; replace only on explicit opt-in.
-      const hasMain = Boolean(prod.imageUrl || prod.b2cImageUrl);
-      if (!hasMain || replaceImages) {
-        updates.imageUrl = heroUrl;
-        updates.b2cImageUrl = heroUrl;
-      }
-
-      // Variant-group images on EXACT label matches (case-insensitive):
-      // fill empty groups always, replace populated ones only on opt-in.
-      const variantUrlsByLabel = {};
-      for (const id of selectedSet) {
-        const label = cwLabelOf(id);
-        if (!label) continue;
-        variantUrlsByLabel[norm(label)] = orderedVariantMockupUrls({
-          colorwayId: id, mockups: pubMockups, urls: galleryUrls, fallbackUrl: heroUrl,
-        });
-      }
-      // NOTE both `image` AND `images` must be written: the storefront card
-      // reads g.image / v.image, the product page reads variant.images — the
-      // persisted shape carries both (variantDerivation CleanGroup/VariantRow).
-      // The change must also propagate to the sellable variants[] rows, which
-      // hold their own copies (joined by `group` = the group's label).
-      if (Array.isArray(prod.variantGroups) && prod.variantGroups.length) {
-        const updatedUrlByLabel = {};
-        let changed = false;
-        const groups = prod.variantGroups.map((g) => {
-          const urls = variantUrlsByLabel[norm(g?.label)];
-          if (!urls?.length) return g;
-          const has = Array.isArray(g.images) ? g.images.length > 0 : Boolean(g.image);
-          if (has && !replaceImages) return g;
-          changed = true;
-          updatedUrlByLabel[norm(g.label)] = urls;
-          const rest = Array.isArray(g.images)
-            ? g.images.slice(1).filter((u) => !urls.some((url) => pathOf(u) === pathOf(url)))
-            : [];
-          return { ...g, image: urls[0], images: [...urls, ...rest] };
-        });
-        if (changed) {
-          updates.variantGroups = groups;
-          if (Array.isArray(prod.variants) && prod.variants.length) {
-            updates.variants = prod.variants.map((v) => {
-              const urls = updatedUrlByLabel[norm(v?.group)];
-              if (!urls?.length) return v;
-              const rest = Array.isArray(v.images)
-                ? v.images.slice(1).filter((u) => !urls.some((url) => pathOf(u) === pathOf(url)))
-                : [];
-              return { ...v, image: urls[0], images: [...urls, ...rest] };
-            });
-          }
-        }
-      }
-
-      // KNOWN WINDOW: getDoc → uploads → updateDoc is a seconds-long
-      // read-modify-write; a concurrent ProductForm save in that window loses
-      // its group edits to this snapshot. Accepted for v1 (single-admin shops).
-      // Automatic print connection — written BEFORE the product doc is touched
-      // (P1 fix 2026-08-15: mapping-write failure must abort with the product
-      // unchanged, never leave updated images/stamps on a broken connection).
-      // Identical mapping rows to the create flow, keyed on
-      // the product's OWN sku; override rows target group skus whose label
-      // EXACTLY matches the overridden colourway's label (decision 2026-08-09:
-      // exact matches only, nothing fuzzy).
-      const writes = [];
-      // Same routing key as the create path — the garment this design prints on.
-      const updateGarment = garmentOfTemplate(selectedTemplate);
-      for (const s of publishSlots) {
-        const baseArt = printArtwork(s);
-        const effective = effectivePlacementFor(s, baseArt);
-        const readout = placementReadout(effective, effTemplate, s, baseArt);
-        const isPocket = s === 'pocket';
-        const posLabel = pocketPositionLabel(pocketPosition);
-        writes.push(setMapping({
-          shopId,
-          sku: prod.sku,
-          artworkId: baseArt.id,
-          profileId: selectedTemplate.profileId,
-          garment: updateGarment,
-          slotLabel: labelForSlot(s),
-          placement: isPocket ? `${posLabel} · ${readout}` : readout,
-          placementSlot: s,
-          ...(isPocket ? { position: pocketPosition } : {}),
-        }));
-        const slotOverrides = overrides[s] || {};
-        for (const [cwId, overrideArtworkId] of Object.entries(slotOverrides)) {
-          if (!overrideArtworkId || !selectedSet.has(cwId)) continue;
-          const gSku = groupSkuByLabel.get(norm(cwLabelOf(cwId)));
-          if (!gSku) continue; // preflight above blocks this mismatch
-          const overrideArt = artworkById(overrideArtworkId) || printArtwork(s);
-          const effO = effectivePlacementFor(s, overrideArt);
-          const readoutO = placementReadout(effO, effTemplate, s, overrideArt);
-          writes.push(setMapping({
-            shopId,
-            sku: gSku,
-            artworkId: overrideArtworkId,
-            profileId: selectedTemplate.profileId,
-            garment: updateGarment,
-            slotLabel: labelForSlot(s),
-            placement: isPocket ? `${posLabel} · ${readoutO}` : readoutO,
-            placementSlot: s,
-            ...(isPocket ? { position: pocketPosition } : {}),
-          }));
-        }
-      }
-      await Promise.all(writes);
-
-      // Same POD stamps as the create path — an existing product that gets a
-      // studio design IS a POD product from now on. costU (the fresh server
-      // quote above) is the DESIGNED-slot cost as ONE number — fram+bak
-      // stämplar mer än bara fram.
-      updates.isPodProduct = true;
-      if (costU != null) { updates.podCostSek = costU; updates.podPrinterUid = printerUidU; }
-      await updateDoc(prodRef, updates);
-      docTouched = true;
-
-
-
-      // Same advisory brand-screening notice as the create path (A11): the
-      // product's existing text + the motifs this update prints.
-      const screeningHits = screenProduct(
-        prod,
-        await loadScreeningBlocklist(),
-        publishedArtworkNames(publishSlots, selectedSet),
-      );
-
-      setPublishResult({
-        name: prod.name || '(namnlös produkt)',
-        sku: prod.sku || '',
-        updated: true,
-        screeningHits,
-      });
-      onChanged?.();
-    } catch (e) {
-      console.error('DesignStudio: update product failed', e);
-      setPublishError(docTouched
-        ? 'Bilderna lades till men tryckkopplingen kan vara ofullständig. Kontrollera produkten och försök igen.'
-        : (e?.message || 'Uppdateringen misslyckades.'));
+      settlePublish(await updateProductFromDesign(studioContext(), form));
     } finally {
       publishingRef.current = false;
       setPublishing(false);
@@ -1250,6 +837,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
 
   const resetPublishForm = () => {
     setPublishError(null);
+    setPublishErrorField(null);
     setPublishResult(null);
   };
 
@@ -1280,7 +868,12 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     { n: 8, label: 'Publicera', done: Boolean(publishResult) },
   ];
   const canEnterStep = (n) => STEP_META.slice(0, n - 1).every((m) => m.done);
+  // The editor is locked while a save runs where the build says so
+  // (STUDIO_FLAGS.lockWhileSaving): the save works on a snapshot, and the
+  // form must show what the server holds once it answers.
+  const editorLocked = STUDIO_FLAGS.lockWhileSaving && publishing;
   const goStep = (n) => {
+    if (editorLocked) return;
     if (n < 1 || n > 8 || !canEnterStep(n)) return;
     // Entering a one-surface-at-a-time page: land the cursor somewhere useful
     // (first motif-less surface for Motiv; clamped last position for
@@ -1371,7 +964,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           <button
             type="button"
             onClick={() => goStep(step - 1)}
-            className="min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3.5 py-2 text-[13px] text-admin-text hover:bg-admin-surface-2"
+            disabled={editorLocked}
+            className="min-h-10 rounded-[var(--radius-admin-el)] border border-admin-border px-3.5 py-2 text-[13px] text-admin-text hover:bg-admin-surface-2 disabled:cursor-default disabled:opacity-40"
           >
             ‹ Tillbaka
           </button>
@@ -1459,7 +1053,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
               key={m.n}
               type="button"
               onClick={() => goStep(m.n)}
-              disabled={!enterable}
+              disabled={!enterable || editorLocked}
               aria-current={current ? 'step' : undefined}
               className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition ${
                 current
@@ -1557,6 +1151,28 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
               <p className="mt-2 text-[11px] text-admin-text-muted">
                 Generiska plaggmallar (preliminära) — ersätts när tryckeriets riktiga plagg finns.
               </p>
+            )}
+            {/* The seller's printer + model, when several make the chosen
+                garment (the Cloudflare admin: a mapping names its printer and
+                article; the older build's platform routing picks it). */}
+            {STUDIO_FLAGS.sellerChoosesProduction && (production?.options?.[garmentOfTemplate(rawTemplate)]?.length ?? 0) > 1 && (
+              <label className="mt-3 block max-w-md">
+                <span className="mb-1 block text-[13px] font-medium text-admin-text">{STUDIO_TEXT.productionLabel}</span>
+                <select
+                  value={routedPrinterUid || ''}
+                  onChange={(e) => {
+                    const garment = garmentOfTemplate(rawTemplate);
+                    const key = e.target.value;
+                    setRouting((r) => ({ ...r, byGarment: { ...r.byGarment, [garment]: key } }));
+                    invalidateComposite(); // other frames: the mockups and reviews are stale
+                  }}
+                  className="w-full rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-3 py-1.5 text-[13px] text-admin-text focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]"
+                >
+                  {production.options[garmentOfTemplate(rawTemplate)].map((key) => (
+                    <option key={key} value={key}>{printersById[key]?.label || key}</option>
+                  ))}
+                </select>
+              </label>
             )}
           </>
         )}
@@ -1707,7 +1323,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       {step === 4 && prints[pi] && (
       <CardSection title="4 · Placering" className="pod-step-enter" bodyClassName="p-4">
         <p className="mb-3 text-[13px] text-admin-text-muted">
-          Standardplaceringen är klar att använda. Dra eller ändra storlek bara om du vill justera resultatet.
+          {STUDIO_TEXT.placementIntro ?? 'Standardplaceringen är klar att använda. Dra eller ändra storlek bara om du vill justera resultatet.'}
         </p>
         <SurfaceSwitcher
           ariaLabel="Byt tryckyta"
@@ -1758,6 +1374,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           <div className="flex flex-col gap-2">
             {/* Pocket position — discrete choice (left/center/right, wearer's
                 perspective); the fixed 10×10 cm spot has no free placement. */}
+            {STUDIO_FLAGS.placementEditable && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[12px] text-admin-text-muted">Fickposition:</span>
               {POCKET_POSITIONS.map((pp) => {
@@ -1783,8 +1400,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
               })}
               <span className="text-[11px] text-admin-text-muted">(sett från bäraren)</span>
             </div>
+            )}
             <p className="text-[12px] text-admin-text-muted">
-              Fickmotivet placeras automatiskt i vald position — fast yta 10 × 10 cm, ingen fri dragning.
+              {STUDIO_TEXT.pocketNote ?? 'Fickmotivet placeras automatiskt i vald position — fast yta 10 × 10 cm, ingen fri dragning.'}
             </p>
           </div>
         ) : (
@@ -1794,7 +1412,8 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             slot={slot}
             artwork={canvasArtwork}
             profile={profile}
-            locked={false}
+            locked={!STUDIO_FLAGS.placementEditable}
+            lockedNote={STUDIO_TEXT.canvasLockedNote}
             // FLAT here on purpose: while POSITIONING, the fabric morph fights
             // the eye — a straight edge the wrinkles bend reads as a placement
             // error. Step 6 (Godkänn), the preview and the exported mockups
@@ -1860,7 +1479,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             activeColorwayId={colorwayId}
             onSelect={setColorwayId}
             placementFor={(s) => placements[s] || null}
-            lockedSlot={(s) => s === 'pocket'}
+            lockedSlot={(s) => s === 'pocket' || !STUDIO_FLAGS.placementEditable}
             labelForSlot={labelForSlot}
             resolveArtwork={resolveArtwork}
             overridesFor={(s) => overrides[s] || {}}
@@ -1908,7 +1527,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             is a lie. Heuristic: every apparel template defines a 'back' slot;
             the front-only accessories don't. Replace with an explicit
             template↔model link when the model library grows. */}
-        {slots.includes('back') && (
+        {STUDIO_FLAGS.studio3d && slots.includes('back') && (
           <Studio3DSection
             artwork={resolveArtwork('front', colorwayId)}
             placement={resolveArtwork('front', colorwayId)
@@ -1916,6 +1535,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
               : null}
             models={models3d}
           />
+        )}
+        {!STUDIO_FLAGS.studio3d && STUDIO_TEXT.no3d && slots.includes('back') && (
+          <p className="mt-4 text-[12px] text-admin-text-muted">{STUDIO_TEXT.no3d}</p>
         )}
 
         <StepNav nextLabel="Nästa: Publicera" nextEnabled={s7done} onNext={() => goStep(8)} hint="Generera en mockup för varje vald färg" />
@@ -1943,6 +1565,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           publishing={publishing}
           result={publishResult}
           error={publishError}
+          errorField={publishErrorField}
+          locked={editorLocked}
+          production={STUDIO_FLAGS.sellerChoosesProduction && routedPrinterUid ? printersById[routedPrinterUid] || null : null}
           reviewedColorwayIds={reviewedColorways}
           selectedColorwayIds={[...selectedColorwayIds]}
           onPublish={publish}
