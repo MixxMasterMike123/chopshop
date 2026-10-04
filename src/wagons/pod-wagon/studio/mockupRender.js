@@ -16,20 +16,15 @@ import {
 import {
   pxPerMm, isComposable, placementHeightMm, clampPlacement, defaultPlacement,
 } from './placementMath';
+import { loadCorsImage } from './corsImage';
 
 // Export resolution: viewBox × 2 (e.g. flat 800×900 → 1600×1800 px). Product-image
 // class, not print class — the print file is the artwork ORIGINAL, decoupled by design.
 export const MOCKUP_SCALE = 2;
 
-// Load an image for canvas drawing. crossOrigin=anonymous so Firebase Storage
-// download URLs (CORS: *) don't taint the canvas; harmless for data/object URLs.
-const loadImage = (src) => new Promise((resolve, reject) => {
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  img.onload = () => resolve(img);
-  img.onerror = () => reject(new Error('Kunde inte läsa bilden för mockupen.'));
-  img.src = src;
-});
+// Load an image for canvas drawing, CORS-approved so the canvas is not tainted
+// (corsImage.js: its own cache entry, a signed address fetched past the cache).
+const loadImage = (src) => loadCorsImage(src, 'Kunde inte läsa bilden för mockupen.');
 
 // canvas.toBlob with graceful format fallback: Safari ignores image/webp and
 // returns PNG — we report the ACTUAL type back so filenames/paths stay truthful.

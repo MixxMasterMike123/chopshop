@@ -47,6 +47,7 @@ import 'pixi.js/advanced-blend-modes';
 // break the studio outright the day script-src starts enforcing. This
 // side-effect import switches Pixi to its no-eval code paths.
 import 'pixi.js/unsafe-eval';
+import { loadCorsImage } from '../corsImage.js';
 
 // Blend modes we allow from config ('overlay' is often the most fabric-real:
 // shadows darken the ink, highlights lift it).
@@ -56,20 +57,9 @@ const ALLOWED_BLENDS = new Set(['normal', 'multiply', 'screen', 'overlay', 'add'
 // the file extension, so extension-less blob:/object URLs (uploaded artwork) and
 // token-suffixed Storage URLs fail parser detection. A manual <img> decode is
 // deterministic for every source we feed it.
-const loadImage = (src) => new Promise((resolve, reject) => {
-  const img = new Image();
-  img.crossOrigin = 'anonymous'; // Storage download URLs serve ACAO:* — no canvas taint
-  img.onload = () => resolve(img);
-  img.onerror = () => reject(new Error('Kunde inte läsa bilden för 3D-mockupen.'));
-  // CACHE FOOTGUN: the same Storage URL is loaded elsewhere on the page by plain
-  // <img> tags (picker/canvas/strip) WITHOUT CORS mode. The browser may serve
-  // that cached non-CORS response to THIS crossOrigin request, which then
-  // rejects. A fixed query param gives the CORS variant its own cache entry.
-  // data:/blob: URLs are untouched (no network, no CORS).
-  img.src = /^https?:/i.test(src)
-    ? `${src}${src.includes('?') ? '&' : '?'}corsbust=2`
-    : src;
-});
+// The CORS and cache handling (and why a signed address is fetched instead) is
+// corsImage.js's.
+const loadImage = (src) => loadCorsImage(src, 'Kunde inte läsa bilden för 3D-mockupen.');
 
 const loadTexture = async (src) => Texture.from(await loadImage(src));
 

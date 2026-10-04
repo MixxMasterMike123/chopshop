@@ -48,6 +48,8 @@ import ColorwayStrip from './ColorwayStrip';
 import MockupPanel from './MockupPanel';
 import PublishPanel from './PublishPanel';
 import Studio3DSection from './Studio3DSection';
+import FabricTuningSection from './FabricTuningSection';
+import { hasFabricMap, withFabricAdjust } from './fabricAdjust';
 import { resolvePrinterUid } from '../printRouting';
 import { STORE } from '../../../config/store';
 // Publish (slice 4) — create the real product + variants + POD mappings. The
@@ -151,6 +153,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // Blob is kept for a publish that cannot fetch the blob: address (the
   // Cloudflare admin's CSP; CP5 unit FN2).
   const [mockups, setMockups] = useState([]);
+  // The seller's fine-tuning of the fabric look on a garment photo (step 7;
+  // fabricAdjust.js). null = untouched. Session-local; reset with the garment.
+  const [fabricAdjust, setFabricAdjust] = useState(null);
   const [heroKey, setHeroKey] = useState(null);
   // PER-COLOURWAY REVIEW GATE (slice 5): ids the seller has SEEN composited in the
   // strip for the CURRENT design. Only the active colourway counts as seen; the set
@@ -286,6 +291,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     const first = kept[0]?.slot || slots[0] || 'front';
     setSlot((cur) => (kept.some((p) => p.slot === cur) ? cur : first));
     setPocketPosition(DEFAULT_POCKET_POSITION);
+    setFabricAdjust(null); // tuned against the OLD garment's fabric map
     resetDesignState();
     setAreaChangedNotice(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -442,9 +448,12 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // chosen position. Everything that does placement geometry (canvas, strip,
   // rasterizer, publish readouts) consumes THIS; pickers/colourways/slots read
   // selectedTemplate (same ids either way).
+  // …with the seller's fine-tuning of the fabric look laid over the template's
+  // map knobs (step 7, fabricAdjust.js): the preview and the mockup renderer
+  // read the same template, so they cannot disagree.
   const effTemplate = useMemo(
-    () => templateWithPocketPosition(selectedTemplate, pocketPosition),
-    [selectedTemplate, pocketPosition]
+    () => withFabricAdjust(templateWithPocketPosition(selectedTemplate, pocketPosition), fabricAdjust),
+    [selectedTemplate, pocketPosition, fabricAdjust]
   );
 
   // Which artwork a colourway prints in a slot: its override, else the SLOT's
@@ -1548,6 +1557,31 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
           error={mockupError}
           canGenerate={s6done && Boolean(selectedTemplate) && designedSlots(selectedTemplate).some((s) => isComposable(printArtwork(s))) && !publishing}
         />
+
+        {/* The garment photo's own fine-tuning (the 3D view's appearance
+            sliders on the template's fabric map). Only where a map exists and
+            a designed side has one. A changed knob makes the generated
+            mockups stale: they are dropped, never published with an old look.
+            The colour reviews stay — the motif and its placement are as seen. */}
+        {hasFabricMap(effTemplate) && (
+          <FabricTuningSection
+            template={effTemplate}
+            colorways={selectedColorways}
+            slots={designedSlots(selectedTemplate).filter((s) =>
+              effTemplate?.photo?.displacement?.urls?.[viewForSlot(s)] && isComposable(printArtwork(s)))}
+            labelForSlot={labelForSlot}
+            resolveArtwork={resolveArtwork}
+            placementFor={effectivePlacementFor}
+            adjust={fabricAdjust}
+            onAdjust={(next) => {
+              setFabricAdjust(next);
+              setMockups((prev) => (prev.length ? [] : prev));
+              setHeroKey((prev) => (prev === null ? prev : null));
+            }}
+            initialColorwayId={colorwayId}
+            disabled={generating || publishing}
+          />
+        )}
 
         {/* 3D-vy (beta): follows the live print placement; pixi lazy-loads.
             APPAREL ONLY — the 3D model library depicts garments (tees), so a

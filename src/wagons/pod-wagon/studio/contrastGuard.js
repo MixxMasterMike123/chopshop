@@ -5,6 +5,7 @@
 // where most visible pixels have very little tonal separation. The final mockup
 // remains the source of truth; this is an early guardrail, not a print guarantee.
 import { contrastRatio, hexToRgb } from '../../../utils/colorContrast.js';
+import { loadCorsImage } from './corsImage.js';
 
 const SAMPLE_EDGE = 72;
 const LOW_CONTRAST_RATIO = 1.8;
@@ -25,13 +26,7 @@ export const classifyHexTone = (hex) => {
   return luminance(rgb) >= 0.42 ? 'light' : 'dark';
 };
 
-const loadImage = (src) => new Promise((resolve, reject) => {
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  img.onload = () => resolve(img);
-  img.onerror = () => reject(new Error('Could not sample artwork preview.'));
-  img.src = src;
-});
+const loadImage = (src) => loadCorsImage(src, 'Could not sample artwork preview.');
 
 export const analyzeArtworkContrast = async (previewUrl, garmentHex) => {
   const garment = hexToRgb(garmentHex);

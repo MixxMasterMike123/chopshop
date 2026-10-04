@@ -121,9 +121,10 @@ const DisplacedTemplatePreview = ({
       try { compositor?.destroy(); } catch { /* already torn down */ }
     };
   }, [
+    // Scale, contrast, blend and alpha are NOT here: they are live knobs (the
+    // tuning effect below), and a slider must not tear the renderer down.
     template?.id, viewBox?.w, viewBox?.h, displacement?.w, displacement?.h,
-    displacement?.scale, displacement?.blur, displacement?.contrast,
-    displacement?.blend, displacement?.alpha, onError, onReadyChange,
+    displacement?.blur, onError, onReadyChange,
   ]);
 
   // Front/back changes hot-swap the registered map and physical print geometry
@@ -144,11 +145,17 @@ const DisplacedTemplatePreview = ({
 
   // …and the colourway's blend tuning follows (multiply↔normal across the
   // light/dark boundary; contrast stays uniform so no map rebuild happens).
+  // The knob values are followed too: the seller's fine-tuning (fabricAdjust.js)
+  // moves them live, a changed contrast through the compositor's own guarded
+  // map rebuild.
   useEffect(() => {
     const compositor = compositorRef.current;
     if (!compositor) return;
     try { compositor.setTuning(tuningRef.current); } catch (error) { onError(error); }
-  }, [colorway?.id]);
+  }, [
+    colorway?.id, tuning?.displacementScale, tuning?.displacementContrast,
+    tuning?.blend, tuning?.alpha,
+  ]);
 
   useEffect(() => {
     const compositor = compositorRef.current;

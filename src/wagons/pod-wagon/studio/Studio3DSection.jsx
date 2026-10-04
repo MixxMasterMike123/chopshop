@@ -27,6 +27,7 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { DEV_3D_GARMENTS } from './pixi/displacement3dConfig';
 import { defaultPlacement } from './placementMath';
+import KnobSlider from './KnobSlider';
 
 const DisplacementPreview = React.lazy(() => import('./pixi/DisplacementPreview'));
 
@@ -57,22 +58,10 @@ const renderReady = (models = []) =>
       pa?.w > 0 && pa?.h > 0 && readyColorwayIds(m).length > 0;
   });
 
-// Appearance-slider row ("Avancerat"): label · range · value readout.
-const KnobSlider = ({ label, min, max, step, value, onChange, fmt = (v) => v }) => (
-  <label className="flex items-center gap-2 text-[12px] text-admin-text-muted">
-    <span className="w-24 shrink-0">{label}</span>
-    <input
-      type="range"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      onChange={(e) => onChange(parseFloat(e.target.value))}
-      className="min-w-0 flex-1 accent-[var(--color-admin-primary)]"
-    />
-    <span className="w-11 shrink-0 text-right tabular-nums text-admin-text">{fmt(value)}</span>
-  </label>
-);
+// A length readout in cm. The value follows the live print placement, which is
+// not on the slider's 0.5 grid (a centred motif sits at e.g. 0.0568… cm), so it
+// is rounded to one decimal for the eye.
+const fmtCm = (v) => `${Math.round(Number(v) * 10) / 10} cm`;
 
 const hasWebGL = () => {
   try {
@@ -317,19 +306,19 @@ const Studio3DSection = ({ artwork = null, placement = null, models = [] }) => {
                         label="Bredd" min={2} max={paMm.w / 10} step={0.5}
                         value={shownPlacement?.wMm != null ? shownPlacement.wMm / 10 : paMm.w / 20}
                         onChange={(v) => setPlaceKnob('wMm', v * 10)}
-                        fmt={(v) => `${v} cm`}
+                        fmt={fmtCm}
                       />
                       <KnobSlider
                         label="Från vänster" min={0} max={paMm.w / 10} step={0.5}
                         value={shownPlacement?.xMm != null ? shownPlacement.xMm / 10 : 0}
                         onChange={(v) => setPlaceKnob('xMm', v * 10)}
-                        fmt={(v) => `${v} cm`}
+                        fmt={fmtCm}
                       />
                       <KnobSlider
                         label="Uppifrån" min={0} max={paMm.h / 10} step={0.5}
                         value={shownPlacement?.yMm != null ? shownPlacement.yMm / 10 : 0}
                         onChange={(v) => setPlaceKnob('yMm', v * 10)}
-                        fmt={(v) => `${v} cm`}
+                        fmt={fmtCm}
                       />
                       <KnobSlider
                         label="Rotation" min={-30} max={30} step={0.5}

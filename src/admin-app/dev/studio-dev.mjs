@@ -24,6 +24,8 @@
 //                (the 3D view must say it cannot draw it, not show a blank canvas)
 //   `photo-404`  the photo template's Svart photo answers 404 (the mockup
 //                export says "Bilderna kunde inte läsas för export …")
+//   `fabric`     the photo template has a fabric map for both sides (the
+//                mockups are warped, and step 7 offers "Finjustera plaggbilden")
 
 import { deflateSync } from 'node:zlib';
 
@@ -113,6 +115,18 @@ function photoUrls() {
 
 const MISSING_IMAGE = '/_api/dev-missing/garment.png'; // answered 404 by the dev API
 
+// The `fabric` scenario's map: a grey garment shape registered to the photo
+// (same size), with the seed's knobs (multiply on light, normal on dark).
+let fabric = null;
+function fabricMap() {
+  fabric ??= garmentPhoto('#8c8c8c');
+  return {
+    w: 300, h: 340, urls: { front: fabric, back: fabric },
+    scale: 30, blur: 6, contrast: 2, blend: 'multiply', alpha: 0.8,
+    perColorway: { svart: { blend: 'normal' } },
+  };
+}
+
 function templates(scenario = null) {
   const photo = scenario === 'photo-404' ? { ...photoUrls(), svart: MISSING_IMAGE } : photoUrls();
   return [
@@ -134,7 +148,10 @@ function templates(scenario = null) {
       colorways: APPAREL,
       printAreas: { front: { x: 105, y: 90, w: 90, h: 105 }, back: { x: 105, y: 80, w: 90, h: 120 } },
       printAreaMm: { front: { w: 300, h: 350 }, back: { w: 300, h: 400 } },
-      photo: { w: 300, h: 340, urls: photo, backUrls: photo },
+      photo: {
+        w: 300, h: 340, urls: photo, backUrls: photo,
+        ...(scenario === 'fabric' ? { displacement: fabricMap() } : {}),
+      },
     },
     {
       id: 'dev_hoodie_flat', label: 'Hoodie', garment: 'hoodie', profileId: 'apparel_dtg', provisional: true,
