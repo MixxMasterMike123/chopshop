@@ -28,6 +28,7 @@ import {
   snapwearAcceptedJobRef,
   snapwearShippingAddress,
 } from "../src/dispatch/snapwear-wire";
+import { resolveDispatch } from "../src/dispatch/resolution";
 import { processOutboxRowById } from "../src/outbox/effects";
 import { runOutboxSweep } from "../src/outbox/sweeper";
 import { setCommerceCronsLoader } from "../src/outbox/scheduled";
@@ -608,6 +609,96 @@ describe("holding: no client is a hold, never a failure", () => {
     expect(snapwear.calls).toHaveLength(1);
     expect(await outboxRow(dispatchId)).toMatchObject({ attempts: 2, result_ref: "SW-HELD", status: "done" });
     expect(await lineRow(order.orderId)).toMatchObject({ dispatch_state: "accepted", printer_job_ref: "SW-HELD" });
+  });
+
+  it("a job whose answer was LOST stays unknown while no client exists: resolvable, alerted, no attempt spent (Codex P2)", async () => {
+    const lost = fakeSnapwear([new Error("connection reset")]);
+    const off = productionEnv(null, { SNAPWEAR_SUBMIT_ENABLED: undefined });
+    const now = Date.now();
+    const orders = [await shippedOrder(), await shippedOrder()];
+    for (const order of orders) {
+      await processOutboxRowById(productionEnv(lost.fetcher), order.dispatchIds[0]!);
+      expect(await outboxRow(order.dispatchIds[0]!)).toMatchObject({ attempts: 1, status: "unknown" });
+    }
+
+    // The switch goes off before the retry: the row is held AS UNKNOWN.
+    for (const order of orders) {
+      const dispatchId = order.dispatchIds[0]!;
+      const held = await processOutboxRowById(off, dispatchId, () => now + 2 * MIN);
+      expect(held).toMatchObject({ kind: "ran", outcome: { kind: "unknown" } });
+      expect(await outboxRow(dispatchId)).toMatchObject({
+        attempts: 2,
+        last_error: "printer_not_configured",
+        next_attempt_at: PRINTER_HOLD_UNTIL_MS,
+        status: "unknown",
+      });
+      expect((await lineRow(order.orderId)).dispatch_state).toBe("unknown");
+    }
+
+    // No attempt spent while it waits; the 30-minute unknown alert names it.
+    await runOutboxSweep(off, now + 40 * MIN);
+    await runOutboxSweep(off, now + 24 * 60 * MIN);
+    for (const order of orders) {
+      const dispatchId = order.dispatchIds[0]!;
+      expect(await outboxRow(dispatchId)).toMatchObject({ attempts: 2, status: "unknown" });
+      expect((await alertsFor(dispatchId)).map((alert) => alert.kind)).toContain("dispatch_unknown_30m");
+    }
+
+    // A human can resolve it (the printer did have it).
+    const [resolved, released] = orders as [(typeof orders)[0], (typeof orders)[0]];
+    const resolution = await resolveDispatch(
+      off,
+      { accountType: "platform_admin", userId: "platform-operator" },
+      resolved.dispatchIds[0]!,
+      { note: "SnapWear dashboard shows it", outcome: "accepted", printerJobRef: "SW-SEEN" },
+      Date.now(),
+    );
+    expect(resolution.status).toBe("ok");
+    expect(await lineRow(resolved.orderId)).toMatchObject({ dispatch_state: "accepted", printer_job_ref: "SW-SEEN" });
+
+    // The client is back: the sweep releases the other and re-submits the
+    // SAME job id. An unreadable refusal keeps it unknown (afterLostAnswer);
+    // the duplicate answer then settles it.
+    const back = fakeSnapwear([
+      () => Response.json({ message: "Order exists", status: "error" }, { status: 400 }),
+      () => Response.json({ message: SNAPWEAR_DUPLICATE_JOB_MESSAGE, status: "error" }, { status: 400 }),
+    ]);
+    const summary = await runOutboxSweep(productionEnv(back.fetcher), now + 25 * 60 * MIN);
+    expect(summary.printerReleased).toBe(1);
+    const releasedId = released.dispatchIds[0]!;
+    expect(await outboxRow(releasedId)).toMatchObject({
+      attempts: 3,
+      last_error: "unknown_rejected_after_unknown_bad_request",
+      status: "unknown",
+    });
+    expect((await lineRow(released.orderId)).dispatch_state).toBe("unknown");
+
+    await runOutboxSweep(productionEnv(back.fetcher), now + 27 * 60 * MIN);
+    expect(await outboxRow(releasedId)).toMatchObject({ attempts: 4, status: "done" });
+    expect((await lineRow(released.orderId)).dispatch_state).toBe("accepted");
+    expect(back.calls.map((call) => (call.body as { job_id: string }).job_id)).toEqual([
+      printerJobId(released.orderId, 1),
+      printerJobId(released.orderId, 1),
+    ]);
+  });
+
+  it("a lost-answer job on its LAST attempt with no client stays unknown, never failed", async () => {
+    const order = await shippedOrder();
+    const dispatchId = order.dispatchIds[0]!;
+    await processOutboxRowById(productionEnv(fakeSnapwear([new Error("reset")]).fetcher), dispatchId);
+    await env.DB.prepare("UPDATE outbox_events SET attempts = max_attempts - 1 WHERE outbox_id = ?")
+      .bind(dispatchId)
+      .run();
+
+    await processOutboxRowById(
+      productionEnv(null, { SNAPWEAR_SUBMIT_ENABLED: undefined }),
+      dispatchId,
+      () => Date.now() + 2 * MIN,
+    );
+
+    expect(await outboxRow(dispatchId)).toMatchObject({ status: "unknown" });
+    expect((await lineRow(order.orderId)).dispatch_state).toBe("unknown");
+    expect((await alertsFor(dispatchId)).map((alert) => alert.kind)).not.toContain("dispatch_failed");
   });
 
   it("a row on its LAST attempt cannot be parked: it fails with its alert (unchanged CP2 rule)", async () => {

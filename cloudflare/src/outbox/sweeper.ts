@@ -26,12 +26,14 @@ import { iso, OUTBOX_EFFECT_TYPES } from "./outbox";
  *   5. RE-NUDGE THE RENDER CONTAINER when a render job has waited in `queued`
  *      longer than RENDER_STALE_MS or holds an expired lease (CP1-D open
  *      question 4): one nudge wakes the container, which drains everything.
- *   0. (first, CP6-PS1) PRINTER HOLDS. Dispatch rows parked because the
- *      environment had no printer client (dispatch-effect.ts parkForPrinter)
- *      become due as soon as a client resolves, and step 2 sends them. No
- *      attempt is spent while they wait; the reconciliation cron's
- *      `dispatch_stranded_30m` alert (src/commerce/crons.ts) names each one
- *      still unsent after 30 minutes.
+ *   0. (first, CP6-PS1) PRINTER HOLDS. Dispatch rows held because the
+ *      environment had no printer client become due as soon as a client
+ *      resolves, and step 2 sends them. That covers `pending` rows
+ *      (dispatch-effect.ts parkForPrinter) and `unknown` rows whose answer
+ *      was lost (holdUnknownForPrinter). No attempt is spent while they wait.
+ *      The reconciliation cron's `dispatch_stranded_30m` alert
+ *      (src/commerce/crons.ts) names each one still unsent after 30 minutes;
+ *      step 4 names the unknown ones too.
  */
 
 export const SWEEP_INLINE_LIMIT = 10;
@@ -50,9 +52,11 @@ export interface OutboxSweepSummary {
 }
 
 /**
- * A client now resolves: every parked dispatch (dispatch-effect.ts
- * parkForPrinter) becomes due at once; the drain below takes the first and
- * the nudge the rest. Bounded per sweep; the next sweep takes more.
+ * A client now resolves: every held dispatch becomes due at once. That means
+ * `pending` (dispatch-effect.ts parkForPrinter) and `unknown` with a lost
+ * answer (holdUnknownForPrinter, re-submitted with the same job id). The
+ * drain below takes the first, the nudge the rest. Bounded per sweep; the
+ * next sweep takes more.
  */
 async function releasePrinterHolds(db: D1Database, now: number): Promise<number> {
   const result = await db
@@ -61,7 +65,7 @@ async function releasePrinterHolds(db: D1Database, now: number): Promise<number>
        SET next_attempt_at = ?, updated_at = MAX(updated_at, ?)
        WHERE outbox_id IN (
          SELECT outbox_id FROM outbox_events
-         WHERE event_type = 'dispatch' AND status = 'pending'
+         WHERE event_type = 'dispatch' AND status IN ('pending', 'unknown')
            AND next_attempt_at = ${PRINTER_HOLD_UNTIL_MS}
          ORDER BY created_at, outbox_id
          LIMIT ${SWEEP_NUDGE_LIMIT}

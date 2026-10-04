@@ -299,3 +299,57 @@ Each mutation was applied once to the working tree by a script (copy, edit, run 
 - **A7:** the design above, once the money side is decided.
 - **A12:** the mail parser calls `recordProductionStatus` with `actorUserId = null`.
 - **Mockups:** freeze the product's mockup ids into the snapshot and fill `mockupUrls`.
+
+---
+
+## Codex round 1 (review of `7347c8bc`)
+
+### [P2] A job whose answer was lost was parked as `pending`
+
+**The finding was real.** A row that went `unknown` (its answer lost, `unknown_since` set) can be claimed again after its backoff. If the printer client was gone by then (the switch off, a var removed), `parkForPrinter` turned it into `pending` with the far-future instant. That locked the operator out:
+- `resolveDispatch` accepts only `unknown` or `failed`;
+- the sweeper's `dispatch_unknown_30m` alert skips `pending`.
+
+So a job SnapWear may already hold could be neither resolved nor named by its alert for as long as the client stayed off.
+
+**The fix** (`cloudflare/src/dispatch/dispatch-effect.ts`, `cloudflare/src/outbox/sweeper.ts`):
+- **`holdUnknownForPrinter`.** In `runDispatchEffect`, a client-less run of a row with `unknown_since` set goes here, never to `parkForPrinter`. It is `markUnknown` under the claim's fence with `next_attempt_at = PRINTER_HOLD_UNTIL_MS` and `last_error = 'printer_not_configured'`, and the line is set to `unknown` in the same batch.
+  - **Resolvable:** the row is `unknown`, so the resolve route takes it.
+  - **Alerted:** `dispatch_unknown_30m` selects by status and `unknown_since`, not by next attempt.
+  - **No attempt spent:** an `unknown` row is claimed only when `next_attempt_at <= now`, so nothing claims it while it waits.
+- **The sweeper's release** (`releasePrinterHolds`) now covers `status IN ('pending', 'unknown')` at the hold instant. When a client resolves again, the row is due, claimed and re-submitted with the SAME job id. `unknown_since` is one-way, so `afterLostAnswer` still applies: an unreadable refusal keeps it `unknown`, and the duplicate answer settles it.
+- **Last attempt.** A row on its last attempt also stays `unknown`, not `failed`. `markUnknown` needs no remaining attempt, whereas the old fallback ended `failed`, which claimed the printer never got the job.
+
+**Why this shape.** It is the simplest one that meets all three: one existing transition (`markUnknown`) and one widened `IN`. There is no new state, column or alert. The `pending` park is unchanged for a job that was never possibly at the printer.
+
+**Seen but not changed (pre-existing CP2 behaviour, not in this finding).** The other retryable failures *before* the printer call (storage not configured or failing, presign failure, the payment-hold fallback, a client exception) still send a previously-`unknown` row back to `pending` with a backoff of minutes. They are bounded, and they end `failed` after the last attempt. The same reasoning would keep such a row `unknown`. That is a one-line follow-up in `retryLater`, if wanted.
+
+### Tests (`cloudflare/test/snapwear-client.test.ts`, +2)
+
+1. **"a job whose answer was LOST stays unknown while no client exists: resolvable, alerted, no attempt spent".** Two shipped orders.
+   - Each submit loses its answer (`unknown`, attempts 1).
+   - The switch goes off before the retry. Each is held as `unknown`: attempts 2, `next_attempt_at` at the hold instant, `last_error 'printer_not_configured'`, line `unknown`.
+   - Sweeps at +40 min and +24 h spend no attempt, and both rows carry `dispatch_unknown_30m`.
+   - One row is resolved accepted by a human through `resolveDispatch` (status ok, line `accepted`, the human's reference).
+   - With the client back, the sweep releases the other (`printerReleased: 1`) and re-submits it. SnapWear answers an unreadable 400, so the row stays `unknown` (`unknown_rejected_after_unknown_bad_request`, attempts 3, line `unknown`). The next sweep gets the duplicate answer: `done`, attempts 4, line `accepted`. Both calls carried the same job id.
+2. **"a lost-answer job on its LAST attempt with no client stays unknown, never failed".** Status `unknown`, line `unknown`, no `dispatch_failed`.
+
+### Mutations
+
+| Mutation | Result |
+|---|---|
+| fix removed: an `unknown_since` row goes to `parkForPrinter` again | 2 failed (both new tests) |
+| the sweeper's release covers `pending` only | 1 failed (the release half of test 1) |
+
+### Gates (round 1)
+
+- `npx tsc --noEmit`, `-p web`, `-p admin`: clean.
+- `npx vitest run test/dispatch.test.ts test/snapwear-client.test.ts test/print-job-status.test.ts test/fake-printer.test.ts test/outbox.test.ts test/outbox-email.test.ts test/money-followups.test.ts`: **7 files, 279 tests, all passed.**
+- Full `npx vitest run`: **Test Files 104 passed (104), Tests 4392 passed (4392)**. That is round 0's 4390 plus 2. CP7-T1 had no Worker file in the tree at the time of the run (no 0052, `REQUIRED_MIGRATION` still 0051), so nothing of theirs affected it.
+- `npm run types:check`: up to date. `node guard/guards.test.mjs`: PASS.
+
+Files changed this round:
+- `cloudflare/src/dispatch/dispatch-effect.ts`
+- `cloudflare/src/outbox/sweeper.ts`
+- `cloudflare/test/snapwear-client.test.ts`
+- this report

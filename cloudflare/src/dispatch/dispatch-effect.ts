@@ -70,7 +70,9 @@ import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-
  * An environment with NO printer client parks the row (parkForPrinter): no
  * attempt is spent while it waits, the sweeper releases it once a client
  * exists, and reconciliation's dispatch_stranded_30m alert names it after 30
- * minutes.
+ * minutes. A row whose earlier answer was lost is held as `unknown` instead
+ * (holdUnknownForPrinter): a human can still resolve it, and the 30-minute
+ * unknown alert still names it.
  *
  * Every line-state write, alert and follow-up row is committed in the batch of
  * the outbox transition it belongs to, under that transition's fence.
@@ -521,6 +523,40 @@ async function parkForPrinter(
 }
 
 /**
+ * The same hold for a row whose earlier answer was LOST (`unknown_since`
+ * set; Codex CP6-PS1 P2). The printer may already have its job, so the row
+ * must stay what a human can act on. parkForPrinter would make it `pending`,
+ * which the resolution route refuses and the 30-minute unknown alert skips.
+ * So it goes back to `unknown`, with `next_attempt_at` = PRINTER_HOLD_UNTIL_MS:
+ *   - resolvable: POST /v1/platform/dispatch/:id/resolve takes `unknown`;
+ *   - alerted: the sweeper's dispatch_unknown_30m names unknown rows by
+ *     `unknown_since`, whatever their next attempt;
+ *   - no attempt spent while it waits: an `unknown` row is claimed only when
+ *     due, and the sweeper's releasePrinterHolds makes it due again once a
+ *     client resolves. It is then re-submitted with the SAME job id: a
+ *     duplicate answer settles it, and an unreadable refusal keeps it
+ *     `unknown` (afterLostAnswer).
+ * On the row's last attempt it stays `unknown` as well. Before, the retry
+ * ended `failed`, which claims the printer never got the job.
+ * The line is `unknown`, as the row is.
+ */
+async function holdUnknownForPrinter(
+  ctx: EffectContext,
+  line: { orderItemId: string; tenantId: string },
+): Promise<OutboxRunOutcome> {
+  const now = ctx.clock();
+  const held = await markUnknown(ctx.env.DB, ctx.claim, {
+    backoffMs: PRINTER_HOLD_UNTIL_MS - now,
+    error: PRINTER_NOT_CONFIGURED,
+    now,
+    withTransition: (guard) => [
+      lineStateStatement(ctx.env.DB, line, guard, { binds: [], sql: "dispatch_state = 'unknown'" }),
+    ],
+  });
+  return outcomeOf(held, now);
+}
+
+/**
  * A cancellation was requested (seen after claiming, or refused at the
  * submitting step). Never a printer call from here.
  */
@@ -592,6 +628,11 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
   // rather than judging the order by it.
   const client = resolvePrinterClient(env);
   if (client === null) {
+    // A job whose answer was lost may already be at the printer: it stays
+    // `unknown` (resolvable, alerted) rather than becoming an ordinary wait.
+    if (row.unknown_since !== null) {
+      return holdUnknownForPrinter(ctx, lineRef);
+    }
     return (
       (await parkForPrinter(ctx, lineRef)) ?? retryLater(ctx, PRINTER_NOT_CONFIGURED, lineRef)
     );
