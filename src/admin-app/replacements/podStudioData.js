@@ -16,7 +16,11 @@
 //     mapping is printer + article + slots.
 //   - The numbers are the server's design quote per article (podCostQuote.js
 //     quoteDesign); podPricing.js is not used.
-//   - The 3D view and the mockup upload are OFF until unit FN2.
+//   - The mockups become the product's images at publish and update (unit
+//     FN2: podStudioImages.js, from the Blob each render keeps); nothing is
+//     stored while they are only generated.
+//   - The 3D view reads the platform's models from the Worker (FN2,
+//     pod3dModels.js); a failed read is said where the view was.
 //   - Nothing is offered when no printer can make it (offerUnrouted: false):
 //     the older studio offered every template before any printer existed.
 
@@ -35,8 +39,8 @@ export const STUDIO_FLAGS = Object.freeze({
   sellerChoosesProduction: true,
   /** The editor (step header, Tillbaka, the publish form) is locked while a save runs. */
   lockWhileSaving: true,
-  /** The 3D view (unit FN2). */
-  studio3d: false,
+  /** The 3D view (unit FN2: GET /v1/admin/pod/3d-models). */
+  studio3d: true,
 });
 
 export const STUDIO_TEXT = Object.freeze({
@@ -45,8 +49,13 @@ export const STUDIO_TEXT = Object.freeze({
   pocketNote:
     'Fickmotivet trycks på tryckeriets vänstra bröstplacering (sett från bäraren), så stort som den fasta ytan och upplösningen tillåter.',
   canvasLockedNote: 'Tryckeriet trycker motivet så stort som tryckytan och originalets upplösning tillåter, centrerat. Måtten ovan är trycket.',
-  no3d: '3D-vyn finns inte i den här versionen av adminen ännu.',
+  no3d: null,
   productionLabel: 'Tryckeri och plagg',
+  /** A 3D model list that could not be read (never "no models"). */
+  models3dFailed: '3D-modellerna kunde inte läsas just nu, så 3D-vyn visas inte. Ladda om sidan för att försöka igen.',
+  /** Mockups whose images could not be read for export (CORS, a lost or expired address, a tainted canvas). */
+  exportUnreadable:
+    'Bilderna kunde inte läsas för export (plaggfotot eller motivet nåddes inte). Kontrollera anslutningen och generera igen; hjälper det inte, kontakta plattformen.',
 });
 
 /**
@@ -66,6 +75,16 @@ export function useStudioEnv() {
 }
 
 const DEPS = { skuFromName, uniqueSku, deriveVariantsFromGroups };
+
+/**
+ * The published colours' finished mockups, in the studio's order, each with
+ * the Blob its render kept (DesignStudio entry.blob).
+ */
+function publishedMockups(ctx, selected) {
+  return (ctx.mockups || [])
+    .filter((m) => selected.has(m.colorwayId) && !m.pending && m.blob)
+    .map((m) => ({ key: m.key, colorwayId: m.colorwayId, slot: m.slot, blob: m.blob, type: m.type || m.blob.type }));
+}
 
 /**
  * The studio's "Skapa produkt": `ctx` is the studio's snapshot of the design
@@ -97,13 +116,17 @@ export async function publishDesign(ctx, form) {
     slots: ctx.publishSlots,
     printerId: production.printerId,
     artworkFor: (slot, colorwayId) => ctx.resolveArtwork(slot, colorwayId)?.id ?? null,
+    mockups: publishedMockups(ctx, new Set(colorways.map((c) => c.id))),
+    heroKey: ctx.heroKey ?? null,
   }, DEPS);
 }
 
 /**
  * The studio's "Uppdatera produkten": the design's print mappings on an
- * existing product's variants (each on the article the seller chose). Its
- * variants, prices and texts are not touched.
+ * existing product's variants (each on the article the seller chose), then
+ * the mockups of the published colours as its images (the studio's earlier
+ * ones replaced, the seller's kept). Its variants, prices and texts are not
+ * touched.
  */
 export async function updateProductFromDesign(ctx, form) {
   const production = ctx.production;
@@ -122,5 +145,8 @@ export async function updateProductFromDesign(ctx, form) {
     overrideColorwayIds,
     artworkFor: (slot, colorwayId) =>
       (colorwayId ? ctx.resolveArtwork(slot, colorwayId) : ctx.printArtwork(slot))?.id ?? null,
+    mockups: publishedMockups(ctx, selected),
+    heroKey: ctx.heroKey ?? null,
+    replaceImages: form.replaceImages === true,
   });
 }

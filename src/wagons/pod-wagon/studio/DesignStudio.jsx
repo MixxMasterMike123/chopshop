@@ -147,7 +147,9 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   // Per-slot, per-colourway artwork override: { [slot]: { [colorwayId]: artworkId } }.
   const [overrides, setOverrides] = useState({});
   // Generated mockups: array of { key, colorwayId, colorwayLabel, slot, objectUrl,
-  // url?, storagePath?, type } + the hero pick (slice 4 reads both).
+  // blob, url?, storagePath?, type } + the hero pick (slice 4 reads both). The
+  // Blob is kept for a publish that cannot fetch the blob: address (the
+  // Cloudflare admin's CSP; CP5 unit FN2).
   const [mockups, setMockups] = useState([]);
   const [heroKey, setHeroKey] = useState(null);
   // PER-COLOURWAY REVIEW GATE (slice 5): ids the seller has SEEN composited in the
@@ -195,8 +197,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       setTemplatesLoading(true);
       setTemplatesError(null);
       try {
+        // A 3D model list that cannot be read does not stop the studio: it is
+        // null (said where the 3D view is), never "no models".
         const [t, p, m3d, routed] = await Promise.all([
-          loadPodMockupTemplates(), loadPodProfiles(), loadPod3dModels(), loadPrintRouting(),
+          loadPodMockupTemplates(), loadPodProfiles(), loadPod3dModels().catch(() => null), loadPrintRouting(),
         ]);
         if (!alive) return;
         setTemplates(t);
@@ -638,6 +642,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
     const uploadPromises = [];
     let uploadFailures = 0;
     let renderSkips = 0;
+    // Renders whose images could not be read for export (a photo, map or motif
+    // address that failed to load, or a canvas the browser refused to export):
+    // said as such where the build has the words (STUDIO_TEXT.exportUnreadable),
+    // else counted with the skips, as before.
+    let unreadable = 0;
     // One shared WebGL compositor for the whole run (colourways × slots) — see
     // createMockupSession: per-mockup contexts both re-process the fabric map
     // every time and can evict the live placement canvas's WebGL context.
@@ -658,7 +667,11 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             session: renderSession,
           }));
         } catch (e) {
-          renderSkips += 1;
+          if (STUDIO_TEXT.exportUnreadable && (e?.name === 'SecurityError' || /Kunde inte läsa bilden/.test(e?.message || ''))) {
+            unreadable += 1;
+          } else {
+            renderSkips += 1;
+          }
           console.warn('DesignStudio: mockup render skipped', cw.id, s, e?.message);
           entry.failed = true;
           setMockups((prev) => prev.filter((m) => m.key !== entry.key));
@@ -666,7 +679,7 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
         }
         const objectUrl = URL.createObjectURL(blob);
         urls.push(objectUrl);
-        Object.assign(entry, { objectUrl, type, pending: false });
+        Object.assign(entry, { objectUrl, type, blob, pending: false });
         setMockups((prev) => prev.map((m) => (m.key === entry.key ? { ...entry } : m)));
         // Uploads overlap the remaining renders (fire-and-collect): render
         // stays serial (one canvas rasterization at a time), but the ~0.3-0.8s
@@ -692,9 +705,13 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
       setMockups(done.map((e) => ({ ...e })));
       setHeroKey((prev) => (prev && done.some((m) => m.key === prev) ? prev : done[0]?.key || null));
       if (done.length === 0) {
-        setMockupError(renderSkips > 0
+        setMockupError(unreadable > 0
+          ? STUDIO_TEXT.exportUnreadable
+          : renderSkips > 0
           ? 'Inga mockuper kunde genereras — plaggfoton saknas för mallens färger.'
           : 'Inget att generera — välj ett original som kan förhandsgranskas.');
+      } else if (unreadable > 0) {
+        setMockupError(`${STUDIO_TEXT.exportUnreadable} (${unreadable} av ${jobs.length} mockuper saknas.)`);
       } else if (renderSkips > 0 || uploadFailures > 0) {
         const parts = [];
         if (renderSkips > 0) parts.push(`${renderSkips} färg${renderSkips > 1 ? 'er' : ''} hoppades över (foto saknas)`);
@@ -1538,7 +1555,10 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
             is a lie. Heuristic: every apparel template defines a 'back' slot;
             the front-only accessories don't. Replace with an explicit
             template↔model link when the model library grows. */}
-        {STUDIO_FLAGS.studio3d && slots.includes('back') && (
+        {STUDIO_FLAGS.studio3d && slots.includes('back') && models3d === null && (
+          <p className="mt-4 text-[12px] text-admin-caution-text">{STUDIO_TEXT.models3dFailed}</p>
+        )}
+        {STUDIO_FLAGS.studio3d && slots.includes('back') && models3d !== null && (
           <Studio3DSection
             artwork={resolveArtwork('front', colorwayId)}
             placement={resolveArtwork('front', colorwayId)

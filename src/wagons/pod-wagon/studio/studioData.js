@@ -49,6 +49,8 @@ export const STUDIO_TEXT = Object.freeze({
   canvasLockedNote: null,
   no3d: null,
   productionLabel: null,
+  models3dFailed: null,
+  exportUnreadable: null,
 });
 
 // Publish/update refuse to write when the server cost quote could not be

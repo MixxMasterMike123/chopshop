@@ -14,6 +14,16 @@
 //
 // The cookie `admin_dev_studio=fail` makes the template read fail (500), and
 // `admin_dev_studio=empty` answers no templates.
+//
+// Unit FN2: the platform's 3D models (GET /v1/admin/pod/3d-models, the
+// seller shape of studio-assets.ts sellerModel): one tee model with Vit and
+// Svart, its photos and fabric maps invented here as data: addresses. More
+// values of the same cookie:
+//   `3d-fail`    the 3D model read fails (500)
+//   `3d-broken`  the model's Svart photo points at an address that answers 404
+//                (the 3D view must say it cannot draw it, not show a blank canvas)
+//   `photo-404`  the photo template's Svart photo answers 404 (the mockup
+//                export says "Bilderna kunde inte läsas för export …")
 
 import { deflateSync } from 'node:zlib';
 
@@ -101,7 +111,10 @@ function photoUrls() {
   return photos;
 }
 
-function templates() {
+const MISSING_IMAGE = '/_api/dev-missing/garment.png'; // answered 404 by the dev API
+
+function templates(scenario = null) {
+  const photo = scenario === 'photo-404' ? { ...photoUrls(), svart: MISSING_IMAGE } : photoUrls();
   return [
     {
       id: 'dev_tee_flat', label: 'T-shirt', garment: 'tee', profileId: 'apparel_dtg', provisional: true,
@@ -121,7 +134,7 @@ function templates() {
       colorways: APPAREL,
       printAreas: { front: { x: 105, y: 90, w: 90, h: 105 }, back: { x: 105, y: 80, w: 90, h: 120 } },
       printAreaMm: { front: { w: 300, h: 350 }, back: { w: 300, h: 400 } },
-      photo: { w: 300, h: 340, urls: photoUrls(), backUrls: photoUrls() },
+      photo: { w: 300, h: 340, urls: photo, backUrls: photo },
     },
     {
       id: 'dev_hoodie_flat', label: 'Hoodie', garment: 'hoodie', profileId: 'apparel_dtg', provisional: true,
@@ -146,11 +159,64 @@ function templates() {
   ];
 }
 
+// ── the 3D models (invented; the seller shape) ─────────────────────────────
+
+let modelImageCache = null;
+function modelImages() {
+  modelImageCache ??= {
+    vit: garmentPhoto('#f3f3f3', 300, 340),
+    svart: garmentPhoto('#26262a', 300, 340),
+    map: garmentPhoto('#808080', 300, 340),
+  };
+  return modelImageCache;
+}
+
+export function models3d(scenario = null) {
+  const img = modelImages();
+  return [
+    {
+      id: 'dev-tee-3d',
+      label: 'T-shirt (3D)',
+      output: { w: 600, h: 680 },
+      perColorway: { svart: { blend: 'screen', alpha: 0.9 } },
+      displacementScale: 18,
+      alpha: 0.85,
+      blend: 'multiply',
+      printAreaMm: { front: { w: 300, h: 350 } },
+      views: {
+        front: {
+          w: 300,
+          h: 340,
+          printArea: { x: 105, y: 90, w: 90, h: 105 },
+          colorways: {
+            vit: { label: 'Vit', photoUrl: img.vit, displacementUrl: img.map },
+            svart: { label: 'Svart', photoUrl: scenario === '3d-broken' ? MISSING_IMAGE : img.svart, displacementUrl: img.map },
+          },
+        },
+      },
+    },
+    // A model the platform has not finished (no print area): never drawn.
+    {
+      id: 'dev-hoodie-3d',
+      label: 'Hoodie (3D, ej klar)',
+      output: null,
+      perColorway: {},
+      printAreaMm: {},
+      views: { front: { w: null, h: null, printArea: { x: 0, y: 0, w: 0, h: 0 }, colorways: {} } },
+    },
+  ];
+}
+
 export const STUDIO_ROUTES = [
   ['GET', '/v1/admin/pod/mockup-templates', (_state, { headers }) => {
     const scenario = cookieOf(headers, STUDIO_COOKIE);
     if (scenario === 'fail') return json(500, { error: { code: 'internal', message: 'Internal error' } });
-    const list = scenario === 'empty' ? [] : templates();
+    const list = scenario === 'empty' ? [] : templates(scenario);
     return json(200, { provisional: list.some((t) => t.provisional), templates: list });
+  }],
+  ['GET', '/v1/admin/pod/3d-models', (_state, { headers }) => {
+    const scenario = cookieOf(headers, STUDIO_COOKIE);
+    if (scenario === '3d-fail') return json(500, { error: { code: 'internal', message: 'Internal error' } });
+    return json(200, { models: models3d(scenario) });
   }],
 ];

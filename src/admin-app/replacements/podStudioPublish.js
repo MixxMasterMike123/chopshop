@@ -11,26 +11,35 @@
 //   1. the SKU made unique in the shop (as the product form does)
 //   2. POST /v1/admin/products (a DRAFT: not in the storefront)
 //   3. the variants (one per colour and size): POST …/variants
-//   4. the print mappings: per variant, one per artwork it prints (the slots
+//   4. the IMAGES (unit FN2): each mockup uploaded (or kept, when the product
+//      already holds the same bytes for that colour and side, or this tab
+//      uploaded them before), then the whole list PUT: the hero first, every
+//      mockup in the product's own rows, each colour's mockups on its first
+//      variant (podStudioImages.js, adapters/studioMedia.js). A lost answer to
+//      the PUT is read back before anything is said.
+//   5. the print mappings: per variant, one per artwork it prints (the slots
 //      that print the same artwork share one), on the variant's article
-//   5. PATCH { status: 'active' }, then POST …/publish (the server's POD gate
+//   6. PATCH { status: 'active' }, then POST …/publish (the server's POD gate
 //      and floor decide; its refusal is said, the product stays a draft)
-// A failure at 3–5 leaves a draft that is not sold: the message says what
-// exists, and the next "Skapa produkt" CONTINUES that draft (the tab
-// remembers it per shop) instead of creating a second one: the product is
-// written again (PATCH), the variants synced by SKU, the mappings planned
-// against the server's (a mapping POST of the same artwork, printer and
-// article re-activates its row), then published.
+// So a studio product is never live without its images. A failure at 3–6
+// leaves a draft that is not sold: the message says what exists, and the next
+// "Skapa produkt" CONTINUES that draft (the tab remembers it per shop) instead
+// of creating a second one: the product is written again (PATCH), the
+// variants synced by SKU, the images re-planned (only what is missing is
+// uploaded; an identical list is not written), the mappings planned against
+// the server's (a mapping POST of the same artwork, printer and article
+// re-activates its row), then published.
+// A colour with no mockup at all stops the publish before anything is written
+// (said with the colour's name); a colour missing one printed side is
+// published with a visible note naming the side.
 //
-// AN EXISTING PRODUCT ("Uppdatera befintlig produkt"): only its print
-// mappings are written, per variant (or the product's own scope when it has
-// no variant), and only where they differ from the server's; its variants,
-// prices and texts are not touched (as in the older studio). A live product's
-// mapping change is checked by the server against its floor.
-//
-// IMAGES: none in this build (unit FN2 uploads the mockups). The routes do not
-// require an image to publish, so a new product is published without one and
-// the result says so.
+// AN EXISTING PRODUCT ("Uppdatera befintlig produkt"): its print mappings are
+// written per variant (or the product's own scope when it has no variant),
+// only where they differ from the server's; then its images: the studio's
+// rows of the published colours are replaced, the seller's are kept
+// (adapters/studioMedia.js says exactly which rows are the studio's). Its
+// variants, prices and texts are not touched (as in the older studio). A live
+// product's mapping change is checked by the server against its floor.
 //
 // THE SELLER SEES ONE NUMBER: the only figures read are the server's quote
 // (inkopMinor, priceFloorMinor); nothing here prices.
@@ -66,14 +75,11 @@ import {
   normalizeLabel,
   planScopeMappings,
 } from '../adapters/studio.js';
+import { IMAGE_ROWS_MAX, SIDE_WORDS, mockupCoverage, planStudioImages } from '../adapters/studioMedia.js';
 import { quoteDesign } from './podCostQuote.js';
+import { imageStepCause, resolveMockupObjects, rowsOf, writeStudioImages } from './podStudioImages.js';
 
 export const QUOTE_FAILED_MSG = 'Inköpspriset kunde inte hämtas. Kontrollera anslutningen och försök igen.';
-export const NO_IMAGES_NOTE =
-  'Produkten har inga produktbilder ännu: mockuperna sparas inte som produktbilder i den här versionen av adminen. ' +
-  'Ladda ned dem i steg 7 och lägg till dem på produkten under Produkter.';
-export const NO_IMAGES_UPDATE_NOTE =
-  'Mockuperna läggs inte till som produktbilder i den här versionen av adminen. Ladda ned dem i steg 7 om du vill lägga till dem under Produkter.';
 
 const SESSION_GONE = 'Sessionen har gått ut. Logga in igen.';
 
@@ -141,6 +147,82 @@ function mappingStepMessage(error) {
   return mappingRefusalMessage(error) ?? (isNetwork(error) ? 'Anslutningen bröts.' : 'En tryckkoppling kunde inte sparas.');
 }
 
+// ── the mockups (unit FN2) ──────────────────────────────────────────────────
+
+const sideText = ({ label, slot }) => `${label} (${SIDE_WORDS[slot] ?? slot})`;
+const hasBytes = (m) => typeof m?.blob?.arrayBuffer === 'function' && m.blob.size > 0;
+
+/**
+ * The checks of the mockups that write nothing: every published colour has at
+ * least one, and the list fits the server's cap. → { error } | { missingSides }
+ * `colours` [{ id, label, variantIds }] (placeholders are enough for the count).
+ */
+function mockupCheck({ mockups, colours, slots, rows = [], heroKey, replaceImages = false, fresh }) {
+  const usable = mockups.filter(hasBytes);
+  const { colourless, missingSides } = mockupCoverage({ mockups: usable, colours, slots });
+  if (colourless.length > 0) {
+    return {
+      error: `Det finns ingen mockup för ${colourless.join(', ')}. Generera mockuperna igen i steg 7 — en färg publiceras inte utan bild.`,
+    };
+  }
+  const plan = planStudioImages({ rows, colours, mockups: usable.map((m) => ({ ...m, objectId: `new:${m.key}` })), heroKey, replaceImages, fresh });
+  if (plan.error) return { error: tooManyImages(plan.count) };
+  return { missingSides };
+}
+
+const tooManyImages = (count) =>
+  `Produkten skulle få ${count} bilder, men högst ${IMAGE_ROWS_MAX} är tillåtna. Välj färre färger, eller ta bort bilder under Produkter.`;
+
+/** The note under a success: what the seller should know about the images. */
+function imageNote({ missingSides = [], compacted = false, galleryOnly = [], keptSeller = [] }) {
+  const parts = [];
+  if (missingSides.length > 0) {
+    parts.push(`Ingen mockup kunde göras för ${missingSides.map(sideText).join(', ')}: den bilden saknas på produkten.`);
+  }
+  if (compacted) {
+    parts.push(`Produkten får högst ${IMAGE_ROWS_MAX} bilder, så bildgalleriet visar huvudbilden och varje färgs mockuper visas på färgen.`);
+  }
+  if (galleryOnly.length > 0) {
+    parts.push(`${galleryOnly.join(', ')} finns inte som variant på produkten: de mockuperna ligger bara i produktens bildgalleri.`);
+  }
+  if (keptSeller.length > 0) {
+    parts.push(`${keptSeller.join(', ')} har egna bilder som behölls. Kryssa i ”Ersätt även befintlig huvudbild/variantbilder” för att lägga mockuperna först.`);
+  }
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+/**
+ * The image step on a product that exists: the objects (kept, reused or
+ * uploaded), the planned list, the write (read back when its answer is lost).
+ * → { ok: true, plan } | { ok: false, cause, unknown?: true }
+ */
+async function imageStep({ shopId, productId, rows, colours, mockups, heroKey, replaceImages = false, fresh }) {
+  const usable = mockups.filter(hasBytes);
+  let objectIdByKey;
+  try {
+    ({ objectIdByKey } = await resolveMockupObjects(usable, { shopId, productId, rows, colours }));
+  } catch (error) {
+    const progress = Number.isInteger(error?.total) && error.total > 0 ? ` (${error.done} av ${error.total} uppladdade)` : '';
+    return { ok: false, cause: `Produktbilderna kunde inte sparas${progress}: ${imageStepCause(error)}` };
+  }
+  const plan = planStudioImages({
+    rows,
+    colours,
+    mockups: usable.map((m) => ({ key: m.key, colorwayId: m.colorwayId, slot: m.slot, objectId: objectIdByKey[m.key] })),
+    heroKey,
+    replaceImages,
+    fresh,
+  });
+  if (plan.error) return { ok: false, cause: tooManyImages(plan.count) };
+  const wrote = await writeStudioImages(productId, plan.list, { shopId, before: rows, colours });
+  if (!wrote.ok) {
+    return wrote.unknown
+      ? { ok: false, unknown: true, cause: 'Anslutningen bröts, och det är oklart om produktbilderna sparades.' }
+      : { ok: false, cause: `Produktbilderna kunde inte sparas: ${wrote.cause}` };
+  }
+  return { ok: true, plan };
+}
+
 // ── a new product ───────────────────────────────────────────────────────────
 
 /**
@@ -153,13 +235,16 @@ function mappingStepMessage(error) {
  *   slots                  the designed slots
  *   printerId              the printer of every article
  *   artworkFor(slot, colorwayId) → artworkId
+ *   mockups                the published colours' mockups [{ key, colorwayId, slot,
+ *                          blob, type }], in the studio's order
+ *   heroKey                the mockup the seller picked as the main image
  * deps: { skuFromName, uniqueSku, deriveVariantsFromGroups }
  *
  * → { result: { name, sku, productId, published: true, note, screeningNotice } }
  *   | { error, field?: 'price', changed?: true }   (changed: something was written)
  */
 export async function publishNewDesign(input, deps) {
-  const { shopId, currency, name, price, colorways, slots, printerId, artworkFor } = input;
+  const { shopId, currency, name, price, colorways, slots, printerId, artworkFor, mockups = [], heroKey = null } = input;
   const { skuFromName, uniqueSku, deriveVariantsFromGroups } = deps;
 
   // 0. Checks that write nothing.
@@ -174,6 +259,12 @@ export async function publishNewDesign(input, deps) {
   if (duplicateArticles(cells.map((cell) => cell.sku)).length > 0) {
     return { error: 'Samma artikel hos tryckeriet är vald för två varianter. Välj en egen artikel för varje färg och storlek.' };
   }
+  // Every colour has its mockup, and the images fit (placeholders: nothing is uploaded yet).
+  const images = mockupCheck({
+    mockups, slots, heroKey, fresh: true,
+    colours: colorways.map((c) => ({ id: c.id, label: c.label, variantIds: [`new:${c.id}`] })),
+  });
+  if (images.error) return { error: images.error };
   const floors = await freshFloors(cells.map((cell) => cell.sku), { shopId, printerId, slots });
   if (!floors.ok) return { error: floors.error };
   const priceMinor = ore(price);
@@ -319,7 +410,25 @@ export async function publishNewDesign(input, deps) {
     return draftError(refusalMessage(error, { step: 'variant', sku: current?.sku, label: current?.label }) ?? 'En variant kunde inte sparas.');
   }
 
-  // 4. The mappings: per variant, only what differs from the server's.
+  // 4. The images (before anything can make the product live).
+  const colourVariants = colorways.map((c) => ({
+    id: c.id,
+    label: c.label,
+    variantIds: units.filter((u) => u.colorway.id === c.id).map((u) => variantIdBySku.get(u.row.sku.toLowerCase())).filter(Boolean),
+  }));
+  let rowsNow = [];
+  if (server) {
+    // The draft's rows as they are now (the variant sync may have removed some).
+    try {
+      rowsNow = rowsOf(await getProduct(productId, { shopId }));
+    } catch (error) {
+      return draftError(error?.code === 'unauthenticated' ? SESSION_GONE : `Produktbilderna kunde inte sparas: ${imageStepCause(error)}`);
+    }
+  }
+  const imaged = await imageStep({ shopId, productId, rows: rowsNow, colours: colourVariants, mockups, heroKey, fresh: true });
+  if (!imaged.ok) return draftError(imaged.cause);
+
+  // 5. The mappings: per variant, only what differs from the server's.
   try {
     const existing = server ? await listMappings({ productId, shopId }) : [];
     const plans = units.map((u) => {
@@ -342,7 +451,7 @@ export async function publishNewDesign(input, deps) {
     return draftError(mappingStepMessage(error));
   }
 
-  // 5. Active, then published (the server's gate decides).
+  // 6. Active, then published (the server's gate decides).
   let after;
   try {
     if (server?.product.status !== 'active') await updateProduct(productId, { status: 'active' }, { shopId });
@@ -385,7 +494,7 @@ export async function publishNewDesign(input, deps) {
       sku: resolvedSku,
       productId,
       published: true,
-      note: NO_IMAGES_NOTE,
+      note: imageNote({ ...imaged.plan, missingSides: images.missingSides }),
       screeningNotice: screeningNoticeFor(after?.screeningStatus),
     },
   };
@@ -400,11 +509,16 @@ export async function publishNewDesign(input, deps) {
  *   colorways              the published colours [{ id, label }]
  *   overrideColorwayIds    the colours that print another artwork somewhere
  *   artworkFor(slot, colorwayId | null) → artworkId (null: the slot's own artwork)
+ *   mockups, heroKey       as for a new product (the published colours' mockups)
+ *   replaceImages          the seller's "Ersätt även befintlig huvudbild/variantbilder"
  *
  * → { result: { name, sku, updated: true, note } } | { error, changed?: true }
  */
 export async function updateExistingFromDesign(input) {
-  const { shopId, productId, slots, printerId, articles, colorways, overrideColorwayIds, artworkFor } = input;
+  const {
+    shopId, productId, slots, printerId, articles, colorways, overrideColorwayIds, artworkFor,
+    mockups = [], heroKey = null, replaceImages = false,
+  } = input;
 
   let detail;
   try {
@@ -438,6 +552,17 @@ export async function updateExistingFromDesign(input) {
   if (duplicateArticles(chosen).length > 0) {
     return { error: 'Samma artikel hos tryckeriet är vald för två varianter. Välj en egen artikel för varje variant.' };
   }
+  // The images: each published colour's variants on the product (its exact
+  // name, as the motif rule above), the first first; the checks write nothing.
+  const colourVariants = colorways.map((c) => ({
+    id: c.id,
+    label: c.label,
+    variantIds: scopes.filter((s) => s.variantId && s.group && normalizeLabel(s.group) === normalizeLabel(c.label)).map((s) => s.variantId),
+  }));
+  const rows = rowsOf(detail);
+  const images = mockupCheck({ mockups, colours: colourVariants, slots, rows, heroKey, replaceImages, fresh: false });
+  if (images.error) return { error: images.error };
+
   const floors = await freshFloors(chosen, { shopId, printerId, slots });
   if (!floors.ok) return { error: floors.error };
   const under = scopes.filter((s, i) => Number.isSafeInteger(s.priceMinor) && s.priceMinor < floors.floorBySku.get(chosen[i]));
@@ -479,5 +604,24 @@ export async function updateExistingFromDesign(input) {
     };
   }
 
-  return { result: { name: product.name || '(namnlös produkt)', sku: product.sku || '', updated: true, note: NO_IMAGES_UPDATE_NOTE } };
+  // The images, after the print is right (as the older studio: the mappings first).
+  const imaged = await imageStep({ shopId, productId, rows, colours: colourVariants, mockups, heroKey, replaceImages, fresh: false });
+  if (!imaged.ok) {
+    if (imaged.unknown) {
+      return { changed: true, error: `${imaged.cause} Kontrollera produkten under Produkter innan du försöker igen.` };
+    }
+    return {
+      changed: written > 0,
+      error: `${imaged.cause} ${written > 0 ? 'Tryckkopplingen är redan uppdaterad. ' : ''}Tryck ”Uppdatera produkten” igen för att försöka igen.`,
+    };
+  }
+
+  return {
+    result: {
+      name: product.name || '(namnlös produkt)',
+      sku: product.sku || '',
+      updated: true,
+      note: imageNote({ ...imaged.plan, missingSides: images.missingSides }),
+    },
+  };
 }

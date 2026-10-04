@@ -378,14 +378,11 @@ const PublishPanel = ({
                     Produkten saknar SKU. Ge den en unik SKU under Produkter innan du fortsätter.
                   </p>
                 )}
-                {/* No product image is written in the Cloudflare admin yet (unit FN2). */}
-                {!sp && (
                 <label className="flex cursor-pointer items-center gap-2 text-[13px] text-admin-text">
                   <input type="checkbox" checked={replaceImages}
                     onChange={(e) => setReplaceImages(e.target.checked)} className={checkboxCls} />
                   Ersätt även befintlig huvudbild/variantbilder (annars fylls bara tomma)
                 </label>
-                )}
                 {sp && targetProduct && (
                   <div>
                     <span className={labelCls}>{PANEL_TEXT.scopeTitle}</span>

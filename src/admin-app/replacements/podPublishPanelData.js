@@ -48,7 +48,7 @@ export const PANEL_TEXT = Object.freeze({
     'Välj tryckeriets artikel (plagget i färg och storlek) för varje kombination som ska säljas. ”Säljs inte” utelämnar kombinationen.',
   notSold: 'Säljs inte',
   scopeTitle: 'Tryckeriets artikel per variant',
-  updated: 'har nu designens tryckkoppling på varje variant (på artikeln du valde).',
+  updated: 'uppdaterades med dina mockuper och har nu designens tryckkoppling på varje variant (på artikeln du valde).',
 });
 
 export const QUOTE_DEBOUNCE_MS = 250;
