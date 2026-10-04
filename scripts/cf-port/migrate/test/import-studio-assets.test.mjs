@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { hostingFileOf, parseArgs, planStudioImport, runStudioImport } from '../import-studio-assets.mjs';
+import { hostingFileOf, parseArgs, planStudioImport, runStudioImport, sameDocument, workerShape } from '../import-studio-assets.mjs';
 import { RefusedError, REPO_ROOT } from '../lib/api-session.mjs';
 import { sourceKeyOf } from '../lib/copy-manifest.mjs';
 import { loadWorkerModule } from '../lib/copy-sources.mjs';
@@ -34,6 +34,80 @@ function stableJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+const nonEmpty = (value) => value !== null && typeof value === 'object' && Object.keys(value).length > 0;
+
+/**
+ * What the REAL Worker stores and answers for a PUT body
+ * (cloudflare/src/pod/studio-assets.ts parse* → rows → templateFromRows /
+ * modelFromRows), restated field by field here and NOT taken from the
+ * importer: its defaults filled in at every level, its empty optional maps
+ * dropped. The fake answers this, not the body it was sent.
+ */
+function workerAnswer(kind, input) {
+  if (kind === 'template') {
+    const map = input.photo?.displacement ?? null;
+    const out = {
+      active: input.active ?? true,
+      colorways: input.colorways.map((c) => ({
+        backFileId: c.backFileId ?? null,
+        frontFileId: c.frontFileId ?? null,
+        hex: c.hex,
+        id: c.id,
+        label: c.label,
+        ...(nonEmpty(c.tuning) ? { tuning: c.tuning } : {}),
+      })),
+      garment: input.garment,
+      label: input.label,
+      photo: input.photo
+        ? {
+            displacement: map ? { ...map, backFileId: map.backFileId ?? null, frontFileId: map.frontFileId ?? null } : null,
+            h: input.photo.h,
+            w: input.photo.w,
+          }
+        : null,
+      printAreaMm: input.printAreaMm,
+      printAreas: input.printAreas,
+      profileId: input.profileId,
+      provisional: input.provisional ?? false,
+      sortOrder: input.sortOrder ?? 0,
+    };
+    for (const key of ['pocketPositions', 'printOffsetTopMm', 'slotLabels']) {
+      if (nonEmpty(input[key])) out[key] = input[key];
+    }
+    return out;
+  }
+  const out = {
+    active: input.active ?? true,
+    label: input.label,
+    output: input.output ?? null,
+    perColorway: Object.fromEntries(Object.entries(input.perColorway ?? {}).filter(([, t]) => nonEmpty(t))),
+    views: Object.fromEntries(
+      Object.entries(input.views).map(([viewId, view]) => [
+        viewId,
+        {
+          colorways: (view.colorways ?? []).map((c) => ({
+            displacementFileId: c.displacementFileId,
+            id: c.id,
+            label: c.label,
+            maskFileId: c.maskFileId ?? null,
+            photoFileId: c.photoFileId,
+            ...(typeof c.mapContrastSd === 'number' ? { mapContrastSd: c.mapContrastSd } : {}),
+          })),
+          h: view.h ?? null,
+          originalDims: view.originalDims ?? null,
+          printArea: view.printArea,
+          printAreaMm: view.printAreaMm ?? null,
+          w: view.w ?? null,
+        },
+      ]),
+    ),
+  };
+  for (const key of ['alpha', 'blend', 'displacementBlur', 'displacementContrast', 'displacementScale']) {
+    if (input[key] !== undefined) out[key] = input[key];
+  }
+  return out;
 }
 
 async function startFakeStudioApi({ refuseTemplate = null } = {}) {
@@ -87,27 +161,31 @@ async function startFakeStudioApi({ refuseTemplate = null } = {}) {
       state.files.set(sha256, file);
       return send(201, { file });
     }
+    const times = { createdAt: '2026-10-04T00:00:00.000Z', updatedAt: '2026-10-04T00:00:00.000Z' };
     for (const [prefix, store, idKey, answerKey] of [
       ['/v1/platform/pod/mockup-templates', state.templates, 'templateId', 'template'],
       ['/v1/platform/pod/3d-models', state.models, 'modelId', 'model'],
     ]) {
       if (url.pathname === prefix) {
         if (method !== 'GET' || !platformOk(false)) return notFound();
-        return send(200, { files: {}, [`${answerKey}s`]: [...store.entries()].map(([id, doc]) => ({ ...doc, [idKey]: id })) });
+        return send(200, {
+          files: {},
+          [`${answerKey}s`]: [...store.entries()].map(([id, doc]) => ({ ...doc, ...times, [idKey]: id })),
+        });
       }
       if (url.pathname.startsWith(`${prefix}/`)) {
         if (method !== 'PUT' || !platformOk(true)) return notFound();
         const id = decodeURIComponent(url.pathname.slice(prefix.length + 1));
         if (refuseTemplate === id) return send(400, { error: { code: 'invalid_request', reason: 'aspect_mismatch' } });
-        const input = JSON.parse(body.toString('utf8'));
+        const input = workerAnswer(answerKey, JSON.parse(body.toString('utf8')));
         const ids = JSON.stringify(input).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) ?? [];
         const stored = new Set([...state.files.values()].map((f) => f.fileId));
         if (ids.some((fileId) => !stored.has(fileId))) return send(400, { error: { code: 'invalid_request', reason: 'file_not_found' } });
         const existing = store.get(id);
-        if (existing && stableJson(existing) === stableJson(input)) return send(200, { changed: false, [answerKey]: { ...input, [idKey]: id } });
+        if (existing && stableJson(existing) === stableJson(input)) return send(200, { changed: false, [answerKey]: { ...input, ...times, [idKey]: id } });
         store.set(id, input);
         state.writes += 1;
-        return send(existing ? 200 : 201, { changed: true, [answerKey]: { ...input, [idKey]: id } });
+        return send(existing ? 200 : 201, { changed: true, [answerKey]: { ...input, ...times, [idKey]: id } });
       }
     }
     return notFound();
@@ -230,16 +308,51 @@ function modelDocs(at) {
   ];
 }
 
-async function world({ refuseTemplate = null, withHosting = true, sourceFiles = null } = {}) {
+/**
+ * A source that answers 200 with the full Content-Length, sends half the
+ * body and drops the connection — the first `breaks[path]` times a path is
+ * asked for; after that it answers whole.
+ */
+async function startBreakingSource(files, breaks) {
+  const hits = new Map();
+  const server = createServer((req, res) => {
+    const key = new URL(req.url, 'http://fake').pathname;
+    hits.set(key, (hits.get(key) ?? 0) + 1);
+    const file = files[key];
+    if (!file) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    if ((breaks[key] ?? 0) >= hits.get(key)) {
+      res.writeHead(200, { 'content-length': String(file.body.length), 'content-type': file.type });
+      res.write(file.body.subarray(0, Math.floor(file.body.length / 2)));
+      setTimeout(() => res.socket.destroy(), 20);
+      return;
+    }
+    res.writeHead(200, { 'content-type': file.type });
+    res.end(file.body);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    close: () => new Promise((resolve) => {
+      server.closeAllConnections();
+      server.close(resolve);
+    }),
+    hits,
+    origin: `http://127.0.0.1:${server.address().port}`,
+  };
+}
+
+async function world({ breaks = null, refuseTemplate = null, withHosting = true, sourceFiles = null } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'studio-import-'));
   const api = await startFakeStudioApi({ refuseTemplate });
   const sourcePath = (name) => `/v0/b/test-bucket.firebasestorage.app/o/${name}`;
-  const source = await startFakeSource(
-    sourceFiles ?? {
-      [sourcePath('white-map')]: { body: png('map'), type: 'image/png' },
-      [sourcePath('white-photo')]: { body: png('photo'), type: 'image/png' },
-    },
-  );
+  const files = sourceFiles ?? {
+    [sourcePath('white-map')]: { body: png('map'), type: 'image/png' },
+    [sourcePath('white-photo')]: { body: png('photo'), type: 'image/png' },
+  };
+  const source = breaks === null ? await startFakeSource(files) : await startBreakingSource(files, breaks);
   const at = (name) => `${source.origin}${sourcePath(name)}?alt=media&token=t`;
   const hosting = path.join(dir, 'public');
   if (withHosting) {
@@ -496,5 +609,60 @@ test('--only models plans no template', () => {
     assert.equal(plan.modelPlan.models.length, 2);
   } finally {
     rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+// ── Codex round 1 ───────────────────────────────────────────────────────────
+
+test('verify compares with the Worker\'s defaults filled in, nested levels too', () => {
+  const flat = {
+    colorways: [{ hex: '#ffffff', id: 'white', label: 'Vit' }],
+    garment: 'bag',
+    label: 'Tygkasse',
+    printAreaMm: { front: { h: 250, w: 250 } },
+    printAreas: { front: { h: 300, w: 300, x: 250, y: 330 } },
+    profileId: 'bag_dtg',
+  };
+  const stored = { ...workerAnswer('template', flat), createdAt: 'x', templateId: 'bag_flat', updatedAt: 'y' };
+  assert.equal(stored.colorways[0].frontFileId, null, 'the Worker answers the null file ids');
+  assert.equal(sameDocument('template', flat, stored), true);
+  assert.deepEqual(workerShape('template', flat).colorways[0], { backFileId: null, frontFileId: null, hex: '#ffffff', id: 'white', label: 'Vit' });
+  // A real difference still shows, nested too.
+  const other = structuredClone(stored);
+  other.colorways[0].frontFileId = randomUUID();
+  assert.equal(sameDocument('template', flat, other), false);
+
+  const model = { label: 'M', views: { front: { colorways: [{ displacementFileId: 'd', id: 'white', label: 'Vit', photoFileId: 'p' }], printArea: { h: 0, w: 0, x: 0, y: 0 } } } };
+  assert.equal(sameDocument('model', model, { ...workerAnswer('model', model), modelId: 'M1' }), true);
+});
+
+test('a source body that breaks midway is a transient failure: retried, and the run goes on', async () => {
+  const photo = '/v0/b/test-bucket.firebasestorage.app/o/white-photo';
+  const w = await world({ breaks: { [photo]: 1 } });
+  try {
+    const result = await runStudioImport(w.args, w.deps);
+    assert.equal(result.exitCode, 0, w.lines.join('\n'));
+    assert.equal(w.source.hits.get(photo), 2, 'the second try read it whole');
+    assert.equal(result.result.files.copied, 7);
+  } finally {
+    await w.close();
+  }
+});
+
+test('a source body that always breaks midway is recorded as failed; the other files and items are still done', async () => {
+  const photo = '/v0/b/test-bucket.firebasestorage.app/o/white-photo';
+  const w = await world({ breaks: { [photo]: 99 } });
+  try {
+    const result = await runStudioImport(w.args, w.deps);
+    assert.equal(result.exitCode, 1);
+    assert.equal(w.source.hits.get(photo), 3, 'three tries');
+    assert.deepEqual(result.result.files, { copied: 6, failed: 1, missing: 0, refused: 0 });
+    const manifest = readStudioCopyManifest(path.join(w.args.out, STUDIO_COPY_MANIFEST_FILE));
+    const failed = manifest.entries.find((entry) => entry.status === 'failed');
+    assert.equal(failed.reason, 'network_error');
+    assert.equal(w.api.state.templates.size, 2);
+    assert.equal(w.api.state.models.has('Mdl0123456789abcdefg'), false);
+  } finally {
+    await w.close();
   }
 });

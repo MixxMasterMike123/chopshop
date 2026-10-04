@@ -336,3 +336,58 @@ Mutations: skipping the manifest check fails the idempotence test. Removing the 
 - Apply 0049 to staging through the preflight before deploying the API.
 - No `wrangler.jsonc` var. The upload route uses the existing `PUBLIC_BUCKET` and `PUBLIC_OBJECT_BASE_URL`, and stays dark without them.
 - The admin Worker's allowlist already forwards `/v1/admin/` and `/v1/platform/` prefixes, so these routes need no admin-Worker change.
+
+## Codex round 1 (review of 464b6af8; fixed on HEAD a0034343)
+
+All three findings were real. Each fix below comes with a test that fails without it. I checked that by reverting each fix once and running the suite, then restoring the fix.
+
+### 1. A flat template failed the import's verification on every run
+
+`transformTemplates` sends a flat template's colourways without `frontFileId`/`backFileId`. The Worker fills both in as `null` when it stores the colourway and answers them that way. The old comparison only lifted the top-level keys the import had sent, so the nested `null`s showed up as a mismatch. Every import with a flat template therefore exited 1 even though everything had been written. The test fake had hidden this because it answered with the body it was sent.
+
+- **Fix** (`import-studio-assets.mjs`): a new exported `workerShape(kind, body)` puts the sent body into the Worker's shape at every level before comparing:
+  - templates: `active`, `provisional` and `sortOrder` filled in; `photo: null` and `displacement: null` when absent; each colourway's `frontFileId`/`backFileId: null`; empty `tuning`, `pocketPositions`, `printOffsetTopMm` and `slotLabels` dropped;
+  - models: `active`, `output: null` and `perColorway: {}` filled in; empty overrides dropped; each view's `colorways: []` and `w`/`h`/`originalDims`/`printAreaMm: null`; each colourway's `maskFileId: null`.
+  
+  `sameDocument(kind, sent, stored)` compares that shape with the platform list entry. The id and the times are not compared.
+- **Fake:** it now answers what the real Worker answers. `workerAnswer` restates `templateFromRows` and `modelFromRows` field by field inside the test, without taking anything from the importer: defaults filled in, empty maps dropped, plus `createdAt`/`updatedAt`. Its "same document, nothing written" check compares those shapes.
+- **Tests:**
+  - The full run, the second run and the lost-manifest run now pass against Worker-shaped answers.
+  - A new unit test checks that the flat body matches the Worker's answer, and that a real nested difference (a colourway's `frontFileId`) still fails.
+  - Mutation (compare the sent body unshaped): 4 failed. The full run exits 1 on "verify: template bag_flat does not match".
+
+### 2. File resolution stopped at 1000 files
+
+`readActiveStudioFiles` read every id in one statement with `LIMIT 1000`. The supported limits allow up to 24 000 distinct files (100 models × 2 views × 40 colourways × 3), so the seller and platform lists could lose addresses beyond the first 1000.
+
+- **Fix** (`studio-files.ts`): the ids are read `STUDIO_FILE_READ_BATCH` (500) at a time, every batch in one `db.batch` (one round trip, one snapshot). The ids still go in as ONE bound parameter per statement (a JSON array read by `json_each`), so D1's 100-parameter limit never applies, and each statement stays about 19 KB.
+- **Tests** (`pod-studio-assets.test.ts`):
+  - Setup: 1200 active files are seeded, and five models (2 views × 40 colourways × photo, map and mask) are PUT through the platform route. The PUT itself already resolves 240 files per model.
+  - `readActiveStudioFiles` returns all 1200, and none for an unknown id.
+  - The seller's `GET /v1/admin/pod/3d-models` carries all 1200 addresses, and the platform list carries at least 1200 `files`.
+  - Mutation (one statement, `LIMIT 1000`): 2 failed.
+
+### 3. A source that broke after its headers aborted the whole import
+
+A connection reset, or the 60 s timeout, while the body streamed threw outside `fetchRemoteOnce`'s error handling. It escaped `readSource`, skipped the retries and stopped the run, and the failed file was never recorded.
+
+- **Fix:** the body loop is inside a `try`. A throw there returns `{ status: 'failed', transient: true, reason: 'network_error' | 'timeout' }`, so `readSource` tries again (3 times), and the manifest and the counts record the failure.
+- **Tests:** they use a source that answers 200 with the full `Content-Length`, sends half the body, then drops the socket.
+  - Broken once: the second try reads the file whole, and the run exits 0 with 7 files copied.
+  - Broken always: three tries, then a `failed` entry (`network_error`) in the manifest. The other 6 files and both templates are still done, the model that needs the file is not written, and the run exits 1 without throwing.
+  - Mutation (no catch around the body): 2 failed.
+
+### Gates (round 1)
+
+- `cd cloudflare && npx tsc --noEmit`: clean.
+- `npx vitest run test/pod-studio-assets.test.ts`: 40 passed, which is the 38 from before plus the 2 new tests.
+- Full `npx vitest run`: **Test Files 102 passed (102), Tests 4321 passed (4321)**. HEAD was 4318: I added 2. The third is probably in the other builder's uncommitted `order-emails.test.ts`, which is in the tree; I did not touch it, nor `email-effect.ts` or `order-emails.ts`.
+- `node --test "scripts/cf-port/migrate/test/*.test.mjs"`: **tests 454, pass 454, fail 0, skipped 0** (451 plus 3).
+- `node guard/guards.test.mjs`: **guard: PASS**, exit 0. A manual grep of the four touched files for the guard's families found nothing.
+
+Files touched in round 1:
+- `cloudflare/src/pod/studio-files.ts`
+- `cloudflare/test/pod-studio-assets.test.ts`
+- `scripts/cf-port/migrate/import-studio-assets.mjs`
+- `scripts/cf-port/migrate/test/import-studio-assets.test.mjs`
+- this report

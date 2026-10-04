@@ -294,9 +294,16 @@ export async function uploadStudioFile(
   return { created: activated, file: toStudioFile(current, base), status: "ok" };
 }
 
+// The ids go to D1 as ONE bound parameter (a JSON array read by json_each),
+// so the bound-parameter limit never applies; a batch of 500 keeps each
+// statement's text and each answer small (500 × 38 characters ≈ 19 KB).
+export const STUDIO_FILE_READ_BATCH = 500;
+
 /**
- * The ACTIVE files among `fileIds`, by id (one query, ids as one JSON
- * parameter: no bound-parameter limit).
+ * The ACTIVE files among `fileIds`, by id — ALL of them, however many: the
+ * ids are read STUDIO_FILE_READ_BATCH at a time, every batch in one D1 batch
+ * (one round trip, one snapshot). The supported limits name up to 24 000
+ * distinct files (100 models × 2 views × 40 colourways × 3).
  */
 export async function readActiveStudioFiles(
   db: D1Database,
@@ -307,16 +314,24 @@ export async function readActiveStudioFiles(
   if (ids.length === 0) {
     return found;
   }
-  const result = await db
-    .prepare(
-      `SELECT ${FILE_COLUMNS} FROM pod_studio_files
-       WHERE status = 'active' AND file_id IN (SELECT value FROM json_each(?))
-       LIMIT 1000`,
-    )
-    .bind(JSON.stringify(ids))
-    .all<StudioFileRow>();
-  for (const row of result.results) {
-    found.set(row.file_id, row);
+  const statements: D1PreparedStatement[] = [];
+  for (let start = 0; start < ids.length; start += STUDIO_FILE_READ_BATCH) {
+    const chunk = ids.slice(start, start + STUDIO_FILE_READ_BATCH);
+    statements.push(
+      db
+        .prepare(
+          `SELECT ${FILE_COLUMNS} FROM pod_studio_files
+           WHERE status = 'active' AND file_id IN (SELECT value FROM json_each(?))
+           LIMIT ${STUDIO_FILE_READ_BATCH}`,
+        )
+        .bind(JSON.stringify(chunk)),
+    );
+  }
+  const results = await db.batch<StudioFileRow>(statements);
+  for (const result of results) {
+    for (const row of result.results) {
+      found.set(row.file_id, row);
+    }
   }
   return found;
 }

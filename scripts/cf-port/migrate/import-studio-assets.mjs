@@ -162,13 +162,20 @@ async function fetchRemoteOnce(fetchImpl, address) {
   }
   const chunks = [];
   let total = 0;
-  for await (const chunk of response.body ?? []) {
-    total += chunk.byteLength;
-    if (total > STUDIO_FILE_MAX_BYTES) {
-      await response.body.cancel().catch(() => undefined);
-      return { reason: 'too_large', status: 'refused' };
+  // The body arrives after the headers: a connection that resets, or the
+  // timeout firing, while it streams throws HERE, and is a transient failure
+  // like one before the headers (readSource tries again; the manifest records it).
+  try {
+    for await (const chunk of response.body ?? []) {
+      total += chunk.byteLength;
+      if (total > STUDIO_FILE_MAX_BYTES) {
+        await response.body.cancel().catch(() => undefined);
+        return { reason: 'too_large', status: 'refused' };
+      }
+      chunks.push(Buffer.from(chunk));
     }
-    chunks.push(Buffer.from(chunk));
+  } catch (error) {
+    return { reason: error?.name === 'TimeoutError' ? 'timeout' : 'network_error', status: 'failed', transient: true };
   }
   return { bytes: Buffer.concat(chunks), status: 'ok' };
 }
@@ -282,31 +289,67 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-/** The keys of `sent` read off `stored`, in the shape the Worker normalises to. */
-function sameDocument(sent, stored) {
-  if (stored === undefined) return false;
-  const picked = Object.fromEntries(Object.keys(sent).map((key) => [key, stored[key]]));
-  return stableJson(normalise(sent)) === stableJson(normalise(picked));
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * A sent body as the Worker stores and answers it (cloudflare/src/pod/studio-assets.ts
+ * parseMockupTemplateInput / parseModel3dInput and templateFromRows / modelFromRows),
+ * nested levels included: the defaults it fills in (`active`, `provisional`,
+ * `sortOrder`, `photo: null`, a colourway's `frontFileId`/`backFileId: null`,
+ * `displacement: null`; a model's `output: null`, `perColorway: {}`, a view's
+ * `colorways: []`, `w`/`h`/`originalDims`/`printAreaMm: null`, a colourway's
+ * `maskFileId: null`) and the empty optional maps it drops.
+ */
+export function workerShape(kind, sent) {
+  const body = structuredClone(sent);
+  if (kind === 'template') {
+    body.active ??= true;
+    body.provisional ??= false;
+    body.sortOrder ??= 0;
+    body.photo ??= null;
+    if (isObject(body.photo)) body.photo.displacement ??= null;
+    for (const colorway of Array.isArray(body.colorways) ? body.colorways : []) {
+      if (!isObject(colorway)) continue;
+      colorway.frontFileId ??= null;
+      colorway.backFileId ??= null;
+      if (isObject(colorway.tuning) && Object.keys(colorway.tuning).length === 0) delete colorway.tuning;
+    }
+    for (const key of ['pocketPositions', 'printOffsetTopMm', 'slotLabels']) {
+      if (isObject(body[key]) && Object.keys(body[key]).length === 0) delete body[key];
+    }
+  } else {
+    body.active ??= true;
+    body.output ??= null;
+    body.perColorway ??= {};
+    for (const [colorwayId, override] of Object.entries(isObject(body.perColorway) ? body.perColorway : {})) {
+      if (isObject(override) && Object.keys(override).length === 0) delete body.perColorway[colorwayId];
+    }
+    for (const view of Object.values(isObject(body.views) ? body.views : {})) {
+      if (!isObject(view)) continue;
+      view.colorways ??= [];
+      view.w ??= null;
+      view.h ??= null;
+      view.originalDims ??= null;
+      view.printAreaMm ??= null;
+      for (const colorway of Array.isArray(view.colorways) ? view.colorways : []) {
+        if (isObject(colorway)) colorway.maskFileId ??= null;
+      }
+    }
+  }
+  return body;
 }
 
-/** The Worker drops empty optional maps and a colourway's empty tuning; so does the comparison. */
-function normalise(value) {
-  if (Array.isArray(value)) return value.map(normalise);
-  if (value === null || typeof value !== 'object') return value;
-  const out = {};
-  for (const [key, entry] of Object.entries(value)) {
-    const inner = normalise(entry);
-    if (
-      ['pocketPositions', 'printOffsetTopMm', 'slotLabels', 'tuning'].includes(key) &&
-      inner !== null &&
-      typeof inner === 'object' &&
-      Object.keys(inner).length === 0
-    ) {
-      continue;
-    }
-    out[key] = inner;
-  }
-  return out;
+/**
+ * Is what the Worker answers (`stored`, a platform list entry) the body that
+ * was sent? The sent body is first given the Worker's own defaults
+ * (`workerShape`); then every one of its keys must read the same off
+ * `stored` (the list adds the id and the times, which are not compared).
+ */
+export function sameDocument(kind, sent, stored) {
+  if (stored === undefined) return false;
+  const expected = workerShape(kind, sent);
+  const picked = Object.fromEntries(Object.keys(expected).map((key) => [key, stored[key]]));
+  return stableJson(expected) === stableJson(picked);
 }
 
 // ── the run ─────────────────────────────────────────────────────────────────
@@ -456,7 +499,7 @@ export async function runStudioImport(args, deps) {
     const listed = await session.request('GET', '/v1/platform/pod/mockup-templates');
     const byId = Object.fromEntries((listed.json?.templates ?? []).map((t) => [t.templateId, t]));
     for (const item of written.templates) {
-      if (!sameDocument(item.body, byId[item.id])) {
+      if (!sameDocument('template', item.body, byId[item.id])) {
         mismatches += 1;
         log(`  verify: template ${item.id} does not match`);
       }
@@ -466,7 +509,7 @@ export async function runStudioImport(args, deps) {
     const listed = await session.request('GET', '/v1/platform/pod/3d-models');
     const byId = Object.fromEntries((listed.json?.models ?? []).map((m) => [m.modelId, m]));
     for (const item of written.models) {
-      if (!sameDocument(item.body, byId[item.id])) {
+      if (!sameDocument('model', item.body, byId[item.id])) {
         mismatches += 1;
         log(`  verify: model ${item.id} does not match`);
       }

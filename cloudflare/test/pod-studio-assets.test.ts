@@ -10,6 +10,7 @@ import {
   seedTenant,
   signUp,
 } from "./pod-fixtures";
+import { readActiveStudioFiles } from "../src/pod/studio-files";
 
 /**
  * CP5-WH (D101): the design studio's platform-owned assets — the mockup
@@ -705,5 +706,92 @@ describe("GET /v1/admin/pod/mockup-templates and /3d-models (the seller)", () =>
     });
     expectNoPlatformOnlyKeys(body);
     expectNoCostKeys(body);
+  });
+});
+
+// ── Codex round 1: every file resolves, past the old 1000 cut-off ───────────
+
+describe("file resolution has no cut-off inside the supported limits", () => {
+  const MODELS = 5; // × 2 views × 40 colourways × 3 files = 1200 distinct files
+  const modelIds = Array.from({ length: MODELS }, (_, m) => `BigModel${m}`);
+  const fileIdOf = (m: number, view: number, c: number, part: number) =>
+    `${(m * 1000 + view * 100 + c).toString(16).padStart(8, "0")}-0000-4000-8000-${part.toString(16).padStart(12, "0")}`;
+
+  beforeAll(async () => {
+    const at = new Date().toISOString();
+    const statements: D1PreparedStatement[] = [];
+    for (let m = 0; m < MODELS; m += 1) {
+      for (let view = 0; view < 2; view += 1) {
+        for (let c = 0; c < 40; c += 1) {
+          for (let part = 0; part < 3; part += 1) {
+            const fileId = fileIdOf(m, view, c, part);
+            statements.push(
+              env.DB.prepare(
+                `INSERT INTO pod_studio_files (file_id, object_key, content_type, size_bytes, sha256, width_px, height_px,
+                   status, created_by, created_at, updated_at)
+                 VALUES (?, ?, 'image/png', 10, ?, 1600, 1936, 'active', 'seed', ?, ?)`,
+              ).bind(fileId, `platform/studio/${fileId}/v1/image.png`, `${fileId.replaceAll("-", "")}`.padEnd(64, "0"), at, at),
+            );
+          }
+        }
+      }
+    }
+    for (let start = 0; start < statements.length; start += 200) {
+      await env.DB.batch(statements.slice(start, start + 200));
+    }
+    expect(await count("SELECT COUNT(*) AS n FROM pod_studio_files WHERE created_by = 'seed'")).toBe(1200);
+
+    for (let m = 0; m < MODELS; m += 1) {
+      const views: Record<string, unknown> = {};
+      ["front", "back"].forEach((viewId, view) => {
+        views[viewId] = {
+          colorways: Array.from({ length: 40 }, (_, c) => ({
+            displacementFileId: fileIdOf(m, view, c, 1),
+            id: `c${c}`,
+            label: `Färg ${c}`,
+            maskFileId: fileIdOf(m, view, c, 2),
+            photoFileId: fileIdOf(m, view, c, 0),
+          })),
+          h: 1936,
+          printArea: { h: 700, w: 525, x: 548, y: 875 },
+          printAreaMm: { h: 400, w: 300 },
+          w: 1600,
+        };
+      });
+      const response = await asPlatform("PUT", `/v1/platform/pod/3d-models/${modelIds[m]}`, {
+        body: { label: `Stor modell ${m}`, views },
+      });
+      expect(response.status).toBe(201);
+    }
+  });
+
+  it("readActiveStudioFiles answers every active id of 1200 (and no pending or unknown one)", async () => {
+    const ids: string[] = [];
+    for (let m = 0; m < MODELS; m += 1)
+      for (let view = 0; view < 2; view += 1)
+        for (let c = 0; c < 40; c += 1) for (let part = 0; part < 3; part += 1) ids.push(fileIdOf(m, view, c, part));
+    const found = await readActiveStudioFiles(env.DB, [...ids, "00000000-0000-4000-8000-0000000fffff"]);
+    expect(found.size).toBe(1200);
+    expect(ids.every((id) => found.has(id))).toBe(true);
+  });
+
+  it("the seller's models carry all 1200 addresses, and the platform list all 1200 files", async () => {
+    const seller = await (
+      await call("GET", "/v1/admin/pod/3d-models", { cookie: tenantAdmin.cookie, shopId: TENANT_A })
+    ).json<{ models: Array<{ id: string; views: Record<string, { colorways: Record<string, Record<string, string>> }> }> }>();
+    let urls = 0;
+    for (const model of seller.models.filter((entry) => modelIds.includes(entry.id))) {
+      for (const view of Object.values(model.views)) {
+        for (const colorway of Object.values(view.colorways)) {
+          for (const key of ["photoUrl", "displacementUrl", "maskUrl"]) {
+            expect(colorway[key], `${model.id} ${key}`).toMatch(/^https:\/\/public-objects\.test\.invalid\/platform\/studio\//);
+            urls += 1;
+          }
+        }
+      }
+    }
+    expect(urls).toBe(1200);
+    const platformList = await (await asPlatform("GET", "/v1/platform/pod/3d-models")).json<{ files: Record<string, unknown> }>();
+    expect(Object.keys(platformList.files).length).toBeGreaterThanOrEqual(1200);
   });
 });
