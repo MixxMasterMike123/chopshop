@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { pollDelay } from '../adapters/pod.js';
 import { loadPodLibrary, renderNews } from './podLibraryLoad.js';
+import { releaseHeldPreviews } from './podPreviewBlobs.js';
 
 export default function usePodLibrary(shopId) {
   const [mappings, setMappings] = useState([]);
@@ -38,6 +39,10 @@ export default function usePodLibrary(shopId) {
       setProfiles(next.profiles);
       setProducts(next.products);
       setProductSkus(next.productSkus);
+      // This library is the one on screen now: previews it does not show are
+      // let go (podPreviewBlobs.js). Never before this point: a failed or
+      // superseded read leaves the earlier rows, and their addresses, in use.
+      releaseHeldPreviews(next.artwork.map((a) => a.previewUrl));
       return true;
     } catch (e) {
       if (!alive.current || seq !== loadSeq.current) return false;
