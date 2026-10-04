@@ -8,7 +8,6 @@ import {
   createFakePrinterClient,
   FAKE_PRINTER_FETCH_OVERRIDE,
   resolvePrinterClient,
-  snapwearClient,
   toSnapwearJobBody,
   type PrinterJob,
 } from "../src/dispatch/printer-client";
@@ -386,22 +385,18 @@ describe("listing what was received", () => {
 describe("the printer client", () => {
   it("resolves by DISPATCH_TARGET, and never to the fake outside staging", async () => {
     expect(resolvePrinterClient(env)).not.toBeNull();
-    expect(resolvePrinterClient(env)).not.toBe(snapwearClient);
     expect(resolvePrinterClient(envWith({ APP_ENV: "production" }))).toBeNull();
     expect(resolvePrinterClient(envWith({ FAKE_PRINTER_TOKEN: undefined }))).toBeNull();
     expect(resolvePrinterClient(envWith({ DISPATCH_TARGET: undefined }))).toBeNull();
     expect(resolvePrinterClient(envWith({ DISPATCH_TARGET: "SnapWear" }))).toBeNull();
+    // SnapWear without its switch, address and token is no client at all
+    // (the full gate: test/snapwear-client.test.ts).
     expect(
       resolvePrinterClient(envWith({ APP_ENV: "production", DISPATCH_TARGET: "snapwear" })),
-    ).toBe(snapwearClient);
+    ).toBeNull();
     expect(() => createFakePrinterClient(envWith({ APP_ENV: "production" }))).toThrow(
       /not enabled/,
     );
-  });
-
-  it("the SnapWear client is a stub that refuses to pretend", async () => {
-    const orderId = await seedOrder();
-    await expect(snapwearClient.submit(printerJob(orderId))).rejects.toThrow("not_implemented");
   });
 
   it("submits in-process by default: accepted, with the fake's id as the printer reference", async () => {

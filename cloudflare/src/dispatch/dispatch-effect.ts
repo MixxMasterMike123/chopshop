@@ -3,6 +3,7 @@ import {
   complete,
   type EffectContext,
   fail,
+  fenceGuard,
   iso,
   markSubmitting,
   markUnknown,
@@ -25,7 +26,11 @@ import {
   type PrinterSubmitResult,
   resolvePrinterClient,
 } from "./printer-client";
-import { dispatchHeldForPayment, parkForHold } from "../commerce/dispatch-hold";
+import {
+  DISPATCH_HOLD_UNTIL_MS,
+  dispatchHeldForPayment,
+  parkForHold,
+} from "../commerce/dispatch-hold";
 import { readDispatchShipTo } from "../commerce/recipient";
 import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-wire";
 
@@ -54,11 +59,18 @@ import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-
  *  4. submit with the STABLE job id `{orderId}-{lineNo}`:
  *       accepted   → done (result_ref = printer id), line `accepted`
  *       duplicate  → done: the printer already had it (a lost response)
- *       rejected   → failed + alert; or superseded if a cancellation arrived
+ *       rejected   → failed + alert; or superseded if a cancellation arrived;
+ *                    or unknown when an earlier attempt's answer was lost
+ *                    (the refusal may be the duplicate we cannot read)
  *       unknown    → unknown, re-submitted after backoff (duplicate ⇒ done);
  *                    the sweeper alerts after 30 minutes (dispatch_unknown_30m)
  *     A cancellation that arrived while the call was out turns accepted /
  *     duplicate into a `printer_cancellation` outbox row in the same batch.
+ *
+ * An environment with NO printer client parks the row (parkForPrinter): no
+ * attempt is spent while it waits, the sweeper releases it once a client
+ * exists, and reconciliation's dispatch_stranded_30m alert names it after 30
+ * minutes.
  *
  * Every line-state write, alert and follow-up row is committed in the batch of
  * the outbox transition it belongs to, under that transition's fence.
@@ -72,6 +84,21 @@ import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-
  * shorten once SnapWear confirms they store the file at import.
  */
 export const DISPATCH_PRINT_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * `next_attempt_at` of a dispatch row PARKED because this environment has no
+ * printer client (resolvePrinterClient → null: no DISPATCH_TARGET, the fake
+ * outside staging, SnapWear before its switch). Year 9999, like the payment
+ * hold, but a DIFFERENT instant on purpose: releaseDispatchHolds releases
+ * rows at DISPATCH_HOLD_UNTIL_MS whose ORDER is no longer payment-held, and
+ * must not wake rows that wait for a printer. Only the sweeper's
+ * releasePrinterHolds (src/outbox/sweeper.ts) releases these, and only once
+ * a client resolves.
+ */
+export const PRINTER_HOLD_UNTIL_MS = DISPATCH_HOLD_UNTIL_MS - 1_000;
+
+/** The `last_error` a printer-parked row carries. */
+export const PRINTER_NOT_CONFIGURED = "printer_not_configured";
 
 const LOCATIONS: readonly PrintLocation[] = ["front", "back"];
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -234,6 +261,20 @@ export function buildDispatchJob(
 
   files.sort((a, b) => LOCATIONS.indexOf(a.location) - LOCATIONS.indexOf(b.location));
   return { ok: true, value: { printFiles: files, quantity, sku } };
+}
+
+/**
+ * THE PS2 SEAM (LAUNCH_TODO A5): the file the printer receives for each print
+ * slot of ONE line. Today it is the artwork's stored print PNG, exactly as the
+ * line's production snapshot froze it (key + sha256); the caller then checks
+ * it in the private bucket and presigns it. PS2 replaces this one function: a
+ * PNG of the printer's whole frame with the motif at its placement offset,
+ * rendered per line (render container; waits on C2/C3) and stored under the
+ * order in the shop's server-owned print path, returned here as that file's
+ * key and sha256 per slot. Nothing else in the dispatch needs to change.
+ */
+function printFilesForPrinter(job: BuiltJob): PrintFile[] {
+  return job.printFiles;
 }
 
 function hex(buffer: ArrayBuffer): string {
@@ -425,6 +466,61 @@ async function retryLater(
 }
 
 /**
+ * This environment has no printer client: PARK the claimed row instead of
+ * retrying it (the CP2 retry spent an attempt per wake-up and, after ten,
+ * failed the job for good — a whole production window without the SnapWear
+ * switch would have failed every paid POD order). The row goes back to
+ * `pending` with its claim released and `next_attempt_at` =
+ * PRINTER_HOLD_UNTIL_MS: nothing claims it again, so no further attempt is
+ * spent however long it waits. The sweeper releases it when a client resolves
+ * (src/outbox/sweeper.ts); the reconciliation cron's dispatch_stranded_30m
+ * alert names it while it waits longer than 30 minutes. The line stays
+ * where it was (back from a previous attempt's 'submitting' to 'pending', as
+ * retryLater does); the seller sees "queued".
+ *
+ * Atomic under the claim's fence, and only while an attempt remains (a row
+ * parked on its last attempt could never be claimed again): otherwise null,
+ * and the caller falls back to retryLater, which fails an exhausted row with
+ * its alert. Same shape as parkForHold (src/commerce/dispatch-hold.ts).
+ */
+async function parkForPrinter(
+  ctx: EffectContext,
+  line: { orderItemId: string; tenantId: string },
+): Promise<OutboxRunOutcome | null> {
+  const { claim, env } = ctx;
+  const now = ctx.clock();
+  const fence = fenceGuard(claim, now);
+  const parkable = {
+    binds: fence.binds,
+    sql: `${fence.sql} AND status = 'claimed' AND attempts < max_attempts`,
+  };
+
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE order_items
+       SET dispatch_state = CASE WHEN dispatch_state = 'submitting' THEN 'pending'
+                                 ELSE dispatch_state END
+       WHERE order_item_id = ? AND tenant_id = ?
+         AND EXISTS (SELECT 1 FROM outbox_events WHERE ${parkable.sql})`,
+    ).bind(line.orderItemId, line.tenantId, ...parkable.binds),
+    env.DB.prepare(
+      `UPDATE outbox_events
+       SET status = 'pending',
+           next_attempt_at = ${PRINTER_HOLD_UNTIL_MS},
+           last_error = '${PRINTER_NOT_CONFIGURED}',
+           claimed_by = NULL, claim_expires_at = NULL,
+           updated_at = MAX(updated_at, ?)
+       WHERE ${parkable.sql}
+       RETURNING outbox_id`,
+    ).bind(now, ...parkable.binds),
+  ]);
+
+  return (results[1]?.results.length ?? 0) === 1
+    ? { delayMs: PRINTER_HOLD_UNTIL_MS - now, kind: "retry" }
+    : null;
+}
+
+/**
  * A cancellation was requested (seen after claiming, or refused at the
  * submitting step). Never a printer call from here.
  */
@@ -491,11 +587,14 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     return failTerminal(ctx, "order_line_not_found", null);
   }
 
-  // An environment without a usable printer HOLDS its work (retry with
-  // backoff, alert when exhausted) rather than judging the order by it.
+  // An environment without a usable printer HOLDS its work (parked, no
+  // attempt spent; released by the sweeper, alerted by reconciliation)
+  // rather than judging the order by it.
   const client = resolvePrinterClient(env);
   if (client === null) {
-    return retryLater(ctx, "printer_not_configured", lineRef);
+    return (
+      (await parkForPrinter(ctx, lineRef)) ?? retryLater(ctx, PRINTER_NOT_CONFIGURED, lineRef)
+    );
   }
 
   const built = buildDispatchJob(env, tenantId, payload, line);
@@ -503,7 +602,8 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     return failTerminal(ctx, built.error, lineRef);
   }
 
-  const storage = await checkPrintFiles(env, built.value.printFiles);
+  const printFiles = printFilesForPrinter(built.value);
+  const storage = await checkPrintFiles(env, printFiles);
   if (storage.kind !== "ok") {
     return storage.kind === "terminal"
       ? failTerminal(ctx, storage.error, lineRef)
@@ -519,7 +619,7 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     const presigner = resolveR2Presigner(env);
     job = {
       artworks: await Promise.all(
-        built.value.printFiles.map(async (file) => ({
+        printFiles.map(async (file) => ({
           location: file.location,
           url: await presigner.presignGet(file.r2Key, DISPATCH_PRINT_URL_TTL_SECONDS),
         })),
@@ -569,21 +669,40 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     result = await client.submit(job);
   } catch {
     // The client contract returns transport failures as `unknown`; a throw is
-    // a failure before sending (the SnapWear stub). Retrying re-sends the same
-    // job id, which the printer deduplicates either way.
+    // a fault before sending (no client throws by design). Retrying re-sends
+    // the same job id, which the printer deduplicates either way.
     return retryLater(ctx, "printer_client_error", lineRef);
   }
 
   return recordSubmitResult(ctx, lineRef, result);
 }
 
+/**
+ * Fail CLOSED on a refusal that follows a lost answer (CP6-PS1). When an
+ * earlier attempt of this row went `unknown` (`unknown_since`), the job may
+ * already be at the printer, and the refusal now may be the printer's
+ * duplicate answer in words this client cannot read (C5: its exact text is not
+ * known, and an unrecognised 400 is `rejected`). Recording it `failed` ("the
+ * printer did not receive it") could lead a human to place the job a second
+ * time, so it stays `unknown`: a human checks the printer and resolves it.
+ */
+export function afterLostAnswer(
+  row: Pick<OutboxRow, "unknown_since">,
+  result: PrinterSubmitResult,
+): PrinterSubmitResult {
+  return result.status === "rejected" && row.unknown_since !== null
+    ? { reason: `rejected_after_unknown_${result.code}`, status: "unknown" }
+    : result;
+}
+
 async function recordSubmitResult(
   ctx: EffectContext,
   line: { orderItemId: string; tenantId: string },
-  result: PrinterSubmitResult,
+  submitted: PrinterSubmitResult,
 ): Promise<OutboxRunOutcome> {
   const { claim, env, row } = ctx;
   const now = ctx.clock();
+  const result = afterLostAnswer(row, submitted);
 
   if (result.status === "accepted" || result.status === "duplicate") {
     const printerRef = result.status === "accepted" ? result.printerJobId : null;

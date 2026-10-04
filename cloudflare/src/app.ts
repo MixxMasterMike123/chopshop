@@ -430,6 +430,12 @@ import {
 // CP5-IMPORTS-I — begin
 import { ADMIN_TAG_LIST_PATH, handleAdminTagListRoute } from "./routes/admin-products";
 // CP5-IMPORTS-I — end
+// CP6-IMPORTS-P — begin
+import {
+  handlePlatformPrintJobStatusRoute,
+  PLATFORM_PRINT_JOB_STATUS_ROUTE,
+} from "./routes/print-jobs-platform";
+// CP6-IMPORTS-P — end
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -459,7 +465,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0050_email_kinds.sql";
+const REQUIRED_MIGRATION = "0051_print_job_status.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -2444,6 +2450,23 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     onMethods(["GET"], (c) => handleAdminTagListRoute(c.env, c.req.raw)),
   );
   // CP5-ROUTES-I — end
+  // CP6-ROUTES-P — begin
+  // The printer's production status of one job = one order line
+  // (src/routes/print-jobs-platform.ts, CP6-PS1): an exact pattern no earlier
+  // route claims. The job segment (`{orderId}-{lineNo}`) is taken from the RAW
+  // pathname and decoded once by the handler; every other method falls
+  // through to the opaque 404.
+  app.all(
+    PLATFORM_PRINT_JOB_STATUS_ROUTE,
+    onMethods(["POST"], (c) =>
+      handlePlatformPrintJobStatusRoute(
+        c.env,
+        c.req.raw,
+        new URL(c.req.url).pathname.split("/")[4] ?? "",
+      ),
+    ),
+  );
+  // CP6-ROUTES-P — end
 
   // Public reads answer through the ETag/304 handlers (src/storefront/public-routes.ts):
   // bodies are byte-identical to the plain handlers, plus `ETag: "<catalog_version>"` and

@@ -163,6 +163,26 @@ interface Env {
   // holds its work (src/dispatch/printer-client.ts).
   DISPATCH_TARGET: string | undefined;
 
+  // ── THE REAL SNAPWEAR SUBMIT (CP6-PS1, LAUNCH_TODO A6) ─────────────────────
+  // OFF unless every condition of snapwearSubmitConfig holds
+  // (src/dispatch/printer-client.ts): DISPATCH_TARGET="snapwear" AND
+  // APP_ENV="production" AND the switch below is exactly "true" AND a bare
+  // https origin AND a token. Staging never builds the client, whatever it is
+  // given. No environment sets any of the three until SnapWear has answered
+  // C4–C6; until then production HOLDS its print jobs (dispatch-effect.ts
+  // parkForPrinter); reconciliation's dispatch_stranded_30m alert names each
+  // held job after 30 minutes.
+
+  // Plain var, production only: the explicit switch. Anything but "true" ⇒ off.
+  SNAPWEAR_SUBMIT_ENABLED?: string;
+
+  // Plain var, production only: SnapWear's API origin, e.g. "https://…" (no
+  // path: the client appends /api/order/add).
+  SNAPWEAR_API_BASE_URL?: string;
+
+  // Worker SECRET, production only: sent as `x-api-token`. Never logged.
+  SNAPWEAR_API_TOKEN?: string;
+
   // ── THE RENDER CONTAINER (CP1-D, DECISIONS D6) ────────────────────────────
   // Durable Object namespace of the Container-enabled class RenderContainer
   // (src/render/render-container.ts; the image is cloudflare/render/). The

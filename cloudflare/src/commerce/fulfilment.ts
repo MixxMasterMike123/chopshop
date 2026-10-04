@@ -39,9 +39,18 @@ import { auditMetadataJson } from "../auth/live-authorization";
  *                      POD line nor hand one over before it left the printer;
  *                      the line's state comes from the dispatch
  *                      (`order_items.production_state` 'shipped', written by
- *                      the platform's side, not by this route). A line whose
+ *                      the platform's side, not by this route:
+ *                      src/dispatch/production-status.ts). A line whose
  *                      dispatch was cancelled does not count. `processing` is
  *                      always open to the seller.
+ *
+ * ── THE ONE CHANGE NOT MADE BY THE SELLER (CP6-PS1) ─────────────────────────
+ * An order that is NOTHING but printer lines and goes by PARCEL has nothing
+ * left for the seller to send: when the printer sends its last line, that
+ * line's batch also records the order `shipped` — the same history row, audit
+ * row, buyer's mail (`email.order_status`) and update as the seller's change,
+ * once (printerShippedOrderStatements below). Every other order (a pickup, or
+ * one with a line the seller sends) waits for the seller, exactly as above.
  *
  * ── ONE BATCH ───────────────────────────────────────────────────────────────
  * The history row, the shipment, the audit row (with the acting-as grant), the
@@ -185,8 +194,11 @@ function unsentPodLinesSql(o: string): string {
             AND u.dispatch_state IS NOT 'cancelled'`;
 }
 
-/** The order is open: not cancelled, not refunded to its charge. Alias `o`. */
-function openSql(o: string): string {
+/**
+ * The order is open: not cancelled, not refunded to its charge. Alias `o`.
+ * Also the printer status intake's guard (src/dispatch/production-status.ts).
+ */
+export function openSql(o: string): string {
   return `${o}.cancelled_at IS NULL
           AND ${o}.status NOT IN ('refunded', 'cancelled')
           AND NOT (${o}.charged_minor > 0 AND ${o}.refund_succeeded_minor >= ${o}.charged_minor)`;
@@ -509,6 +521,144 @@ export async function changeFulfilment(
     return { status: "not_found" };
   }
   return { reason: decideFulfilment(facts, input) ?? "transition", status: "refused" };
+}
+
+// ── the printer sent the whole order (CP6-PS1) ─────────────────────────────
+
+/**
+ * The order's `shipped`, recorded in the batch that moves a printer line to
+ * 'shipped' (src/dispatch/production-status.ts), when — evaluated AFTER that
+ * line's update, inside the batch — ALL of these hold:
+ *   - `after` holds (the caller's proof that THIS batch moved the line);
+ *   - the order goes by parcel (the printer sent it to the buyer; a pickup
+ *     order's print went to the shop, and the seller makes it ready);
+ *   - every line is a printer line (no line the seller still has to send);
+ *   - no printer line is unsent (unsentPodLinesSql), and one at least is sent;
+ *   - the order is open (openSql) and still `unfulfilled` or `processing`.
+ * Then, as changeFulfilment does: the history row (track 'fulfilment', the
+ * actor = who recorded the printer's status, so the seller reads "platform",
+ * or "system" for a future automated source), the audit row, the buyer's
+ * `email.order_status` row, and the order update LAST. The fulfilment state
+ * guard makes it once per order: a second line, a repeat or a race finds the
+ * order `shipped` and writes nothing, and the seller's own later `shipped` is
+ * shipped → shipped, which needs a tracking number (another parcel).
+ *
+ * NO `order_shipments` row: the printer's tracking stays on its line (0051),
+ * where no tenant route reads it. A shipment row would put it in the buyer's
+ * mail AND the seller's order detail — a decision still owed
+ * (docs/cf-port/CP6_PS1_REPORT.md).
+ */
+export async function printerShippedOrderStatements(
+  db: D1Database,
+  input: {
+    actorUserId: string | null;
+    after: { binds: unknown[]; sql: string };
+    nowMs: number;
+    orderId: string;
+    tenantId: string;
+  },
+): Promise<{ historyId: string; statements: D1PreparedStatement[] }> {
+  const { actorUserId, nowMs, orderId, tenantId } = input;
+  const historyId = crypto.randomUUID();
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify(["printer_shipped", orderId, historyId])),
+  );
+  const requestHash = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+  const shippable = `EXISTS (
+      SELECT 1 FROM orders AS g
+      WHERE g.order_id = ? AND g.tenant_id = ?
+        AND g.delivery_method = 'shipping'
+        AND g.fulfilment_status IN ('unfulfilled', 'processing')
+        AND ${openSql("g")}
+        AND NOT EXISTS (
+          SELECT 1 FROM order_items AS n
+          WHERE n.order_id = g.order_id AND n.tenant_id = g.tenant_id
+            AND n.production_json IS NULL
+        )
+        AND EXISTS (
+          SELECT 1 FROM order_items AS s
+          WHERE s.order_id = g.order_id AND s.tenant_id = g.tenant_id
+            AND s.production_state = 'shipped'
+        )
+        AND (${unsentPodLinesSql("g")}) = 0
+    ) AND (${input.after.sql})`;
+  const shippableBinds = [orderId, tenantId, ...input.after.binds];
+  // Every later statement follows the history row this batch wrote.
+  const written = `FROM order_status_history AS h
+                   WHERE h.history_id = ? AND h.order_id = ? AND h.tenant_id = ?`;
+  const writtenBinds = [historyId, orderId, tenantId];
+
+  return {
+    historyId,
+    statements: [
+      db
+        .prepare(
+          `INSERT INTO order_status_history (
+             history_id, order_id, tenant_id, from_status, to_status,
+             actor_user_id, reason, created_at, track, client_key, request_hash
+           )
+           SELECT ?, o.order_id, o.tenant_id, o.fulfilment_status, 'shipped',
+                  ?, NULL, ?, 'fulfilment', ?, ?
+           FROM orders AS o
+           WHERE o.order_id = ? AND o.tenant_id = ? AND ${shippable}`,
+        )
+        .bind(
+          historyId,
+          actorUserId,
+          nowMs,
+          crypto.randomUUID(),
+          requestHash,
+          orderId,
+          tenantId,
+          ...shippableBinds,
+        ),
+      db
+        .prepare(
+          `INSERT INTO audit_events (
+             event_id, tenant_id, actor_user_id, action, resource_type, resource_id,
+             reason, request_id, metadata_json, created_at
+           )
+           SELECT ?, h.tenant_id, ?, 'order.fulfilment', 'order', h.order_id, NULL, ?,
+                  json_object('from', h.from_status, 'historyId', h.history_id,
+                              'source', 'printer', 'to', 'shipped'),
+                  ?
+           ${written}`,
+        )
+        .bind(crypto.randomUUID(), actorUserId, crypto.randomUUID(), nowMs, ...writtenBinds),
+      db
+        .prepare(
+          `INSERT INTO outbox_events (
+             outbox_id, tenant_id, event_type, aggregate_type, aggregate_id,
+             dedupe_key, payload_json, status, next_attempt_at, created_at, updated_at
+           )
+           SELECT ?, h.tenant_id, 'email.order_status', 'order', h.order_id, ?, ?,
+                  'pending', ?, ?, ?
+           ${written}`,
+        )
+        .bind(
+          `email-order-status:${historyId}`,
+          `email.order_status:${historyId}`,
+          JSON.stringify({ historyId, orderId }),
+          nowMs,
+          nowMs,
+          nowMs,
+          ...writtenBinds,
+        ),
+      db
+        .prepare(
+          `UPDATE orders
+           SET fulfilment_status = 'shipped', updated_at = MAX(updated_at, ?)
+           WHERE order_id = ? AND tenant_id = ?
+             AND fulfilment_status IN ('unfulfilled', 'processing')
+             AND EXISTS (SELECT 1 ${written})`,
+        )
+        .bind(nowMs, orderId, tenantId, ...writtenBinds),
+    ],
+  };
 }
 
 // ── the order read's fulfilment record ─────────────────────────────────────

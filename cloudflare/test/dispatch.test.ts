@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
-import { DISPATCH_PRINT_URL_TTL_SECONDS } from "../src/dispatch/dispatch-effect";
+import { DISPATCH_PRINT_URL_TTL_SECONDS, PRINTER_HOLD_UNTIL_MS } from "../src/dispatch/dispatch-effect";
 import { FAKE_PRINTER_FETCH_OVERRIDE } from "../src/dispatch/printer-client";
 import { printerJobId } from "../src/dispatch/snapwear-wire";
 import { handleFakePrinterRoute } from "../src/routes/fake-printer";
@@ -278,7 +278,7 @@ describe("dispatch: what is refused before any printer call", () => {
     expect(await printerJobs(order.orderId)).toHaveLength(0);
   });
 
-  it("the SnapWear stub (A6 unbuilt) never pretends to submit: retried, the line back to pending", async () => {
+  it("SnapWear without its switch (CP6-PS1) never pretends to submit: the job is held, the line untouched", async () => {
     const order = await seedOrder(TENANT_A, { printer: "snapwear" });
     const dispatchId = order.dispatchIds[0]!;
 
@@ -286,14 +286,16 @@ describe("dispatch: what is refused before any printer call", () => {
 
     expect(result).toMatchObject({ kind: "ran", outcome: { kind: "retry" } });
     expect(await outboxRow(dispatchId)).toMatchObject({
-      last_error: "printer_client_error",
+      last_error: "printer_not_configured",
+      next_attempt_at: PRINTER_HOLD_UNTIL_MS,
       status: "pending",
+      submitted_at: null,
     });
-    expect((await lineRow(order.orderId)).dispatch_state).toBe("pending");
+    expect((await lineRow(order.orderId)).dispatch_state).toBeNull();
     expect(await printerJobs(order.orderId)).toHaveLength(0);
   });
 
-  it("holds (retries with backoff) when this environment has no usable printer", async () => {
+  it("holds (parked, no further attempt) when this environment has no usable printer", async () => {
     const order = await seedOrder(TENANT_A);
     const dispatchId = order.dispatchIds[0]!;
 
@@ -303,6 +305,7 @@ describe("dispatch: what is refused before any printer call", () => {
     expect(await outboxRow(dispatchId)).toMatchObject({
       attempts: 1,
       last_error: "printer_not_configured",
+      next_attempt_at: PRINTER_HOLD_UNTIL_MS,
       status: "pending",
       submitted_at: null,
     });
@@ -914,7 +917,21 @@ describe("the line follows an exhausted row (Codex P2)", () => {
 
   const PATHS: Array<[string, Record<PropertyKey, unknown>, string, string | null]> = [
     // [label, env overrides, error code, printer the order was routed to]
-    ["a printer-client exception (the SnapWear stub)", { DISPATCH_TARGET: "snapwear" }, "printer_client_error", "snapwear"],
+    [
+      // No real client throws (both return transport faults as `unknown`);
+      // this one does, to keep the dispatcher's defensive branch covered.
+      "a printer-client exception",
+      {
+        [FAKE_PRINTER_FETCH_OVERRIDE]: async () => ({
+          get ok(): boolean {
+            throw new Error("client fault");
+          },
+          json: async () => ({}),
+        }),
+      },
+      "printer_client_error",
+      null,
+    ],
     ["no usable printer (before any call)", { DISPATCH_TARGET: undefined }, "printer_not_configured", null],
     ["storage not configured (before any call)", { PRIVATE_BUCKET: undefined }, "storage_not_configured", null],
     ["a storage error (before any call)", { PRIVATE_BUCKET: failingBucket }, "storage_error", null],

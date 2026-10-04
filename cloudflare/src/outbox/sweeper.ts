@@ -1,3 +1,5 @@
+import { PRINTER_HOLD_UNTIL_MS } from "../dispatch/dispatch-effect";
+import { resolvePrinterClient } from "../dispatch/printer-client";
 import { nudgeRenderJob } from "../pod/render-jobs";
 import { processNextOutboxRow } from "./effects";
 import { nudgeOutbox } from "./nudge";
@@ -24,6 +26,12 @@ import { iso, OUTBOX_EFFECT_TYPES } from "./outbox";
  *   5. RE-NUDGE THE RENDER CONTAINER when a render job has waited in `queued`
  *      longer than RENDER_STALE_MS or holds an expired lease (CP1-D open
  *      question 4): one nudge wakes the container, which drains everything.
+ *   0. (first, CP6-PS1) PRINTER HOLDS. Dispatch rows parked because the
+ *      environment had no printer client (dispatch-effect.ts parkForPrinter)
+ *      become due as soon as a client resolves, and step 2 sends them. No
+ *      attempt is spent while they wait; the reconciliation cron's
+ *      `dispatch_stranded_30m` alert (src/commerce/crons.ts) names each one
+ *      still unsent after 30 minutes.
  */
 
 export const SWEEP_INLINE_LIMIT = 10;
@@ -34,9 +42,34 @@ export const RENDER_STALE_MS = 5 * 60 * 1_000;
 export interface OutboxSweepSummary {
   processed: number;
   nudged: number;
+  /** Printer-parked dispatch rows released this sweep (a client resolved). */
+  printerReleased: number;
   renderNudged: boolean;
   settled: number;
   unknownAlerts: number;
+}
+
+/**
+ * A client now resolves: every parked dispatch (dispatch-effect.ts
+ * parkForPrinter) becomes due at once; the drain below takes the first and
+ * the nudge the rest. Bounded per sweep; the next sweep takes more.
+ */
+async function releasePrinterHolds(db: D1Database, now: number): Promise<number> {
+  const result = await db
+    .prepare(
+      `UPDATE outbox_events
+       SET next_attempt_at = ?, updated_at = MAX(updated_at, ?)
+       WHERE outbox_id IN (
+         SELECT outbox_id FROM outbox_events
+         WHERE event_type = 'dispatch' AND status = 'pending'
+           AND next_attempt_at = ${PRINTER_HOLD_UNTIL_MS}
+         ORDER BY created_at, outbox_id
+         LIMIT ${SWEEP_NUDGE_LIMIT}
+       )`,
+    )
+    .bind(now, now)
+    .run();
+  return result.meta.changes;
 }
 
 const KNOWN_TYPES_SQL = OUTBOX_EFFECT_TYPES.map((type) => `'${type}'`).join(", ");
@@ -162,6 +195,10 @@ export async function runOutboxSweep(env: Env, now: number): Promise<OutboxSweep
 
   const settled = await settleExhaustedClaims(env.DB, clock());
 
+  // Before the drain, so a released job goes out in this very sweep.
+  const printerReleased =
+    resolvePrinterClient(env) === null ? 0 : await releasePrinterHolds(env.DB, clock());
+
   let processed = 0;
   while (processed < SWEEP_INLINE_LIMIT) {
     let ran: Awaited<ReturnType<typeof processNextOutboxRow>>;
@@ -190,7 +227,14 @@ export async function runOutboxSweep(env: Env, now: number): Promise<OutboxSweep
   const unknownAlerts = await alertLongUnknownDispatches(env.DB, clock());
   const renderNudged = await renudgeStaleRenderJob(env, clock());
 
-  const summary = { nudged: due.length, processed, renderNudged, settled, unknownAlerts };
+  const summary = {
+    nudged: due.length,
+    printerReleased,
+    processed,
+    renderNudged,
+    settled,
+    unknownAlerts,
+  };
   console.log(JSON.stringify({ message: "outbox sweep", ...summary }));
   return summary;
 }
