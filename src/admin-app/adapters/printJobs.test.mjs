@@ -5,9 +5,22 @@ import { describe, it } from 'node:test';
 
 import {
   DEFAULT_FILTERS,
+  EXCEPTION_FILTERS,
   REFUSED_ORDER_STATUSES,
   actionBlockText,
+  actionBody,
+  actionConfirm,
+  actionDoneText,
+  actionGoneText,
+  actionMovedText,
+  actionToastText,
   cursorBefore,
+  exceptionActions,
+  exceptionConfirm,
+  exceptionDoneText,
+  exceptionState,
+  exceptionText,
+  offersAction,
   emptyViewText,
   isDefaultFilters,
   keepsJob,
@@ -58,7 +71,7 @@ describe('what a row may do (the status route\'s rules)', () => {
 
 describe('the filters', () => {
   it('the default view asks for accepted jobs without a state and leaves the shipped out', () => {
-    assert.deepEqual(listParams(DEFAULT_FILTERS), { state: undefined, dispatchState: 'accepted', tenantId: undefined, printerId: undefined });
+    assert.deepEqual(listParams(DEFAULT_FILTERS), { state: undefined, dispatchState: 'accepted', exception: undefined, tenantId: undefined, printerId: undefined });
     assert.equal(keepsJob(DEFAULT_FILTERS, { state: 'shipped' }), false);
     assert.equal(keepsJob(DEFAULT_FILTERS, { state: 'produced' }), true);
     assert.equal(keepsJob({ ...DEFAULT_FILTERS, state: 'all' }, { state: 'shipped' }), true);
@@ -67,7 +80,7 @@ describe('the filters', () => {
 
   it('one value per filter; "all" leaves the key out', () => {
     assert.deepEqual(listParams({ state: 'none', dispatchState: 'all', tenantId: 'test-shop-c', printerId: 'fake-printer' }),
-      { state: 'none', dispatchState: undefined, tenantId: 'test-shop-c', printerId: 'fake-printer' });
+      { state: 'none', dispatchState: undefined, exception: undefined, tenantId: 'test-shop-c', printerId: 'fake-printer' });
     assert.equal(isDefaultFilters({ ...DEFAULT_FILTERS, tenantId: 'x' }), false);
     // An empty view says "none" only when the list was read to its end.
     assert.match(emptyViewText(DEFAULT_FILTERS, false), /Inga tryckjobb att hantera/);
@@ -150,5 +163,167 @@ describe('the confirm says what the write does beyond the line', () => {
     assert.match(refusal('tracking_differs'), /andra spårningsuppgifter/);
     assert.match(statusRefusalText({ status: 409, code: 'conflict' }), /ändrades samtidigt/);
     assert.match(statusRefusalText({ status: 404, code: 'not_found' }), /finns inte/);
+  });
+});
+
+describe('the printer\'s exception (CP6-PS4; production-status.ts decideProductionStatus)', () => {
+  const OPEN = { ...JOB, exception: 'out_of_stock', exceptionResolvedAt: null };
+  const RESTOCKED = { ...OPEN, state: 'shipped' };
+  const RESOLVED = { ...OPEN, exceptionResolvedAt: '2026-10-04T09:15:00.000Z' };
+
+  it('where it stands: none, open, restocked (shipped after all), resolved', () => {
+    assert.equal(exceptionState(JOB), null);
+    assert.equal(exceptionState({ ...JOB, exception: null, exceptionResolvedAt: null }), null);
+    assert.equal(exceptionState(OPEN), 'open');
+    assert.equal(exceptionState({ ...OPEN, state: 'in_production' }), 'open');
+    assert.equal(exceptionState(RESTOCKED), 'restocked');
+    assert.equal(exceptionState(RESOLVED), 'resolved');
+    assert.equal(exceptionState({ ...RESOLVED, state: 'in_production' }), 'resolved');
+  });
+
+  it('the state steps: only "shipped" while it is open, nothing after a resolution', () => {
+    assert.deepEqual(nextStates(OPEN), ['shipped']);
+    assert.deepEqual(nextStates({ ...OPEN, state: 'in_production' }), ['shipped']);
+    assert.deepEqual(nextStates(RESTOCKED), []);
+    assert.deepEqual(nextStates(RESOLVED), []);
+    for (const orderStatus of REFUSED_ORDER_STATUSES) assert.deepEqual(nextStates({ ...OPEN, orderStatus }), []);
+  });
+
+  it('recording: an accepted line of an open order, not produced or shipped, with none yet', () => {
+    assert.deepEqual(exceptionActions(JOB), ['out_of_stock']);
+    assert.deepEqual(exceptionActions({ ...JOB, state: 'in_production' }), ['out_of_stock']);
+    assert.deepEqual(exceptionActions({ ...JOB, orderStatus: 'partially_refunded' }), ['out_of_stock']);
+    for (const state of ['produced', 'shipped']) assert.deepEqual(exceptionActions({ ...JOB, state }), [], state);
+    for (const orderStatus of ['cancelled', 'refunded']) assert.deepEqual(exceptionActions({ ...JOB, orderStatus }), [], orderStatus);
+    for (const dispatchState of [null, 'pending', 'submitting', 'unknown', 'failed', 'cancelled']) {
+      assert.deepEqual(exceptionActions({ ...JOB, dispatchState }), [], String(dispatchState));
+    }
+  });
+
+  it('closing: an open exception only, on a closed order too; never a restocked or a closed one', () => {
+    assert.deepEqual(exceptionActions(OPEN), ['resolved']);
+    for (const orderStatus of ['cancelled', 'refunded']) assert.deepEqual(exceptionActions({ ...OPEN, orderStatus }), ['resolved'], orderStatus);
+    assert.deepEqual(exceptionActions({ ...OPEN, dispatchState: 'cancelled' }), ['resolved']);
+    assert.deepEqual(exceptionActions(RESTOCKED), []);
+    assert.deepEqual(exceptionActions(RESOLVED), []);
+    assert.equal(offersAction(OPEN, 'resolved'), true);
+    assert.equal(offersAction(OPEN, 'out_of_stock'), false);
+    assert.equal(offersAction(OPEN, 'shipped'), true);
+    assert.equal(offersAction(OPEN, 'produced'), false);
+    assert.equal(offersAction(JOB, 'out_of_stock'), true);
+    assert.equal(offersAction(JOB, 'resolved'), false);
+  });
+
+  it('the row\'s line about it, and why no step is offered', () => {
+    assert.match(exceptionText(OPEN), /slut i lager\. Ordern hålls kvar/);
+    for (const orderStatus of REFUSED_ORDER_STATUSES) {
+      assert.equal(exceptionText({ ...OPEN, orderStatus }), 'Tryckeriet har meddelat att plagget är slut i lager.', orderStatus);
+    }
+    assert.match(exceptionText(RESTOCKED), /har skickat raden/);
+    assert.match(exceptionText(RESOLVED), /^Undantaget stängdes .*: tryckeriet skickar inte raden\.$/);
+    assert.match(exceptionText({ ...RESOLVED, exceptionResolvedAt: 'x' }), /^Undantaget stängdes: /);
+    assert.equal(exceptionText(JOB), null);
+    assert.equal(actionBlockText(OPEN), null);
+    assert.match(actionBlockText({ ...OPEN, orderStatus: 'cancelled' }), /Ordern är avbruten/);
+    assert.equal(actionBlockText(RESOLVED), null, 'the resolved line says it itself');
+    assert.equal(actionBlockText({ ...RESOLVED, orderStatus: 'cancelled' }), null, 'on a closed order too');
+  });
+
+  it('the filter: "open" asks for every reported line and keeps the open ones', () => {
+    assert.deepEqual(EXCEPTION_FILTERS.map(([v]) => v), ['all', 'open', 'none']);
+    assert.equal(listParams({ ...DEFAULT_FILTERS, exception: 'open' }).exception, 'out_of_stock');
+    assert.equal(listParams({ ...DEFAULT_FILTERS, exception: 'none' }).exception, 'none');
+    assert.equal(listParams(DEFAULT_FILTERS).exception, undefined);
+    const open = { ...DEFAULT_FILTERS, state: 'all', exception: 'open' };
+    assert.deepEqual([OPEN, RESTOCKED, RESOLVED, JOB].map((j) => keepsJob(open, j)), [true, false, false, false]);
+    assert.deepEqual([OPEN, RESOLVED, JOB].map((j) => keepsJob(DEFAULT_FILTERS, j)), [true, true, true]);
+    assert.equal(isDefaultFilters({ ...DEFAULT_FILTERS, exception: 'open' }), false);
+  });
+
+  it('the bodies, and a lost answer read back', () => {
+    assert.deepEqual(actionBody('out_of_stock', { trackingNumber: 'X' }), { body: { exception: 'out_of_stock' } });
+    assert.deepEqual(actionBody('resolved'), { body: { exception: 'resolved' } });
+    assert.deepEqual(actionBody('produced'), { body: { state: 'produced' } });
+    assert.equal(statusHolds(OPEN, { exception: 'out_of_stock' }), true);
+    assert.equal(statusHolds(JOB, { exception: 'out_of_stock' }), false);
+    assert.equal(statusHolds(RESOLVED, { exception: 'resolved' }), true);
+    assert.equal(statusHolds(OPEN, { exception: 'resolved' }), false);
+    assert.equal(sameJobFacts(JOB, OPEN), false);
+    assert.equal(sameJobFacts(OPEN, RESOLVED), false);
+  });
+
+  it('recording, confirmed: what happens, as the route does it', () => {
+    const c = exceptionConfirm(JOB, 'out_of_stock');
+    const text = c.lines.join(' ');
+    assert.match(c.title, /"slut i lager" för order 1042, rad 1/);
+    assert.match(text, /kan inte tas bort efteråt/);
+    assert.match(text, /Ordern hålls kvar: butiken kan inte markera den som skickad eller klar att hämta, och den markeras inte som skickad av sig själv/);
+    assert.match(text, /I butikens order står raden som misslyckad/);
+    assert.match(text, /Ett larm skapas för plattformen, ett per rad/);
+    assert.match(text, /Inga pengar flyttas, och köparen får inget mejl/);
+    assert.match(text, /bara rapporteras som skickad/);
+    assert.match(text, /loggas/);
+    assert.equal(c.tone, 'primary');
+    assert.deepEqual(actionConfirm(JOB, 'out_of_stock'), c);
+    assert.deepEqual(actionConfirm(JOB, 'produced'), statusConfirm(JOB, 'produced'));
+  });
+
+  it('closing, confirmed: settled by hand first; the line is never sent; the order\'s mail only when it is open', () => {
+    const open = exceptionConfirm(OPEN, 'resolved');
+    const text = open.lines.join(' ');
+    assert.match(open.title, /^Stäng undantaget för order 1042, rad 1\?$/);
+    assert.match(text, /köparen och butiken redan har fått det utrett för hand/);
+    assert.match(text, /Raden skickas inte, och ingen status kan rapporteras på den efteråt\. Det går inte att ångra/);
+    assert.match(text, /håller inte längre kvar ordern/);
+    assert.match(text, /sista oskickade raden.*en annan rad redan är skickad, markeras hela ordern som skickad direkt, och köparen får ett mejl/);
+    assert.match(text, /Inga pengar flyttas.*Larmet om slut i lager stängs inte/);
+    assert.equal(open.tone, 'danger');
+    for (const [orderStatus, word] of [['cancelled', 'avbruten'], ['refunded', 'återbetald']]) {
+      const closed = exceptionConfirm({ ...OPEN, orderStatus }, 'resolved').lines.join(' ');
+      assert.match(closed, new RegExp(`Ordern är ${word}, så ingenting mer händer med den, och inget mejl skickas`));
+      assert.doesNotMatch(closed, /köparen får ett mejl om att den är skickad/);
+      assert.doesNotMatch(closed, /håller inte längre kvar ordern/);
+    }
+  });
+
+  it('after the answer, and when the job moved', () => {
+    assert.match(exceptionDoneText(JOB, 'out_of_stock'), /slut i lager är rapporterat\. Ordern hålls kvar/);
+    assert.match(exceptionDoneText(JOB, 'out_of_stock', { changed: false }), /var redan rapporterat; ingenting ändrades/);
+    assert.match(exceptionDoneText(JOB, 'out_of_stock', { readBack: true }), /Svaret kom aldrig fram, men ändringen är sparad/);
+    assert.match(exceptionDoneText(OPEN, 'resolved'), /undantaget är stängt, och raden skickas inte\.$/);
+    assert.match(exceptionDoneText(OPEN, 'resolved', { orderShipped: true }), /Hela ordern är nu markerad som skickad/);
+    assert.match(exceptionDoneText(OPEN, 'resolved', { changed: false }), /var redan stängt/);
+    assert.match(exceptionDoneText(OPEN, 'resolved', { readBack: true }), /ändringen är sparad\. Om hela ordern därmed markerades som skickad kunde inte läsas här/);
+    assert.equal(actionDoneText(JOB, 'produced', {}), statusDoneText(JOB, 'produced', {}));
+    assert.deepEqual(
+      [actionToastText('out_of_stock'), actionToastText('resolved'), actionToastText('resolved', { orderShipped: true }), actionToastText('shipped', { orderShipped: true })],
+      ['Slut i lager är rapporterat.', 'Undantaget är stängt.', 'Undantaget är stängt och ordern är skickad.', 'Statusen är sparad och ordern är skickad.'],
+    );
+    assert.match(actionMovedText(JOB, 'out_of_stock'), /slut i lager kan inte rapporteras nu/);
+    assert.match(actionMovedText(JOB, 'resolved'), /undantaget kan inte stängas nu/);
+    assert.match(actionMovedText(JOB, 'produced'), /kan inte få statusen "producerad" nu/);
+    assert.match(actionGoneText('resolved'), /ändringen kan inte göras nu/);
+    assert.match(actionGoneText('shipped'), /kan inte få den statusen nu/);
+  });
+
+  it('each of the four new refusals in its own words; `produced` per body', () => {
+    const refusal = (reason, body) => statusRefusalText({ status: 409, code: 'print_job_status_not_allowed', reason }, body);
+    const generic = refusal('something_new');
+    assert.equal(generic, 'Tryckjobbet kan inte få den statusen.');
+    const texts = {
+      out_of_stock: refusal('out_of_stock', { state: 'produced' }),
+      exception_resolved: refusal('exception_resolved', { state: 'shipped' }),
+      no_exception: refusal('no_exception', { exception: 'resolved' }),
+      producedRecord: refusal('produced', { exception: 'out_of_stock' }),
+      producedResolve: refusal('produced', { exception: 'resolved' }),
+    };
+    assert.match(texts.out_of_stock, /rapporterat slut i lager.*bara rapporteras som skickad/);
+    assert.match(texts.exception_resolved, /Undantaget för raden är stängt/);
+    assert.match(texts.no_exception, /inte rapporterat slut i lager.*inget undantag att stänga/);
+    assert.match(texts.producedRecord, /plagget fanns i lager: slut i lager kan inte rapporteras/);
+    assert.match(texts.producedResolve, /redan skickad, så det finns inget undantag att stänga/);
+    assert.equal(new Set(Object.values(texts)).size, 5);
+    assert.ok(Object.values(texts).every((t) => t !== generic));
+    assert.equal(refusal('produced'), generic, 'a produced refusal without a known body says nothing it cannot know');
   });
 });

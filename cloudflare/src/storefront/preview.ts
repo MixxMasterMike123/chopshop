@@ -1,5 +1,10 @@
 import { isAuthConfigured } from "../auth/create-auth";
-import { PUBLIC_ELIGIBILITY_PREDICATE } from "../catalog/eligibility";
+import {
+  CANVAS_ELIGIBILITY_PREDICATE,
+  PUBLIC_ELIGIBILITY_PREDICATE,
+  publicEligibilityPredicate,
+} from "../catalog/eligibility";
+import { printCanvasEnabled } from "../dispatch/print-canvas";
 import { jsonResponse } from "../lib/http";
 import type { TenantContext } from "../tenancy/resolve-tenant";
 import { resolveRequestTenant } from "../tenancy/resolve-tenant";
@@ -67,11 +72,17 @@ const HKDF_INFO = "storefront-preview-grant/v1";
  * admin) passes its context unchanged and reads as public.
  */
 export interface StorefrontTenant extends TenantContext {
+  /** CP6-PS4: the print canvas is on, so a stand-in frame is not public (withPrintCanvas). */
+  readonly hideStandInFrames?: true;
   readonly preview?: true;
 }
 
 export function isPreview(tenant: StorefrontTenant): boolean {
   return tenant.preview === true;
+}
+
+export function hidesStandInFrames(tenant: StorefrontTenant): boolean {
+  return tenant.hideStandInFrames === true;
 }
 
 // ── the predicate of a preview: THE predicate minus ONE term ────────────────
@@ -104,9 +115,19 @@ export function withoutPublishedTerm(predicate: string): string {
 /** THE predicate with the shop's `published` term lifted. The only place it is made. */
 export const PREVIEW_ELIGIBILITY_PREDICATE = withoutPublishedTerm(PUBLIC_ELIGIBILITY_PREDICATE);
 
-/** The fragment a storefront read of `tenant` uses: THE predicate, or the preview's. */
+/** CP6-PS4: the same, with the stand-in term (the print canvas on). */
+export const PREVIEW_CANVAS_ELIGIBILITY_PREDICATE = withoutPublishedTerm(CANVAS_ELIGIBILITY_PREDICATE);
+
+/**
+ * The fragment a storefront read of `tenant` uses: THE predicate, or the
+ * preview's; each with the stand-in term while the tenant is marked
+ * `hideStandInFrames` (CP6-PS4). An unmarked tenant reads exactly as before.
+ */
 export function eligibilityPredicate(tenant: StorefrontTenant): string {
-  return isPreview(tenant) ? PREVIEW_ELIGIBILITY_PREDICATE : PUBLIC_ELIGIBILITY_PREDICATE;
+  if (isPreview(tenant)) {
+    return hidesStandInFrames(tenant) ? PREVIEW_CANVAS_ELIGIBILITY_PREDICATE : PREVIEW_ELIGIBILITY_PREDICATE;
+  }
+  return publicEligibilityPredicate(hidesStandInFrames(tenant));
 }
 
 // ── the grant ───────────────────────────────────────────────────────────────
@@ -221,14 +242,29 @@ export async function resolveStorefrontTenant(
   request: Request,
   now: number = Date.now(),
 ): Promise<StorefrontTenant | null> {
-  const tenant = await resolveRequestTenant(env.DB, request);
-  if (tenant === null) {
+  const resolved = await resolveRequestTenant(env.DB, request);
+  if (resolved === null) {
     return null;
   }
+  const tenant = withPrintCanvas(env, resolved);
   const grant = request.headers.get(PREVIEW_HEADER);
   return grant !== null && (await verifyPreviewGrant(env, tenant.tenantId, grant, now))
     ? { ...tenant, preview: true }
     : tenant;
+}
+
+/**
+ * CP6-PS4: `tenant` marked `hideStandInFrames` while the print canvas is on
+ * (printCanvasEnabled, read here at the edge and nowhere inward), unchanged
+ * otherwise. Every public read of the request then evaluates THE predicate
+ * with its stand-in term (eligibility.ts STAND_IN_FRAME_TERM) and names the
+ * switch in its ETag (public-routes.ts).
+ */
+export function withPrintCanvas<T extends TenantContext>(
+  env: Pick<Env, "PRINT_CANVAS_ENABLED">,
+  tenant: T,
+): T & StorefrontTenant {
+  return printCanvasEnabled(env) ? { ...tenant, hideStandInFrames: true } : tenant;
 }
 
 // ── the answer of a preview ─────────────────────────────────────────────────

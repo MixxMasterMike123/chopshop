@@ -10,7 +10,7 @@ import {
 import type { PodQuote, TierFacts } from "./pod-quote";
 import { podPriceFloorMinor, quoteFromTier, quotePodCost } from "./pod-quote";
 import type { PrintArea, PrintSlot, Printer, PrinterRow } from "./printers";
-import { loadUsablePrinter, PRINT_SLOTS, slotFrame, toPrinter } from "./printers";
+import { isStandInSku, loadUsablePrinter, PRINT_SLOTS, slotFrame, toPrinter } from "./printers";
 
 /**
  * POD mappings — "product P prints artwork A on slots S of printer X's SKU K".
@@ -72,6 +72,8 @@ export interface SellerQuote {
 export type RefusalCode =
   | "artwork_not_ready"
   | "currency_mismatch"
+  /** CP6-PS4: the SKU's model has only stand-in frames while the print canvas is on. */
+  | "pod_frame_unconfirmed"
   | "price_below_floor"
   | "printer_unavailable"
   | "resolution_too_low"
@@ -441,6 +443,8 @@ async function loadSellableUnits(
 
 export type PodGateFailure =
   | "currency_mismatch"
+  /** CP6-PS4: an active mapping routes to a stand-in model while the print canvas is on. */
+  | "pod_frame_unconfirmed"
   | "pod_mapping_missing"
   | "pod_mapping_suspended"
   | "pod_too_large"
@@ -469,6 +473,8 @@ export function podRefusalMessage(code: string): string {
       return "The printer cannot make this product with its current print mappings. Re-post or delete the mappings, or contact support.";
     case "currency_mismatch":
       return "The printer cannot make this product as it is set up. Contact support.";
+    case "pod_frame_unconfirmed":
+      return "The printer has not confirmed the print area for this garment yet, so it cannot be sold now. Choose another garment, or try again once the printer has confirmed it.";
     case "price_below_floor":
       return "The price is below this product's price floor. Raise it to at least the floor shown with the product's print quote.";
     case "taken_down":
@@ -488,6 +494,14 @@ export function podRefusalMessage(code: string): string {
  * write (a new mapping, a new price) before writing it. `onlyScope` limits the
  * check to units served by one scope — a mapping edit must not be refused for a
  * problem in a scope it does not touch.
+ *
+ * `refuseStandInFrames` (CP6-PS4; the publish route passes the print canvas
+ * switch): a product with ANY active mapping on a stand-in model
+ * (isStandInSku) is refused `pod_frame_unconfirmed` — product-wide, whatever
+ * `onlyScope` says, because THE public predicate hides the whole product then
+ * (eligibility.ts STAND_IN_FRAME_TERM). Checked LAST, after every other rule
+ * passed: a caller that acts on only some codes (deleteMapping, the live
+ * mapping edit) never loses the floor check to an earlier return.
  */
 export async function evaluatePodGate(
   db: D1Database,
@@ -497,6 +511,7 @@ export async function evaluatePodGate(
     mappings?: readonly PodMapping[];
     onlyScope?: string | null;
     productPriceMinor?: number;
+    refuseStandInFrames?: boolean;
   } = {},
 ): Promise<PodGateFailure | null> {
   const product = await loadProductFacts(db, tenantId, productId);
@@ -558,7 +573,37 @@ export async function evaluatePodGate(
       return "price_below_floor";
     }
   }
+  if (options.refuseStandInFrames === true && (await routesToStandIn(db, mappings))) {
+    return "pod_frame_unconfirmed";
+  }
   return null;
+}
+
+/**
+ * Whether any ACTIVE one of `mappings` routes to a stand-in model on its
+ * printer (isStandInSku), whatever the printer's status: the SQL twin joins
+ * the printer by id alone. One read of the printers, complete (the ids are
+ * the set's own).
+ */
+async function routesToStandIn(db: D1Database, mappings: readonly PodMapping[]): Promise<boolean> {
+  const active = mappings.filter((mapping) => mapping.status === "active");
+  const printerIds = [...new Set(active.map((mapping) => mapping.printerId))];
+  if (printerIds.length === 0) {
+    return false;
+  }
+  const rows = await db
+    .prepare(
+      `SELECT id, tenant_id, type, name, status, currency, shipping_cost_minor, capabilities_json
+       FROM printers
+       WHERE id IN (SELECT value FROM json_each(?))`,
+    )
+    .bind(JSON.stringify(printerIds))
+    .all<PrinterRow>();
+  const printers = new Map(rows.results.map((row) => [row.id, toPrinter(row)]));
+  return active.some((mapping) => {
+    const printer = printers.get(mapping.printerId);
+    return printer !== null && printer !== undefined && isStandInSku(printer.capabilities, mapping.sku);
+  });
 }
 
 async function sellerQuoteFor(
@@ -785,16 +830,24 @@ function isUniqueConstraintFailure(error: unknown): boolean {
  * decision, an edit or another mapping change landing between the reads and
  * the batch rolls the batch back whole; it is re-run once, then answered as a
  * `conflict`.
+ *
+ * `refuseStandInFrames` (CP6-PS4; the route passes the print canvas switch):
+ * a SKU whose model has only stand-in frames (isStandInSku) is refused
+ * `pod_frame_unconfirmed`, on a draft as on a live product, like the other
+ * refusals of the printer's side (the SKU, the slots, the price). Absent or
+ * false = as before.
  */
 export async function createMapping(
   db: D1Database,
   principal: TenantAdminPrincipal,
   input: CreateMappingInput,
   now: number,
+  options: { refuseStandInFrames?: boolean } = {},
 ): Promise<CreateMappingResult> {
   return withScreeningRetry<CreateMappingResult>(
     now,
-    (attemptNow) => createMappingOnce(db, principal, input, attemptNow),
+    (attemptNow) =>
+      createMappingOnce(db, principal, input, attemptNow, options.refuseStandInFrames === true),
     () => ({ code: "conflict", status: "conflict" }),
   );
 }
@@ -804,6 +857,7 @@ async function createMappingOnce(
   principal: TenantAdminPrincipal,
   input: CreateMappingInput,
   now: number,
+  refuseStandInFrames: boolean,
 ): Promise<CreateMappingResult> {
   const tenantId = principal.tenantId;
   // FIRST, before any content read (THE FENCE).
@@ -852,6 +906,9 @@ async function createMappingOnce(
   }
   if (printer.capabilities.skus[input.sku] === undefined) {
     return { code: "sku_unavailable", status: "refused" };
+  }
+  if (refuseStandInFrames && isStandInSku(printer.capabilities, input.sku)) {
+    return { code: "pod_frame_unconfirmed", status: "refused" };
   }
 
   // The artwork's verdict is the input here, never re-measured: width/height in
@@ -1398,8 +1455,7 @@ function decideProductionLine(
   const printPrefix = `pod/${tenantId}/print/`;
   // CP6-PS2: frozen beside each slot. CP6-PS3: a reason to refuse the cart
   // only when the caller says the print canvas is on.
-  const frameProvisional =
-    printer.capabilities.models[printer.capabilities.skus[routing.sku]?.model ?? ""]?.provisional === true;
+  const frameProvisional = isStandInSku(printer.capabilities, routing.sku);
   if (refuseStandInFrames && frameProvisional) {
     return null;
   }

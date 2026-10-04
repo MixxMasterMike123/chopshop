@@ -89,6 +89,9 @@ describe('platform calls (never X-Shop-Id)', () => {
     const page = await listPrintJobs({ dispatchState: 'accepted', tenantId: 'test-shop-a', cursor: 'c', limit: 50, state: undefined });
     assert.deepEqual(page, { jobs: [{ jobId: 'j' }], nextCursor: 'j' });
     assert.equal(calls[0].url, '/_api/v1/platform/print-jobs?dispatchState=accepted&tenantId=test-shop-a&cursor=c&limit=50');
+    await listPrintJobs({ exception: 'out_of_stock' });
+    assert.equal(calls[1].url, '/_api/v1/platform/print-jobs?exception=out_of_stock');
+    calls.length = 1;
     stubFetch(() => answer(200, { changed: true, orderShipped: true, job: { state: 'shipped' } }));
     assert.deepEqual(await setPrintJobStatus('o-1', { state: 'shipped', trackingNumber: 'T' }), { job: { state: 'shipped' }, changed: true, orderShipped: true });
     assert.equal(calls[1].url, '/_api/v1/platform/print-jobs/o-1/status');

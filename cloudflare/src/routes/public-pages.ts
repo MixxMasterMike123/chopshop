@@ -55,13 +55,13 @@ export async function handlePublicPagesRoute(env: Env, request: Request): Promis
   const tenant = await resolveStorefrontTenant(env, request);
   const preview = tenant?.preview === true;
   const list = tenant === null ? null : await listPublicPages(env, env.DB, tenant.tenantId, query, preview);
-  return list === null
+  return tenant === null || list === null
     ? pageNotFound()
     : versionedJsonResponse(
         request,
         list.catalogVersion,
         { nextCursor: list.nextCursor, pages: list.pages },
-        preview,
+        tenant,
       );
 }
 
@@ -78,7 +78,7 @@ export async function handlePublicPageRoute(env: Env, request: Request, segment:
   const preview = tenant?.preview === true;
   const read =
     tenant === null ? null : await readPublicPage(env, env.DB, tenant.tenantId, slug, query.lang, preview);
-  return read === null
+  return tenant === null || read === null
     ? pageNotFound()
-    : versionedJsonResponse(request, read.catalogVersion, { page: read.page }, preview);
+    : versionedJsonResponse(request, read.catalogVersion, { page: read.page }, tenant);
 }

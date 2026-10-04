@@ -570,6 +570,8 @@ const REFUSALS = {
   pod_mapping_missing: 'Sparad som utkast — produkten visas i webbshoppen först när tryckkopplingen (med plagg valt) finns.',
   pod_mapping_suspended: 'En tryckkoppling är pausad eftersom tryckeriet inte längre kan göra den. Koppla om eller ta bort den under Print on demand.',
   pod_unavailable: 'Produkten kan inte tillverkas som den är uppsatt just nu. Kontakta plattformen.',
+  // CP6-PS4: a mapping's printer model has only stand-in frames while the print canvas is on.
+  pod_frame_unconfirmed: 'Tryckeriet har inte bekräftat tryckytan för plagget än, så produkten kan inte publiceras just nu. Den kan publiceras när tryckeriet har bekräftat tryckytan.',
   pod_too_large: 'Produkten har för många aktiva varianter för att prisgolvet ska kunna kontrolleras. Avpublicera den och minska varianterna till högst 200.',
   taken_down: 'Produkten är avpublicerad av plattformen efter en anmälan och kan inte publiceras.',
   variant_limit: 'Produkten har så många varianter som tillåts (högst 200 aktiva).',

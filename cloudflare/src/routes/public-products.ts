@@ -93,7 +93,7 @@ export async function handlePublicProductListRoute(env: Env, request: Request): 
   const page = await listPublicProductPageVersioned(env, env.DB, tenant, filter);
   return page === null
     ? notFoundResponse("Products not found")
-    : versionedJsonResponse(request, page.catalogVersion, page.value, tenant.preview === true);
+    : versionedJsonResponse(request, page.catalogVersion, page.value, tenant);
 }
 
 export async function handlePublicProductRefRoute(env: Env, request: Request): Promise<Response> {
@@ -104,12 +104,7 @@ export async function handlePublicProductRefRoute(env: Env, request: Request): P
   const tenant = await resolveStorefrontTenant(env, request);
   const product =
     tenant === null ? null : await getPublicProductByRefVersioned(env, env.DB, tenant, ref);
-  return product === null || product.value === null
+  return tenant === null || product === null || product.value === null
     ? notFoundResponse("Product not found")
-    : versionedJsonResponse(
-        request,
-        product.catalogVersion,
-        { product: product.value },
-        tenant?.preview === true,
-      );
+    : versionedJsonResponse(request, product.catalogVersion, { product: product.value }, tenant);
 }

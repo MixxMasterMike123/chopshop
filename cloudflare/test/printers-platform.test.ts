@@ -984,6 +984,7 @@ describe("THE ONE-NUMBER WALK: no tenant answer shows the platform's hand", () =
       "pod_unpriced",
       "currency_mismatch",
       "price_below_floor",
+      "pod_frame_unconfirmed",
       "taken_down",
       "anything-else",
     ]) {

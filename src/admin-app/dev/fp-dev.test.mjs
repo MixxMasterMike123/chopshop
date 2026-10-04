@@ -42,6 +42,33 @@ describe('the platform\'s print jobs', () => {
   });
 });
 
+describe('the printer\'s exception (CP6-PS4)', () => {
+  const path = (order, line = 1) => `/v1/platform/print-jobs/${order}-${line}/status`;
+  const O1042 = '1a2b3c4d-0000-4000-8000-000000001042';
+  const O1051 = 'b4c5d6e7-0000-4000-8000-000000001051';
+
+  it('the bodies are exactly one key; the list\'s filter takes none | out_of_stock and holds closed ones too', () => {
+    const { call } = as('platform@example.com', 'dev-password-2');
+    assert.equal(call('POST', path(O1042), { body: { exception: 'out_of_stock', state: 'produced' } }).status, 400);
+    assert.equal(call('POST', path(O1042), { body: { exception: 'lost' } }).status, 400);
+    assert.equal(call('GET', '/v1/platform/print-jobs?exception=Out_of_stock').status, 400);
+    const listed = call('GET', '/v1/platform/print-jobs?exception=out_of_stock').body.jobs.map((j) => j.orderNumber);
+    assert.deepEqual(listed, ['1051', '1052', '1053', '2002']);
+    assert.ok(call('GET', '/v1/platform/print-jobs?exception=none').body.jobs.every((j) => j.exception === null));
+  });
+
+  it('the route\'s order of refusals, and the auto-ship after a close', () => {
+    const { call } = as('platform@example.com', 'dev-password-2');
+    assert.equal(call('POST', path('5e6f7081-0000-4000-8000-000000001046'), { body: { exception: 'out_of_stock' } }).body.error.reason, 'not_accepted');
+    assert.equal(call('POST', path('4d5e6f70-0000-4000-8000-000000001045'), { body: { exception: 'out_of_stock' } }).body.error.reason, 'refunded');
+    assert.equal(call('POST', path(O1042, 1), { body: { exception: 'out_of_stock' } }).body.changed, true);
+    assert.equal(call('POST', path(O1042, 1), { body: { state: 'in_production' } }).body.error.reason, 'out_of_stock');
+    const closed = call('POST', path(O1051), { body: { exception: 'resolved' } }).body;
+    assert.deepEqual([closed.changed, closed.orderShipped, typeof closed.job.exceptionResolvedAt], [true, true, 'string']);
+    assert.equal(call('POST', path(O1051), { body: { state: 'shipped' } }).body.error.reason, 'exception_resolved');
+  });
+});
+
 describe('the settings PATCH', () => {
   it('fenced on expectedUpdatedAt: a stale fence is 409 with the stored settings; a shop the user cannot use is 404', () => {
     const { call } = as('admin@example.com', 'dev-password-1');

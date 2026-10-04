@@ -1,4 +1,5 @@
 import { authorizeTenantAdminRequest } from "../auth/request-authorization";
+import { printCanvasEnabled } from "../dispatch/print-canvas";
 import { jsonResponse } from "../lib/http";
 import {
   decodeSegment,
@@ -174,7 +175,9 @@ export async function handleAdminPodProductRoute(
     if (input === null) {
       return invalidRequestResponse();
     }
-    const result = await createMapping(env.DB, principal, input, now);
+    const result = await createMapping(env.DB, principal, input, now, {
+      refuseStandInFrames: printCanvasEnabled(env),
+    });
     if (result.status === "not_found") {
       return routeNotFoundResponse();
     }
@@ -191,7 +194,10 @@ export async function handleAdminPodProductRoute(
       return errorResponse(
         422,
         tenantRefusalCode(result.code),
-        result.code === "price_below_floor" ? podRefusalMessage(result.code) : "Mapping cannot be created",
+        // The two refusals the seller acts on with words of their own.
+        result.code === "price_below_floor" || result.code === "pod_frame_unconfirmed"
+          ? podRefusalMessage(result.code)
+          : "Mapping cannot be created",
       );
     }
     return jsonResponse(

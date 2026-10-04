@@ -42,9 +42,12 @@ export type { AdminProduct, ProductStatus } from "./admin-product-reads";
  *   pod_unpriced         its printer SKU / slots have no price (A1)
  *   currency_mismatch    the printer prices in another currency
  *   price_below_floor    PRISGOLV (podPricing.js): a price under the break-even floor
+ *   pod_frame_unconfirmed (CP6-PS4, publish only) a mapping's printer model has
+ *                        only stand-in frames while the print canvas is on
  */
 export type AdminRefusalCode =
   | "currency_mismatch"
+  | "pod_frame_unconfirmed"
   | "pod_mapping_missing"
   | "pod_mapping_suspended"
   | "pod_too_large"
@@ -1101,16 +1104,21 @@ async function updateAdminProductOnce(
  * down, or — for a POD product — when any sellable unit has no active mapping,
  * is unpriced, or is priced under PRISGOLV (evaluatePodGate). A 'pending'
  * product is NOT refused: publishing is how it enters the review queue.
+ * `refuseStandInFrames` (CP6-PS4; the route passes the print canvas switch):
+ * also when any active mapping routes to a stand-in model
+ * (`pod_frame_unconfirmed`), which THE public predicate would hide.
  */
 export async function publishAdminProduct(
   db: D1Database,
   principal: TenantAdminPrincipal,
   productId: string,
   now: number,
+  options: { refuseStandInFrames?: boolean } = {},
 ): Promise<AdminCatalogResult> {
   return withScreeningRetry<AdminCatalogResult>(
     now,
-    (attemptNow) => publishAdminProductOnce(db, principal, productId, attemptNow),
+    (attemptNow) =>
+      publishAdminProductOnce(db, principal, productId, attemptNow, options.refuseStandInFrames === true),
     () => ({ status: "conflict" }),
   );
 }
@@ -1120,6 +1128,7 @@ async function publishAdminProductOnce(
   principal: TenantAdminPrincipal,
   productId: string,
   now: number,
+  refuseStandInFrames: boolean,
 ): Promise<AdminCatalogResult> {
   // FIRST, before any content read (THE FENCE).
   const guard = await readScreeningGuard(db, principal.tenantId, productId);
@@ -1135,7 +1144,7 @@ async function publishAdminProductOnce(
     return refused("taken_down");
   }
   if (existing.is_pod === 1) {
-    const failure = await evaluatePodGate(db, principal.tenantId, productId);
+    const failure = await evaluatePodGate(db, principal.tenantId, productId, { refuseStandInFrames });
     if (failure !== null) {
       return refused(failure);
     }

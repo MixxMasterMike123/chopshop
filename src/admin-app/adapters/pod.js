@@ -420,6 +420,8 @@ const MAPPING_REFUSALS = {
   sku_mismatch: 'Produkten (eller varianten) är redan kopplad till en annan artikel eller ett annat tryckeri. Den trycks på ett enda plagg: ta bort de andra kopplingarna först.',
   variant_mismatch: 'Originalet är redan kopplat till samma artikel på en annan nivå av produkten (hela produkten eller en variant). Ta bort den kopplingen först.',
   product_archived: 'Produkten är borttagen och kan inte kopplas.',
+  // CP6-PS4: the article's model has only stand-in frames while the print canvas is on.
+  pod_frame_unconfirmed: 'Tryckeriet har inte bekräftat tryckytan för det här plagget än, så det kan inte kopplas just nu. Välj ett annat plagg, eller försök igen när tryckeriet har bekräftat tryckytan.',
   pod_too_large: 'Produkten har för många aktiva varianter för att prisgolvet ska kunna kontrolleras (högst 200).',
   conflict: 'Produkten ändrades samtidigt. Försök igen.',
 };

@@ -12,7 +12,7 @@ import { getConnectBalance } from '../../../api/admin/payments.js';
 import { STORE } from '../../../config/store.js';
 import { createState, route } from '../../dev/dev-api.mjs';
 import { balanceFailure, balanceView } from '../../adapters/payments.js';
-import { DEFAULT_FILTERS, statusBody } from '../../adapters/printJobs.js';
+import { DEFAULT_FILTERS, actionBody, exceptionActions, nextStates, statusBody } from '../../adapters/printJobs.js';
 import { loadShopConfig, saveShopConfig } from '../../replacements/shopConfig.js';
 import { loadMenuBuilder, saveMenu } from '../../replacements/adminMenuData.js';
 import { loadBranding, saveBranding } from '../../replacements/adminStorefrontData.js';
@@ -273,12 +273,12 @@ describe('the print jobs', () => {
 
   it('the default view: accepted and not shipped, asked with one value per filter', async () => {
     const { jobs, nextCursor } = await loadJobs(DEFAULT_FILTERS);
-    assert.deepEqual(jobs.map((j) => `${j.orderNumber}-${j.lineNo}`), ['1042-1', '1042-2', '1043-2', '1044-1', '1045-1', '2001-1', '1049-1']);
+    assert.deepEqual(jobs.map((j) => `${j.orderNumber}-${j.lineNo}`), ['1042-1', '1042-2', '1043-2', '1044-1', '1045-1', '2001-1', '1049-1', '1051-1', '1053-1', '2002-1']);
     assert.equal(nextCursor, null);
     assert.equal(new URL(sent[0].url, 'http://x').search, '?dispatchState=accepted&limit=50');
     assert.ok(sent.every((s) => !('x-shop-id' in s.headers)));
     // No cost and no buyer in a row.
-    assert.deepEqual(Object.keys(jobs[0]).sort(), ['carrier', 'createdAt', 'dispatchState', 'dispatchedAt', 'jobId', 'lineNo', 'name', 'orderId', 'orderNumber',
+    assert.deepEqual(Object.keys(jobs[0]).sort(), ['carrier', 'createdAt', 'dispatchState', 'dispatchedAt', 'exception', 'exceptionResolvedAt', 'jobId', 'lineNo', 'name', 'orderId', 'orderNumber',
       'orderStatus', 'printerId', 'printerJobRef', 'quantity', 'shopName', 'sku', 'state', 'tenantId', 'trackingNumber', 'trackingUrl', 'updatedAt', 'variantLabel']);
   });
 
@@ -306,9 +306,9 @@ describe('the print jobs', () => {
 
   it('filters and "Visa fler"', async () => {
     const shipped = await loadJobs({ ...DEFAULT_FILTERS, state: 'shipped' });
-    assert.deepEqual(shipped.jobs.map((j) => j.orderNumber), ['1048']);
+    assert.deepEqual(shipped.jobs.map((j) => j.orderNumber), ['1048', '1051', '1052']);
     const shopC = await loadJobs({ ...DEFAULT_FILTERS, tenantId: 'test-shop-c' });
-    assert.deepEqual(shopC.jobs.map((j) => j.orderNumber), ['2001']);
+    assert.deepEqual(shopC.jobs.map((j) => j.orderNumber), ['2001', '2002']);
     const unknown = await loadJobs({ ...DEFAULT_FILTERS, dispatchState: 'unknown', state: 'all' });
     assert.deepEqual(unknown.jobs.map((j) => j.orderNumber), ['1046']);
     scenario('many');
@@ -356,6 +356,59 @@ describe('the print jobs', () => {
     await assert.rejects(recordStatus(job(jobs, '1049'), { state: 'produced' }), (e) => /sparades inte\. Försök igen/.test(e.userMessage));
     scenario('unclear');
     await assert.rejects(recordStatus(job(jobs, '1049'), { state: 'produced' }), (e) => /oklart om statusen sparades/.test(e.userMessage));
+  });
+
+  it('the exception filter: the open ones only, asked as exception=out_of_stock; and none', async () => {
+    const open = await loadJobs({ ...DEFAULT_FILTERS, state: 'all', dispatchState: 'all', exception: 'open' });
+    assert.deepEqual(open.jobs.map((j) => `${j.orderNumber}-${j.lineNo}`), ['1051-1', '2002-1']);
+    assert.equal(new URL(sent.at(-1).url, 'http://x').search, '?exception=out_of_stock&limit=50');
+    const none = await loadJobs({ ...DEFAULT_FILTERS, exception: 'none' });
+    assert.ok(none.jobs.every((j) => j.exception === null));
+    assert.ok(none.jobs.some((j) => j.orderNumber === '1042'));
+  });
+
+  it('record it: held, then only "skickad" or a close; the refusals of what no longer fits in words', async () => {
+    const { jobs } = await loadJobs(DEFAULT_FILTERS);
+    const line = job(jobs, '1042', 2); // in production
+    assert.deepEqual(exceptionActions(line), ['out_of_stock']);
+    const done = await recordStatus(line, actionBody('out_of_stock').body);
+    assert.deepEqual([done.changed, done.job.exception, done.job.exceptionResolvedAt, done.job.state], [true, 'out_of_stock', null, 'in_production']);
+    assert.deepEqual(sent.at(-1).body, { exception: 'out_of_stock' });
+    assert.deepEqual([nextStates(done.job), exceptionActions(done.job)], [['shipped'], ['resolved']]);
+    assert.equal((await recordStatus(done.job, { exception: 'out_of_stock' })).changed, false);
+    await assert.rejects(recordStatus(done.job, { state: 'produced' }), (e) => /bara rapporteras som skickad/.test(e.userMessage) && e.fresh.exception === 'out_of_stock');
+    await assert.rejects(recordStatus(job(jobs, '1043', 2), { exception: 'out_of_stock' }), (e) => /plagget fanns i lager/.test(e.userMessage));
+    await assert.rejects(recordStatus(job(jobs, '1044', 1), { exception: 'out_of_stock' }), (e) => /avbruten/.test(e.userMessage));
+    await assert.rejects(recordStatus(job(jobs, '1042', 1), { exception: 'resolved' }), (e) => /inget undantag att stänga/.test(e.userMessage));
+  });
+
+  it('close it: the order\'s last unsent line ships the order; nothing follows; a closed order is only noted', async () => {
+    const { jobs } = await loadJobs(DEFAULT_FILTERS);
+    const closed = await recordStatus(job(jobs, '1051', 1), actionBody('resolved').body);
+    assert.deepEqual([closed.changed, closed.orderShipped, Boolean(closed.job.exceptionResolvedAt)], [true, true, true]);
+    assert.deepEqual([nextStates(closed.job), exceptionActions(closed.job)], [[], []]);
+    assert.equal((await recordStatus(closed.job, { exception: 'resolved' })).changed, false);
+    await assert.rejects(recordStatus(closed.job, { state: 'shipped' }), (e) => /Undantaget för raden är stängt/.test(e.userMessage));
+    const cancelled = await recordStatus(job(jobs, '2002', 1), { exception: 'resolved' });
+    assert.deepEqual([cancelled.changed, cancelled.orderShipped], [true, false]);
+    const shipped = await loadJobs({ ...DEFAULT_FILTERS, state: 'shipped' });
+    await assert.rejects(recordStatus(job(shipped.jobs, '1052', 1), { exception: 'resolved' }), (e) => /redan skickad, så det finns inget undantag/.test(e.userMessage));
+  });
+
+  it('a lost answer of an exception body is read back: done, not done, unclear', async () => {
+    const { jobs } = await loadJobs(DEFAULT_FILTERS);
+    scenario('lost');
+    const done = await recordStatus(job(jobs, '2001'), { exception: 'out_of_stock' });
+    assert.deepEqual([done.readBack, done.job.exception, done.orderShipped], [true, 'out_of_stock', null]);
+    const closed = await recordStatus(done.job, { exception: 'resolved' });
+    assert.deepEqual([closed.readBack, Boolean(closed.job.exceptionResolvedAt)], [true, true]);
+    scenario('drop');
+    await assert.rejects(recordStatus(job(jobs, '1049'), { exception: 'out_of_stock' }), (e) => /sparades inte\. Försök igen/.test(e.userMessage));
+    // Not saved is said on the facts the body moves: a state that moved meanwhile does not make it unclear.
+    const moved = { ...job(jobs, '1042', 2), state: 'produced' }; // the server holds it in production
+    await assert.rejects(recordStatus(moved, { exception: 'out_of_stock' }), (e) => /sparades inte\. Försök igen/.test(e.userMessage));
+    scenario('unclear');
+    await assert.rejects(recordStatus(job(jobs, '1049'), { exception: 'out_of_stock' }), (e) => /oklart om statusen sparades/.test(e.userMessage));
   });
 
   it('the filters\' choices: the shops and the printers by name', async () => {

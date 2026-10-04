@@ -7,6 +7,13 @@
  *   src/commerce/checkout.ts        line resolution
  *   src/catalog/screening.ts        the D8 "other live products" count
  *
+ * CP6-PS4: while the print canvas is on, every reader that decides what a
+ * buyer sees or buys (the storefront's reads through preview.ts
+ * eligibilityPredicate, the sitemap, checkout, the platform's "visible"
+ * count) adds STAND_IN_FRAME_TERM below; with it off, THE predicate is this
+ * constant byte for byte. Screening's D8 count keeps the constant (see
+ * docs/cf-port/CP6_PS4_REPORT.md, decision A5).
+ *
  * §2.4 reads: is_active AND b2c_available AND shop.status='active' AND
  * shop.published!=false AND takedown_at IS NULL AND screening.status <>
  * 'blocked' (advisory statuses stay public — §11.6). In this schema:
@@ -72,3 +79,58 @@ export const PUBLIC_ELIGIBILITY_PREDICATE = `publication.published = 1
          AND suspended_mapping.product_id = product.product_id
          AND suspended_mapping.status = 'suspended'
      )`;
+
+/**
+ * `$.<object>."<key>"<rest>` as an SQL expression, or NULL when `key` holds a
+ * character no capability key has (parsePrinterCapabilities: every model and
+ * SKU key is `[A-Za-z0-9._-]`). A path built from a `"` or a `\` is a parse
+ * error in SQLite, which would fail the whole read; such a key can never name
+ * an entry of a valid document, so NULL (no entry) is the same answer.
+ */
+function capabilityPath(object: string, key: string, rest: string): string {
+  return `CASE WHEN ${key} GLOB '*[^A-Za-z0-9._-]*' THEN NULL
+              ELSE '$.${object}."' || ${key} || '"${rest}' END`;
+}
+
+const STAND_IN_MODEL = `json_extract(
+             stand_in_printer.capabilities_json,
+             ${capabilityPath("skus", "stand_in_mapping.sku", ".model")}
+           )`;
+
+/**
+ * CP6-PS4: the stand-in term, added to THE predicate only while the print
+ * canvas is on (src/dispatch/print-canvas.ts printCanvasEnabled). A POD
+ * product with ANY active mapping whose printer SKU's model has only a
+ * stand-in frame (`capabilities.models[skus[sku].model].provisional ===
+ * true`, decideProductionLine's rule) is not public: checkout refuses such a
+ * line then (dispatch would refuse to print it), so the storefront must not
+ * offer it. The whole product, as a suspended mapping hides the whole product.
+ * A printer edit that marks or clears a stand-in bumps catalog_version (0025
+ * catalog_version_printers_update); the switch itself is in the ETag
+ * (src/storefront/public-routes.ts).
+ */
+export const STAND_IN_FRAME_TERM = `
+     AND NOT EXISTS (
+       SELECT 1
+       FROM pod_mappings AS stand_in_mapping
+       INNER JOIN printers AS stand_in_printer
+         ON stand_in_printer.id = stand_in_mapping.printer_id
+       WHERE stand_in_mapping.tenant_id = product.tenant_id
+         AND stand_in_mapping.product_id = product.product_id
+         AND stand_in_mapping.status = 'active'
+         AND json_type(
+           stand_in_printer.capabilities_json,
+           ${capabilityPath("models", STAND_IN_MODEL, ".provisional")}
+         ) = 'true'
+     )`;
+
+/** THE predicate with the stand-in term (the print canvas on). */
+export const CANVAS_ELIGIBILITY_PREDICATE = `${PUBLIC_ELIGIBILITY_PREDICATE}${STAND_IN_FRAME_TERM}`;
+
+/**
+ * THE predicate for a read that is never a preview (checkout, the sitemap, the
+ * platform's counts): itself, or with the stand-in term while the canvas is on.
+ */
+export function publicEligibilityPredicate(hideStandInFrames: boolean): string {
+  return hideStandInFrames ? CANVAS_ELIGIBILITY_PREDICATE : PUBLIC_ELIGIBILITY_PREDICATE;
+}

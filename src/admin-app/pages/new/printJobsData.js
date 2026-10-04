@@ -12,7 +12,10 @@
 //                 built on, the re-check at the confirm, and a read-back
 //   a status      POST …/:jobId/status; a lost answer (no answer, a 5xx, an
 //                 unreadable 2xx) is read back before anything is said: stored
-//                 → done; the job as it was → not saved; else → unclear
+//                 → done; the job as it was → not saved; else → unclear. The
+//                 printer's exception (CP6-PS4) goes the same way: its two
+//                 bodies, `{ exception: "out_of_stock" | "resolved" }`, are a
+//                 status body each (adapters/printJobs.js actionBody)
 //   the filters   the shops (GET /v1/platform/tenants) and the printers (GET
 //                 /v1/platform/printers: their ids and names only); a list
 //                 that cannot be read leaves its filter at "Alla"
@@ -71,18 +74,23 @@ const unclear = (cause, fresh) => pageError(
 );
 
 /** A refused write: its sentence, with the job as it is now when that can be read (`fresh`). */
-async function refused(job, error) {
+async function refused(job, error, body) {
   let fresh = null;
   try {
     fresh = await readJob(job);
   } catch {
     // The sentence stands without the row.
   }
-  return pageError(statusRefusalText(error), error, fresh ? { fresh } : {});
+  return pageError(statusRefusalText(error, body), error, fresh ? { fresh } : {});
 }
 
+/** The facts a body would move: the state, or the exception and its resolution. */
+const sameMoved = (a, b, body) => (body.exception
+  ? (a.exception ?? null) === (b.exception ?? null) && (a.exceptionResolvedAt ?? null) === (b.exceptionResolvedAt ?? null)
+  : (a.state ?? null) === (b.state ?? null));
+
 /**
- * Records `body` (adapters/printJobs.js statusBody) for `job`. → { job (as
+ * Records `body` (adapters/printJobs.js actionBody) for `job`. → { job (as
  * stored, the row's other fields kept), changed, orderShipped (null: not
  * known after a read-back), readBack }.
  */
@@ -92,7 +100,7 @@ export async function recordStatus(job, body) {
     answer = await setPrintJobStatus(job.jobId, body);
     if (!answer.job) throw Object.assign(new Error('The answer did not carry the job'), { code: 'bad_response' });
   } catch (error) {
-    if (!isLostAnswer(error)) throw await refused(job, error);
+    if (!isLostAnswer(error)) throw await refused(job, error, body);
     let fresh;
     try {
       fresh = await readJob(job);
@@ -100,14 +108,14 @@ export async function recordStatus(job, body) {
       throw unclear(error);
     }
     if (fresh && statusHolds(fresh, body)) return { job: fresh, changed: true, orderShipped: null, readBack: true };
-    if (fresh && (fresh.state ?? null) === (job.state ?? null)) {
+    if (fresh && sameMoved(fresh, job, body)) {
       throw pageError('Anslutningen bröts och statusen sparades inte. Försök igen.', error, { fresh });
     }
     throw unclear(error, fresh);
   }
-  const { state, trackingNumber, trackingUrl, carrier } = answer.job;
+  const { state, trackingNumber, trackingUrl, carrier, exception = null, exceptionResolvedAt = null } = answer.job;
   return {
-    job: { ...job, state, trackingNumber, trackingUrl, carrier },
+    job: { ...job, state, trackingNumber, trackingUrl, carrier, exception, exceptionResolvedAt },
     changed: answer.changed,
     orderShipped: answer.orderShipped,
     readBack: false,

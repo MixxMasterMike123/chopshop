@@ -821,7 +821,9 @@ async function handleAdminProductRoute(
 
   return adminResultResponse(
     route.action === "publish"
-      ? await publishAdminProduct(env.DB, principal, route.productId, now)
+      ? await publishAdminProduct(env.DB, principal, route.productId, now, {
+          refuseStandInFrames: printCanvasEnabled(env),
+        })
       : await unpublishAdminProduct(env.DB, principal, route.productId, now),
     200,
   );

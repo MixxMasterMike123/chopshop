@@ -383,6 +383,7 @@ describe('refusals in the page\'s words', () => {
     assert.match(refusalMessage({ status: 409, code: 'conflict' }, { step: 'variant', sku: 'x' }), /"x"/);
     assert.match(refusalMessage({ status: 409, code: 'variant_limit' }, { step: 'variant' }), /200/);
     assert.match(refusalMessage({ status: 422, code: 'pod_unavailable' }, { step: 'publish' }), /tillverkas/);
+    assert.match(refusalMessage({ status: 422, code: 'pod_frame_unconfirmed' }, { step: 'publish' }), /inte bekräftat tryckytan/);
   });
   it('the screening verdicts that need a word', () => {
     assert.match(screeningNoticeFor('pending'), /granskas/);

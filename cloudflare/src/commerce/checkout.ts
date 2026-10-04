@@ -12,7 +12,7 @@ import {
 import { isCheckoutLegallyOpen } from "../legal/legal-pages";
 import {
   ELIGIBLE_PRODUCTS_FROM,
-  PUBLIC_ELIGIBILITY_PREDICATE,
+  publicEligibilityPredicate,
 } from "../catalog/eligibility";
 import { resolveProductionLines } from "../pod/pod-mappings";
 import type { FrozenRecipient, RecipientInput } from "./recipient";
@@ -494,12 +494,15 @@ function isIdempotencyCollision(error: unknown): boolean {
  * published, active, not taken down, shop active and live, screening public,
  * a POD product mapped), so nothing purchasable through checkout is invisible
  * on the storefront and nothing hidden from the storefront is purchasable.
+ * CP6-PS4: with `refuseStandInFrames` (the print canvas on) it is THE
+ * predicate with its stand-in term, as the storefront reads it then.
  */
 async function resolveLine(
   db: D1Database,
   tenant: TenantContext,
   item: CheckoutItemInput,
   itemIndex: number,
+  refuseStandInFrames: boolean,
 ): Promise<ResolvedLine | null> {
   const publication = await db
     .prepare(
@@ -518,7 +521,7 @@ async function resolveLine(
        ${ELIGIBLE_PRODUCTS_FROM}
        WHERE publication.tenant_id = ?
          AND product.tenant_id = ?
-         AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+         AND ${publicEligibilityPredicate(refuseStandInFrames)}
          AND publication.product_id = ?
        LIMIT 1`,
     )
@@ -602,6 +605,7 @@ async function resolveLines(
   db: D1Database,
   tenant: TenantContext,
   items: CheckoutItemInput[],
+  refuseStandInFrames: boolean,
 ): Promise<ResolvedLine[] | null> {
   const seen = new Set<string>();
 
@@ -618,7 +622,7 @@ async function resolveLines(
 
   const lines: ResolvedLine[] = [];
   for (const [itemIndex, item] of items.entries()) {
-    const line = await resolveLine(db, tenant, item, itemIndex);
+    const line = await resolveLine(db, tenant, item, itemIndex, refuseStandInFrames);
     if (line === null) {
       return null;
     }
@@ -982,7 +986,10 @@ export interface CheckoutOptions {
    * printer frame is a stand-in (the model's `provisional` flag) is then
    * refused like any line that cannot be produced: dispatch would refuse to
    * print it (canvasFrame), after the buyer paid. Absent or false = the
-   * stand-in flag is only frozen, as before.
+   * stand-in flag is only frozen, as before. CP6-PS4: the line resolution
+   * then also reads THE predicate with its stand-in term, so a product with
+   * any active mapping on a stand-in model is refused whole, as the
+   * storefront hides it whole.
    */
   refuseStandInFrames?: boolean;
 }
@@ -1142,7 +1149,7 @@ export async function createCheckout(
     }
   }
 
-  const lines = await resolveLines(db, tenant, input.items);
+  const lines = await resolveLines(db, tenant, input.items, options.refuseStandInFrames === true);
   if (lines === null) {
     return { status: "invalid_items" };
   }

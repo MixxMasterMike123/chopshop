@@ -1,5 +1,5 @@
 {
-  "_note": "INVENTED data for the dev API's print-job rows (unit CP5-FP, fp-dev.mjs). No real order, buyer or printer reference. `printer: false` marks an order line that is not a printer line (it is never listed). delivery: parcel | pickup; fulfilment: the order's fulfilment state; status: the order's (payment) status.",
+  "_note": "INVENTED data for the dev API's print-job rows (unit CP5-FP, fp-dev.mjs). No real order, buyer or printer reference. `printer: false` marks an order line that is not a printer line (it is never listed). delivery: parcel | pickup; fulfilment: the order's fulfilment state; status: the order's (payment) status. CP6-PS4: `exception` (out_of_stock) and `exceptionResolvedAt` on a line: 1051-1 open (its other line shipped: closing it ships the order), 1052-1 restocked and shipped, 1053-1 closed, 2002-1 open on a cancelled order.",
   "orders": [
     {
       "orderId": "1a2b3c4d-0000-4000-8000-000000001042", "tenantId": "test-shop-a", "orderNumber": "1042",
@@ -81,6 +81,39 @@
       "createdAt": "2026-10-03T11:00:00.000Z",
       "lines": [
         { "name": "Hoodie med eget tryck", "sku": "POD-HOOD-GRY-S", "variantLabel": "Grå · S", "quantity": 1, "printer": true, "dispatchState": "failed", "printerJobRef": null, "dispatchedAt": "2026-10-03T11:01:00.000Z", "state": null }
+      ]
+    },
+    {
+      "orderId": "b4c5d6e7-0000-4000-8000-000000001051", "tenantId": "test-shop-a", "orderNumber": "1051",
+      "status": "paid", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-03T12:00:00.000Z",
+      "lines": [
+        { "name": "Hoodie med eget tryck", "sku": "POD-HOOD-BLK-L", "variantLabel": "Svart · L", "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1051-1", "dispatchedAt": "2026-10-03T12:04:00.000Z", "state": null, "exception": "out_of_stock" },
+        { "name": "Keps med tryck", "sku": "POD-CAP-01", "variantLabel": null, "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1051-2", "dispatchedAt": "2026-10-03T12:04:00.000Z", "state": "shipped", "trackingNumber": "DEV000654321SE", "carrier": "Exempelfrakt" }
+      ]
+    },
+    {
+      "orderId": "c5d6e7f8-0000-4000-8000-000000001052", "tenantId": "test-shop-a", "orderNumber": "1052",
+      "status": "paid", "delivery": "parcel", "fulfilment": "shipped", "printerId": "fake-printer",
+      "createdAt": "2026-10-03T13:00:00.000Z",
+      "lines": [
+        { "name": "T-shirt med eget tryck", "sku": "POD-TEE-GRN-M", "variantLabel": "Grön · M", "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1052-1", "dispatchedAt": "2026-10-03T13:03:00.000Z", "state": "shipped", "exception": "out_of_stock", "trackingNumber": "DEV000777888SE", "carrier": "Exempelfrakt" }
+      ]
+    },
+    {
+      "orderId": "d6e7f809-0000-4000-8000-000000001053", "tenantId": "test-shop-a", "orderNumber": "1053",
+      "status": "partially_refunded", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "fake-printer",
+      "createdAt": "2026-10-03T14:00:00.000Z",
+      "lines": [
+        { "name": "Hoodie med eget tryck", "sku": "POD-HOOD-GRY-XL", "variantLabel": "Grå · XL", "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "fp-job-1053-1", "dispatchedAt": "2026-10-03T14:02:00.000Z", "state": null, "exception": "out_of_stock", "exceptionResolvedAt": "2026-10-04T09:15:00.000Z" }
+      ]
+    },
+    {
+      "orderId": "e7f8091a-0000-4000-8000-000000001054", "tenantId": "test-shop-c", "orderNumber": "2002",
+      "status": "cancelled", "delivery": "parcel", "fulfilment": "unfulfilled", "printerId": "handtryck-exempel",
+      "createdAt": "2026-10-03T15:00:00.000Z",
+      "lines": [
+        { "name": "Poster med eget motiv", "sku": "POD-POSTER-A2", "variantLabel": null, "quantity": 1, "printer": true, "dispatchState": "accepted", "printerJobRef": "hand-2002-1", "dispatchedAt": "2026-10-03T15:20:00.000Z", "state": "in_production", "exception": "out_of_stock" }
       ]
     }
   ]

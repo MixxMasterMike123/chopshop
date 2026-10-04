@@ -7,7 +7,7 @@ import {
   decodeSitemapCursor,
   SITEMAP_PAGE_MAX,
 } from "../storefront/sitemap";
-import { previewJsonResponse, resolveStorefrontTenant } from "../storefront/preview";
+import { previewJsonResponse, resolveStorefrontTenant, withPrintCanvas } from "../storefront/preview";
 import { resolveRequestTenant } from "../tenancy/resolve-tenant";
 
 /**
@@ -109,5 +109,6 @@ export async function handlePublicSitemapRequest(env: Env, request: Request): Pr
   if (tenant === null || !(await isPublicShop(env.DB, tenant.tenantId))) {
     return notFoundResponse("Sitemap not found");
   }
-  return jsonResponse(await buildSitemapPage(env.DB, tenant, cursor, limit, Date.now()));
+  // Never a preview; the print canvas switch read here, at the edge (CP6-PS4).
+  return jsonResponse(await buildSitemapPage(env.DB, withPrintCanvas(env, tenant), cursor, limit, Date.now()));
 }

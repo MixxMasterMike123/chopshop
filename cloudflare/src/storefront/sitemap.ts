@@ -1,9 +1,8 @@
 import {
   ELIGIBLE_PRODUCTS_FROM,
-  PUBLIC_ELIGIBILITY_PREDICATE,
+  publicEligibilityPredicate,
 } from "../catalog/eligibility";
 import { PUBLIC_LEGAL_PAGES } from "../routes/public-legal";
-import type { TenantContext } from "../tenancy/resolve-tenant";
 import {
   ALL_PRODUCTS_PATH,
   categoryPath,
@@ -13,6 +12,8 @@ import {
   productPath,
   tagPath,
 } from "./addresses";
+import type { StorefrontTenant } from "./preview";
+import { hidesStandInFrames } from "./preview";
 import { legalPageTexts } from "./seo";
 
 /**
@@ -30,6 +31,8 @@ import { legalPageTexts } from "./seo";
  * Only what a visitor can reach: products through THE predicate, collections
  * and pages when published, categories and tags of public products, the legal
  * pages the shop has adopted, and the platform terms when a version is out.
+ * CP6-PS4: THE predicate with its stand-in term while the print canvas is on
+ * (the route marks the tenant, preview.ts withPrintCanvas). Never a preview's.
  */
 
 export interface SitemapEntry {
@@ -112,11 +115,12 @@ function isoOrNull(value: unknown): string | null {
   return typeof value === "string" && ISO_TIME.test(value) ? value : null;
 }
 
-/** A section's rows after `after`, at most `limit`, ascending by key. */
+/** A section's rows after `after`, at most `limit`, ascending by key. `eligible`: THE predicate as the request reads it. */
 async function sectionRows(
   section: Section,
   db: D1Database,
   tenantId: string,
+  eligible: string,
   after: string,
   limit: number,
   now: number,
@@ -136,7 +140,7 @@ async function sectionRows(
            ${ELIGIBLE_PRODUCTS_FROM}
            WHERE publication.tenant_id = ? AND product.tenant_id = ?
              AND product.product_id > ?
-             AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+             AND ${eligible}
            ORDER BY product.product_id
            LIMIT ?`,
         )
@@ -175,7 +179,7 @@ async function sectionRows(
            WHERE publication.tenant_id = ? AND product.tenant_id = ?
              AND product.category IS NOT NULL
              AND product.category > ?
-             AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+             AND ${eligible}
            ORDER BY value
            LIMIT ?`,
         )
@@ -197,7 +201,7 @@ async function sectionRows(
             AND tagged.tenant_id = product.tenant_id
            WHERE publication.tenant_id = ? AND product.tenant_id = ?
              AND tagged.tag > ?
-             AND ${PUBLIC_ELIGIBILITY_PREDICATE}
+             AND ${eligible}
            ORDER BY value
            LIMIT ?`,
         )
@@ -252,7 +256,7 @@ async function sectionRows(
  */
 export async function buildSitemapPage(
   db: D1Database,
-  tenant: TenantContext,
+  tenant: StorefrontTenant,
   cursor: SitemapCursor | null,
   limit: number,
   now: number,
@@ -262,11 +266,12 @@ export async function buildSitemapPage(
   const entries: SitemapEntry[] = [];
   const seen = new Set<string>();
   let queries = 0;
+  const eligible = publicEligibilityPredicate(hidesStandInFrames(tenant));
 
   while (section < SECTIONS.length && entries.length < limit && queries < QUERY_BUDGET) {
     const wanted = limit - entries.length;
     const name = SECTIONS[section] as Section;
-    const rows = await sectionRows(name, db, tenant.tenantId, after, wanted, now);
+    const rows = await sectionRows(name, db, tenant.tenantId, eligible, after, wanted, now);
     queries += 1;
     for (const row of rows) {
       after = row.key;

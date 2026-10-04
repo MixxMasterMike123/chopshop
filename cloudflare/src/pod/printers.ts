@@ -484,6 +484,17 @@ export function slotFrame(
   return null;
 }
 
+/**
+ * Whether `sku`'s model has only stand-in frames (the model's `provisional`
+ * flag, CP3): the print canvas refuses to print one (src/dispatch/
+ * print-canvas.ts canvasFrame), so while it is on such a SKU is not sold
+ * (CP6-PS3), mapped or published (CP6-PS4). The one reading of the flag in
+ * code; src/catalog/eligibility.ts STAND_IN_FRAME_TERM is its SQL twin.
+ */
+export function isStandInSku(capabilities: PrinterCapabilities, sku: string): boolean {
+  return capabilities.models[capabilities.skus[sku]?.model ?? ""]?.provisional === true;
+}
+
 // ── the tenant view (A13: capability only, built by ALLOWLIST) ─────────────
 
 /**

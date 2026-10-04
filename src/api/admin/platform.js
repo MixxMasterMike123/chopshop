@@ -513,22 +513,24 @@ export async function archiveTermsVersionText(version, text) {
 // CP5_WK_REPORT.md, CP6_PS1_REPORT.md). PLATFORM-ONLY: only the console's
 // print-jobs page imports this section. A row carries no cost and no buyer.
 //
-//   GET  /v1/platform/print-jobs[?state&dispatchState&tenantId&printerId&cursor&limit≤100]
+//   GET  /v1/platform/print-jobs[?state&dispatchState&exception&tenantId&printerId&cursor&limit≤100]
 //        { jobs: [{ jobId, tenantId, shopName, orderId, orderNumber, orderStatus, lineNo,
 //                   name, sku, variantLabel, quantity, printerId, printerJobRef,
 //                   dispatchState, dispatchedAt, state, trackingNumber, trackingUrl,
-//                   carrier, createdAt, updatedAt }], nextCursor }
-//        ONE value per filter (`none` = no state recorded); ordered by job id
-//        (order id, line), the cursor the last job id of the page before
+//                   carrier, exception, exceptionResolvedAt, createdAt, updatedAt }], nextCursor }
+//        ONE value per filter (`none` = no state recorded; `exception` none | out_of_stock,
+//        CP6-PS3); ordered by job id (order id, line), the cursor the last job id of the page before
 //   POST /v1/platform/print-jobs/:jobId/status  { state, trackingNumber?, trackingUrl?, carrier? }
+//        or (CP6-PS3) exactly { exception: "out_of_stock" } / { exception: "resolved" }
 //        → 200 { job, changed, orderShipped }
 //        409 print_job_status_not_allowed { reason: not_accepted | cancelled | refunded |
-//        backwards | tracking_differs } · 409 conflict · 400 invalid_request · 404
+//        backwards | tracking_differs | out_of_stock | exception_resolved | no_exception |
+//        produced } · 409 conflict · 400 invalid_request · 404
 
 /** One page of print jobs. → { jobs, nextCursor }. */
-export async function listPrintJobs({ state, dispatchState, tenantId, printerId, cursor, limit, signal } = {}) {
+export async function listPrintJobs({ state, dispatchState, exception, tenantId, printerId, cursor, limit, signal } = {}) {
   const { data } = await platformRequest('GET', withQuery('/v1/platform/print-jobs', {
-    state, dispatchState, tenantId, printerId, cursor, limit,
+    state, dispatchState, exception, tenantId, printerId, cursor, limit,
   }), { signal });
   return {
     jobs: Array.isArray(data?.jobs) ? data.jobs : [],

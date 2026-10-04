@@ -149,9 +149,9 @@ export async function handlePublicCollectionsRoute(
   const list =
     tenant === null ? null : await listPublicCollections(env, env.DB, tenant.tenantId, query, preview);
   return withCors(
-    list === null
+    tenant === null || list === null
       ? collectionNotFound()
-      : versionedJsonResponse(request, list.catalogVersion, list.value, preview),
+      : versionedJsonResponse(request, list.catalogVersion, list.value, tenant),
   );
 }
 
@@ -176,10 +176,10 @@ export async function handlePublicCollectionRoute(
   }
   const ref = decodeSegment(new URL(request.url).pathname.split("/")[REF_SEGMENT] ?? "");
   const tenant = ref === null ? null : await resolveStorefrontTenant(env, request);
-  const read =
-    tenant === null || ref === null
-      ? ({ status: "not_found" } as const)
-      : await readPublicCollection(env, env.DB, tenant, ref, query);
+  if (tenant === null || ref === null) {
+    return withCors(collectionNotFound());
+  }
+  const read = await readPublicCollection(env, env.DB, tenant, ref, query);
   switch (read.status) {
     case "ok":
       return withCors(
@@ -191,7 +191,7 @@ export async function handlePublicCollectionRoute(
             nextCursor: read.value.nextCursor,
             products: read.value.products,
           },
-          tenant?.preview === true,
+          tenant,
         ),
       );
     case "invalid_cursor":

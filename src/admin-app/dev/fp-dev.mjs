@@ -6,6 +6,8 @@
 //   GET   /v1/admin/payments/connect/balance      routes/connect-admin.ts
 //   GET   /v1/platform/print-jobs                 routes/print-jobs-platform.ts, dispatch/print-job-list.ts
 //   POST  /v1/platform/print-jobs/:jobId/status   dispatch/production-status.ts, commerce/fulfilment.ts
+//                                                 (CP6-PS4: the printer's exception, its two bodies,
+//                                                 its four refusals and the `exception` filter)
 // In their own modules, reading the same cookie: the shop counts
 // (platform-dev.mjs), the printer PATCH's dry run (printers-dev.mjs), the
 // resend of an invite (members-dev.mjs).
@@ -183,7 +185,7 @@ export function balanceRoute(connectOf) {
 const PRODUCTION_STATES = ['in_production', 'produced', 'shipped'];
 const RANK = { in_production: 1, produced: 2, shipped: 3 };
 const DISPATCH_STATES = ['accepted', 'cancelled', 'failed', 'pending', 'submitting', 'unknown'];
-const QUERY_KEYS = ['cursor', 'dispatchState', 'limit', 'printerId', 'state', 'tenantId'];
+const QUERY_KEYS = ['cursor', 'dispatchState', 'exception', 'limit', 'printerId', 'state', 'tenantId'];
 const JOB_ID = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-([1-9][0-9]{0,3})$/;
 const TENANT_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const PRINTER_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -227,6 +229,8 @@ function viewOf(state, { order, line, lineNo }) {
     createdAt: order.createdAt,
     dispatchedAt: line.dispatchedAt ?? null,
     dispatchState: line.dispatchState ?? null,
+    exception: line.exception ?? null,
+    exceptionResolvedAt: line.exceptionResolvedAt ?? null,
     jobId: `${order.orderId}-${lineNo}`,
     lineNo,
     name: line.name,
@@ -256,12 +260,14 @@ function listJobs(state, { url, headers }) {
   }
   const state_ = params.get('state');
   const dispatch = params.get('dispatchState');
+  const exception = params.get('exception');
   const tenantId = params.get('tenantId');
   const printerId = params.get('printerId');
   const cursor = params.get('cursor');
   const rawLimit = params.get('limit');
   if (state_ !== null && state_ !== 'none' && !PRODUCTION_STATES.includes(state_)) return invalid();
   if (dispatch !== null && dispatch !== 'none' && !DISPATCH_STATES.includes(dispatch)) return invalid();
+  if (exception !== null && exception !== 'none' && exception !== 'out_of_stock') return invalid();
   if (tenantId !== null && !TENANT_ID.test(tenantId)) return invalid();
   if (printerId !== null && (!PRINTER_ID.test(printerId) || printerId === 'default')) return invalid();
   const at = cursor === null ? null : JOB_ID.exec(cursor);
@@ -274,6 +280,8 @@ function listJobs(state, { url, headers }) {
     if (printerId !== null && order.printerId !== printerId) return false;
     if (state_ !== null && (line.state ?? null) !== (state_ === 'none' ? null : state_)) return false;
     if (dispatch !== null && (line.dispatchState ?? null) !== (dispatch === 'none' ? null : dispatch)) return false;
+    // Every reported line, closed or not (print-job-list.ts).
+    if (exception !== null && (line.exception ?? null) !== (exception === 'none' ? null : exception)) return false;
     if (at) {
       const [, orderId, n] = at;
       if (order.orderId < orderId || (order.orderId === orderId && lineNo <= Number(n))) return false;
@@ -307,6 +315,11 @@ function optionalUrl(value) {
 
 /** production-status.ts parseProductionStatusInput. */
 function statusInput(body) {
+  if (isObject(body) && Object.hasOwn(body, 'exception')) {
+    return Object.keys(body).length === 1 && (body.exception === 'out_of_stock' || body.exception === 'resolved')
+      ? { exception: body.exception }
+      : null;
+  }
   if (!isObject(body) || Object.keys(body).some((k) => !['carrier', 'state', 'trackingNumber', 'trackingUrl'].includes(k))) return null;
   if (!PRODUCTION_STATES.includes(body.state)) return null;
   const trackingNumber = optionalText(body.trackingNumber, 100);
@@ -328,32 +341,70 @@ function setStatus(state, { segments, headers, body }) {
   const mode = fpScenario(headers);
   if (mode === 'conflict') return refused(409, 'conflict', 'The print job changed meanwhile; try again');
   const job = () => ({
-    carrier: line.carrier ?? null, jobId: `${order.orderId}-${row.lineNo}`, lineNo: row.lineNo, orderId: order.orderId,
+    carrier: line.carrier ?? null, exception: line.exception ?? null, exceptionResolvedAt: line.exceptionResolvedAt ?? null,
+    jobId: `${order.orderId}-${row.lineNo}`, lineNo: row.lineNo, orderId: order.orderId,
     state: line.state ?? null, tenantId: order.tenantId, trackingNumber: line.trackingNumber ?? null, trackingUrl: line.trackingUrl ?? null,
   });
-  // decideProductionStatus
-  if ((line.state ?? null) === input.state) {
-    const same = (line.trackingNumber ?? null) === input.trackingNumber && (line.carrier ?? null) === input.carrier && (line.trackingUrl ?? null) === input.trackingUrl;
-    return same ? json(200, { changed: false, job: job(), orderShipped: false }) : notAllowed('tracking_differs');
-  }
-  if (order.status === 'cancelled' || line.dispatchState === 'cancelled') return notAllowed('cancelled');
-  if (order.status === 'refunded') return notAllowed('refunded');
-  if (line.dispatchState !== 'accepted') return notAllowed('not_accepted');
-  if (line.state && RANK[input.state] < RANK[line.state]) return notAllowed('backwards');
+  const decision = decideStatus(order, line, input);
+  if (decision === 'unchanged') return json(200, { changed: false, job: job(), orderShipped: false });
+  if (decision !== 'move') return notAllowed(decision);
   if (mode === 'drop' || mode === 'unclear') return lostAnswer();
 
-  Object.assign(line, { state: input.state, updatedAt: new Date().toISOString() });
-  if (input.state === 'shipped') Object.assign(line, { trackingNumber: input.trackingNumber, trackingUrl: input.trackingUrl, carrier: input.carrier });
-  // printerShippedOrderStatements: a parcel order whose every line is a printer
-  // line, none unsent, open and not yet shipped, is shipped (one buyer mail).
+  const now = new Date().toISOString();
+  if (input.exception === 'out_of_stock') {
+    line.exception = 'out_of_stock';
+  } else if (input.exception === 'resolved') {
+    line.exceptionResolvedAt = now;
+  } else {
+    Object.assign(line, { state: input.state, updatedAt: now });
+    if (input.state === 'shipped') Object.assign(line, { trackingNumber: input.trackingNumber, trackingUrl: input.trackingUrl, carrier: input.carrier });
+  }
+  // printerShippedOrderStatements, after a 'shipped' or a resolution: a parcel
+  // order whose every line is a printer line, one sent and none unsent (a
+  // resolved line is not unsent, an open exception is), open and not yet
+  // shipped, is shipped (one buyer mail).
   let orderShipped = false;
-  if (input.state === 'shipped' && order.delivery === 'parcel' && ['unfulfilled', 'processing'].includes(order.fulfilment)
-    && order.lines.every((l) => l.printer === true && (l.state === 'shipped' || l.dispatchState === 'cancelled'))) {
+  if ((input.state === 'shipped' || input.exception === 'resolved') && order.delivery === 'parcel'
+    && ['unfulfilled', 'processing'].includes(order.fulfilment) && !CLOSED_ORDER_STATUSES.includes(order.status)
+    && order.lines.every((l) => l.printer === true)
+    && order.lines.some((l) => l.state === 'shipped')
+    && order.lines.every((l) => l.state === 'shipped' || l.dispatchState === 'cancelled' || Boolean(l.exceptionResolvedAt))) {
     order.fulfilment = 'shipped';
     orderShipped = true;
   }
   if (mode === 'lost') return lostAnswer();
   return json(200, { changed: true, job: job(), orderShipped });
+}
+
+const CLOSED_ORDER_STATUSES = ['cancelled', 'refunded'];
+
+/** production-status.ts decideProductionStatus (with decidePrinterException). */
+function decideStatus(order, line, input) {
+  const cancelled = order.status === 'cancelled' || line.dispatchState === 'cancelled';
+  const refunded = order.status === 'refunded';
+  if (input.exception === 'resolved') {
+    if (line.exceptionResolvedAt) return 'unchanged';
+    if (!line.exception) return 'no_exception';
+    return line.state === 'shipped' ? 'produced' : 'move';
+  }
+  if (input.exception === 'out_of_stock') {
+    if (line.exception === 'out_of_stock') return 'unchanged';
+    if (cancelled) return 'cancelled';
+    if (refunded) return 'refunded';
+    if (line.dispatchState !== 'accepted') return 'not_accepted';
+    return line.state === 'produced' || line.state === 'shipped' ? 'produced' : 'move';
+  }
+  if ((line.state ?? null) === input.state) {
+    const same = (line.trackingNumber ?? null) === input.trackingNumber && (line.carrier ?? null) === input.carrier && (line.trackingUrl ?? null) === input.trackingUrl;
+    return same ? 'unchanged' : 'tracking_differs';
+  }
+  if (cancelled) return 'cancelled';
+  if (refunded) return 'refunded';
+  if (line.dispatchState !== 'accepted') return 'not_accepted';
+  if (line.exceptionResolvedAt) return 'exception_resolved';
+  if (line.exception && input.state !== 'shipped') return 'out_of_stock';
+  if (line.state && RANK[input.state] < RANK[line.state]) return 'backwards';
+  return 'move';
 }
 
 function notAllowed(reason) {

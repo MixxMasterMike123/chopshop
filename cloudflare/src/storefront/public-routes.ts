@@ -1,5 +1,6 @@
 import { notFoundResponse } from "../lib/responses";
-import { previewJsonResponse, resolveStorefrontTenant } from "./preview";
+import type { StorefrontTenant } from "./preview";
+import { hidesStandInFrames, isPreview, previewJsonResponse, resolveStorefrontTenant } from "./preview";
 import { getPublicStorefrontVersioned } from "./public-storefront";
 
 /**
@@ -23,12 +24,20 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
  * 404s carry no ETag and are never cacheable.
  *
  * A PREVIEW (D57, preview.ts): a read whose tenant a valid grant marked
- * answers through `versionedJsonResponse(…, true)` — the body with
+ * answers through `versionedJsonResponse` as a preview — the body with
  * `Cache-Control: no-store`, no ETag, `X-Robots-Tag: noindex`, and never a 304.
+ *
+ * CP6-PS4: while the print canvas is on (the tenant is marked
+ * `hideStandInFrames`, preview.ts withPrintCanvas), the bodies are built with
+ * the stand-in term of THE predicate, which a switch flip changes without
+ * bumping catalog_version. So the ETag names the switch: `"<catalog_version>"`
+ * with it off (byte for byte as before), `"<catalog_version>-c"` with it on.
+ * A body kept from before a flip never matches after it: a full answer, never
+ * a stale 304.
  */
 
-function etagFor(catalogVersion: number): string {
-  return `"${catalogVersion}"`;
+function etagFor(catalogVersion: number, tenant: StorefrontTenant): string {
+  return hidesStandInFrames(tenant) ? `"${catalogVersion}-c"` : `"${catalogVersion}"`;
 }
 
 /** RFC 9110 §13.1.2: a list of entity tags, or `*`; weak comparison. */
@@ -43,16 +52,17 @@ function matchesIfNoneMatch(request: Request, etag: string): boolean {
     .some((candidate) => candidate === "*" || candidate === etag);
 }
 
+/** `tenant`: the read's (resolveStorefrontTenant), which says preview and the switch. */
 export function versionedJsonResponse(
   request: Request,
   catalogVersion: number,
   body: unknown,
-  preview = false,
+  tenant: StorefrontTenant,
 ): Response {
-  if (preview) {
+  if (isPreview(tenant)) {
     return previewJsonResponse(body);
   }
-  const etag = etagFor(catalogVersion);
+  const etag = etagFor(catalogVersion, tenant);
   const headers = {
     "Cache-Control": "no-cache",
     ETag: etag,
@@ -81,12 +91,7 @@ export async function handlePublicStorefrontRequest(
   const tenant = await resolveStorefrontTenant(env, request);
   const storefront =
     tenant === null ? null : await getPublicStorefrontVersioned(env, env.DB, tenant);
-  return storefront === null
+  return tenant === null || storefront === null
     ? notFoundResponse("Storefront not found")
-    : versionedJsonResponse(
-        request,
-        storefront.catalogVersion,
-        { storefront: storefront.value },
-        tenant?.preview === true,
-      );
+    : versionedJsonResponse(request, storefront.catalogVersion, { storefront: storefront.value }, tenant);
 }

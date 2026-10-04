@@ -279,6 +279,7 @@ describe('refusals', () => {
     assert.match(mappingRefusalMessage({ status: 409, code: 'slot_taken' }), /redan ett original/);
     assert.match(mappingRefusalMessage({ status: 409, code: 'sku_mismatch' }), /annan artikel/);
     assert.match(mappingRefusalMessage({ status: 422, code: 'artwork_not_ready' }), /inte godkänt/);
+    assert.match(mappingRefusalMessage({ status: 422, code: 'pod_frame_unconfirmed' }), /inte bekräftat tryckytan för det här plagget/);
     assert.match(mappingRefusalMessage({ status: 404, code: 'not_found' }), /finns inte/);
     assert.match(mappingRefusalMessage({ status: 401, code: 'unauthenticated' }), /Logga in/);
     assert.equal(mappingRefusalMessage({ status: 500, code: 'http_error' }), null);
