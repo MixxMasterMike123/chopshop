@@ -649,6 +649,24 @@ describe("refund_notice: written when the refund SETTLES, never on a reservation
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe("order_status_update: the consumer of CP5-WB's rows", () => {
+  it("a nudge whose lookup fails after the change committed does not fail the request", async () => {
+    const { nudgeOrderMails } = await import("../src/outbox/nudge");
+    const brokenDb = new Proxy(env.DB, {
+      get(target, property) {
+        if (property === "prepare") {
+          return () => {
+            throw new Error("D1 is down");
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const q = quiet({ DB: brokenDb });
+    await expect(nudgeOrderMails(q.env, TENANT_A, "any-order")).resolves.toBeUndefined();
+    expect(q.nudges.sent).toHaveLength(0);
+  });
+
   it("the routes nudge their mail at once: the status mail after a fulfilment step, the notice after a settled refund", async () => {
     const order = await plainOrder(TENANT_A, "shipping");
     await addRecipient(order.orderId, TENANT_A, "shipping");

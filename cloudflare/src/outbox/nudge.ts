@@ -80,3 +80,22 @@ export async function pendingOrderMailIds(
     .all<{ outbox_id: string }>();
   return rows.results.map((row) => row.outbox_id);
 }
+
+/**
+ * Nudges one order's pending mail rows. For a route to call AFTER its batch
+ * committed: it NEVER throws — a lookup or a queue that fails here must not
+ * turn a change that succeeded into a failed request; the sweeper then
+ * delivers the mail.
+ */
+export async function nudgeOrderMails(env: Env, tenantId: string, orderId: string): Promise<void> {
+  try {
+    await nudgeOutbox(env, await pendingOrderMailIds(env.DB, tenantId, orderId));
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        error: error instanceof Error ? error.name : "unknown",
+        message: "order mail nudge failed after the change committed; the sweeper will claim the rows",
+      }),
+    );
+  }
+}

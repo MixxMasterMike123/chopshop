@@ -1,4 +1,4 @@
-import { nudgeOutbox, pendingOrderMailIds } from "../outbox/nudge";
+import { nudgeOrderMails } from "../outbox/nudge";
 import { authorizeTenantAdminRequest } from "../auth/request-authorization";
 import { listAdminOrders, parseAdminOrderListQuery } from "../commerce/admin-order-list";
 import type { FulfilmentChange } from "../commerce/fulfilment";
@@ -127,7 +127,7 @@ export async function handleAdminOrderFulfilmentRoute(
       // The buyer's status mail is in the change's batch: nudge it now rather
       // than leave it for the next sweep. Never throws; a lost nudge is the
       // sweeper's.
-      await nudgeOutbox(env, await pendingOrderMailIds(env.DB, principal.tenantId, decoded));
+      await nudgeOrderMails(env, principal.tenantId, decoded);
       return changeResponse(result.change, false);
     case "replayed":
       return changeResponse(result.change, true);

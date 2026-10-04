@@ -2,7 +2,7 @@ import { authorizeTenantAdminRequest } from "../auth/request-authorization";
 import { readAdminOrder } from "../commerce/admin-orders";
 import { pendingPrinterCancellationIds } from "../commerce/dispatch-hold";
 import { readAdminOrderConsent } from "../legal/consent";
-import { nudgeOutbox, pendingOrderMailIds } from "../outbox/nudge";
+import { nudgeOrderMails, nudgeOutbox } from "../outbox/nudge";
 import type { RefundRequestInput, RefundState } from "../commerce/refunds";
 import { parseRefundRequestInput, requestRefund } from "../commerce/refunds";
 import {
@@ -287,9 +287,20 @@ export async function handleAdminOrderRefundsRoute(
   // printer_cancellation in the settlement batch: nudge it now, rather than
   // leave it for the next 15-minute sweep while the job may be printing.
   if (outcome.status === "created") {
-    await nudgeOutbox(env, await pendingPrinterCancellationIds(env.DB, [orderId]));
+    // The money has moved: a lookup that fails here must not fail the answer
+    // (the sweeper claims the row).
+    try {
+      await nudgeOutbox(env, await pendingPrinterCancellationIds(env.DB, [orderId]));
+    } catch (error) {
+      console.warn(
+        JSON.stringify({
+          error: error instanceof Error ? error.name : "unknown",
+          message: "printer cancellation nudge failed after the refund settled; the sweeper will claim the row",
+        }),
+      );
+    }
     // And the buyer's refund notice, written by the same settlement.
-    await nudgeOutbox(env, await pendingOrderMailIds(env.DB, principal.tenantId, orderId));
+    await nudgeOrderMails(env, principal.tenantId, orderId);
   }
 
   switch (outcome.status) {
