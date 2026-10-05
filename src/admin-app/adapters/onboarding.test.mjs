@@ -99,7 +99,10 @@ describe('onboardingSteps', () => {
     const held = step(products([{ published: true, screeningStatus: 'pending' }]), 'product');
     assert.equal(held.state, 'platform');
     assert.equal(held.text, 'Produkten är sparad och visas i butiken när plattformen har granskat den.');
-    assert.equal(step(products([{ published: true, screeningStatus: 'rejected' }]), 'product').state, 'todo');
+    // 'blocked' is the server's word for a product screening refused.
+    assert.equal(step(products([{ published: true, screeningStatus: 'blocked' }]), 'product').state, 'todo');
+    assert.equal(step(products([{ published: true, screeningStatus: 'flagged' }]), 'product').state, 'done');
+    assert.equal(step(products([{ published: true, screeningStatus: 'blocked' }, { published: true, screeningStatus: 'pending' }]), 'product').state, 'platform');
     assert.equal(step(products([{ published: true, screeningStatus: 'approved', takenDown: true }]), 'product').state, 'todo');
     assert.equal(step(products([{ published: true, screeningStatus: 'approved' }]), 'product').state, 'done');
     // A product that needs no review (not screened) is live.

@@ -126,7 +126,10 @@ function productStep(products, pod) {
     linkLabel: pod ? 'Öppna Print on demand' : 'Öppna Produkter',
   };
   if (live.length === 0) return create;
-  if (live.some((p) => p.screeningStatus !== 'pending' && p.screeningStatus !== 'rejected')) {
+  // The server's statuses (cloudflare/src/catalog/screening-core.ts): 'pending'
+  // is held for the platform's review, 'blocked' is refused; neither is in
+  // the shop. Anything else (approved, flagged, none) is.
+  if (live.some((p) => p.screeningStatus !== 'pending' && p.screeningStatus !== 'blocked')) {
     return { key: 'product', state: 'done', title: 'Första produkten', text: 'Publicerad.' };
   }
   if (live.some((p) => p.screeningStatus === 'pending')) {
