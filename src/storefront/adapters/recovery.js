@@ -43,9 +43,26 @@ export function recoveryPlan(items, productsById) {
         continue;
       }
     }
-    lines.push({ product, variant, quantity });
+    lines.push({ product: withDelivery(product), variant, quantity });
   }
   return { lines, missing };
+}
+
+/**
+ * The product as addToCart reads its delivery restriction. The public read
+ * answers `allowShipping` / `allowPickup`; the cart reads
+ * `delivery.{shipping,pickup}` (the product page's shape, adapters/products.js
+ * toPageProduct). Without this a pickup-only or shipping-only product would
+ * come back into the cart as deliverable both ways, and its checkout would be
+ * refused by the server. A product that already carries `delivery` is left as
+ * it is.
+ */
+function withDelivery(product) {
+  if (product.delivery && typeof product.delivery === 'object') return product;
+  return {
+    ...product,
+    delivery: { shipping: product.allowShipping !== false, pickup: product.allowPickup !== false },
+  };
 }
 
 /** The distinct product ids of the link's lines, for the reads `recoveryPlan` needs. */

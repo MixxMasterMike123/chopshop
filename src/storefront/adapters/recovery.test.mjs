@@ -17,7 +17,34 @@ const TEE = {
   ],
 };
 
+// The live product as the plan hands it to the cart: itself, with the
+// delivery restriction in the shape the cart reads (both ways when the read
+// names none).
+const inCart = (product) => ({ ...product, delivery: { shipping: true, pickup: true } });
+
 describe('recoveryPlan', () => {
+  it("carries a product's delivery restriction into the shape the cart reads", () => {
+    const products = {
+      pickupOnly: { productId: 'pickupOnly', allowShipping: false, allowPickup: true },
+      shipOnly: { productId: 'shipOnly', allowShipping: true, allowPickup: false },
+      both: { productId: 'both' },
+      paged: { productId: 'paged', allowShipping: true, delivery: { shipping: false, pickup: true } },
+    };
+    const plan = recoveryPlan(
+      Object.keys(products).map((productId) => ({ productId, quantity: 1 })),
+      products,
+    );
+    assert.deepEqual(plan.lines.map((line) => [line.product.productId, line.product.delivery]), [
+      ['pickupOnly', { shipping: false, pickup: true }],
+      ['shipOnly', { shipping: true, pickup: false }],
+      ['both', { shipping: true, pickup: true }],
+      // A product already in the page's shape keeps its own.
+      ['paged', { shipping: false, pickup: true }],
+    ]);
+    // The read's own object is not changed.
+    assert.equal(products.pickupOnly.delivery, undefined);
+  });
+
   it('matches each line against the LIVE product and its variant, keeping the quantity', () => {
     const plan = recoveryPlan(
       [
@@ -28,8 +55,8 @@ describe('recoveryPlan', () => {
     );
     assert.equal(plan.missing, 0);
     assert.deepEqual(plan.lines, [
-      { product: TEE, quantity: 2, variant: TEE.variants[1] },
-      { product: MUG, quantity: 1, variant: null },
+      { product: inCart(TEE), quantity: 2, variant: TEE.variants[1] },
+      { product: inCart(MUG), quantity: 1, variant: null },
     ]);
   });
 
@@ -48,7 +75,7 @@ describe('recoveryPlan', () => {
       { 'p-gone': null, 'p-mug': MUG, 'p-tee': TEE },
     );
     assert.equal(plan.missing, 7);
-    assert.deepEqual(plan.lines, [{ product: MUG, quantity: 3, variant: null }]);
+    assert.deepEqual(plan.lines, [{ product: inCart(MUG), quantity: 3, variant: null }]);
   });
 
   it('reads no price from the link: a price in an answer changes nothing', () => {
@@ -56,7 +83,7 @@ describe('recoveryPlan', () => {
       [{ productId: 'p-mug', priceMinor: 1, quantity: 1, unitPriceMinor: 1 }],
       { 'p-mug': MUG },
     );
-    assert.deepEqual(plan.lines, [{ product: MUG, quantity: 1, variant: null }]);
+    assert.deepEqual(plan.lines, [{ product: inCart(MUG), quantity: 1, variant: null }]);
     assert.equal(plan.lines[0].product.priceMinor, 12_900);
   });
 
