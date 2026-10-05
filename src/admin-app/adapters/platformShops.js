@@ -163,13 +163,25 @@ export function commissionErrorMessage(error) {
 export const isConflict = (error) => error?.status === 409;
 
 /**
+ * The add-ons the Worker treats as OPT-IN that a shop is never born with
+ * (cloudflare/src/platform/tenant-config.ts OPT_IN_KEYS, less `pod`, which the
+ * Butikstyp decides). The older preset turns the discount codes and the
+ * checkout reminder ON for every new shop, from the days they were on by
+ * default; on Cloudflare they are off until the platform turns them on for a
+ * shop (CP8-DC DC2, CP9-AC AC2), and a preset must not undo that silently.
+ */
+export const OFF_AT_PROVISION = ['abandonedCheckout', 'contentStudio', 'discountCodes', 'marketingMaterials'];
+
+/**
  * The provisioned shop's add-ons: the preset's values for the keys the API
- * allows (the others are not sent: the API refuses an unknown key).
+ * allows (the others are not sent: the API refuses an unknown key), with every
+ * opt-in add-on of OFF_AT_PROVISION written off whatever the preset says.
  */
 export function provisionFeaturesOf(presetFeatures, allowedKeys) {
   const out = {};
   for (const key of allowedKeys) {
-    if (typeof presetFeatures?.[key] === 'boolean') out[key] = presetFeatures[key];
+    if (OFF_AT_PROVISION.includes(key)) out[key] = false;
+    else if (typeof presetFeatures?.[key] === 'boolean') out[key] = presetFeatures[key];
   }
   return out;
 }

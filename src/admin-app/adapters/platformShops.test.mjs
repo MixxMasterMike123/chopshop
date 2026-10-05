@@ -16,6 +16,7 @@ import {
   legalReadinessFromLegal,
   pageStatusOf,
   previewUrlOf,
+  OFF_AT_PROVISION,
   provisionFeaturesOf,
   toDetailShop,
   toListShops,
@@ -161,9 +162,20 @@ describe('messages', () => {
 describe('provisioning', () => {
   it('sends only the keys the API allows', () => {
     const preset = { affiliate: true, campaigns: true, dining: false, discountCodes: true, abandonedCheckout: true, productReviews: true, contentStudio: false, marketingMaterials: false, b2b: false, pod: true };
+    // The older preset says the discount codes and the reminder are on: a new
+    // shop is born without every opt-in add-on (but `pod`, the Butikstyp's).
     assert.deepEqual(provisionFeaturesOf(preset, API_FEATURE_KEYS), {
-      abandonedCheckout: true, contentStudio: false, discountCodes: true, marketingMaterials: false, pod: true, productReviews: true,
+      abandonedCheckout: false, contentStudio: false, discountCodes: false, marketingMaterials: false, pod: true, productReviews: true,
     });
+  });
+
+  it('an opt-in add-on is off at birth whatever the preset says, and pod follows the shop type', () => {
+    const allOn = Object.fromEntries(API_FEATURE_KEYS.map((key) => [key, true]));
+    assert.deepEqual(provisionFeaturesOf(allOn, API_FEATURE_KEYS), {
+      abandonedCheckout: false, contentStudio: false, discountCodes: false, marketingMaterials: false, pod: true, productReviews: true,
+    });
+    assert.equal(provisionFeaturesOf({ ...allOn, pod: false }, API_FEATURE_KEYS).pod, false);
+    for (const key of OFF_AT_PROVISION) assert.ok(API_FEATURE_KEYS.includes(key), key);
   });
 });
 
