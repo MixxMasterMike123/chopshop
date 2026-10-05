@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MONEY_ROUTES } from './money-api.mjs';
+import { RECOVERY_ROUTES } from './recovery-api.mjs';
 
 export const DEV_API_MARKER = 'storefront-dev-api-invented-data';
 
@@ -242,6 +243,8 @@ export const ROUTES = [
   })],
   // F2's rows: checkout, payment, receipt, order, withdrawal, report.
   ...MONEY_ROUTES,
+  // CP9-AC's rows: the reminder's resume link and unsubscribe.
+  ...RECOVERY_ROUTES,
 ];
 
 /** One path segment, decoded once, as the Worker's id rule: no '/', '.', '..', control. */

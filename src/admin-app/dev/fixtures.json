@@ -17,7 +17,7 @@
           "affiliate": false,
           "discountCodes": true,
           "productReviews": false,
-          "abandonedCheckout": false,
+          "abandonedCheckout": true,
           "contentStudio": false,
           "marketingMaterials": false,
           "b2b": false,

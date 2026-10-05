@@ -19,6 +19,7 @@ import {
 } from '@heroicons/react/24/outline';
 import StripePaymentForm from '../../components/shop/StripePaymentForm';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
+import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { formatPickupDayShort } from '../../utils/pickupDates';
 import { requiresWithdrawalGate, resolveWithdrawalNotice } from '../../utils/withdrawal';
 
@@ -30,6 +31,11 @@ const Checkout = () => {
   } = useCart();
   const store = useStoreSettings();
   const pickupLocations = Array.isArray(store?.pickupLocations) ? store.pickupLocations : [];
+  // Övergiven kassa (CP9-AC): the reminder box is asked for only while the
+  // shop actually sends reminders (the platform's add-on AND the seller's
+  // switch, read by the API). Hidden, nothing of it is rendered or sent.
+  const { isEnabled } = useShopFeatures();
+  const remindersOn = isEnabled('abandonedCheckout');
 
   // The server's answer to the checkout (POST /v1/checkout, sent by the
   // payment form on the payment step): the priced order whose figures the
@@ -140,6 +146,7 @@ const Checkout = () => {
   const [contactInfo, setContactInfo] = useState({
     email: '',
     marketing: false,
+    reminder: false,
   });
 
   const [shippingInfo, setShippingInfo] = useState({
@@ -531,6 +538,29 @@ const Checkout = () => {
                         {t('checkout_marketing_opt_in', 'Skicka mig nyheter och erbjudanden via e-post')}
                       </label>
                     </div>
+
+                    {remindersOn && (
+                      <div className="flex items-start space-x-3">
+                        <input
+                          type="checkbox"
+                          id="reminder"
+                          checked={contactInfo.reminder}
+                          onChange={(e) => setContactInfo({...contactInfo, reminder: e.target.checked})}
+                          aria-describedby="reminder-help"
+                          className="h-4 w-4 text-accent accent-[var(--color-accent)] focus:ring-accent/30 border-ink/20 rounded-sm mt-0.5 shrink-0"
+                        />
+                        <div>
+                          <label htmlFor="reminder" className="text-sm text-ink-muted leading-relaxed">
+                            {t('checkout_remind_me', 'Påminn mig via e-post om jag inte slutför köpet')}
+                          </label>
+                          <p id="reminder-help" className="text-xs text-ink-faint leading-relaxed mt-0.5">
+                            {t('checkout_remind_me_help', 'Högst ett mejl från {{shop}}. Du kan avregistrera dig i mejlet.', {
+                              shop: String(store?.shopName || '').trim() || t('checkout_terms_seller_fallback', 'butiken'),
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <button
                     onClick={handleNextStep}
@@ -841,6 +871,8 @@ const Checkout = () => {
                       firstName: shippingInfo.firstName,
                       lastName: shippingInfo.lastName,
                       marketing: contactInfo.marketing,
+                      // Only a box the buyer saw can count (CP9-AC).
+                      reminder: remindersOn && contactInfo.reminder === true,
                       preferredLang: currentLanguage
                     }}
                     shippingInfo={{

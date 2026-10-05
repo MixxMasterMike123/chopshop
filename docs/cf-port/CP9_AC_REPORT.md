@@ -1100,3 +1100,216 @@ Yes/no. "Defaults" accepts all. **Legal** marks those where the source is your n
 Seen, outside scope:
 - `checkouts.status` documents `'expired'` but nothing writes it (`0009:76`; searched `cloudflare/src`). The retention sweep treats `('open', 'expired')` alike (`crons.ts:136`, `:183`). Harmless; noted.
 - `D99`–`D103` exist only outside `DECISIONS.md`, so the next decision number is not verified.
+
+## Build log (phase 2)
+
+Built on branch `cf-port` from `d729691f` (this design committed, tree clean), working tree only: no git write, no network beyond 127.0.0.1, no deploy, no wrangler command that reaches Cloudflare, staging not touched. The design above is the specification; where the code said otherwise the code won, and each such point is under "Deviations" below. Migration number: **0056**, the next free one (the DAC7 design's 0056 is not built; that unit takes the next free number when it is, and rebases its `email_deliveries` rebuild on 0056's kind list).
+
+Baseline before any edit: `npx vitest run` → `Test Files 127 passed (127)`, `Tests 4803 passed (4803)`.
+
+| Step | What was done | Gate after the step |
+|---|---|---|
+| 0 Golden | Before any code changed: new `test/checkout-reminders-off-golden.test.ts`, run against the tree at `d729691f`, its three expected strings captured from that run: (a) three checkouts through the real `POST /v1/checkout` (terms only, marketing ticked, marketing unticked): every column of the row but ids and times, `consent_json` with only `recordedAt` masked, the lines, the recipient, the audit row; (b) `GET /v1/storefront` of a shop with the add-on off: the body byte for byte, the ETag with the version and the revision masked; (c) the Resend request of every mail kind that existed (verification, reset, invite, confirmation, digest, both withdrawal mails, status update, shop notice, refund notice) through the real consumer: the body and the header names. | `Tests 3 passed (3)` on the old tree, and on every run since |
+| 1 Migration | `migrations/0056_checkout_reminders.sql`: §3.2 blocks 1–4 as written; block 5 written out in full, `diff` against `0050_email_kinds.sql:27-92` shows only the kind list and the copy's name. `REQUIRED_MIGRATION` → 0056 (`app.ts`); the pins in `health.test.ts` and `public-catalog.test.ts`. New `test/checkout-reminders-schema.test.ts`: tenant mismatch, born withdrawn, the UNIQUE, both CHECK pairs, the cap at 7 d − 1 ms refused and at + 1 ms admitted, skipped / withdrawn / another tenant / another address not counted, the trigger's literal = `REMINDER_CAP_MS`, the one move queued → withdrawn with every frozen column refused, no delete on the three tables, suppressions append-only and keyed per shop, the settings CHECKs, the catalog bumps, the staged rebuild from 0050 with nine kinds of rows read back unchanged. | `Tests 14 passed (14)`; `tsc` clean |
+| 2 Consent | `legal/consent.ts`: rule 4 in the header (F8's first half), `reminder` in `CONSENT_KEYS`, an optional boolean in the parse (`null` reads as absent, as `marketing` always has), frozen as `reminder: true` only when ticked, `readFrozenConsent` refuses any other value, `reminderConsentGiven(json)`. New `test/checkout-reminder-consent.test.ts`: an unticked consent byte-identical to the pre-unit string, ticked carries `"reminder":true` and never `false`, a non-boolean is a 400 through the route, `sameConsent` across the change, a replay with the box flipped is a 409, the order copy verbatim, the rule's eight cases. | `Tests 21 passed (21)`; golden 3/3 |
+| 3 Tokens | `commerce/checkout-recovery-token.ts` (§3.4). New `test/checkout-recovery-token.test.ts`: round trip per purpose, 83 characters, deterministic, the other purpose / another tenant / one flipped character / another reminder id refused, ten malformed shapes, nothing without the secret, a signature made with the preview grant's key never verifies. | `Tests 15 passed (15)` |
+| 4 Mail kind | `email/checkout-reminder-email.ts` (the job, strict URL rules, 1–50 lines, 2 h lifetime, the Swedish text, the fingerprint, the sender's display name, the two headers, the last full Stockholm day, `isReminderSuppressed`), wired into `auth-email-job.ts` (union, parse, render), `email-delivery-store.ts` (fingerprint) and `email-queue-consumer.ts` (for this kind only: `"<shop>" <address>`, `reply_to`, `headers`; and a suppressed address is never sent to: ledger `failed`, `E_UNSUBSCRIBED`). New `test/checkout-reminder-email.test.ts`. | `Tests 24 passed (24)`; the golden's mail part identical; the older mail suites 107/107 |
+| 5 Effect | `commerce/checkout-reminders.ts` `runCheckoutReminderEmailEffect`: payload `{ reminderId }` only, the row's tenant, re-checks 1, 2, 3, 4, 5, 7, 8, 11 (consent included: Deviation 1), `withdraw` (the decision, outbox `done`, and an unclaimed ledger row of an earlier attempt closed `E_WITHDRAWN`, one batch under the claim), else the job through the shared `deliver`, which now takes an optional lifetime and alert subject (absent for every older mail). `outbox.ts` and `effects.ts`: the type. New `test/checkout-reminder-effect.test.ts`. | `Tests 16 passed (16)` |
+| 6 Cron | `runCheckoutReminders`: the candidate SQL of §4.2, the twelve checks in their order, the write of §4.4 with its two races, the nudge, the summary, nothing without the secret, the web origin or Stripe. `public-storefront.ts`: `ordersOpenOf` and `shopTakesOrders` (Deviation 3). `scheduled.ts`: `CP9_STEPS` after the CP3 steps, before the digest. New `test/checkout-reminders-cron.test.ts`. | `Tests 35 passed (35)` |
+| 7 Public routes | `routes/storefront-checkout-recovery.ts` (§6.2–6.5), mounted in `app.ts` inside `storefront(...)`, POST only. `web/src/api-allowlist.ts` two rows; `test/web-routing.test.ts` nine cases. New `test/checkout-recovery-routes.test.ts`: the lines and nothing else (denylist), `completed`, eleven refusals and the no-secret one byte-equal to the opaque 404, the resolve writes nothing (row counts of eight tables, the checkout row unchanged), one suppression and one audit row then nothing more, the RFC 8058 form body, an 8-day-old link unsubscribes, the 31st request is a 429. | `Tests 10 passed (10)`; web-routing 190/190 |
+| 8 Admin route | `routes/admin-checkout-reminders.ts` (§7.1, plus `enabledAt`: Deviation 6), mounted in `app.ts`. New `test/admin-checkout-reminders.test.ts`. | `Tests 20 passed (20)` after step 9's opt-in |
+| 9 D81 | `PORTED_FEATURE_KEYS` + `abandonedCheckout`; the storefront's feature ANDed with the seller's switch, read in the existing batch; `STOREFRONT_BODY_REVISION = 3` with its comment line; `OPT_IN_KEYS` + `abandonedCheckout`; the importer's pin (below). Pins moved: `tenant-features.test.ts` (the defaults; the default-ON example key → `productReviews`), `public-storefront.test.ts`, `onboarding-identity.test.ts` (revision 3); `admin-session.test.ts:470` still holds (opt-in, so false). New `test/checkout-reminders-storefront.test.ts`: the five switch combinations, a switch or add-on change never meets a stale 304, the admin's feature is the add-on alone, `ordersOpenOf` equals the expression it replaced in all ten cases, `shopTakesOrders`. | the nine affected suites 161/161 |
+| — | The whole Worker suite after the server steps | `Test Files 137 passed (137)`, `Tests 4980 passed (4980)` |
+| 10 Storefront | `api/checkoutRecovery.js`; `storefront/adapters/recovery.js` (the pure plan); both pages rewritten from the old ones without Firebase; `StorefrontApp.jsx` two rows; `pages.jsx` two swaps; `providers/Cart.jsx` `{ quiet }`; `Checkout.jsx` the box (only while `isEnabled('abandonedCheckout')`, and `reminder` sent only when the box was shown AND ticked); `StripePaymentForm.jsx` passes it on; `adapters/checkout.js` sets `consent.reminder` only for a literal `true`; dev API `storefront/dev/recovery-api.mjs` and an invented shop `paminnelsebutiken` (provbutiken with the add-on on); `guard/allowlist.txt` −2 lines. Tests: `adapters/checkout.test.mjs` +3, new `adapters/recovery.test.mjs`, `api/api.test.mjs` +4, `dev/dev-api.test.mjs` +3. | these files: node `# pass 75` |
+| 11 Admin frontend | `api/admin/checkoutReminders.js`; `admin-app/replacements/shopConfig.js` `load/saveCartRecovery` on the route (`{}` on its 404); `AdminSettings.jsx` the card (§7.2's texts, the switch, the status line, the count, the no-mail notice); admin dev API `admin-app/dev/checkout-reminders-dev.mjs`, the dev fixture's shop A has the add-on. New `api/admin/checkoutReminders.test.mjs`, `admin-app/dev/checkout-reminders-dev.test.mjs`. | node 7/7; `src/admin-app/**` 768/768 |
+| 12 Docs | Not done: `DECISIONS.md`, `PLAN.md`, `CP5_GAP_ANALYSIS.md`, `MIGRATION_MANIFEST.md` and `HANDOVER.md` are outside the paths this unit may touch (Unfinished 1). | none |
+
+**The importer's pin.** `scripts/cf-port/migrate/test/tenant-config-keys-pin.test.mjs` ("OPT_IN_FEATURE_KEYS matches the live Worker source's OPT_IN_KEYS Set literal") fails once `OPT_IN_KEYS` gains `abandonedCheckout`: shown with the original `transform-shops.mjs` (`not ok 4`, `# fail 1`). The one line changed is `scripts/cf-port/migrate/lib/transform-shops.mjs:102`, `OPT_IN_FEATURE_KEYS` gaining `'abandonedCheckout'`; the pin then passes (`# fail 0`). Consequence at import, as the design says (§8.1): melodie-mc and robowatz (explicit `true` in Firebase) get an explicit row ON; gif-sundsvall, ninetone and sillmans (absent, so ON in Firebase) get OFF.
+
+**The rule "with the add-on off, nothing changes".**
+- The checkout request and its rows: the golden test (step 0), values from the tree before the unit, the same bytes after it. The adapter's tests pin that a request without a ticked box is byte for byte the request of before, for every value but a literal `true`.
+- The storefront's checkout page: the contact step of `provbutiken` (add-on off) shot before the change and after it at 1440 and 390 px; the PNGs are byte-identical (`cmp`), and the page's markup differs only in the dev server's cache-busting query on `main.jsx` and Stripe's random iframe name.
+- Every existing mail: the golden's mail part, through the real consumer.
+- The storefront answer: the body byte for byte (golden). Its ETag's revision moves `-r2` → `-r3` for every shop once (Deviation 9).
+
+**The consent rule.** A reminder needs the checkout's OWN frozen `reminder: true` or `marketing: true` (`reminderConsentGiven`). It is asked at the decision (check 5) and again under the outbox claim just before the mail is built; an unsubscribed address is refused at the decision (check 7), again before the mail is built, and once more by the consumer before a held job leaves. Each has a test and a mutation (1, 1b, 2, 3, 4, 4a, 18, 18b).
+
+## Deviations, decisions and what is left (phase 2)
+
+### Contradictions between the design and the code, and what I did
+
+1. **The consent is asked again before the mail is built.** §4.5 leaves consent out of the send-time re-checks (frozen, cannot change). The unit's rule says both the consent and the unsubscription are re-checked just before the mail is built, so the effect asks `reminderConsentGiven` again (withdrawn `no_consent`). A reminder row can only be queued after check 5, so in practice it never fires; it guards a queued row written by any other path. Test: effect "5 no_consent"; mutation 1b.
+2. **An undeliverable address has no `hashEmailRecipient` (F9) but its `skipped` row needs `buyer_hash`.** `hashEmailRecipient` throws for an address without a dot after the `@`, and `checkout_reminders.buyer_hash` is NOT NULL. The cron computes `addressHash` = sha256 of the trimmed, lower-cased address without the shape check: the same digest as `hashEmailRecipient` for every address a mail can go to, so the cap, the suppression and the import keys are unchanged.
+3. **`ordersOpen` is not computed through `shopTakesOrders`.** §4.3 check 4 asks for one helper used both by the cron and by `ordersOpen`. `shopTakesOrders` includes the public-shop gate, and `ordersOpen` today is also answered for a preview of an unpublished shop: routing it through `shopTakesOrders` would change that answer. Instead one pure function, `ordersOpenOf(legallyOpen, account)`, is the expression `ordersOpen` had (a ten-case truth-table test proves equality), used by the storefront answer and by `shopTakesOrders` = `isPublicShop` AND `ordersOpenOf(…)`. The two cannot drift; the storefront answer is byte for byte as before.
+4. **The two checkout texts are not added to `src/locales/sv-SE.json`.** That file is generated by the importer from the Firebase export (`scripts/cf-port/migrate/test/build-locales.test.mjs`: keys sorted, nothing the scrub leaves out). A hand-added key failed that suite and would be dropped by the next build. The texts are code fallbacks under their keys, as every recovery and unsubscribe page text already is. The file is unchanged.
+5. **The outbox row's aggregate is the reminder, not the checkout.** §4.4 writes `aggregate_type 'checkout'`, `aggregate_id = <checkout id>`. The shared failure alert prints the aggregate id ("for order <id>"), and the checkout id is the bearer capability of the payment and receipt routes (§3.4). The row is `aggregate_type 'checkout_reminder'`, `aggregate_id = <reminder id>`, and the alert names "checkout reminder <reminder id>" (`deliver`/`failEmail` take an optional subject; absent for every older mail, whose alert text is unchanged).
+6. **The admin answer carries `enabledAt`.** §7.1's GET shape has no date, but §7.2's line "På sedan {datum}" needs one. GET and PUT answer `enabledAt` and `updatedAt` as ISO-8601 or null.
+7. **The mail's last valid day is the last FULL Stockholm day the link works.** §5.2 prints "the Stockholm calendar day of `link_expires_at`" after "Länken gäller till och med": the link then stops in the middle of the promised day (at the minute of the decision). `linkValidUntilOf` prints the Stockholm day of `link_expires_at − 25 h` (a day is at most 25 hours, at the autumn clock change), so the whole printed day is always covered; tests include the 2026-10-25 change.
+8. **"Stripe answers that the intent does not exist" cannot be told apart from other refusals.** `StripeGatewayError` carries only `rejected`. Every rejected read (a 4xx other than 408/409/429) is `intent_gone`; unknown outcomes (network, 5xx, 429) are no row and no more Stripe this tick. A bad key would therefore skip, never mail.
+9. **The revision bump changes every shop's storefront ETag once.** With the add-on opt-in and no seller switch existing at the deploy, no body changes, so the bump is not needed for the deploy. It is kept (the design's item 2, mutation 32) because it keeps a body of this code from ever matching a body of the code before across a rollback (a shop that turned the switch on, then a rollback, would otherwise get a stale 304). It is the one byte that changes for a shop with the add-on off: its ETag header, a one-time cache miss; the body is byte for byte the same (golden).
+10. **The token's pattern lives in the mail module.** `checkout-recovery-token.ts` imports `auth/create-auth` (for `isAuthConfigured`), which imports `email/auth-email-job.ts`, which now imports the reminder mail; the mail's URL validator needs the pattern. `RECOVERY_TOKEN_PATTERN` is defined in `email/checkout-reminder-email.ts` (no runtime import) and re-exported by the token module, so there is no import cycle.
+11. **Check 1 for a checkout that is no longer open.** §4.3 records any failure of check 1 as `paid`. A checkout the retention sweep marked `abandoned` was not paid; it is recorded `intent_gone` (no order, not completed, not succeeded). An order, a `completed` checkout or a succeeded intent is `paid`.
+12. **The staging ledger row never becomes `expired`.** §5.4 and §10.4 step 6 expect the held reminder's ledger row `pending` and then `expired` after 2 hours. With no mail account the consumer holds every batch without claiming it (`handleEmailQueueBatch` → `retryAll` after 300 s) and the queue drops the message after its 8 retries (about 40 minutes, `wrangler.jsonc` `max_retries: 8`, no dead-letter queue). Nothing claims the row, so it stays `pending`. A mail account added within those ~40 minutes (and inside the job's 2 hours) sends it; later, the reminder is lost. The smoke plan below says so.
+
+### Decisions taken beyond the design (for the owner to confirm)
+
+- **D-1. The consumer refuses a held reminder to an address that unsubscribed meanwhile** (ledger `failed`, `E_UNSUBSCRIBED`, no send). For "never to an unsubscribed address" while a job is held (no mail account) or queued. Mutation 18b.
+- **D-2. A withdrawal closes the ledger row an earlier attempt recorded** (`pending`, never claimed → `failed`, `E_WITHDRAWN`), in the withdrawal's batch: a job that reached the queue before a crash is then refused by the ledger instead of sent. Mutation 37.
+- **D-3. The recovery page reads every product before it touches the cart.** A read that fails shows the error panel and leaves the visitor's cart as it was. When no line can be restored, the cart is NOT cleared and a panel says so (a new text, below). Firebase cleared first.
+- **D-4. The box can only send what was shown**: the checkout passes `reminder: remindersOn && ticked`, so a hidden box can never put `reminder: true` in a request.
+- **D-5. The completed panel loses its exclamation mark** ("Tack för ditt köp." for "Tack för ditt köp!"), by the unit's copy rule.
+- **D-6. On a retry the mail lists the lines frozen at its first build** (the order mails' freeze rule, so the ledger's fingerprint holds); the re-check still withdraws the reminder when nothing is buyable any more.
+- **D-7. The unsubscribe page without a shop support address** says "… Svara på mejlet eller kontakta butiken." (a second form of §6.7's text).
+- **D-8. The audit row of an unsubscribe is written only when the suppression is new** (a second click writes nothing), so one address has one row.
+- **D-9. The dev fixtures**: an invented storefront shop `paminnelsebutiken` (provbutiken with the add-on on) and the admin dev fixture's `test-shop-a` with the add-on on; the dev routes answer by token (`oppen`, `klar`, `borta`, `fel`).
+
+### Every new or changed Swedish text
+
+| Where | Key / place | Text | New, changed or unchanged |
+|---|---|---|---|
+| Checkout, contact step | `checkout_remind_me` | Påminn mig via e-post om jag inte slutför köpet | Firebase's, verbatim (back) |
+| Checkout, contact step | `checkout_remind_me_help` | Högst ett mejl från {{shop}}. Du kan avregistrera dig i mejlet. | new (§2.4) |
+| Recovery page | `checkout_recovery_partial` (toast) | Vissa varor finns inte längre och togs bort ur varukorgen. | changed (§6.7; Firebase: "Vissa varor har uppdaterats sedan du var här sist.") |
+| Recovery page | `checkout_recovery_invalid_title` | Länken till din varukorg fungerar inte längre. | new (§6.7) |
+| Recovery page | `checkout_recovery_gone_title` | Varorna från din varukorg finns inte längre i butiken. | new (D-3) |
+| Recovery page | `checkout_recovery_completed_body` | Den här beställningen är redan slutförd. Tack för ditt köp. | changed (D-5) |
+| Recovery page | title, loading, completed title, error, button | Återställer din varukorg · Vi återställer din varukorg… · Köpet är redan genomfört · Något gick fel när vi skulle återställa din varukorg. Gå till butiken och försök igen. · Till butiken | unchanged |
+| Unsubscribe page | `checkout_unsub_done_body` | Vi skickar inga fler påminnelser om varukorgar från {{shop}}. Du kan handla i butiken som vanligt. | changed (§6.7, the shop named) |
+| Unsubscribe page | `checkout_unsub_invalid_title` | Länken fungerar inte längre. | new |
+| Unsubscribe page | `checkout_unsub_invalid_body` | Vill du inte få påminnelser från {{shop}}? Svara på mejlet eller kontakta butiken på {{email}}. | new |
+| Unsubscribe page | `checkout_unsub_invalid_body_no_email` | Vill du inte få påminnelser från {{shop}}? Svara på mejlet eller kontakta butiken. | new (D-7) |
+| Unsubscribe page | `checkout_unsub_error` | Något gick fel. Försök igen om en stund. | new |
+| Unsubscribe page | `checkout_unsub_retry` | Försök igen | new |
+| Unsubscribe page | title, loading, done title, button | Avregistrera påminnelser · Avregistrerar… · Du är avregistrerad från påminnelser · Till butiken | unchanged |
+| Mail, subject | | Du glömde något i kassan hos {shop} · without a name: Du glömde något i kassan | new (§5.2) |
+| Mail, body | | Din varukorg väntar · Hej {name}, / Hej, · Du påbörjade ett köp hos {shop} men slutförde det inte. Vi har sparat varorna åt dig: · - {n} st {name} ({label}) · Slutför köpet: {link} · Länken gäller till och med {d månad åååå}. Priser och frakt visas i kassan. · Du får det här mejlet eftersom du gav {shop} lov att mejla dig när du handlade. · Det här är den enda påminnelsen om det här köpet. · Vill du inte få fler påminnelser från {shop}? Avregistrera dig: {link} · Har du frågor? Kontakta {shop} på {address}. / Har du frågor? Kontakta butiken. | new (§5.2; {shop} is "butiken" without a name) |
+| Mail, HTML links | | Slutför köpet · Avregistrera dig från påminnelser | new (Firebase's link label) |
+| Admin card | intro | Skicka ett påminnelsemejl till kunder som kom till betalningen men inte slutförde köpet. Högst en påminnelse per kassa och högst en per kund och vecka. Bara kunder som kryssat i påminnelserutan eller sagt ja till e-post från butiken får mejlet. | new (replaces the old intro) |
+| Admin card | note | Påminnelserna skickas i butikens namn. Du ansvarar för att de följer marknadsföringslagen. | new (AC5) |
+| Admin card | no mail (caution) | E-post är inte inställd här ännu. Påminnelser köas men skickas inte förrän plattformen har ställt in e-posten. | new |
+| Admin card | switch, status | Skicka påminnelser · Av: inga påminnelser skickas. · På sedan {d månad åååå}: kassor från och med då kan få en påminnelse. | new |
+| Admin card | count | Köade påminnelser de senaste 30 dagarna: {n} | new |
+| Admin card | delay label and help, Spara, both toasts | as before | unchanged |
+
+No text has an em dash or an exclamation mark.
+
+### Mutations
+
+Each: the file copied aside, mutated, the named tests run, restored with `cp`, `cmp` exit 0. All 43 killed; none survived.
+
+| # | Mutation | Failing tests | The first of them |
+|---|---|---|---|
+| 1 | the consent check removed (decision) | 2 | `checkout-reminders-cron.test.ts` › the checks of §4.3, each with its reason > 12 Stripe unreachable: no row, no further Stripe call this tick, de |
+| 1b | the consent re-check removed (send) | 1 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > 5 no_consent: a reminder queued for a che |
+| 2 | the consent rule accepts terms alone | 4 | `checkout-reminder-consent.test.ts` › reminderConsentGiven (AC4): the reminder box OR the marketing box, of THIS checkout > terms alone → {"marketin |
+| 3 | `reminder: false` written into the frozen JSON | 4 | `checkout-reminder-consent.test.ts` › POST /v1/checkout carries the box > answers 409 for a replay of the key with the box flipped |
+| 4 | the suppression check removed at decision AND at send | 2 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > 7 unsubscribed: the address unsubscribed  |
+| 4a | the suppression check removed at decision only | 1 | `checkout-reminders-cron.test.ts` › the checks of §4.3, each with its reason > 7 unsubscribed: the address unsubscribed from THIS shop (another sh |
+| 5 | supersede limited to newer open checkouts (F3) | 1 | `checkout-reminders-cron.test.ts` › the checks of §4.3, each with its reason > 8 superseded: a later checkout of the address, whatever its state,  |
+| 6 | the cap trigger made a no-op | 2 | `checkout-reminders-cron.test.ts` › the races at the write > the cap trigger decides two runs racing for one buyer: one queued, one frequency_cap |
+| 7 | the cap counts skipped rows | 2 | `checkout-reminders-schema.test.ts` › 0056: one decision per checkout, of its own tenant > holds both CHECK pairs: queued ⇔ no reason, skipped ⇔ no  |
+| 8 | REMINDER_CAP_MS changed without the trigger | 2 | `checkout-reminders-schema.test.ts` › 0056: the cap (AC6) > refuses a second queued reminder for one shop and address within 7 days, admits one afte |
+| 9 | the paid check reads only status | 4 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > 1 paid: an order appeared after the decis |
+| 10 | Stripe `processing` treated as sendable | 1 | `checkout-reminders-cron.test.ts` › the checks of §4.3, each with its reason > 12 the intent at Stripe: processing → {"reason":"payment_in_progres |
+| 11 | a Stripe 5xx writes a final row | 1 | `checkout-reminders-cron.test.ts` › the checks of §4.3, each with its reason > 12 Stripe unreachable: no row, no further Stripe call this tick, de |
+| 12 | the add-on check removed | 3 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > 2 feature_off: the platform turned the ad |
+| 13 | the enabled_at term removed from the candidate SQL | 1 | `checkout-reminders-cron.test.ts` › which checkouts are candidates at all > only checkouts made while the seller's switch was on (AC3); none while |
+| 14 | the orders_closed check removed | 2 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > 4 orders_closed: the shop was unpublished |
+| 15 | the late limit removed | 1 | `checkout-reminders-cron.test.ts` › which checkouts are candidates at all > due after the delay; never before; never more than 24 hours late (no r |
+| 16 | ORDER BY made descending | 2 | `checkout-reminders-cron.test.ts` › the checks of §4.3, each with its reason > 12 Stripe unreachable: no row, no further Stripe call this tick, de |
+| 16b | the LIMIT removed | 1 | `checkout-reminders-cron.test.ts` › which checkouts are candidates at all > decides at most 25 per tick, oldest first; the next ones on the next t |
+| 17 | the send-time re-check of paid removed | 2 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > 1 paid: an order appeared after the decis |
+| 18 | the send-time re-check of the suppression removed | 1 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > 7 unsubscribed: the address unsubscribed  |
+| 18b | the consumer's last suppression check removed (held job) | 1 | `checkout-reminder-email.test.ts` › the consumer, for this kind > sends nothing to an address that unsubscribed after the job was built |
+| 19 | the token's signature not verified | 4 | `checkout-recovery-routes.test.ts` › POST /v1/checkout-recovery/:token (the resume link) > answers ONE 404, byte for byte, for every refusal |
+| 20 | the tenant left out of the signed message | 3 | `checkout-recovery-routes.test.ts` › POST /v1/checkout-recovery/:token (the resume link) > answers ONE 404, byte for byte, for every refusal |
+| 21 | the purpose ignored | 4 | `checkout-recovery-routes.test.ts` › POST /v1/checkout-recovery/:token (the resume link) > answers ONE 404, byte for byte, for every refusal |
+| 22 | the resolve answers a price | 1 | `checkout-recovery-routes.test.ts` › POST /v1/checkout-recovery/:token (the resume link) > answers the lines as references, in their order, and not |
+| 22b | the resolve answers the address | 1 | `checkout-recovery-routes.test.ts` › POST /v1/checkout-recovery/:token (the resume link) > answers `completed` once the reminded checkout became an |
+| 23 | one 404 case answers different bytes | 1 | `checkout-recovery-routes.test.ts` › POST /v1/checkout-recovery/:token (the resume link) > answers ONE 404, byte for byte, for every refusal |
+| 24 | the resume link served after link_expires_at | 2 | `checkout-recovery-routes.test.ts` › POST /v1/checkout-recovery/:token (the resume link) > answers ONE 404, byte for byte, for every refusal |
+| 25 | the link expiry applied to unsubscribe | 1 | `checkout-recovery-routes.test.ts` › POST /v1/checkout-recovery/:token/unsubscribe > still works with a link 8 days old (no expiry, AC11) |
+| 26 | the rate limit removed | 1 | `checkout-recovery-routes.test.ts` › the rate limit (one scope for both routes) > answers 429 to the 31st request of one visitor within 10 minutes, |
+| 27 | the decision updates checkouts.updated_at | 1 | `checkout-reminders-cron.test.ts` › a due checkout with consent is queued, once > writes nothing to the checkout: its updated_at and intent clock  |
+| 28 | the List-Unsubscribe headers dropped | 1 | `checkout-reminder-email.test.ts` › the consumer, for this kind > sends the shop's name as sender, the support address as Reply-To and both List-U |
+| 29 | the From display name not cleaned | 2 | `checkout-reminder-email.test.ts` › the consumer, for this kind > sends the shop's name as sender, the support address as Reply-To and both List-U |
+| 30 | PORTED_FEATURE_KEYS without abandonedCheckout | 4 | `checkout-reminders-storefront.test.ts` › features.abandonedCheckout = ported AND the add-on AND the seller's switch > a switch change (and an add-on ch |
+| 31 | the public feature ignores the seller's switch | 2 | `checkout-reminders-storefront.test.ts` › features.abandonedCheckout = ported AND the add-on AND the seller's switch > add-on on, no switch row → true |
+| 32 | STOREFRONT_BODY_REVISION left at 2 | 2 | `checkout-reminders-storefront.test.ts` › features.abandonedCheckout = ported AND the add-on AND the seller's switch > is ported, and the body revision  |
+| 33 | abandonedCheckout not opt-in | 6 | `admin-checkout-reminders.test.ts` › who may > answers the opaque 404 to both methods while the platform's add-on is off, or was never on |
+| 34 | buildCheckoutRequest always sends reminder | 7 | `checkout.test.mjs` › sends products, variants and quantities, and never a price |
+| 35 | the recovery plan takes a price from the answer | 2 | `recovery.test.mjs` › reads no price from the link: a price in an answer changes nothing |
+| 36 | checkout_reminder missing from the ledger CHECK | 5 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > closes the ledger row an earlier attempt  |
+| 37 | a withdrawal leaves an earlier attempt's ledger row open | 1 | `checkout-reminder-effect.test.ts` › every send-time re-check withdraws the reminder and builds no mail > closes the ledger row an earlier attempt  |
+
+Not a mutation test: the checkout box shown while the add-on is off. That rule is proven by the byte-identical shots of the contact step (above); the box's JSX is guarded by `remindersOn` only.
+
+### Screens looked at (dev servers on 127.0.0.1, the dev APIs, Playwright's headless Chromium, one Vite server at a time)
+
+In `/Users/mikaelohlen/cp9-ac-screens/`, each at 1440 and 390 px:
+- Storefront (NORD): `before-checkout-contact-*` and `after-off-checkout-contact-*` (provbutiken, add-on off; byte-identical), `on-checkout-contact-*` (paminnelsebutiken, the box and its line), `recovery-oppen-*` (the rebuilt cart on the checkout, live prices, the toast for the line that is gone, no "added" modal), `recovery-klar-*`, `recovery-borta-*`, `recovery-fel-*`, `recovery-ogiltig-*`, `unsubscribe-oppen-*` (done), `unsubscribe-ogiltig-*`, `unsubscribe-fel-*` (retry).
+- Shop admin (neutral): `admin-card-off-*`, `admin-card-on-saved-*` (after switching on and saving: "På sedan 5 oktober 2026: …"), `admin-card-no-mail-*` (the caution notice, cookie `admin_dev_mail=off`).
+
+Changed after looking: on a desktop width the switch stood at the far right of the card, away from its label; its row is now `max-w-md`. Only existing tokens and components: the storefront's `rounded-tile`, `text-ink`, `font-display`, `bg-accent`, the checkout's checkbox classes; the admin's `CardSection`, `Button`, `labelCls`/`helpCls`, `admin-caution-*` (as `PublishPanel.jsx`), the switch markup of `AdminStorefront.jsx`. The console's only errors were the dev API's intended 404/502 answers and a `validateDOMNesting` warning the checkout page had before this unit.
+
+### Unfinished, said plainly
+
+1. **Step 12, the docs** (`DECISIONS.md` for the D81 reversal, `PLAN.md:106`, `CP5_GAP_ANALYSIS.md:111`, `MIGRATION_MANIFEST.md:73`, `HANDOVER.md`): outside the paths this unit may touch. Not done.
+2. **The importer's suppression transform (§3.7)** lives in `scripts/cf-port/migrate/lib`, where this unit may change only a failing pin. Not built. At the 2026-09-27 freeze `checkoutSuppressions` had 0 documents, so it would write nothing; it must exist before a later export that holds any.
+3. Nothing else of the build plan is left: F8's second half, the stale comment of `commerce/stripe-events.ts` `handleIntentStatus` ("there are no reminders here"), is corrected (comment only).
+4. **Not looked at on staging or with a mail account**: the mail itself in Gmail/Outlook, Resend's acceptance of the `headers` member, Gmail's one-click unsubscribe (§10.5, all waiting for a mail account).
+
+### Seen, outside this unit
+
+- **The storefront's locale files are generated** (Deviation 4): any unit that tells a builder to add a storefront key to `src/locales/*.json` will meet the same refusal.
+- **A held mail is lost on staging after ~40 minutes** (Deviation 12): the same for every mail kind, not only reminders; when a mail account arrives, nothing older than the queue's retries is sent.
+- **F9 and F10 are left as they were**: the checkout still accepts an address no mail can go to (the reminder skips it as `undeliverable`), and every other buyer mail still leaves as `EMAIL_FROM`.
+- The checkout page logs a `validateDOMNesting` warning in development (a `<div>` inside a `<p>`), from before this unit.
+
+### Staging smoke plan with no mail account
+
+After the reviewer's yes; production never. D1 reads are `SELECT`s only.
+
+1. `scripts/cf-preflight.sh staging`; bookmark; apply 0056 to staging D1; deploy API, web and admin. `GET /ready` names `0056_checkout_reminders.sql`. `GET /_api/<shop>/v1/storefront` answers `ETag: "<v>-r3"` (or `-r3-x`), body unchanged.
+2. Before turning anything on: the contact step of the checkout shows the marketing box only; `SELECT tenant_id, enabled FROM tenant_features WHERE feature_key = 'abandonedCheckout'` (staging's explicit rows; a shop without one has the add-on OFF now, opt-in).
+3. As the platform user, in Tillägg, turn "Övergiven kassa" on for the test shop. As its admin (or acting as it), Inställningar: the card shows the switch off ("Av: inga påminnelser skickas."), delay 1, "Köade påminnelser de senaste 30 dagarna: 0", and the caution "E-post är inte inställd här ännu. …". Turn the switch on, Spara: "På sedan {i dag}: …".
+4. Storefront: the contact step shows "Påminn mig via e-post om jag inte slutför köpet" and its line under the marketing box. Turn the switch off once: the box is gone after a reload (the version moved); turn it on again.
+5. Four test buyers at their own test addresses: A ticks the reminder box, reaches the payment form, leaves; B ticks nothing, reaches the payment form, leaves; C ticks the box and pays with 4242; D ticks the box, reaches the payment form, goes back, changes the country, reaches it again, leaves (two checkouts).
+6. Right away: `SELECT customer_email, json_extract(consent_json, '$.reminder') FROM checkouts WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 6` → 1 for A, C and D's two; NULL for B.
+7. After at least 1 h 15 min (the delay plus one tick):
+   - `SELECT c.customer_email, r.state, r.reason FROM checkout_reminders r JOIN checkouts c USING (checkout_id) WHERE r.tenant_id = ?`: A `queued`; B `skipped/no_consent`; C no row (completed, not a candidate; `skipped/paid` only if the webhook was slower than the step); D's older `skipped/superseded`, its newer `queued`.
+   - `SELECT kind, status, last_error_code FROM email_deliveries WHERE kind = 'checkout_reminder' ORDER BY created_at DESC`: one row per queued reminder, `pending` (and it stays `pending`: Deviation 12).
+   - `SELECT status, result_ref, last_error, payload_json FROM outbox_events WHERE event_type = 'email.checkout_reminder'`: `done`, `result_ref` = the delivery id, the payload `{"reminderId": …}` and nothing else.
+   - The Worker's log: one "checkout reminders" line with counts and no address.
+8. The card's count equals the number of queued rows of the last 30 days.
+9. The cap: buyer A abandons a second checkout → after the delay `skipped/frequency_cap`.
+10. Turning off: the switch off, a new abandoned checkout with the box ticked → no row after the delay. The add-on off in Tillägg: the card disappears; the admin route answers 404.
+11. The routes with a forged token (no real link exists without the mail):
+    - `curl -sS -X POST https://chopshop-web-stg.kent-ee2.workers.dev/_api/<shop>/v1/checkout-recovery/v1.00000000-0000-4000-8000-000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA` → 404, and `…/checkout-recovery/garbage` → the same bytes;
+    - the same two with `/unsubscribe` → 404, also with `-d 'List-Unsubscribe=One-Click' -H 'content-type: application/x-www-form-urlencoded'`;
+    - the 31st call within 10 minutes from one address → 429;
+    - a GET of either → refused by the web Worker (404).
+12. The pages with a forged token: `/<shop>/aterta/x` → "Länken till din varukorg fungerar inte längre."; `/<shop>/avregistrera/x` → "Länken fungerar inte längre." and the line with the shop's support address; both `noindex` (the shell's `X-Robots-Tag`).
+13. Look at the checkout box, both pages and the card at a phone width.
+
+What waits for a mail account is §10.5 as written, with one addition: the real one-click POST from Gmail reaches `…/unsubscribe` through the web Worker, and a held reminder whose address unsubscribed meanwhile is refused by the consumer (ledger `failed`, `E_UNSUBSCRIBED`).
+
+### Gates (after the last edit)
+
+| Gate | Result | Baseline |
+|---|---|---|
+| `cd cloudflare && npx tsc --noEmit && npx tsc --noEmit -p web && npx tsc --noEmit -p admin` | clean | clean |
+| `cd cloudflare && npx vitest run` | `Test Files 137 passed (137)`, `Tests 4980 passed (4980)`; the two known "Network connection lost" lines; no test failed on any run | 127 / 4803 |
+| `cd cloudflare && npm run types:check` | `Types at worker-configuration.d.ts are up to date.` | same |
+| `node --test src/api/*.test.mjs src/api/admin/*.test.mjs "src/admin-app/**/*.test.mjs" src/storefront/adapters/*.test.mjs src/storefront/dev/*.test.mjs` | `# tests 1136`, `# pass 1136`, `# fail 0` | 1114 |
+| `npx vite build --config vite.admin.config.js && node cloudflare/admin/check-admin-build.mjs` | `admin build: 28 files (22 text) checked, no Firebase code, no source map, no secret, every file servable.` | pass |
+| `npx vite build` (the older build) and `npx vite build --config vite.storefront.config.js && node cloudflare/web/check-storefront-build.mjs` | both built; `storefront build: 11 files (7 text) checked, no Firebase code, every file servable.` | pass |
+| `node guard/guards.test.mjs` | `allowlist size = 292`, `PASS` (the guard itself wrote `guard/allowlist.baseline` 294 → 292) | 294 |
+| `node --test "scripts/cf-port/migrate/test/*.test.mjs"` | `# tests 554`, `# pass 554`, `# fail 0` | 554 |
+
+### Files
+
+- New: `cloudflare/migrations/0056_checkout_reminders.sql`; `cloudflare/src/commerce/checkout-reminders.ts`, `checkout-recovery-token.ts`; `cloudflare/src/email/checkout-reminder-email.ts`; `cloudflare/src/routes/storefront-checkout-recovery.ts`, `admin-checkout-reminders.ts`; tests `checkout-reminders-off-golden`, `checkout-reminders-schema`, `checkout-reminder-consent`, `checkout-recovery-token`, `checkout-reminder-email`, `checkout-reminder-effect`, `checkout-reminders-cron`, `checkout-recovery-routes`, `admin-checkout-reminders`, `checkout-reminders-storefront` (`.test.ts`) and `reminder-fixtures.ts`; `src/api/checkoutRecovery.js`, `src/api/admin/checkoutReminders.js` (+ test), `src/storefront/adapters/recovery.js` (+ test), `src/storefront/dev/recovery-api.mjs`, `src/admin-app/dev/checkout-reminders-dev.mjs` (+ test).
+- Changed (Worker): `app.ts`, `legal/consent.ts`, `email/auth-email-job.ts`, `email/email-delivery-store.ts`, `email/email-queue-consumer.ts`, `outbox/outbox.ts`, `outbox/effects.ts`, `outbox/email-effect.ts`, `outbox/scheduled.ts`, `platform/tenant-config.ts`, `storefront/public-storefront.ts`, `storefront/public-routes.ts`, `commerce/stripe-events.ts` (comment), `web/src/api-allowlist.ts`; tests `health`, `public-catalog`, `public-storefront`, `tenant-features`, `onboarding-identity`, `web-routing`.
+- Changed (frontend): `pages/shop/Checkout.jsx`, `CheckoutRecoveryPage.jsx`, `CheckoutUnsubscribePage.jsx`, `components/shop/StripePaymentForm.jsx`, `storefront/StorefrontApp.jsx`, `pages.jsx`, `providers/Cart.jsx`, `adapters/checkout.js` (+ test), `dev/dev-api.mjs` (+ test), `dev/fixtures.json`, `dev/money-fixtures.json`, `api/api.test.mjs`, `pages/admin/AdminSettings.jsx`, `admin-app/replacements/shopConfig.js`, `admin-app/dev/dev-api.mjs`, `admin-app/dev/fixtures.json`.
+- Changed (other): `scripts/cf-port/migrate/lib/transform-shops.mjs:102` (the pin), `guard/allowlist.txt` (the two page lines; unavoidable, the guard's rule b refuses a listed file that no longer imports Firebase), `guard/allowlist.baseline` (written by the guard gate itself).

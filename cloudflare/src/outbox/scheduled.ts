@@ -1,4 +1,5 @@
 import { rescreenStaleScreenings } from "../catalog/screening";
+import { runCheckoutReminders } from "../commerce/checkout-reminders";
 import { raiseStuckOnboardingAlerts } from "../commerce/connect-onboarding";
 import { runOutboxSweep } from "./sweeper";
 
@@ -9,7 +10,8 @@ import { runOutboxSweep } from "./sweeper";
  *   "*\/15 * * * *"  → runOutboxSweep (PLAN §2.2), THEN CP2-A's
  *                      runReconciliation and runRetentionSweep (§2.2, §2.3) —
  *                      same 15-minute cadence, so the 30-minute alert SLA holds
- *                      — THEN the CP3 steps (CP3_STEPS below), THEN the digest
+ *                      — THEN the CP3 steps (CP3_STEPS below), THEN CP9-AC's
+ *                      abandoned-checkout reminders, THEN the digest
  *   anything else    → logged and ignored (a cron this build does not know)
  *
  * Each step is isolated: one failing never skips the next. If any failed, the
@@ -79,6 +81,15 @@ const CP3_STEPS: ReadonlyArray<readonly [string, CronStep]> = [
   ["connect_stuck", (env, now) => raiseStuckOnboardingAlerts(env.DB, now)],
 ];
 
+/**
+ * CP9-AC: one decision per due abandoned checkout, at most 25 per tick
+ * (src/commerce/checkout-reminders.ts). After the retention sweep, so a
+ * checkout it settled this tick is not reminded, and before the digest.
+ */
+export const CP9_STEPS: ReadonlyArray<readonly [string, CronStep]> = [
+  ["checkout_reminders", (env, now) => runCheckoutReminders(env, now)],
+];
+
 export async function handleScheduled(
   controller: Pick<ScheduledController, "cron" | "scheduledTime">,
   env: Env,
@@ -127,7 +138,7 @@ export async function handleScheduled(
   //   connect_stuck    one warning alert per Connect onboarding operation that
   //                    has stayed `reserved` for more than 24 hours
   //                    (src/commerce/connect-onboarding.ts).
-  for (const [name, step] of CP3_STEPS) {
+  for (const [name, step] of [...CP3_STEPS, ...CP9_STEPS]) {
     if (!(await runStep(name, () => step(env, now())))) {
       failures.push(name);
     }

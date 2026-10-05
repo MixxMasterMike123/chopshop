@@ -1,5 +1,11 @@
-import { parseAuthEmailJob, renderAuthEmail } from "./auth-email-job";
+import { hashEmailRecipient, parseAuthEmailJob, renderAuthEmail } from "./auth-email-job";
 import type { AuthEmailJob } from "./auth-email-job";
+import {
+  checkoutReminderFrom,
+  checkoutReminderHeaders,
+  isCheckoutReminderEmailJob,
+  isReminderSuppressed,
+} from "./checkout-reminder-email";
 import {
   claimAuthEmailDelivery,
   completeAuthEmailDelivery,
@@ -19,7 +25,12 @@ import { isOrderEmailJob, orderEmailReplyTo } from "./order-emails";
  * the same functions; only the template differs (auth-email-job.ts). Since
  * CP5-WE also the three order mails (order-emails.ts: the buyer's status
  * update and refund notice, with the shop's support address as Reply-To, and
- * the shop's new-order notice).
+ * the shop's new-order notice). Since CP9-AC the abandoned-checkout reminder
+ * (checkout-reminder-email.ts): for that kind ONLY, the sender's display name
+ * is the shop's, Reply-To is the shop's support address, the body carries the
+ * two List-Unsubscribe headers, and an address that unsubscribed since the job
+ * was built is never sent to (the job is held while no mail account exists,
+ * up to its 2 hours). Every other kind's request is byte for byte as before.
  *
  * ── EXACTLY-ONCE ON TOP OF AT-LEAST-ONCE ─────────────────────────────────────
  * Queues deliver at least once, so every message first CLAIMS its ledger row
@@ -140,16 +151,23 @@ async function sendThroughResend(
   attempts: number,
 ): Promise<SendOutcome> {
   const message = renderAuthEmail(job);
-  // A buyer's order mail (CP5-WE) answers to the shop, not to the platform's
-  // sender: the address is the shop's own, frozen in the job's content.
-  const replyTo = isOrderEmailJob(job) ? orderEmailReplyTo(job) : null;
+  // A buyer's order mail (CP5-WE) and the reminder (CP9-AC) answer to the
+  // shop, not to the platform's sender: the address is the shop's own, frozen
+  // in the job's content.
+  const reminder = isCheckoutReminderEmailJob(job) ? job : null;
+  const replyTo = isOrderEmailJob(job)
+    ? orderEmailReplyTo(job)
+    : reminder === null
+      ? null
+      : reminder.content.supportEmail;
 
   let response: Response;
   try {
     response = await send(
       new Request(RESEND_EMAILS_URL, {
         body: JSON.stringify({
-          from: config.from,
+          from: reminder === null ? config.from : checkoutReminderFrom(config.from, reminder.content.shopName),
+          ...(reminder === null ? {} : { headers: checkoutReminderHeaders(reminder) }),
           html: message.html,
           ...(replyTo === null ? {} : { reply_to: replyTo }),
           subject: message.subject,
@@ -233,6 +251,17 @@ async function deliverMessage(
   if (claim.status !== "claimed") {
     // sent / failed / expired / fingerprint conflict: nothing left to do, and
     // doing it again would be the duplicate send this ledger exists to stop.
+    message.ack();
+    return;
+  }
+
+  // CP9-AC: never to an address that unsubscribed from this shop's
+  // reminders, also when that happened after the job was built.
+  if (
+    isCheckoutReminderEmailJob(job) &&
+    (await isReminderSuppressed(env.DB, job.tenantId, await hashEmailRecipient(job.recipient)))
+  ) {
+    await failAuthEmailDelivery(env.DB, job.deliveryId, claim.leaseToken, "E_UNSUBSCRIBED", Date.now());
     message.ack();
     return;
   }

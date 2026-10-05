@@ -100,6 +100,8 @@ describe("the API allowlist", () => {
     ["GET", "/v1/orders/4f6e2a9c-1b3d-4e5f-8a7b-9c0d1e2f3a4b"],
     ["POST", "/v1/reports"],
     ["POST", "/v1/withdrawals"],
+    ["POST", "/v1/checkout-recovery/v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE"],
+    ["POST", "/v1/checkout-recovery/v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE/unsubscribe"],
   ])("passes %s %s", (method, path) => {
     expect(isAllowedStorefrontApiRequest(method, path)).toBe(true);
   });
@@ -134,6 +136,14 @@ describe("the API allowlist", () => {
     ["POST", "/v1/orders/x"],
     ["GET", "/v1/withdrawals"],
     ["POST", "/v1/withdrawals/x"],
+    // CP9-AC: POST only, the token one segment, nothing past `unsubscribe`.
+    ["GET", "/v1/checkout-recovery/v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE"],
+    ["GET", "/v1/checkout-recovery/v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE/unsubscribe"],
+    ["POST", "/v1/checkout-recovery"],
+    ["POST", "/v1/checkout-recovery/v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.%2FAbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE"],
+    ["POST", "/v1/checkout-recovery/v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE/unsubscribe/x"],
+    ["POST", "/v1/checkout-recovery/v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE/resume"],
+    ["POST", "/v1/checkout-recovery/v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE/Unsubscribe"],
     ["OPTIONS", "/v1/storefront"],
     // Spellings of an allowed path that are not that path.
     ["GET", "/v1/%70roducts"],

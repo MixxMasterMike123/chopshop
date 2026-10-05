@@ -32,8 +32,14 @@
 //                               - the API's refusals as they are (400 …).
 //                             This tab's saves run one after another, each on
 //                             the baseline the one before left.
-//   load/saveCartRecovery, load/saveReviewSettings: the two add-ons are not
-//                             ported (D81): the loads answer {}, the saves refuse.
+//   load/saveCartRecovery(…, shopId)  Övergiven kassa (CP9-AC): GET / PUT
+//                             /v1/admin/checkout-reminders, the seller's switch and
+//                             delay: { enabled, delayHours, enabledAt,
+//                             queuedLast30Days, mailConfigured }. The load answers
+//                             {} while the platform's add-on is off (the route's
+//                             404); the save sends { enabled, delayHours } only.
+//   load/saveReviewSettings:  the add-on is not ported (D81): the load answers {},
+//                             the save refuses.
 //
 // THE BASELINE belongs to the page that loaded it: the latest load of a shop
 // owns it. A write's answer moves it forward, unless a load started since the
@@ -44,7 +50,8 @@
 // it shows against the stored settings would overwrite them. That holds after
 // an earlier page's load succeeded too: each load starts by dropping the baseline.
 
-import { adminRequest, getRequestShopId, notAvailable } from '../../api/admin/client.js';
+import { AdminApiError, adminRequest, getRequestShopId, notAvailable } from '../../api/admin/client.js';
+import { getCheckoutReminders, putCheckoutReminders } from '../../api/admin/checkoutReminders.js';
 import { getSettings, patchSettings } from '../../api/admin/settings.js';
 import { STORE } from '../../config/store.js';
 import { mergeThree } from '../adapters/merge.js';
@@ -196,11 +203,18 @@ export const saveShopConfig = (patch, shopId) => {
   return readForShop(key, () => write);
 };
 
-export const loadCartRecovery = async () => ({});
-
-export const saveCartRecovery = async () => {
-  throw notAvailable('Övergiven kassa');
+export const loadCartRecovery = async (shopId) => {
+  try {
+    return (await getCheckoutReminders(shopOption(shopId))) ?? {};
+  } catch (error) {
+    // The platform's add-on is off for the shop: there is nothing to load.
+    if (error instanceof AdminApiError && error.status === 404) return {};
+    throw error;
+  }
 };
+
+export const saveCartRecovery = async ({ enabled, delayHours }, shopId) =>
+  putCheckoutReminders({ delayHours, enabled: enabled === true }, shopOption(shopId));
 
 export const loadReviewSettings = async () => ({});
 

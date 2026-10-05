@@ -85,6 +85,11 @@ const AdminSettings = () => {
   // Cart-recovery ("Övergiven kassa") reminder delay (hours). Loaded/saved via
   // the dedicated cartRecovery seam. Default 1h, clamped 1–24.
   const [cartRecoveryDelay, setCartRecoveryDelay] = useState(1);
+  // CP9-AC: the seller's own switch (off by default), and what the seam says
+  // of the stored state: since when it is on, the queued count, and whether a
+  // mail can leave this environment at all.
+  const [cartRecoveryEnabled, setCartRecoveryEnabled] = useState(false);
+  const [cartRecoveryStored, setCartRecoveryStored] = useState({});
   const [savingRecovery, setSavingRecovery] = useState(false);
 
   // Product-reviews ("Recensioner") request delay (days). Loaded/saved via the
@@ -166,6 +171,8 @@ const AdminSettings = () => {
         const n = Number(cr.delayHours);
         if (!cancelled) {
           setCartRecoveryDelay(Number.isFinite(n) ? Math.min(24, Math.max(1, Math.round(n))) : 1);
+          setCartRecoveryEnabled(cr.enabled === true);
+          setCartRecoveryStored(cr);
         }
       } catch (e) {
         console.warn('AdminSettings: could not load cart recovery config:', e?.message);
@@ -210,8 +217,9 @@ const AdminSettings = () => {
     try {
       setSavingRecovery(true);
       const clamped = Math.min(24, Math.max(1, Math.round(Number(cartRecoveryDelay) || 1)));
-      await saveCartRecovery({ delayHours: clamped }, shopId);
+      const saved = await saveCartRecovery({ delayHours: clamped, enabled: cartRecoveryEnabled }, shopId);
       setCartRecoveryDelay(clamped);
+      if (saved && typeof saved === 'object' && typeof saved.enabled === 'boolean') setCartRecoveryStored(saved);
       toast.success('Inställningar för övergiven kassa sparade.');
     } catch (error) {
       console.error('Error saving cart recovery settings:', error);
@@ -219,7 +227,7 @@ const AdminSettings = () => {
     } finally {
       setSavingRecovery(false);
     }
-  }, [cartRecoveryDelay, shopId]);
+  }, [cartRecoveryDelay, cartRecoveryEnabled, shopId]);
 
   // Save store identity via the shopConfig seam for THIS shop.
   const saveStoreIdentity = useCallback(async () => {
@@ -1022,11 +1030,53 @@ const AdminSettings = () => {
                   add-on is enabled for this shop (platform-controlled). */}
               {abandonedCheckoutEnabled && (
                 <CardSection title="Övergiven kassa" bodyClassName="space-y-4">
-                  <p className="text-[13px] text-admin-text-muted">
-                    Skicka en påminnelse via e-post till kunder som påbörjade en betalning men inte
-                    slutförde köpet. En påminnelse per kassa. Kunden måste ha kryssat i påminnelserutan
-                    i kassan.
-                  </p>
+                  <div className="space-y-2">
+                    <p className="text-[13px] text-admin-text-muted">
+                      Skicka ett påminnelsemejl till kunder som kom till betalningen men inte slutförde
+                      köpet. Högst en påminnelse per kassa och högst en per kund och vecka. Bara kunder
+                      som kryssat i påminnelserutan eller sagt ja till e-post från butiken får mejlet.
+                    </p>
+                    <p className="text-[12px] text-admin-text-muted">
+                      Påminnelserna skickas i butikens namn. Du ansvarar för att de följer
+                      marknadsföringslagen.
+                    </p>
+                  </div>
+                  {cartRecoveryStored.mailConfigured === false && (
+                    <p className="rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] text-admin-caution-text">
+                      E-post är inte inställd här ännu. Påminnelser köas men skickas inte förrän
+                      plattformen har ställt in e-posten.
+                    </p>
+                  )}
+                  <div className="flex max-w-md items-start justify-between gap-4">
+                    <div>
+                      <p id="cart-recovery-switch" className={labelCls}>Skicka påminnelser</p>
+                      {cartRecoveryStored.enabled === true && cartRecoveryStored.enabledAt ? (
+                        <p className={helpCls}>
+                          På sedan{' '}
+                          {new Date(cartRecoveryStored.enabledAt).toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric' })}
+                          : kassor från och med då kan få en påminnelse.
+                        </p>
+                      ) : cartRecoveryStored.enabled !== true ? (
+                        <p className={helpCls}>Av: inga påminnelser skickas.</p>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={cartRecoveryEnabled}
+                      aria-labelledby="cart-recovery-switch"
+                      onClick={() => setCartRecoveryEnabled((on) => !on)}
+                      className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                        cartRecoveryEnabled ? 'bg-[var(--color-admin-primary)]' : 'bg-admin-border'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                          cartRecoveryEnabled ? 'translate-x-[18px]' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
                   <div className="max-w-xs">
                     <label className={labelCls}>Fördröjning innan påminnelse (timmar)</label>
                     <input
@@ -1040,6 +1090,11 @@ const AdminSettings = () => {
                     />
                     <p className={helpCls}>Mellan 1 och 24 timmar. Standard: 1 timme.</p>
                   </div>
+                  {typeof cartRecoveryStored.queuedLast30Days === 'number' && (
+                    <p className="text-[13px] text-admin-text-muted">
+                      Köade påminnelser de senaste 30 dagarna: {cartRecoveryStored.queuedLast30Days}
+                    </p>
+                  )}
                   <div className="flex justify-end border-t border-admin-border pt-4">
                     <Button variant="primary" onClick={saveCartRecoverySettings} disabled={savingRecovery}>
                       {savingRecovery ? (

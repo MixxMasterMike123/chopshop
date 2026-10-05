@@ -80,6 +80,13 @@ export function toApiRecipient({ deliveryMethod, shippingCountry, shippingInfo, 
  * the text of a field; sent only when it is a non-empty string, so a request
  * without one is the same request as before, and the payment is made again
  * only when a code is added or removed.
+ *
+ * `reminder` (CP9-AC): the box "Påminn mig via e-post om jag inte slutför
+ * köpet", shown only while the shop sends reminders. `consent.reminder: true`
+ * is sent ONLY when it is literally true: an unticked or hidden box leaves the
+ * request byte for byte what it was, so its idempotency key and the frozen
+ * consent of every unticked checkout are unchanged
+ * (cloudflare/src/legal/consent.ts rule 4).
  */
 export function buildCheckoutRequest({
   items,
@@ -90,11 +97,13 @@ export function buildCheckoutRequest({
   pickupLocationId,
   pickupDate,
   marketing,
+  reminder,
   withdrawal,
   discountCode,
 }) {
   const method = toApiDeliveryMethod(deliveryMethod);
   const consent = { terms: true, marketing: marketing === true };
+  if (reminder === true) consent.reminder = true;
   if (withdrawal?.required === true && withdrawal?.accepted === true) {
     consent.withdrawalWaiver = true;
     consent.disclosureVersion = String(withdrawal.noticeVersion || '');

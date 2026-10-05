@@ -49,3 +49,6 @@ export { default as Checkout } from '../pages/shop/Checkout.jsx';
 export { default as OrderReturn } from '../pages/shop/OrderReturn.jsx';
 export { default as OrderConfirmation } from '../pages/shop/OrderConfirmation.jsx';
 export { default as WithdrawalPage } from '../pages/shop/WithdrawalPage.jsx';
+// CP9-AC: Övergiven kassa, the reminder's resume and unsubscribe links.
+export { default as CheckoutRecoveryPage } from '../pages/shop/CheckoutRecoveryPage.jsx';
+export { default as CheckoutUnsubscribePage } from '../pages/shop/CheckoutUnsubscribePage.jsx';

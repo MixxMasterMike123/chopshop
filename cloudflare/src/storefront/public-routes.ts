@@ -48,10 +48,14 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
  * appended while the shop cannot take an order (`"<v>-r2-x"`, `"<v>-c-r2-x"`).
  * Revision 2: every body gained `ordersOpen`, and stored placeholder texts
  * left the identity (identity-projection.ts ownText).
+ * Revision 3: features.abandonedCheckout (CP9-AC): ported, and true only with
+ * the seller's switch on. No body changes at the deploy (the add-on is
+ * opt-in and no switch exists yet); the revision keeps a body of the code
+ * before from ever matching a body of this one, across a rollback too.
  */
 
 /** Raise with any code change to the storefront body (PORTED_FEATURE_KEYS, ordersOpen). */
-export const STOREFRONT_BODY_REVISION = 2;
+export const STOREFRONT_BODY_REVISION = 3;
 
 function etagFor(catalogVersion: number, tenant: StorefrontTenant, revision: number, ordersClosed: boolean): string {
   const base = hidesStandInFrames(tenant) ? `${catalogVersion}-c` : `${catalogVersion}`;

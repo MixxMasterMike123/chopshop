@@ -1026,6 +1026,19 @@
         "ordersOpen": true
       }
     },
+    "paminnelsebutiken": {
+      "extends": "provbutiken",
+      "storefront": {
+        "features": {
+          "abandonedCheckout": true,
+          "contentStudio": false,
+          "discountCodes": true,
+          "marketingMaterials": false,
+          "pod": true,
+          "productReviews": false
+        }
+      }
+    },
     "nybutiken": {
       "extends": "provbutiken",
       "storefront": {

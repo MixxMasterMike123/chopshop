@@ -146,9 +146,11 @@ export const NOT_PORTED_FEATURE_KEYS = ["affiliate", "b2b"] as const;
  *
  * CP8-DC (DC2): `discountCodes` is opt-in here, unlike Firebase's default-ON
  * (D62): the code box appears, and a code applies, only on a shop the
- * platform turned it on for.
+ * platform turned it on for. CP9-AC (AC2): `abandonedCheckout` likewise: no
+ * reminder is ever sent for a shop the platform did not turn it on for.
  */
 const OPT_IN_KEYS: ReadonlySet<FeatureKey> = new Set<FeatureKey>([
+  "abandonedCheckout",
   "contentStudio",
   "discountCodes",
   "marketingMaterials",

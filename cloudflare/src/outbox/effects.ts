@@ -2,6 +2,7 @@ import {
   runDispatchEffect,
   runPrinterCancellationEffect,
 } from "../dispatch/dispatch-effect";
+import { runCheckoutReminderEmailEffect } from "../commerce/checkout-reminders";
 import { runWithdrawalEmailEffect } from "../commerce/withdrawals";
 import { runEmailEffect, runOrderStatusEmailEffect } from "./email-effect";
 import {
@@ -24,6 +25,7 @@ import {
 const EFFECTS: Record<OutboxEffectType, (ctx: EffectContext) => Promise<OutboxRunOutcome>> = {
   dispatch: runDispatchEffect,
   email: runEmailEffect,
+  "email.checkout_reminder": runCheckoutReminderEmailEffect,
   "email.order_status": runOrderStatusEmailEffect,
   printer_cancellation: runPrinterCancellationEffect,
   withdrawal_email: runWithdrawalEmailEffect,

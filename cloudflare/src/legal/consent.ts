@@ -18,9 +18,15 @@
  *     buyer keeps the right, and no stored fact may say otherwise.
  *  3. MARKETING is a separate, optional, pre-unticked box (MFL 19 §, the
  *     dual-checkbox decision): stored as its own fact, never implied by terms.
+ *  4. REMINDER (CP9-AC): the purpose-specific box "Påminn mig via e-post om
+ *     jag inte slutför köpet", optional and pre-unticked, shown only while
+ *     the shop sends reminders. Frozen as `reminder: true` ONLY when ticked:
+ *     an unticked checkout's consent is byte for byte what it was before the
+ *     box came back. A reminder needs it OR the marketing box
+ *     (reminderConsentGiven, the owner's rule of 2026-07-06).
  *
  * The frozen shape (checkouts.consent_json → orders.consent_json):
- *   { v: 1, terms: true, marketing: boolean,
+ *   { v: 1, terms: true, marketing: boolean, reminder?: true,
  *     withdrawal: { personalizedItems: number[], waived: boolean,
  *                   disclosureVersion: string | null, disclosureSha256: string | null },
  *     recordedAt: ISO-8601 }
@@ -41,6 +47,8 @@ export const WITHDRAWAL_DISCLOSURE_TEXT =
 export interface CheckoutConsentInput {
   disclosureVersion: string | null;
   marketing: boolean;
+  /** CP9-AC: the reminder box was ticked. Absent (an engine caller) = unticked. */
+  reminder?: boolean;
   terms: true;
   withdrawalWaiver: boolean;
 }
@@ -52,6 +60,8 @@ export type ConsentRefusalCode =
 export interface FrozenConsent {
   marketing: boolean;
   recordedAt: string;
+  /** CP9-AC: present only when the reminder box was ticked. */
+  reminder?: true;
   terms: true;
   v: 1;
   withdrawal: {
@@ -62,13 +72,16 @@ export interface FrozenConsent {
   };
 }
 
-const CONSENT_KEYS = ["disclosureVersion", "marketing", "terms", "withdrawalWaiver"];
+const CONSENT_KEYS = ["disclosureVersion", "marketing", "reminder", "terms", "withdrawalWaiver"];
 const DISCLOSURE_VERSION_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
- * Strict shape. `terms` must be literally `true`; the two boxes are optional
+ * Strict shape. `terms` must be literally `true`; the three boxes are optional
  * booleans (absent = unticked); `disclosureVersion` accompanies a ticked waiver
  * and only a ticked waiver — a version with no waiver is self-contradictory.
+ * `reminder` is accepted whatever the shop's switch says: a tab opened before
+ * the seller turned it off must not fail at payment, and no reminder is sent
+ * for such a shop anyway (src/commerce/checkout-reminders.ts).
  */
 export function parseCheckoutConsent(value: unknown): CheckoutConsentInput | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -82,8 +95,13 @@ export function parseCheckoutConsent(value: unknown): CheckoutConsentInput | nul
     return null;
   }
   const marketing = record.marketing ?? false;
+  const reminder = record.reminder ?? false;
   const withdrawalWaiver = record.withdrawalWaiver ?? false;
-  if (typeof marketing !== "boolean" || typeof withdrawalWaiver !== "boolean") {
+  if (
+    typeof marketing !== "boolean" ||
+    typeof reminder !== "boolean" ||
+    typeof withdrawalWaiver !== "boolean"
+  ) {
     return null;
   }
 
@@ -100,7 +118,7 @@ export function parseCheckoutConsent(value: unknown): CheckoutConsentInput | nul
     return null;
   }
 
-  return { disclosureVersion, marketing, terms: true, withdrawalWaiver };
+  return { disclosureVersion, marketing, ...(reminder ? { reminder: true } : {}), terms: true, withdrawalWaiver };
 }
 
 /**
@@ -161,6 +179,8 @@ export async function freezeConsent(
   const frozen: FrozenConsent = {
     marketing: consent.marketing,
     recordedAt: new Date(now).toISOString(),
+    // Only when ticked, so an unticked checkout freezes what it froze before.
+    ...(consent.reminder === true ? { reminder: true as const } : {}),
     terms: true,
     v: 1,
     withdrawal: personalized
@@ -200,6 +220,7 @@ export function readFrozenConsent(json: string | null): FrozenConsent | null {
     record.v !== 1 ||
     record.terms !== true ||
     typeof record.marketing !== "boolean" ||
+    (record.reminder !== undefined && record.reminder !== true) ||
     typeof record.recordedAt !== "string" ||
     typeof withdrawal !== "object" ||
     withdrawal === null ||
@@ -210,6 +231,18 @@ export function readFrozenConsent(json: string | null): FrozenConsent | null {
     return null;
   }
   return record as FrozenConsent;
+}
+
+/**
+ * THE consent rule of a reminder (CP9-AC §2.3, AC4): the checkout's OWN
+ * frozen consent says `reminder: true` OR `marketing: true`. Nothing else
+ * counts: a missing or unreadable consent, `terms` alone, the withdrawal
+ * waiver, or another checkout of the same buyer. The cron step decides with
+ * it and the mail effect asks it again before the mail is built.
+ */
+export function reminderConsentGiven(json: string | null): boolean {
+  const frozen = readFrozenConsent(json);
+  return frozen !== null && (frozen.reminder === true || frozen.marketing === true);
 }
 
 /**

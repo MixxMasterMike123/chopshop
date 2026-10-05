@@ -44,7 +44,8 @@ let shopA: Tenant;
 let shopB: Tenant;
 
 const EXPECTED_DEFAULTS = {
-  abandonedCheckout: true,
+  // CP9-AC (AC2): opt-in.
+  abandonedCheckout: false,
   contentStudio: false,
   // CP8-DC (DC2): opt-in.
   discountCodes: false,
@@ -164,30 +165,31 @@ describe("PUT /v1/platform/tenants/:tenantId/features", () => {
   it("honours an explicit OFF on a default-on key and an explicit ON on an opt-in key", async () => {
     const body = await expectJson<FeaturesBody>(
       await platform(world, "PUT", `/v1/platform/tenants/${shopA.tenantId}/features`, {
-        body: { features: { abandonedCheckout: false, pod: true } },
+        body: { features: { pod: true, productReviews: false } },
       }),
       200,
       "put",
     );
     const byKey = new Map(body.features.map((feature) => [feature.key, feature]));
-    expect(byKey.get("abandonedCheckout")).toEqual({
+    // CP9-AC moved this example to productReviews, the one default-ON key left.
+    expect(byKey.get("productReviews")).toEqual({
       defaultEnabled: true,
       enabled: false,
-      key: "abandonedCheckout",
+      key: "productReviews",
       source: "explicit",
     });
     expect(byKey.get("pod")).toEqual({ defaultEnabled: false, enabled: true, key: "pod", source: "explicit" });
     // Keys not named keep their default.
-    expect(byKey.get("productReviews")).toMatchObject({ enabled: true, source: "default" });
+    expect(byKey.get("abandonedCheckout")).toMatchObject({ enabled: false, source: "default" });
     expect(await readFeatures(shopA.tenantId)).toEqual(body);
 
     // The shared predicate agrees with the route.
-    await expect(isFeatureEnabled(env.DB, shopA.tenantId, "abandonedCheckout")).resolves.toBe(false);
+    await expect(isFeatureEnabled(env.DB, shopA.tenantId, "productReviews")).resolves.toBe(false);
     await expect(isFeatureEnabled(env.DB, shopA.tenantId, "pod")).resolves.toBe(true);
-    await expect(isFeatureEnabled(env.DB, shopA.tenantId, "productReviews")).resolves.toBe(true);
+    await expect(isFeatureEnabled(env.DB, shopA.tenantId, "abandonedCheckout")).resolves.toBe(false);
     await expect(isFeatureEnabled(env.DB, shopA.tenantId, "contentStudio")).resolves.toBe(false);
     // Another tenant is untouched.
-    await expect(isFeatureEnabled(env.DB, shopB.tenantId, "abandonedCheckout")).resolves.toBe(true);
+    await expect(isFeatureEnabled(env.DB, shopB.tenantId, "productReviews")).resolves.toBe(true);
     await expect(isFeatureEnabled(env.DB, shopB.tenantId, "pod")).resolves.toBe(false);
 
     const [audit] = await auditRows(shopA.tenantId, "tenant.features_update");
@@ -195,10 +197,10 @@ describe("PUT /v1/platform/tenants/:tenantId/features", () => {
       actorUserId: world.platformUserId,
       metadata: {
         previous: {
-          abandonedCheckout: { enabled: true, source: "default" },
           pod: { enabled: false, source: "default" },
+          productReviews: { enabled: true, source: "default" },
         },
-        set: { abandonedCheckout: false, pod: true },
+        set: { pod: true, productReviews: false },
       },
       resourceId: shopA.tenantId,
       resourceType: "tenant",
@@ -215,6 +217,7 @@ describe("PUT /v1/platform/tenants/:tenantId/features", () => {
     );
     const byKey = new Map(body.features.map((feature) => [feature.key, feature]));
     expect(byKey.get("productReviews")).toMatchObject({ enabled: true, source: "explicit" });
+    // CP9-AC: an explicit ON of the opt-in key.
     expect(byKey.get("abandonedCheckout")).toMatchObject({ enabled: true, source: "explicit" });
     expect(byKey.get("pod")).toMatchObject({ enabled: true, source: "explicit" });
   });

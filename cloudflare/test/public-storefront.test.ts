@@ -171,12 +171,14 @@ describe("the storefront response's members", () => {
     const on = (await storefrontBody(shop.origin)).features;
     expect(Object.keys(on).sort()).toEqual([...FEATURE_KEYS].sort());
     for (const key of FEATURE_KEYS) {
-      expect(on[key], key).toBe(PORTED_FEATURE_KEYS.includes(key));
+      // CP9-AC: abandonedCheckout also needs the seller's own switch (below).
+      expect(on[key], key).toBe(PORTED_FEATURE_KEYS.includes(key) && key !== "abandonedCheckout");
     }
     expect(on.pod).toBe(true);
     expect(on.productReviews).toBe(false);
     // CP8-DC: ported (D81 reversed for this key only), opt-in per shop (DC2).
     expect(on.discountCodes).toBe(true);
+    // CP9-AC: ported, opt-in, and only with the seller's switch on.
     expect(on.abandonedCheckout).toBe(false);
 
     await setFeature(shop.tenantId, "pod", false);

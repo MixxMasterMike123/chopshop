@@ -341,7 +341,8 @@ describe("the storefront answer says whether the shop can take an order now", ()
     const response = await storefront(ready);
     expect(response.headers.get("etag")).toBe(`"${version}-r${STOREFRONT_BODY_REVISION}"`);
     expect(await ordersOpen(response)).toBe(true);
-    expect(STOREFRONT_BODY_REVISION).toBe(2);
+    // CP9-AC raised it (features.abandonedCheckout).
+    expect(STOREFRONT_BODY_REVISION).toBe(3);
   });
 
   it("an account that stops taking charges (no catalog bump): closed, a new ETag, never a stale 304", async () => {

@@ -330,7 +330,9 @@ export const CartProvider = ({ children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linesKey, cart.discountCode, discountsOn]);
 
-  const addToCart = (product, quantity = 1, variant = null) => {
+  // `quiet` (CP9-AC): no "added to cart" modal, for the reminder link that
+  // rebuilds a whole cart at once (pages/shop/CheckoutRecoveryPage.jsx).
+  const addToCart = (product, quantity = 1, variant = null, { quiet = false } = {}) => {
     const productId = product.productId ?? product.id;
     const variantSku = variant?.sku || null;
     const lineId = `${productId}::${variantSku || ''}`;
@@ -369,7 +371,7 @@ export const CartProvider = ({ children }) => {
         newItems.push(item);
         addedItem = { ...item, formattedPrice: `${unitPrice} kr` };
       }
-      setTimeout(() => showAddedToCartModal(addedItem), 100);
+      if (!quiet) setTimeout(() => showAddedToCartModal(addedItem), 100);
       return { ...prevCart, items: newItems };
     });
   };

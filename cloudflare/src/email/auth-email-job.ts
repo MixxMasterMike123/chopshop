@@ -1,5 +1,12 @@
 import { isValidDiscountCode } from "../commerce/discount-codes";
 import {
+  type CheckoutReminderEmailJob,
+  isCheckoutReminderEmailJob,
+  isCheckoutReminderEmailKind,
+  parseCheckoutReminderEmailJob,
+  renderCheckoutReminderEmail,
+} from "./checkout-reminder-email";
+import {
   discountLabel,
   isOrderEmailJob,
   isOrderEmailKind,
@@ -17,6 +24,8 @@ import {
 
 export type AuthEmailKind =
   | "alert_digest"
+  // CP9-AC: the abandoned-checkout reminder (./checkout-reminder-email.ts).
+  | "checkout_reminder"
   | "email_verification"
   | "order_confirmation"
   // CP5-WE: the three order mails (./order-emails.ts).
@@ -165,6 +174,7 @@ export interface AlertDigestEmailJob extends EmailJobBase {
 export type AuthEmailJob =
   | AuthActionEmailJob
   | AlertDigestEmailJob
+  | CheckoutReminderEmailJob
   | OrderConfirmationEmailJob
   | OrderEmailJob
   | WithdrawalEmailJob;
@@ -279,6 +289,10 @@ export function parseAuthEmailJob(
     return parseOrderEmailJob(value);
   }
 
+  if (isCheckoutReminderEmailKind((value as { kind?: unknown }).kind)) {
+    return parseCheckoutReminderEmailJob(value);
+  }
+
   if ((value as { kind?: unknown }).kind === "order_confirmation") {
     return parseOrderConfirmationEmailJob(value);
   }
@@ -361,6 +375,10 @@ export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
 
   if (isOrderEmailJob(job)) {
     return renderOrderEmail(job);
+  }
+
+  if (isCheckoutReminderEmailJob(job)) {
+    return renderCheckoutReminderEmail(job);
   }
 
   if (job.kind === "order_confirmation") {

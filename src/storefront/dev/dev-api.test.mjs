@@ -221,3 +221,32 @@ describe('the dev API is never part of the build', () => {
     }
   });
 });
+
+describe('the reminder links (CP9-AC)', () => {
+  const post = (path) => route(shops, 'POST', new URL(path, 'http://dev.invalid'));
+
+  it('the resume link: open (the fixture lines plus one gone), completed, gone, an error and the one 404', () => {
+    const open = post('/_api/paminnelsebutiken/v1/checkout-recovery/oppen');
+    assert.equal(open.status, 200);
+    assert.equal(open.body.recovery.status, 'open');
+    for (const item of open.body.recovery.items) {
+      assert.deepEqual(Object.keys(item).filter((key) => !['productId', 'quantity', 'variantId'].includes(key)), []);
+    }
+    assert.ok(open.body.recovery.items.some((item) => item.productId === 'p-utgangen'));
+    assert.deepEqual(post('/_api/paminnelsebutiken/v1/checkout-recovery/klar').body, { recovery: { status: 'completed' } });
+    assert.equal(post('/_api/paminnelsebutiken/v1/checkout-recovery/fel').status, 502);
+    assert.equal(post('/_api/paminnelsebutiken/v1/checkout-recovery/nagot-annat').status, 404);
+  });
+
+  it('the unsubscribe: done, an error and the one 404', () => {
+    assert.deepEqual(post('/_api/paminnelsebutiken/v1/checkout-recovery/oppen/unsubscribe').body, { unsubscribed: true });
+    assert.equal(post('/_api/paminnelsebutiken/v1/checkout-recovery/fel/unsubscribe').status, 502);
+    assert.equal(post('/_api/paminnelsebutiken/v1/checkout-recovery/nagot-annat/unsubscribe').status, 404);
+  });
+
+  it('the invented shop with the reminders on is provbutiken with the box shown', () => {
+    const { body } = get('/_api/paminnelsebutiken/v1/storefront');
+    assert.equal(body.storefront.features.abandonedCheckout, true);
+    assert.equal(get('/_api/provbutiken/v1/storefront').body.storefront.features.abandonedCheckout, false);
+  });
+});

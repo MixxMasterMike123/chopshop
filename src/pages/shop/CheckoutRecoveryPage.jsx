@@ -1,36 +1,41 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { httpsCallable, getFunctions } from 'firebase/functions';
-import { doc, getDoc } from 'firebase/firestore';
 import { Helmet } from 'react-helmet-async';
-import { db } from '../../firebase/config';
+import toast from 'react-hot-toast';
 import ShopNavigation from '../../components/shop/ShopNavigation';
 import ShopFooter from '../../components/shop/ShopFooter';
-import { useShopId } from '../../contexts/ShopContext';
 import { useCart } from '../../contexts/CartContext';
 import { useTranslation } from '../../contexts/TranslationContext';
+import { getCountryAwareUrl } from '../../utils/productUrls';
+import { getProduct } from '../../api/products';
+import { resolveCheckoutRecovery } from '../../api/checkoutRecovery';
+import { recoveryPlan, recoveryProductIds } from '../../storefront/adapters/recovery';
 
 /**
- * Checkout recovery page — /{shopId}/aterta/:token.
+ * Checkout recovery page — <root>/aterta/:token (CP9-AC).
  *
  * Reached from the abandoned-checkout reminder email. On mount it resolves the
- * checkout server-side (resolveCheckoutRecovery, which returns only line refs —
- * no prices, no PII), then rebuilds the cart through the NORMAL CartContext add
- * path (fetching each live product so the server-recomputed price at payment
- * matches — total-parity invariant), and forwards to the checkout.
+ * link (POST /v1/checkout-recovery/:token, which answers line references only:
+ * no prices, no personal data), reads each product as the storefront always
+ * does (the live public product), and rebuilds the cart through the NORMAL
+ * cart path: the visitor's cart is replaced (AC12), each line added with the
+ * live price, without the "added" modal. Then on to the checkout, which asks
+ * for contact and delivery again and prices a NEW checkout from scratch.
+ * Nothing of the old checkout's money, its discount code or its payment is
+ * carried.
  *
- * States: loading → (invalid → shop home) | (completed → friendly panel) |
- * (open → restore cart → /{shopId}/checkout). Works even if the add-on was later
- * disabled (no AddonGate) — the recovery link must never dead-end.
+ * States: loading → open (rebuild → checkout) | completed (the order exists)
+ * | invalid (the link does not work) | gone (nothing of it is for sale any
+ * more; the visitor's cart is left as it was) | error (retry from the shop).
+ * Works whatever the add-on's state: a link must never dead-end.
  */
 const CheckoutRecoveryPage = () => {
-  const shopId = useShopId();
   const { token } = useParams();
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { clearCart, addToCart } = useCart();
 
-  const [status, setStatus] = useState('loading'); // 'loading' | 'completed' | 'error'
+  const [status, setStatus] = useState('loading'); // 'loading' | 'completed' | 'invalid' | 'gone' | 'error'
   const ranRef = useRef(false); // guard against double-run (StrictMode / re-render)
 
   useEffect(() => {
@@ -39,73 +44,47 @@ const CheckoutRecoveryPage = () => {
 
     (async () => {
       try {
-        const functions = getFunctions(undefined, 'us-central1');
-        const resolveCheckoutRecovery = httpsCallable(functions, 'resolveCheckoutRecovery');
-        const res = await resolveCheckoutRecovery({ shopId, token });
-        const data = res?.data || {};
-
-        if (data.status === 'invalid') {
-          navigate(`/${shopId}`, { replace: true });
-          return;
-        }
-        if (data.status === 'completed') {
-          setStatus('completed');
+        const recovery = await resolveCheckoutRecovery(token);
+        if (recovery.status !== 'open') {
+          setStatus(recovery.status);
           return;
         }
 
-        // Open: rebuild the cart from live products, then go to checkout.
-        const items = Array.isArray(data.items) ? data.items : [];
+        // Every product first: a read that fails leaves the visitor's cart as it was.
+        const productsById = {};
+        for (const productId of recoveryProductIds(recovery.items)) {
+          productsById[productId] = await getProduct(productId);
+        }
+        const { lines, missing } = recoveryPlan(recovery.items, productsById);
+        if (lines.length === 0) {
+          setStatus('gone');
+          return;
+        }
+
         clearCart();
-
-        let anyMissing = false;
-        for (const it of items) {
-          const productId = it.productId;
-          if (!productId) { anyMissing = true; continue; }
-          try {
-            const snap = await getDoc(doc(db, 'productsPublic', productId));
-            if (!snap.exists()) { anyMissing = true; continue; }
-            const productData = snap.data();
-            // Only restore products that still belong to this shop, are active
-            // and B2C-available (the server would reject anything else at payment).
-            if (
-              productData.shopId !== shopId ||
-              productData.isActive === false ||
-              productData.availability?.b2c === false
-            ) {
-              anyMissing = true;
-              continue;
-            }
-            const product = { id: snap.id, ...productData };
-            // Match the saved variant by sku against the embedded variants.
-            const variantSku = it.variantSku || it.sku || '';
-            let matchedVariant = null;
-            if (variantSku && Array.isArray(product.variants)) {
-              matchedVariant = product.variants.find((v) => v && v.sku === variantSku) || null;
-            }
-            const quantity = Number(it.quantity) || 1;
-            addToCart(product, quantity, matchedVariant);
-          } catch (e) {
-            console.warn('CheckoutRecovery: could not restore item', productId, e?.message);
-            anyMissing = true;
-          }
+        for (const line of lines) {
+          addToCart(line.product, line.quantity, line.variant, { quiet: true });
         }
-
-        if (anyMissing) {
-          // Non-blocking notice — the buyer still proceeds with whatever restored.
-          try {
-            const toast = (await import('react-hot-toast')).default;
-            toast(t('checkout_recovery_partial', 'Vissa varor har uppdaterats sedan du var här sist.'));
-          } catch { /* toast is best-effort */ }
+        if (missing > 0) {
+          toast(t('checkout_recovery_partial', 'Vissa varor finns inte längre och togs bort ur varukorgen.'));
         }
-
-        navigate(`/${shopId}/checkout`, { replace: true });
+        navigate(getCountryAwareUrl('checkout'), { replace: true });
       } catch (err) {
-        console.error('resolveCheckoutRecovery failed', err);
+        console.error('checkout recovery failed', err?.code || err?.name);
         setStatus('error');
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const backToShop = (
+    <a
+      href={getCountryAwareUrl('')}
+      className="inline-block bg-accent text-white px-6 py-3 rounded-full font-bold hover:opacity-90 transition-opacity"
+    >
+      {t('checkout_recovery_back_to_shop', 'Till butiken')}
+    </a>
+  );
 
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
@@ -131,14 +110,27 @@ const CheckoutRecoveryPage = () => {
               {t('checkout_recovery_completed_title', 'Köpet är redan genomfört')}
             </h1>
             <p className="text-ink/70 mb-6 leading-relaxed">
-              {t('checkout_recovery_completed_body', 'Den här beställningen är redan slutförd. Tack för ditt köp!')}
+              {t('checkout_recovery_completed_body', 'Den här beställningen är redan slutförd. Tack för ditt köp.')}
             </p>
-            <a
-              href={`/${shopId}`}
-              className="inline-block bg-accent text-white px-6 py-3 rounded-full font-bold hover:opacity-90 transition-opacity"
-            >
-              {t('checkout_recovery_back_to_shop', 'Till butiken')}
-            </a>
+            {backToShop}
+          </div>
+        )}
+
+        {status === 'invalid' && (
+          <div className="bg-white rounded-tile shadow-xs border border-ink/5 p-8">
+            <h1 className="font-display text-3xl font-bold text-ink tracking-tight mb-6">
+              {t('checkout_recovery_invalid_title', 'Länken till din varukorg fungerar inte längre.')}
+            </h1>
+            {backToShop}
+          </div>
+        )}
+
+        {status === 'gone' && (
+          <div className="bg-white rounded-tile shadow-xs border border-ink/5 p-8">
+            <h1 className="font-display text-3xl font-bold text-ink tracking-tight mb-6">
+              {t('checkout_recovery_gone_title', 'Varorna från din varukorg finns inte längre i butiken.')}
+            </h1>
+            {backToShop}
           </div>
         )}
 
@@ -147,12 +139,7 @@ const CheckoutRecoveryPage = () => {
             <p className="text-ink/80 mb-6">
               {t('checkout_recovery_error', 'Något gick fel när vi skulle återställa din varukorg. Gå till butiken och försök igen.')}
             </p>
-            <a
-              href={`/${shopId}`}
-              className="inline-block bg-accent text-white px-6 py-3 rounded-full font-bold hover:opacity-90 transition-opacity"
-            >
-              {t('checkout_recovery_back_to_shop', 'Till butiken')}
-            </a>
+            {backToShop}
           </div>
         )}
       </main>

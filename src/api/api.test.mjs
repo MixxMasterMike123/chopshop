@@ -9,6 +9,7 @@ import { ApiError, apiUrl, parseShopSegment, request, segment, shopHref, storefr
 import { createCheckout, createPayment } from './checkout.js';
 import { getProduct, listAllProducts } from './products.js';
 import { getOrder, pollReceipt, receiptPollTimeLeft } from './orders.js';
+import { resolveCheckoutRecovery, unsubscribeCheckoutReminders } from './checkoutRecovery.js';
 
 const realFetch = globalThis.fetch;
 let calls;
@@ -321,5 +322,44 @@ describe("the time left of a checkout's receipt poll", () => {
     assert.equal(receiptPollTimeLeft('left-3', 50_000), 90_000);
     assert.equal(receiptPollTimeLeft('left-4', 60_000), 90_000);
     assert.equal(receiptPollTimeLeft('left-3', 60_000), 80_000);
+  });
+});
+
+describe('the reminder links (CP9-AC)', () => {
+  const TOKEN = `v1.3f2a6b1c-9d4e-4f5a-8b6c-7d8e9f0a1b2c.${'A'.repeat(43)}`;
+
+  it('resolves through POST /v1/checkout-recovery/:token, without a body', async () => {
+    stubFetch(() => answer(200, { recovery: { items: [{ productId: 'p', quantity: 1 }], status: 'open' } }));
+    assert.deepEqual(await resolveCheckoutRecovery(TOKEN), { items: [{ productId: 'p', quantity: 1 }], status: 'open' });
+    assert.equal(calls[0].url, `/_api/sillmans/v1/checkout-recovery/${TOKEN}`);
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[0].init.body, undefined);
+  });
+
+  it('answers completed, and invalid for the one 404', async () => {
+    stubFetch(() => answer(200, { recovery: { status: 'completed' } }));
+    assert.deepEqual(await resolveCheckoutRecovery(TOKEN), { items: [], status: 'completed' });
+    stubFetch(() => answer(404, { error: { code: 'not_found', message: 'Route not found' } }));
+    assert.deepEqual(await resolveCheckoutRecovery(TOKEN), { items: [], status: 'invalid' });
+  });
+
+  it('rejects a 429, a 502 and an unknown shape (the page shows its error)', async () => {
+    for (const reply of [answer(429, { error: { code: 'rate_limited' } }), answer(502, {}), answer(200, { recovery: { status: 'x' } })]) {
+      stubFetch(() => reply);
+      await assert.rejects(resolveCheckoutRecovery(TOKEN), ApiError);
+    }
+  });
+
+  it('unsubscribes through POST …/unsubscribe: true, false for the 404, rejects otherwise', async () => {
+    stubFetch(() => answer(200, { unsubscribed: true }));
+    assert.equal(await unsubscribeCheckoutReminders(TOKEN), true);
+    assert.equal(calls[0].url, `/_api/sillmans/v1/checkout-recovery/${TOKEN}/unsubscribe`);
+    assert.equal(calls[0].init.method, 'POST');
+    stubFetch(() => answer(404, { error: { code: 'not_found' } }));
+    assert.equal(await unsubscribeCheckoutReminders(TOKEN), false);
+    stubFetch(() => answer(500, {}));
+    await assert.rejects(unsubscribeCheckoutReminders(TOKEN), ApiError);
+    stubFetch(() => answer(200, {}));
+    await assert.rejects(unsubscribeCheckoutReminders(TOKEN), ApiError);
   });
 });

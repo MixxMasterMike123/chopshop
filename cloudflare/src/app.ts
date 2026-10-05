@@ -376,6 +376,17 @@ import {
   STOREFRONT_DISCOUNT_PREVIEW_PATH,
 } from "./routes/storefront-discount-preview";
 // CP8-DC (imports) — end
+// CP9-AC (imports) — begin
+import {
+  ADMIN_CHECKOUT_REMINDERS_PATH,
+  handleAdminCheckoutRemindersRoute,
+} from "./routes/admin-checkout-reminders";
+import {
+  CHECKOUT_RECOVERY_ROUTE,
+  CHECKOUT_RECOVERY_UNSUBSCRIBE_ROUTE,
+  handleCheckoutRecoveryRoute,
+} from "./routes/storefront-checkout-recovery";
+// CP9-AC (imports) — end
 // CP4-D2 (imports) — begin
 import { ADMIN_PREVIEW_PATH, handleAdminPreviewRoute } from "./routes/admin-preview";
 // CP4-D2 (imports) — end
@@ -489,7 +500,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0055_discount_code_holds.sql";
+const REQUIRED_MIGRATION = "0056_checkout_reminders.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -2419,6 +2430,24 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     onMethods(["POST"], storefront((c) => handleStorefrontDiscountPreviewRoute(c.env, c.req.raw))),
   );
   // CP8-DC (the discount preview) — end
+  // CP9-AC (Övergiven kassa) — begin
+  // The reminder's two links: storefront routes, tenant by hostname, the same
+  // public-entrypoint rule; the handler reads the RAW path's token once. The
+  // seller's switch: the shop's admin (acting-as admitted), same origin for
+  // the PUT, the opaque 404 to anyone else and while the add-on is off.
+  app.all(
+    CHECKOUT_RECOVERY_ROUTE,
+    onMethods(["POST"], storefront((c) => handleCheckoutRecoveryRoute(c.env, c.req.raw))),
+  );
+  app.all(
+    CHECKOUT_RECOVERY_UNSUBSCRIBE_ROUTE,
+    onMethods(["POST"], storefront((c) => handleCheckoutRecoveryRoute(c.env, c.req.raw))),
+  );
+  app.all(
+    ADMIN_CHECKOUT_REMINDERS_PATH,
+    onMethods(["GET", "PUT"], (c) => handleAdminCheckoutRemindersRoute(c.env, c.req.raw)),
+  );
+  // CP9-AC (Övergiven kassa) — end
   // CP4-D2 — begin
   // The preview grant of an unpublished shop (D57): the shop's admin
   // (acting-as admitted), POST only, same origin; the handler answers the

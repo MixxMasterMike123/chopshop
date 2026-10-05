@@ -35,7 +35,8 @@ const SHIPPING_INFO = {
   postalCode: '123 45',
 };
 const ITEM_KEYS = ['productId', 'quantity', 'variantId'];
-const CONSENT_KEYS = ['disclosureVersion', 'marketing', 'terms', 'withdrawalWaiver'];
+// = cloudflare/src/legal/consent.ts CONSENT_KEYS (CP9-AC added `reminder`).
+const CONSENT_KEYS = ['disclosureVersion', 'marketing', 'reminder', 'terms', 'withdrawalWaiver'];
 
 const LINES = [
   { productId: 'prod-a', quantity: 2, variantId: 'var-a-m' },
@@ -203,6 +204,30 @@ describe('buildCheckoutRequest: the cart\'s discount code (CP8-DC)', () => {
       globalThis.fetch = realFetch;
       delete globalThis.location;
     }
+  });
+});
+
+describe('buildCheckoutRequest: the reminder box (CP9-AC)', () => {
+  const base = { items: LINES, email: 'kund@example.test', deliveryMethod: 'pickup', shippingCountry: 'SE', marketing: false };
+
+  it('sends `consent.reminder: true` only when the box was ticked', () => {
+    const request = buildCheckoutRequest({ ...base, reminder: true });
+    assert.deepEqual(request.consent, { marketing: false, reminder: true, terms: true });
+    for (const key of Object.keys(request.consent)) assert.ok(CONSENT_KEYS.includes(key), key);
+  });
+
+  it('sends no reminder key, and the same request as before, unless it is literally true', () => {
+    const before = buildCheckoutRequest(base);
+    for (const reminder of [undefined, null, false, 'true', 1, {}, []]) {
+      const request = buildCheckoutRequest({ ...base, reminder });
+      assert.equal('reminder' in request.consent, false, String(reminder));
+      assert.equal(JSON.stringify(request), JSON.stringify(before));
+    }
+  });
+
+  it('never takes it from another box: marketing ticked is marketing only', () => {
+    const request = buildCheckoutRequest({ ...base, marketing: true });
+    assert.deepEqual(request.consent, { marketing: true, terms: true });
   });
 });
 

@@ -235,8 +235,6 @@ src/pages/shop/B2BOrderDetail.jsx
 src/pages/shop/B2BOrders.jsx
 src/pages/shop/B2BProfile.jsx
 src/pages/shop/B2BRegister.jsx
-src/pages/shop/CheckoutRecoveryPage.jsx
-src/pages/shop/CheckoutUnsubscribePage.jsx
 src/pages/shop/CustomerAccount.jsx
 src/pages/shop/CustomerRegister.jsx
 src/pages/shop/EmailVerificationHandler.jsx

@@ -19,7 +19,7 @@
  *
  * Sources of the rows: the routes that exist (src/app.ts: storefront,
  * products, pod previews, checkout, payment, receipt, orders, reports, the
- * withdrawal function) and the
+ * withdrawal function, the two links of an abandoned-checkout reminder) and the
  * public routes of CP4 briefs A–C (collections, pages, legal). `GET /v1/seo`
  * and `GET /v1/sitemap` are NOT here: only this Worker calls them, never a
  * browser.
@@ -50,6 +50,10 @@ export const STOREFRONT_API_ROUTES: readonly ApiRoute[] = [
   { methods: ["GET"], segments: ["v1", "orders", ID] },
   { methods: ["POST"], segments: ["v1", "reports"] },
   { methods: ["POST"], segments: ["v1", "withdrawals"] },
+  // CP9-AC: the reminder's resume link and its unsubscribe (also the
+  // mail's RFC 8058 one-click target). The token is unreserved characters only.
+  { methods: ["POST"], segments: ["v1", "checkout-recovery", ID] },
+  { methods: ["POST"], segments: ["v1", "checkout-recovery", ID, "unsubscribe"] },
 ];
 
 const RAW_ID_SEGMENT = /^(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+$/;

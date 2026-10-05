@@ -296,6 +296,8 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, withdrawa
     pickupLocationId: deliveryInfo?.pickupLocation?.id,
     pickupDate: deliveryInfo?.pickupDate,
     marketing: customerInfo?.marketing,
+    // CP9-AC: the reminder box; nothing is sent unless it was ticked.
+    reminder: customerInfo?.reminder,
     withdrawal: withdrawalGate,
     // CP8-DC: the code the cart holds, never the field's text.
     discountCode: cart.discountCode,

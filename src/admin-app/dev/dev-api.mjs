@@ -41,6 +41,7 @@ import { STUDIO_ROUTES } from './studio-dev.mjs';
 import { FL_PLATFORM_ROUTES } from './platform-settings-dev.mjs';
 import { REDIRECT_ROUTES } from './redirects-dev.mjs';
 import { DISCOUNT_CODE_ROUTES } from './discount-codes-dev.mjs';
+import { CHECKOUT_REMINDER_ROUTES } from './checkout-reminders-dev.mjs';
 import { PRINT_JOB_ROUTES, balanceRoute, settingsPatchRoute, settingsReadRoute } from './fp-dev.mjs';
 
 export const DEV_API_MARKER = 'admin-dev-api-invented-data';
@@ -444,6 +445,7 @@ const ADMIN_ROUTES = [
   ...STUDIO_ROUTES, // unit FN1
   ...REDIRECT_ROUTES, // unit FL
   ...DISCOUNT_CODE_ROUTES, // CP8-DC
+  ...CHECKOUT_REMINDER_ROUTES, // CP9-AC
 ];
 
 // Unit FB adds the platform rows (tenants, acting-as) here.

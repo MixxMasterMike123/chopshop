@@ -47,11 +47,12 @@ export interface PublicStorefront {
  * THE features that are ported (D81). A feature whose code is not on
  * Cloudflare reads `false` in the public response whatever the shop's row or
  * default says, so no button of it appears and fails. Porting a feature is
- * adding its key here (CP8-DC: `discountCodes`, opt-in per shop, DC1/DC2).
+ * adding its key here (CP8-DC: `discountCodes`, opt-in per shop, DC1/DC2;
+ * CP9-AC: `abandonedCheckout`, opt-in per shop, AC1/AC2).
  * A change here changes the storefront body without a catalog bump: raise
  * STOREFRONT_BODY_REVISION (public-routes.ts) with it.
  */
-export const PORTED_FEATURE_KEYS: readonly FeatureKey[] = ["pod", "discountCodes"];
+export const PORTED_FEATURE_KEYS: readonly FeatureKey[] = ["pod", "discountCodes", "abandonedCheckout"];
 
 /**
  * `GET /v1/storefront` → `{ storefront: PublicStorefrontResponse }`: one read
@@ -85,6 +86,33 @@ export interface PublicStorefrontResponse extends PublicStorefront {
 export async function isPublicShop(db: D1Database, tenantId: string): Promise<boolean> {
   const row = await publicShopStatement(db, tenantId).first<PublicShopRow>();
   return row !== null && row.shop_name !== null && row.shop_name.trim() !== "";
+}
+
+/**
+ * THE answer of `ordersOpen` (CP9-OB): the legal gate AND the account's own
+ * test. One function, so the storefront's answer and CP9-AC's
+ * `shopTakesOrders` cannot drift.
+ */
+export function ordersOpenOf(legallyOpen: boolean, account: ConnectAccountRow | null): boolean {
+  return legallyOpen && account !== null && takesDestinationCharges(account);
+}
+
+/**
+ * CP9-AC check 4: can this shop take an order NOW, as its storefront says? A
+ * public shop (isPublicShop) whose `ordersOpen` would answer true. Read on its
+ * own by the reminder cron step and the reminder mail, never by the
+ * storefront answer (which reads the same facts in its own batch).
+ */
+export async function shopTakesOrders(db: D1Database, tenantId: string, now: number): Promise<boolean> {
+  const [publicShop, legallyOpen, account] = await Promise.all([
+    isPublicShop(db, tenantId),
+    isCheckoutLegallyOpen(db, tenantId, now),
+    db
+      .prepare("SELECT stripe_account_id, stripe_charges_enabled FROM tenants WHERE tenant_id = ? LIMIT 1")
+      .bind(tenantId)
+      .first<ConnectAccountRow>(),
+  ]);
+  return publicShop && ordersOpenOf(legallyOpen, account);
 }
 
 function parseIdentity(json: string | null): Record<string, unknown> {
@@ -139,11 +167,12 @@ export async function getPublicStorefrontVersioned(
   db: D1Database,
   tenant: StorefrontTenant,
 ): Promise<{ catalogVersion: number; value: PublicStorefrontResponse } | null> {
-  const [shopResult, settingsResult, featuresResult, accountResult] = await db.batch<
+  const [shopResult, settingsResult, featuresResult, accountResult, reminderResult] = await db.batch<
     | PublicShopRow
     | { store_identity_json: string }
     | { enabled: number; feature_key: string }
     | ConnectAccountRow
+    | { enabled: number }
   >([
     publicShopStatement(db, tenant.tenantId, isPreview(tenant)),
     db
@@ -160,6 +189,11 @@ export async function getPublicStorefrontVersioned(
     db
       .prepare("SELECT stripe_account_id, stripe_charges_enabled FROM tenants WHERE tenant_id = ? LIMIT 1")
       .bind(tenant.tenantId),
+    // CP9-AC: the seller's own switch of Övergiven kassa (0056; its triggers
+    // bump catalog_version, so the version labels it too).
+    db
+      .prepare("SELECT enabled FROM checkout_reminder_settings WHERE tenant_id = ? LIMIT 1")
+      .bind(tenant.tenantId),
   ]);
 
   const shop = (shopResult?.results[0] as PublicShopRow | undefined) ?? null;
@@ -171,6 +205,11 @@ export async function getPublicStorefrontVersioned(
   const features = publicFeatures(
     (featuresResult?.results ?? []) as Array<{ enabled: number; feature_key: string }>,
   );
+  // CP9-AC §8.1: the checkout asks for the reminder box only while the shop
+  // actually sends reminders: the platform's add-on (above) AND the seller's
+  // switch.
+  features.abandonedCheckout =
+    features.abandonedCheckout && (reminderResult?.results[0] as { enabled: number } | undefined)?.enabled === 1;
 
   const account = (accountResult?.results[0] as ConnectAccountRow | undefined) ?? null;
 
@@ -197,7 +236,7 @@ export async function getPublicStorefrontVersioned(
       locale: shop.default_locale,
       menu: resolveMenu(menuEntries, menuResolutions),
       name: shop.shop_name,
-      ordersOpen: legallyOpen && account !== null && takesDestinationCharges(account),
+      ordersOpen: ordersOpenOf(legallyOpen, account),
       pickupLocations: projectPickupLocations(identity.pickupLocations),
       templateId: projectTemplateId(identity.templateId),
       theme: projectTheme(identity.theme),

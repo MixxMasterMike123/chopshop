@@ -189,7 +189,9 @@ async function commitWithLedger(
  * the retention sweep reads it (a canceled intent's snapshot may be purged 7
  * days later; `requires_payment_method` is NOT terminal and keeps the clock
  * running from this moment). Firebase additionally marked the checkout
- * 'failed' to keep abandoned-cart reminders away; there are no reminders here.
+ * 'failed' to keep abandoned-cart reminders away. Here the reminder step
+ * reads this event's own row in payment_events instead (CP9-AC check 10,
+ * src/commerce/checkout-reminders.ts): nothing more is written for it.
  */
 async function handleIntentStatus(
   db: D1Database,

@@ -4,6 +4,7 @@ import {
   hashEmailRecipient,
   type AuthEmailJob,
 } from "./auth-email-job";
+import { fingerprintCheckoutReminderEmailJob, isCheckoutReminderEmailJob } from "./checkout-reminder-email";
 import { fingerprintOrderEmailJob, isOrderEmailJob } from "./order-emails";
 import { fingerprintWithdrawalEmailJob, isWithdrawalEmailJob } from "./withdrawal-email";
 
@@ -38,6 +39,10 @@ export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string
   // So do the order mails of CP5-WE.
   if (isOrderEmailJob(job)) {
     return fingerprintOrderEmailJob(job);
+  }
+  // And the abandoned-checkout reminder of CP9-AC.
+  if (isCheckoutReminderEmailJob(job)) {
+    return fingerprintCheckoutReminderEmailJob(job);
   }
 
   const canonical = JSON.stringify({

@@ -81,10 +81,21 @@ const JOB_LIFETIME_MS = 24 * 60 * 60 * 1_000;
 const MIN_REMAINING_LIFETIME_MS = 10 * 60 * 1_000;
 const MAX_LINES = 100;
 
-type Built =
+export type Built =
   | { freeze: string | null; job: AuthEmailJob; kind: "built" }
   | { error: string; kind: "fail" }
   | { kind: "no_mail" };
+
+/**
+ * What a mail effect of another module (CP9-AC's reminder,
+ * src/commerce/checkout-reminders.ts) may say to `deliver`: its job's own
+ * lifetime, and what its alert names instead of "order <aggregate id>". Absent
+ * for every mail of this module, whose jobs and alerts are as before.
+ */
+export interface DeliverOptions {
+  lifetimeMs?: number;
+  subject?: string;
+}
 
 const NOT_FOUND: Built = { error: "order_not_found", kind: "fail" };
 const INVALID: Built = { error: "invalid_email_content", kind: "fail" };
@@ -559,10 +570,11 @@ async function buildStatusUpdate(
 
 // ── the run ─────────────────────────────────────────────────────────────────
 
-async function failEmail(
+export async function failEmail(
   ctx: EffectContext,
   error: string,
   terminal: boolean,
+  subject?: string,
 ): Promise<OutboxRunOutcome> {
   const { claim, env, row } = ctx;
   const now = ctx.clock();
@@ -576,7 +588,7 @@ async function failEmail(
         {
           id: `outbox-failed:${row.outbox_id}`,
           kind: "outbox_failed",
-          message: `Email effect ${row.outbox_id} (${row.dedupe_key.split(":").slice(0, 2).join(":")}) for order ${row.aggregate_id} failed (${error}); the mail was not sent.`,
+          message: `Email effect ${row.outbox_id} (${row.dedupe_key.split(":").slice(0, 2).join(":")}) for ${subject ?? `order ${row.aggregate_id}`} failed (${error}); the mail was not sent.`,
           nowMs: now,
           resourceId: row.outbox_id,
           resourceType: "outbox_event",
@@ -592,10 +604,11 @@ async function failEmail(
 }
 
 /** Built job → ledger + freeze + submitting (one batch, under the claim) → queue → done. */
-async function deliver(ctx: EffectContext, built: Built): Promise<OutboxRunOutcome> {
+export async function deliver(ctx: EffectContext, built: Built, options: DeliverOptions = {}): Promise<OutboxRunOutcome> {
   const { claim, env, row } = ctx;
+  const lifetimeMs = options.lifetimeMs ?? JOB_LIFETIME_MS;
   if (built.kind === "fail") {
-    return failEmail(ctx, built.error, true);
+    return failEmail(ctx, built.error, true, options.subject);
   }
   if (built.kind === "no_mail") {
     const doneAt = ctx.clock();
@@ -604,10 +617,10 @@ async function deliver(ctx: EffectContext, built: Built): Promise<OutboxRunOutco
 
   const queue = env.EMAIL_QUEUE;
   if (queue === undefined) {
-    return failEmail(ctx, "email_queue_not_configured", false);
+    return failEmail(ctx, "email_queue_not_configured", false, options.subject);
   }
-  if (ctx.clock() > row.created_at + JOB_LIFETIME_MS - MIN_REMAINING_LIFETIME_MS) {
-    return failEmail(ctx, "email_expired", true);
+  if (ctx.clock() > row.created_at + lifetimeMs - MIN_REMAINING_LIFETIME_MS) {
+    return failEmail(ctx, "email_expired", true, options.subject);
   }
 
   const { freeze, job } = built;
@@ -634,7 +647,7 @@ async function deliver(ctx: EffectContext, built: Built): Promise<OutboxRunOutco
   try {
     await queue.send(job, { contentType: "json" });
   } catch {
-    return failEmail(ctx, "email_queue_error", false);
+    return failEmail(ctx, "email_queue_error", false, options.subject);
   }
 
   const doneAt = ctx.clock();
