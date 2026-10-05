@@ -98,6 +98,12 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 - **Decisions waiting for Mikael, all built on their defaults:** PS2's nine, PS3 D1–D11, PS4 A1–A8/B1–B6, DC1–DC17 + B1–B13, OB1–OB13, AC1–AC16 (+ the builder's own), and DAC1–DAC26 (not built).
 - Staging now: API, web and admin `badc8c8e` (0056, canvas on). Tree clean.
 
+**Update 2026-10-05 05:37 — the reviews design is committed (not built); a new shop is born without the opt-in add-ons.**
+- **CP9-RV, the design** (`CP9_RV_REPORT.md`, RV1–RV22, the legal ones marked; nothing built): one review per product per paid order, the average computed at read time, the request mails on the reminder unit's patterns with a consent box, the add-on made opt-in (today `productReviews` is default ON in the Worker and unported: porting it unchanged would turn reviews on for four of five shops). About 1.8 times the reminder unit; two units recommended: RV-A (the reviews, display, moderation; ships dark) then RV-B (the request mails; its smoke needs the minimum delay of days). WAITS for Mikael's go: the largest remaining feature, and none of it helps onboarding.
+- **`9421e832`** (the reviewer's, from the design's finding F13; Codex clean; attested; **admin deployed**): the console's "Ny butik" preset wrote `discountCodes` and `abandonedCheckout` ON for every new shop, which undid "off until the platform turns it on" (DC2, AC2). The admin build's provisioning now writes every opt-in add-on off; `pod` follows the shop type. The dry-run shop `dryrun-20261004` was made before this and has both on.
+- **Not started:** marketing materials (small–medium), the Shopify/Woo migrators (medium), custom domains for shops (medium, needs the platform zone). **Designed, not built:** DAC7 (the accountant), reviews (Mikael's go).
+- Staging now: API and web `badc8c8e` (0056), admin `9421e832`. Tree clean.
+
 ### (history) ▶ 2026-10-04 14:10 — resumed from the 10:15 stop: FL is fixed and ON STAGING, T1 is committed and 0052 is applied on staging; two builders run — START HERE
 
 **Staging serves: admin `237f0339` (version `4b6d7789-…`), API `6549f276` (code requires 0051; the database is on 0052), web `959f7892`.** HEAD `f085d880` pushed; both new commits are Codex-clean and attested (logs `~/chopshop-export/codex-2026-10-04/codex-237f0339.log`, `codex-f085d880.log`).
