@@ -231,9 +231,19 @@ interface TenantConnectRow {
 }
 
 /**
- * The shop's connected account, or null when it cannot take a destination
- * charge. Firebase's `useConnect = chargesEnabled && stripeAccountId`.
+ * THE test of a shop's account: can it take a destination charge? Firebase's
+ * `useConnect = chargesEnabled && stripeAccountId`. Also what the storefront
+ * answer's `ordersOpen` asks (CP9-OB, storefront/public-storefront.ts), so the
+ * storefront and the payment route cannot disagree.
  */
+export function takesDestinationCharges(row: {
+  stripe_account_id: string | null;
+  stripe_charges_enabled: number;
+}): boolean {
+  return row.stripe_account_id !== null && row.stripe_charges_enabled === 1;
+}
+
+/** The shop's connected account, or null when it cannot take a destination charge. */
 async function loadConnectAccount(
   db: D1Database,
   tenantId: string,
@@ -248,11 +258,7 @@ async function loadConnectAccount(
     .bind(tenantId)
     .first<TenantConnectRow>();
 
-  if (
-    row === null ||
-    row.stripe_account_id === null ||
-    row.stripe_charges_enabled !== 1
-  ) {
+  if (row === null || !takesDestinationCharges(row)) {
     return null;
   }
 

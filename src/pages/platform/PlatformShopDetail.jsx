@@ -15,7 +15,9 @@ import {
   setShopConnectEnabled,
   setShopPublished,
   setShopStatus,
+  setShopSupportEmail,
   storefrontUrlOf,
+  SUPPORT_EMAIL_EDITABLE,
 } from './platformShopDetailData';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import ImpersonateShopModal from '../../components/platform/ImpersonateShopModal';
@@ -44,8 +46,8 @@ const fmtDateTime = (iso) => {
   return Number.isNaN(d.getTime()) ? v : d.toLocaleString('sv-SE');
 };
 
-const Card = ({ title, children, action }) => (
-  <div className="rounded-xl border border-white/10 bg-gray-900 p-5">
+const Card = ({ title, children, action, tone }) => (
+  <div className={`rounded-xl border bg-gray-900 p-5 ${tone === 'warn' ? 'border-amber-500/30' : 'border-white/10'}`}>
     <div className="flex items-center justify-between mb-4">
       <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500">{title}</h2>
       {action}
@@ -53,6 +55,65 @@ const Card = ({ title, children, action }) => (
     {children}
   </div>
 );
+
+// CP9-OB: an address at a placeholder domain is not the shop's (the legal
+// pages and the order mails refuse it, legal-identity.ts / order-emails.ts).
+const PLACEHOLDER_ADDRESS = /@example\.(com|org|net|se)$/i;
+
+// The shop's support address, set by the platform (D99). The seller cannot
+// adopt its legal pages without it: they print it. Inline editor in the
+// pattern of CommissionCell.
+const SupportEmailCell = ({ shop, onSaved }) => {
+  const current = typeof shop.supportEmail === 'string' && !PLACEHOLDER_ADDRESS.test(shop.supportEmail) ? shop.supportEmail : '';
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(current);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    const email = value.trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast.error('Ange en giltig e-postadress.'); return; }
+    if (PLACEHOLDER_ADDRESS.test(email)) { toast.error('En adress på example.com räknas inte. Ange butikens riktiga adress.'); return; }
+    try {
+      setSaving(true);
+      const stored = await setShopSupportEmail(shop, email || null);
+      toast.success(stored ? `Support-e-post sparad: ${stored}` : 'Support-e-post borttagen');
+      onSaved?.(stored);
+      setEditing(false);
+    } catch (e) {
+      console.error('Error saving support email:', e);
+      toast.error(e?.status === 400 ? 'Ange en giltig e-postadress.' : 'Kunde inte spara support-e-posten.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => { setValue(current); setEditing(true); }}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-2.5 py-1 text-xs font-medium text-gray-200 hover:bg-indigo-500/15 hover:text-indigo-300"
+      >
+        {current || <span className="text-amber-300">Lägg in adress</span>}
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex w-full items-center gap-1.5 sm:w-auto">
+      <input
+        type="email" value={value} autoFocus
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false); }}
+        placeholder="kundtjanst@butiken.se"
+        className="min-w-0 flex-1 rounded-lg border border-white/10 bg-gray-950 px-2 py-1 text-xs text-gray-100 focus:border-indigo-500 focus:outline-none sm:w-56 sm:flex-none"
+      />
+      <button disabled={saving} onClick={save} className="rounded-lg bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50">
+        {saving ? '…' : 'Spara'}
+      </button>
+      <button onClick={() => setEditing(false)} className="rounded-lg bg-white/5 px-2 py-1 text-xs text-gray-400 hover:bg-white/10">✕</button>
+    </div>
+  );
+};
 
 const PlatformShopDetail = () => {
   const { shopId } = useParams();
@@ -195,6 +256,8 @@ const PlatformShopDetail = () => {
 
   const storefrontUrl = storefrontUrlOf(shop);
   const c = connectLabel(shop);
+  const hasSupportEmail = typeof shop.supportEmail === 'string' && shop.supportEmail.trim() !== ''
+    && !PLACEHOLDER_ADDRESS.test(shop.supportEmail);
 
   // Legal facts for the read-only Juridik card below.
   const legalReadiness = legalReadinessOf(shop);
@@ -324,14 +387,16 @@ const PlatformShopDetail = () => {
             </div>
           </Card>
 
-          {/* Betalningar (Connect) */}
+          {/* Betalningar (Connect). CP9-OB: the card says which step the shop
+              is at, and turns amber while it waits for the operator's "Bjud in". */}
           <Card
             title="Betalningar"
+            tone={c.waitsForOperator ? 'warn' : undefined}
             action={<span className={'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ' + c.cls}>{c.text}</span>}
           >
             <div className="flex items-center justify-between gap-4">
-              <p className="text-sm text-gray-400">
-                Bjud in butiken att aktivera Stripe Connect. Butiken slutför onboarding själv innan den kan ta betalt.
+              <p className={`text-sm ${c.waitsForOperator ? 'text-amber-200' : 'text-gray-400'}`}>
+                {c.step}
               </p>
               {!shop.payments?.chargesEnabled && (
                 <button
@@ -355,6 +420,24 @@ const PlatformShopDetail = () => {
               />
             </div>
           </Card>
+
+          {/* Support-e-post (CP9-OB): the platform sets it (D99); the shop's
+              legal pages print it, so the seller cannot adopt them without it. */}
+          {SUPPORT_EMAIL_EDITABLE && (
+            <Card title="Support-e-post" tone={hasSupportEmail ? undefined : 'warn'}>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <p className={`text-sm ${hasSupportEmail ? 'text-gray-400' : 'text-amber-200'}`}>
+                  {hasSupportEmail
+                    ? 'Adressen köparna når butiken på. Den står i butikens juridiska sidor och sidfot.'
+                    : 'Saknas. Butiken kan inte godkänna sina juridiska sidor förrän du har lagt in den: sidorna skriver ut den.'}
+                </p>
+                <SupportEmailCell
+                  shop={shop}
+                  onSaved={(email) => setShop((prev) => ({ ...prev, supportEmail: email }))}
+                />
+              </div>
+            </Card>
+          )}
 
           {/* Juridik — two independent facts, read-only:
               (1) the shop's own consumer legal pages (readiness + who accepted

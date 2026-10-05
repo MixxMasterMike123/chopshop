@@ -41,14 +41,22 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
  * (`"<v>-c-r<n>"` with the switch on). Raising it makes every ETag kept from
  * before the deploy miss once. Only `GET /v1/storefront` names one today;
  * every other read's ETag is as before.
+ *
+ * CP9-OB: the storefront body carries `ordersOpen` (public-storefront.ts),
+ * which changes without a catalog bump (a Connect webhook, the terms grace
+ * ending by the clock). So `GET /v1/storefront` names it too: `-x` is
+ * appended while the shop cannot take an order (`"<v>-r2-x"`, `"<v>-c-r2-x"`).
+ * Revision 2: every body gained `ordersOpen`, and stored placeholder texts
+ * left the identity (identity-projection.ts ownText).
  */
 
-/** Raise with any code change to the storefront body (PORTED_FEATURE_KEYS). */
-export const STOREFRONT_BODY_REVISION = 1;
+/** Raise with any code change to the storefront body (PORTED_FEATURE_KEYS, ordersOpen). */
+export const STOREFRONT_BODY_REVISION = 2;
 
-function etagFor(catalogVersion: number, tenant: StorefrontTenant, revision: number): string {
+function etagFor(catalogVersion: number, tenant: StorefrontTenant, revision: number, ordersClosed: boolean): string {
   const base = hidesStandInFrames(tenant) ? `${catalogVersion}-c` : `${catalogVersion}`;
-  return revision === 0 ? `"${base}"` : `"${base}-r${revision}"`;
+  const tagged = revision === 0 ? base : `${base}-r${revision}`;
+  return ordersClosed ? `"${tagged}-x"` : `"${tagged}"`;
 }
 
 /** RFC 9110 §13.1.2: a list of entity tags, or `*`; weak comparison. */
@@ -66,6 +74,8 @@ function matchesIfNoneMatch(request: Request, etag: string): boolean {
 /**
  * `tenant`: the read's (resolveStorefrontTenant), which says preview and the
  * switch. `revision`: the body's code revision (0, the default, names none).
+ * `ordersClosed`: the body says the shop cannot take an order (only the
+ * storefront answer passes it).
  */
 export function versionedJsonResponse(
   request: Request,
@@ -73,11 +83,12 @@ export function versionedJsonResponse(
   body: unknown,
   tenant: StorefrontTenant,
   revision = 0,
+  ordersClosed = false,
 ): Response {
   if (isPreview(tenant)) {
     return previewJsonResponse(body);
   }
-  const etag = etagFor(catalogVersion, tenant, revision);
+  const etag = etagFor(catalogVersion, tenant, revision, ordersClosed);
   const headers = {
     "Cache-Control": "no-cache",
     ETag: etag,
@@ -95,7 +106,7 @@ export function versionedJsonResponse(
 /**
  * `GET /v1/storefront` — the full public response (CP4-D, public-storefront.ts):
  * `{ storefront: { name, locale, currency, identity, branding, menu, features,
- * pickupLocations, templateId, theme, accent } }`. An unknown, suspended or
+ * ordersOpen, pickupLocations, templateId, theme, accent } }`. An unknown, suspended or
  * unpublished shop is the 404 below; an unpublished one answers to a valid
  * preview grant (preview.ts).
  */
@@ -114,5 +125,6 @@ export async function handlePublicStorefrontRequest(
         { storefront: storefront.value },
         tenant,
         STOREFRONT_BODY_REVISION,
+        !storefront.value.ordersOpen,
       );
 }

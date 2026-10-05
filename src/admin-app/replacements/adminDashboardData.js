@@ -17,11 +17,23 @@
 // count (no customer accounts, D81), the affiliate revenue and the active
 // affiliates (PORT-LATER).
 //
+// The "Kom igång" checklist (CP9-OB item 3): loadOnboarding reads the facts
+// the admin already has (the legal status, the shop, the Connect view, the
+// first page of products) and answers the steps (adapters/onboarding.js), or
+// null when every step is done or a read failed (the dashboard then shows what
+// it showed before: a checklist on a guess would mislead).
+//
 // Read for the page's `shopId` only (readForShop): with no shop chosen nothing
 // is asked, and numbers that arrive after the tab moved to another shop are
 // dropped, never shown under it (CP5-FX, finding 1).
 
+import { adminRequest } from '../../api/admin/client.js';
+import { getLegalPagesStatus } from '../../api/admin/legal.js';
 import { listAllOrders } from '../../api/admin/orders.js';
+import { getConnect } from '../../api/admin/payments.js';
+import { listProducts } from '../../api/admin/products.js';
+import { onboardingComplete, onboardingSteps } from '../adapters/onboarding.js';
+import { notEnabledPayments, toPagePayments } from '../adapters/payments.js';
 import { orderFromListRow } from '../adapters/order.js';
 import { minorToKronor } from '../adapters/money.js';
 import { readForShop } from '../providers/ordersForShop.js';
@@ -53,4 +65,25 @@ function statsOf({ orders, count, totalMinor }) {
     activeAffiliates: null,
     recentOrders: rows.slice(0, 5),
   };
+}
+
+export function loadOnboarding(shopId) {
+  return readForShop(shopId, async (id) => {
+    const option = { shopId: id };
+    const [status, shop, connect, products] = await Promise.all([
+      getLegalPagesStatus(option),
+      adminRequest('GET', '/v1/admin/shop', option).then(({ data }) => data?.shop ?? null),
+      getConnect(option),
+      listProducts({ ...option, limit: 100 }).then((page) => page.products),
+    ]);
+    if (!status || !shop) return null;
+    const steps = onboardingSteps({
+      status,
+      shop,
+      payments: connect ? toPagePayments(connect) : notEnabledPayments(),
+      products,
+      pod: shop.features?.pod === true,
+    });
+    return onboardingComplete(steps) ? null : { steps };
+  });
 }

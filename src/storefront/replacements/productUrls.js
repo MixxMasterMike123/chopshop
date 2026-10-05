@@ -138,21 +138,27 @@ export const buildMenuHref = (item) => {
 export const isExternalMenuItem = (item) =>
   item?.type === 'url' && /^https?:\/\//i.test(item.target || '');
 
-export const getProductSeoTitle = (product) => {
-  if (!product) return STORE.shopName;
+// CP9-OB: the shop's own name from the live settings (`store`, the page's
+// useStoreSettings()), never a default text: without one, no suffix at all.
+const shopNameOf = (store) => String(store?.shopName || '').trim();
+
+const seoSuffix = (store) => (shopNameOf(store) ? ` | ${shopNameOf(store)}` : '');
+
+export const getProductSeoTitle = (product, store) => {
+  if (!product) return shopNameOf(store);
   const name = safeGetContent(product.name);
   const size = product.size ? ` - ${product.size}` : '';
-  return `${name}${size} | ${STORE.shopName}`;
+  return `${name}${size}${seoSuffix(store)}`;
 };
 
-export const getProductSeoDescription = (product) => {
-  if (!product) return STORE.tagline || STORE.shopName;
+export const getProductSeoDescription = (product, store) => {
+  if (!product) return String(store?.tagline || '').trim() || shopNameOf(store);
 
   const name = safeGetContent(product.name);
   const b2cDesc = safeGetContent(product.descriptions?.b2c);
   const fallbackDesc = safeGetContent(product.description);
   const legacyB2bDesc = safeGetContent(product.descriptions?.b2b);
-  const defaultDesc = `${name} – ${STORE.shopName}`;
+  const defaultDesc = shopNameOf(store) ? `${name} – ${shopNameOf(store)}` : name;
 
   const description = b2cDesc || fallbackDesc || legacyB2bDesc || defaultDesc;
 
@@ -161,22 +167,20 @@ export const getProductSeoDescription = (product) => {
 };
 
 export const getShopSeoTitle = (language = 'sv-SE', store = STORE) => {
-  const name = store.shopName || STORE.shopName;
-  const tagline = store.tagline || STORE.tagline;
-  return tagline ? `${name} - ${tagline}` : name;
+  const name = shopNameOf(store);
+  const tagline = store?.tagline || '';
+  return tagline && name ? `${name} - ${tagline}` : name || tagline;
 };
 
 export const getShopSeoDescription = (language = 'sv-SE', store = STORE) => {
-  return store.companyDescription || store.tagline || store.shopName || STORE.shopName;
+  return store?.companyDescription || store?.tagline || shopNameOf(store);
 };
 
-const seoSuffix = () => ` | ${STORE.shopName}`;
-
-export const getCartSeoTitle = () => `Varukorg${seoSuffix()}`;
+export const getCartSeoTitle = (store) => `Varukorg${seoSuffix(store)}`;
 export const getCartSeoDescription = () =>
   'Granska dina valda produkter. Säker kassa och snabb leverans.';
 
-export const getCheckoutSeoTitle = () => `Kassa${seoSuffix()}`;
+export const getCheckoutSeoTitle = (store) => `Kassa${seoSuffix(store)}`;
 export const getCheckoutSeoDescription = () =>
   'Säker kassa. Snabb leverans och 14 dagars ångerrätt. Betala säkert online.';
 
@@ -187,11 +191,11 @@ const LEGAL_LABELS = {
   cookies: 'Cookie-policy',
   shipping: 'Frakt & Leverans',
 };
-export const getLegalSeoTitle = (pageType = 'privacy') =>
-  `${LEGAL_LABELS[pageType] || LEGAL_LABELS.privacy}${seoSuffix()}`;
-export const getLegalSeoDescription = (pageType = 'privacy') => {
+export const getLegalSeoTitle = (pageType = 'privacy', store) =>
+  `${LEGAL_LABELS[pageType] || LEGAL_LABELS.privacy}${seoSuffix(store)}`;
+export const getLegalSeoDescription = (pageType = 'privacy', store) => {
   const label = LEGAL_LABELS[pageType] || LEGAL_LABELS.privacy;
-  return `${label} – ${STORE.shopName}.`;
+  return shopNameOf(store) ? `${label} – ${shopNameOf(store)}.` : `${label}.`;
 };
 
 // Structured data for the shop's home. The serving origin is the page's own.
@@ -205,15 +209,17 @@ export const generateShopStructuredData = (language = 'sv-SE', store = STORE) =>
   return {
     "@context": "https://schema.org",
     "@type": "Organization",
-    "name": store.shopName || STORE.shopName,
+    "name": shopNameOf(store),
     "url": baseUrl,
     "logo": logoUrl?.startsWith('http') ? logoUrl : `${baseUrl}${logoUrl}`,
     "description": getShopSeoDescription(language, store),
-    "contactPoint": {
-      "@type": "ContactPoint",
-      "contactType": "customer service",
-      "email": store.supportEmail || STORE.supportEmail
-    },
+    ...(store.supportEmail && {
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "contactType": "customer service",
+        "email": store.supportEmail
+      }
+    }),
     ...(sameAs.length > 0 && { "sameAs": sameAs })
   };
 };

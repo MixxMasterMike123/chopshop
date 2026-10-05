@@ -277,12 +277,32 @@ afterEach(() => {
 });
 
 describe("issuing an invite", () => {
+  it("CP9-OB: with no mail account the invite is still queued, and the answer says no mail can leave", async () => {
+    // Its own person: the other cases count the shop admin's invite rows.
+    const person = await signUp("invite-no-mail@example.com", "Test No Mail");
+    await seedAccess(person.userId, "tenant_admin");
+    for (const missing of [{ RESEND_API_KEY: undefined }, { EMAIL_FROM: undefined }, { EMAIL_FROM: undefined, RESEND_API_KEY: undefined }]) {
+      const captured = captureQueue();
+      const response = await invite(person.userId, { env: envWith({ EMAIL_QUEUE: captured.queue, ...missing }) });
+      expect(response.status).toBe(202);
+      const text = await response.text();
+      const body = JSON.parse(text) as { invite: Record<string, unknown>; mailConfigured: boolean };
+      expect(body.mailConfigured).toBe(false);
+      expect(captured.sent).toHaveLength(1);
+      const token = tokenOf(parseAuthEmailJob(captured.sent[0], env.AUTH_BASE_URL));
+      expect(text).not.toContain(token);
+      expect(text).not.toContain("reset-password");
+    }
+  });
+
   it("queues a reset email built only from the allowlist, and answers without the token", async () => {
     const { job, response } = await inviteAndCapture(shopAdmin.userId);
     const text = await response.text();
-    const body = JSON.parse(text) as { invite: Record<string, unknown> };
+    const body = JSON.parse(text) as { invite: Record<string, unknown>; mailConfigured: boolean };
 
-    expect(Object.keys(body)).toEqual(["invite"]);
+    // CP9-OB: whether the mail can leave, beside the invite (a boolean only).
+    expect(Object.keys(body)).toEqual(["invite", "mailConfigured"]);
+    expect(body.mailConfigured).toBe(true);
     expect(Object.keys(body.invite).sort()).toEqual(["expiresAt", "surface", "userId"]);
     expect(body.invite).toMatchObject({ surface: "admin", userId: shopAdmin.userId });
 

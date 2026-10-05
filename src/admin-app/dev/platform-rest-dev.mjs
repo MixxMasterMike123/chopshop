@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { devMailConfigured } from './fp-dev.mjs';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'platform-rest-fixtures.json');
 const json = (status, body) => ({ status, body });
@@ -107,7 +108,8 @@ function usersAction(state, { segments, headers, entry }) {
     }
     const now = Date.now();
     user.invite = { createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 72 * 3600_000).toISOString(), status: 'issued' };
-    return json(202, { invite: { userId, surface: user.accountType === 'platform_admin' ? 'platform' : 'admin', expiresAt: user.invite.expiresAt } });
+    // CP9-OB: whether a mail can leave (devMailConfigured: the cookie admin_dev_mail=off says no).
+    return json(202, { invite: { userId, surface: user.accountType === 'platform_admin' ? 'platform' : 'admin', expiresAt: user.invite.expiresAt }, mailConfigured: devMailConfigured(headers) });
   }
   if (action === 'deactivate') {
     if (userId === entry.user.id) return refused(409, 'cannot_deactivate_self', 'An operator cannot deactivate their own identity');

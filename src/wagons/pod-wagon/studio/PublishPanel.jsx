@@ -28,6 +28,16 @@ import {
   SERVER_PRICED, PANEL_TEXT, resultScreeningText, useServerPricing,
 } from './publishPanelData';
 
+// CP9-OB: what the result says of the shop. "LIVE" only when the server shows
+// the product: a product held for the platform's review (`held`) or stopped
+// by it (`blocked`) is not in the shop yet (the data module says which).
+const resultShopLine = (result) => {
+  if (result.updated) return 'den är uppdaterad i butiken.';
+  if (result.held) return 'Produkten är sparad och visas i butiken när plattformen har granskat den.';
+  if (result.blocked) return null;
+  return 'den är nu LIVE i butiken.';
+};
+
 // XS first (2026-08-27) — the printer's runs start at XS, and a size the seller
 // never sees is a size they never sell. Per-colourway opt-outs subtract from here.
 const DEFAULT_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
@@ -60,7 +70,7 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
  *                     publish, shown as the "Detta trycks" receipt (slice A)
  *   shopId         — string | null (null → publish disabled with an explanation)
  *   publishing     — bool (handler in flight)
- *   result         — { name, sku, updated?, screeningHits? } | null (success);
+ *   result         — { name, sku, updated?, screeningHits?, held?, blocked? } | null (success);
  *                    screeningHits = blocklist terms found (A11) → caution notice
  *   error          — string | null (honest failure message)
  *   reviewedColorwayIds — Set|array of colourway ids the seller has SEEN in the strip.
@@ -727,11 +737,12 @@ const PublishPanel = ({
                   : `Produkten ”${result.name}” skapades.`}
               </p>
               <p className="mt-1 text-[12px] text-admin-success-text">
-                {result.sku ? `SKU: ${result.sku} · ` : ''}den är {result.updated ? 'uppdaterad' : 'nu LIVE'} i butiken.
+                {[result.sku ? `SKU: ${result.sku}` : null, resultShopLine(result)].filter(Boolean).join(' · ')}
               </p>
               {/* Brand screening (SnapWear A11): published anyway, but the seller
-                  is told plainly that the platform reviews it and why. */}
-              {resultScreeningText(result) && (
+                  is told plainly that the platform reviews it and why. A held
+                  product's line above says it already (CP9-OB). */}
+              {!result.held && resultScreeningText(result) && (
                 <p className="mt-2 rounded-[var(--radius-admin-el)] bg-admin-caution-bg px-3 py-2 text-[12px] leading-relaxed text-admin-caution-text" role="status">
                   {resultScreeningText(result)}
                 </p>

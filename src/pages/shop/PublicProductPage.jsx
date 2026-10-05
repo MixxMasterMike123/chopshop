@@ -507,16 +507,16 @@ const PublicProductPage = () => {
   return (
     <>
       <Helmet>
-        <title>{getProductSeoTitle(product)}</title>
-        <meta name="description" content={getProductSeoDescription(product)} />
+        <title>{getProductSeoTitle(product, store)}</title>
+        <meta name="description" content={getProductSeoDescription(product, store)} />
         <meta property="og:type" content="product" />
-        <meta property="og:title" content={getProductSeoTitle(product)} />
-        <meta property="og:description" content={getProductSeoDescription(product)} />
+        <meta property="og:title" content={getProductSeoTitle(product, store)} />
+        <meta property="og:description" content={getProductSeoDescription(product, store)} />
         {shareImage && <meta property="og:image" content={shareImage} />}
         <meta property="og:url" content={window.location.href} />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={getProductSeoTitle(product)} />
-        <meta name="twitter:description" content={getProductSeoDescription(product)} />
+        <meta name="twitter:title" content={getProductSeoTitle(product, store)} />
+        <meta name="twitter:description" content={getProductSeoDescription(product, store)} />
         {shareImage && <meta name="twitter:image" content={shareImage} />}
         <script type="application/ld+json">{JSON.stringify(generateProductSchema(product))}</script>
       </Helmet>

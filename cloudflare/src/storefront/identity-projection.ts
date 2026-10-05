@@ -1,4 +1,5 @@
 import { ELIGIBLE_PRODUCTS_FROM } from "../catalog/eligibility";
+import { isPlaceholderAddress, isPlaceholderText } from "../legal/legal-identity";
 import {
   GALLERY_IMAGE_KEY,
   isPlainObject,
@@ -67,6 +68,22 @@ function readText(value: unknown, max: number, multiline = false): string | unde
     return undefined;
   }
   return trimmed;
+}
+
+/**
+ * CP9-OB: a value that is one of the older admin's default texts (stored when
+ * it saved its whole form, carried by the import) is not the shop's own and is
+ * never shown as if it were (src/legal/legal-identity.ts). Applied to the five
+ * keys that had such a default: legalName, address, tagline,
+ * companyDescription and the support address.
+ */
+function ownText(text: string | undefined): string | undefined {
+  return text === undefined || isPlaceholderText(text) ? undefined : text;
+}
+
+/** The support address, unless it is at a placeholder domain (the order mails' rule). */
+function ownAddress(text: string | undefined): string | undefined {
+  return text === undefined || isPlaceholderAddress(text) ? undefined : text;
 }
 
 /** An absolute http(s) address with no credentials, as the URL parser writes it. */
@@ -324,11 +341,11 @@ export function projectStoreIdentity(
   );
 
   return compact<PublicStoreIdentity>({
-    address: readText(own(identity, "address"), 1_000, true),
+    address: ownText(readText(own(identity, "address"), 1_000, true)),
     blocks: projectBlocks(own(identity, "blocks")),
     businessInfo: readText(own(identity, "businessInfo"), 300),
     collectionsTitle: readText(own(identity, "collectionsTitle"), 200),
-    companyDescription: readText(own(identity, "companyDescription"), 1_000, true),
+    companyDescription: ownText(readText(own(identity, "companyDescription"), 1_000, true)),
     featuredLimit: readFeaturedLimit(own(identity, "featuredLimit")),
     featuredTitle: readText(own(identity, "featuredTitle"), 200),
     frontpageCategory: readText(own(identity, "frontpageCategory"), 200),
@@ -340,7 +357,7 @@ export function projectStoreIdentity(
     heroSubtitle: readText(own(identity, "heroSubtitle"), 500, true),
     introBody: readText(own(identity, "introBody"), 5_000, true),
     introTitle: readText(own(identity, "introTitle"), 300),
-    legalName: readText(own(identity, "legalName"), 200),
+    legalName: ownText(readText(own(identity, "legalName"), 200)),
     orgNumber: readText(own(identity, "orgNumber"), 64),
     productsSubtitle: readText(own(identity, "productsSubtitle"), 500),
     productsTitle: readText(own(identity, "productsTitle"), 200),
@@ -349,8 +366,8 @@ export function projectStoreIdentity(
     social: projectSocial(own(identity, "social")),
     story: projectStory(own(identity, "story")),
     storyTitle: readText(own(identity, "storyTitle"), 200),
-    supportEmail: readText(resolved.supportEmail, 320),
-    tagline: readText(own(identity, "tagline"), 300),
+    supportEmail: ownAddress(readText(resolved.supportEmail, 320)),
+    tagline: ownText(readText(own(identity, "tagline"), 300)),
     trustpilot: projectTrustpilot(own(identity, "trustpilot")),
   });
 }

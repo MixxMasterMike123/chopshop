@@ -231,10 +231,11 @@ describe("public eligibility, POD fields, previews and catalog_version", () => {
 
     for (const [response, etag] of [
       [await handlePublicProductListRoute(env, new Request(`${ORIGIN}/v1/products`)), `"${version}"`],
-      // CP8-DC (F10): the storefront body names its code revision as well.
+      // CP8-DC (F10): the storefront body names its code revision as well;
+      // CP9-OB: and `-x`, this shop cannot take an order (no account).
       [
         await handlePublicStorefrontRequest(env, new Request(`${ORIGIN}/v1/storefront`)),
-        `"${version}-r${STOREFRONT_BODY_REVISION}"`,
+        `"${version}-r${STOREFRONT_BODY_REVISION}-x"`,
       ],
     ] as const) {
       expect(response.status).toBe(200);

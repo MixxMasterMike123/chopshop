@@ -79,7 +79,8 @@ describe('the settings: the fenced partial write', () => {
     scenario('conflict'); // another admin changes the slogan first
     let refusal;
     await assert.rejects(saveShopConfig(mine, 'test-shop-a'), (e) => { refusal = e; return e.code === 'settings_conflict'; });
-    assert.equal(storedIdentity().address, undefined, 'nothing of this save was written');
+    // (CP9-OB: the fixture shop has the address its legal pages print.)
+    assert.equal(storedIdentity().address, 'Example Street 1<br>111 11 Exampletown', 'nothing of this save was written');
     const { value, message } = refusal.follow(mine, formFromSaved);
     assert.equal(value.tagline, 'Ändrad av en annan administratör');
     assert.equal(value.address, 'Min adress');
@@ -236,6 +237,14 @@ describe('a member\'s new invite link', () => {
     const done = await resendInvite('test-shop-a', OSKAR);
     assert.match(done.message, /ny inbjudningslänk.*oskar\.berg@example\.com.*tidigare länken fungerar inte längre/);
     assert.equal(sent.at(-1).url, '/_api/v1/admin/members/user-member-a3/resend-invite');
+    assert.equal(done.notSent, false);
+  });
+
+  it('CP9-OB: 202 where no mail can leave: said plainly, never as sent', async () => {
+    scenario('', 'admin_dev_mail=off');
+    const done = await resendInvite('test-shop-a', OSKAR);
+    assert.equal(done.notSent, true);
+    assert.equal(done.message, 'Inget mejl skickades: e-post är inte inställd här ännu. oskar.berg@example.com kan inte logga in förrän e-posten fungerar och inbjudan skickas igen.');
   });
 
   it('the refusals, each in words, the list re-read where the row is wrong', async () => {

@@ -8,7 +8,7 @@ import {
   routeNotFoundResponse,
 } from "../lib/responses";
 import { isSameOriginRequest } from "../lib/same-origin";
-import { isInviteConfigured } from "../platform/invites";
+import { isInviteConfigured, isInviteMailConfigured } from "../platform/invites";
 import type { MemberRefusal } from "../platform/tenant-members";
 import {
   inviteTenantMember,
@@ -29,7 +29,7 @@ import { parseUserIdSegment } from "../platform/user-directory";
  *   GET  /v1/admin/members
  *        200 { members: [{ userId, email, name, status, invited, joinedAt, self }] }
  *   POST /v1/admin/members  { email, name }
- *        201 { member } · 400 invalid_request · 409 already_member |
+ *        201 { member, mailConfigured } · 400 invalid_request · 409 already_member |
  *        not_addable | member_limit · 429 rate_limited · 503 email_unavailable ·
  *        404 also while the invite mail is not configured (as the platform's
  *        invite route: the surface is dark)
@@ -37,7 +37,7 @@ import { parseUserIdSegment } from "../platform/user-directory";
  *        200 { revoked: { userId } } · 409 cannot_revoke_self | last_admin ·
  *        404 for a user who is not an active admin of this shop
  *   POST /v1/admin/members/:userId/resend-invite   (CP5-WK; no body is read)
- *        202 { invite: { userId, surface: "admin", expiresAt } } — a new link
+ *        202 { invite: { userId, surface: "admin", expiresAt }, mailConfigured } — a new link
  *        is queued and the previous unused one is dead · 409 not_invited (the
  *        person has set a password of their own: `invited` is false) |
  *        not_invitable (the platform suspended the identity) · 429
@@ -152,7 +152,7 @@ export async function handleAdminMembersRoute(env: Env, request: Request): Promi
   const result = await inviteTenantMember(env, principal, input, now);
   switch (result.status) {
     case "ok":
-      return jsonResponse({ member: result.member }, 201);
+      return jsonResponse({ mailConfigured: isInviteMailConfigured(env), member: result.member }, 201);
     case "refused":
       return refusalResponse(result.reason);
     case "invalid":
@@ -249,7 +249,7 @@ export async function handleAdminMemberResendInviteRoute(
   switch (result.status) {
     case "ok":
       // Accepted for delivery, as the platform's invite: never the token or the link.
-      return jsonResponse({ invite: result.invite }, 202);
+      return jsonResponse({ invite: result.invite, mailConfigured: isInviteMailConfigured(env) }, 202);
     case "refused":
       return refusalResponse(result.reason);
     case "email_unavailable":

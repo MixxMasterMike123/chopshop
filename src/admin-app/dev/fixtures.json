@@ -28,7 +28,13 @@
         }
       },
       "settings": {
-        "storeIdentity": { "tagline": "Invented goods for testing.", "accent": "#0E5E63" },
+        "storeIdentity": {
+          "tagline": "Invented goods for testing.",
+          "accent": "#0E5E63",
+          "legalName": "Test Shop A AB",
+          "address": "Example Street 1<br>111 11 Exampletown",
+          "orgNumber": "556000-0001"
+        },
         "returnAddress": "Test Shop A\nExample Street 1\n111 11 Exampletown",
         "vatRegistered": true,
         "vatNumber": "SE000000000001",

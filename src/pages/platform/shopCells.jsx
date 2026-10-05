@@ -14,13 +14,35 @@ import toast from 'react-hot-toast';
 
 // Stripe Connect status label for a shop, derived from the payments map (which is
 // platform-/Stripe-set only). Precedence: charging > has account (onboarding) >
-// invited (connectEnabled) > off.
+// invited (connectEnabled) > not invited. CP9-OB: a shop no one has invited is
+// waiting for the OPERATOR (no shop can take a payment without it), so that
+// state is the amber one, named for what it waits for; `step` is the one
+// sentence the shop's page says about it.
 export const connectLabel = (shop) => {
   const p = shop.payments || {};
-  if (p.chargesEnabled) return { text: 'Aktivt', cls: 'bg-green-500/15 text-green-300' };
-  if (p.stripeAccountId) return { text: 'Onboarding', cls: 'bg-amber-500/15 text-amber-300' };
-  if (p.connectEnabled) return { text: 'Inbjuden', cls: 'bg-sky-500/15 text-sky-300' };
-  return { text: 'Av', cls: 'bg-white/5 text-gray-500' };
+  if (p.chargesEnabled) {
+    return { text: 'Aktivt', cls: 'bg-green-500/15 text-green-300', step: 'Butiken kan ta betalt.' };
+  }
+  if (p.stripeAccountId) {
+    return {
+      text: 'Onboarding',
+      cls: 'bg-sky-500/15 text-sky-300',
+      step: 'Butiken har börjat fylla i Stripes formulär men är inte klar. Den kan inte ta betalt förrän Stripe har godkänt kontot.',
+    };
+  }
+  if (p.connectEnabled) {
+    return {
+      text: 'Inbjuden',
+      cls: 'bg-sky-500/15 text-sky-300',
+      step: 'Inbjuden. Butiken behöver nu fylla i Stripes formulär under Utbetalningar i sin admin.',
+    };
+  }
+  return {
+    text: 'Väntar på inbjudan',
+    cls: 'bg-amber-500/15 text-amber-300',
+    waitsForOperator: true,
+    step: 'Butiken kan inte ta betalt förrän du bjuder in den. Klicka på Bjud in, sedan fyller butiken i Stripes formulär.',
+  };
 };
 
 // Legal-pages readiness for the operator. Reads the same gate the seller's

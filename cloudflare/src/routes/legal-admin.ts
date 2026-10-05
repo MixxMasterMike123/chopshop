@@ -8,6 +8,7 @@ import {
   readLatestLegalPagesAcceptance,
   readLegalReadiness,
 } from "../legal/legal-pages";
+import { readLegalIdentityGaps } from "../legal/legal-identity";
 import {
   acceptPlatformTerms,
   maySignForSeller,
@@ -41,7 +42,10 @@ import { isSameOriginRequest } from "../lib/same-origin";
  *        graceDeadline is set when it accepted the version right before the current
  *        one (also once passed; inGrace then false). `readiness` is the legal
  *        readiness gate (booleans only — never the address itself): why a shop
- *        whose terms are fine still takes no checkout.
+ *        whose terms are fine still takes no checkout. CP9-OB: `identityMissing`
+ *        = what the stored identity lacks for the legal pages to print no hole
+ *        (src/legal/legal-identity.ts field names, possibly empty): what an
+ *        adoption below would be refused for. Not a checkout condition.
  *
  *   POST /v1/admin/legal/accept-terms   { termsVersion }
  *        201 { acceptance: { termsVersion, acceptedAt } }   recorded now
@@ -69,6 +73,10 @@ import { isSameOriginRequest } from "../lib/same-origin";
  *            a well-formed body whose HTML html-refusal.ts refuses: `page` the
  *            first refused page key (angerratt, integritetspolicy, kopvillkor
  *            order), `pages` every refused key, `reason` the first one's refusal
+ *        409 { error: { code: "legal_identity_incomplete", missing } }   CP9-OB: the
+ *            stored identity lacks what the pages print (legal-identity.ts:
+ *            legalName, address, supportEmail, orgNumber, vatNumber); nothing
+ *            written, no attempt counted
  *        413 payload_too_large · 429 rate_limited
  *
  *   404  everything else — no session, no membership, cross-origin on a POST,
@@ -119,10 +127,11 @@ export async function handleAdminLegalStatusRoute(
   }
 
   const now = Date.now();
-  const [status, readiness, latestAcceptance] = await Promise.all([
+  const [status, readiness, latestAcceptance, identityMissing] = await Promise.all([
     readTermsStatus(env.DB, principal.tenantId, now),
     readLegalReadiness(env.DB, principal.tenantId),
     readLatestTermsAcceptance(env.DB, principal.tenantId, now, "shop"),
+    readLegalIdentityGaps(env.DB, principal.tenantId),
   ]);
   return jsonResponse({
     accepted: status.acceptedAt !== null,
@@ -130,6 +139,7 @@ export async function handleAdminLegalStatusRoute(
     acceptedVersion: status.acceptedVersion,
     currentVersion: status.currentVersion,
     graceDeadline: status.graceDeadline,
+    identityMissing,
     inGrace: status.inGrace,
     latestAcceptance,
     readiness,
@@ -264,6 +274,17 @@ export async function handleAdminLegalAcceptPagesRoute(env: Env, request: Reques
   switch (result.status) {
     case "accepted":
       return jsonResponse({ acceptance: result.acceptance }, 201);
+    case "identity_incomplete":
+      return jsonResponse(
+        {
+          error: {
+            code: "legal_identity_incomplete",
+            message: "The shop's identity lacks what the legal pages print",
+            missing: result.missing,
+          },
+        },
+        409,
+      );
     case "too_large":
       return payloadTooLargeResponse();
     case "rate_limited":

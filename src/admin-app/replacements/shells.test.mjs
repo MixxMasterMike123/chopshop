@@ -84,6 +84,15 @@ describe('the console shell\'s scope', () => {
     assert.deepEqual(badgeCountsOf({ newCount: '3' }), {});
     assert.deepEqual(badgeCountsOf(null), {});
   });
+
+  it('CP9-OB: the badge adds the products waiting for review, not the flagged (already live) ones', () => {
+    const queue = [{ status: 'pending' }, { status: 'pending' }, { status: 'flagged' }, { status: 'blocked' }];
+    assert.deepEqual(badgeCountsOf({ newCount: 3 }, queue), { reports: 5 });
+    assert.deepEqual(badgeCountsOf({ newCount: 0 }, [{ status: 'pending' }]), { reports: 1 });
+    assert.deepEqual(badgeCountsOf({ newCount: 2 }, null), { reports: 2 });
+    assert.deepEqual(badgeCountsOf({ newCount: 2 }, [null, {}]), { reports: 2 });
+    assert.deepEqual(badgeCountsOf(null, queue), {});
+  });
 });
 
 // A Storage of the browser's shape, enough for the code under test.

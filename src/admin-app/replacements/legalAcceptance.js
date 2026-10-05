@@ -23,7 +23,7 @@ import { LEGAL_PAGES, LEGAL_PAGE_KEYS, LEGAL_TEMPLATE_VERSION } from '../../conf
 import { renderLegalPage } from '../../utils/legalPageRenderer.js';
 import { acceptLegalPages } from '../../api/admin/legal.js';
 import { AdminApiError, notAvailable } from '../../api/admin/client.js';
-import { LEGAL_KEYS, acceptanceFromView, pageNamesOf, refusedTextKeys } from '../adapters/settings.js';
+import { LEGAL_KEYS, acceptanceFromView, identityGapLabels, pageNamesOf, refusedTextKeys } from '../adapters/settings.js';
 
 export function renderAcceptedLegalTexts(identity = {}, options = {}, customHtml = {}) {
   const out = {};
@@ -54,6 +54,15 @@ function errorOfAnswer(error) {
         keys,
       )
       : legalError('Villkoren kunde inte godkännas: förfrågan avvisades.');
+  }
+  if (error.status === 409 && error.code === 'legal_identity_incomplete') {
+    // CP9-OB: the stored identity lacks what the pages print (legal-identity.ts).
+    const missing = identityGapLabels(error.details?.missing);
+    return legalError(
+      missing.length > 0
+        ? `Villkoren kan inte godkännas ännu: ${missing.join(', ')}. Fyll i uppgifterna, spara och godkänn igen.`
+        : 'Villkoren kan inte godkännas ännu: butikens uppgifter är inte kompletta.',
+    );
   }
   if (error.status === 413) return legalError('Texterna är för långa för att kunna sparas.');
   if (error.status === 429) {

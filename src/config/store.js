@@ -11,10 +11,14 @@
  * so a shop can be rebranded without a redeploy.
  */
 export const STORE = {
-  // Display identity
-  shopName: 'My Shop',
-  legalName: 'My Company',
-  tagline: 'Quality products, delivered.',
+  // Display identity. CP9-OB: EMPTY, never a placeholder value. The texts this
+  // file shipped before ("My Shop", "My Company", …) were shown as the admin
+  // form's values, printed in the storefront and adopted into legal pages;
+  // src/utils/placeholderIdentity.js still recognises them where a shop
+  // stored them. A page prints the shop's own value or nothing.
+  shopName: '',
+  legalName: '',
+  tagline: '',
 
   // Generic placeholder logo. Admins can override via the Store Identity form.
   logoUrl: '/images/logo.svg',
@@ -68,10 +72,10 @@ export const STORE = {
   reviewsTitle: '',
   reviewsSubtitle: '',
 
-  // Contact
-  supportEmail: 'hello@example.com',
+  // Contact (empty until the shop has its own, CP9-OB)
+  supportEmail: '',
   // HTML allowed (rendered via dangerouslySetInnerHTML in the footer).
-  address: 'My Company<br>123 Main Street<br>City',
+  address: '',
 
   // Return address shown to the customer in the legal pages (köpvillkor §8 +
   // ångerrätt page). HARD-REQUIRED before the auto-generated legal pages may go
@@ -80,7 +84,7 @@ export const STORE = {
 
   // Footer company / legal info. Rendered DIRECTLY (not via the translation
   // layer) so saved translations can't override per-shop identity.
-  companyDescription: 'Quality products, delivered.',
+  companyDescription: '',
   orgNumber: '',   // e.g. company/VAT registration number; empty hides the line
   businessInfo: '', // e.g. 'Registered for VAT'; empty hides the line
   // VAT registration — drives the [[IF vat_registered]] branch in the legal

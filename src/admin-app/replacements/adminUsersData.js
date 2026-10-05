@@ -11,7 +11,7 @@
 import { useMemo } from 'react';
 import { useShopId } from '../../contexts/ShopContext';
 import { inviteMember, listMembers, revokeMember } from '../../api/admin/members.js';
-import { REVOKE_BLOCK, isInviteMailFailure, memberActionMessage, memberRowsOf } from '../adapters/member.js';
+import { REVOKE_BLOCK, isInviteMailFailure, mailNotSentMessage, memberActionMessage, memberRowsOf } from '../adapters/member.js';
 import { resendInvite } from './memberResendData.js';
 
 /** The page shows the shop's own admins, with invite and remove. */
@@ -45,7 +45,11 @@ export function useUsersData() {
     getAllUsers: () => guarded(async () => memberRowsOf(await listMembers({ shopId }))),
     updateUserRole: async () => { throw new Error('Roller kan inte ändras här.'); },
     updateUserMarginal: async () => { throw new Error('Marginal finns inte här.'); },
-    inviteAdmin: ({ email, name }) => guarded(() => inviteMember({ shopId, email, name })),
+    // CP9-OB: `notice` when the Worker says no mail can leave this environment.
+    inviteAdmin: ({ email, name }) => guarded(async () => {
+      const member = await inviteMember({ shopId, email, name });
+      return member?.mailConfigured === false ? { ...member, notice: mailNotSentMessage(email) } : member;
+    }),
     removeAdmin: (userId) => guarded(() => revokeMember({ shopId, userId })),
     resendInvite: (user) => resendInvite(shopId, user),
   }), [shopId]);

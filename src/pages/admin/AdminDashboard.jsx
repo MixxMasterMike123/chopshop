@@ -4,7 +4,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useShopId } from '../../contexts/ShopContext';
 import { useTranslation } from '../../contexts/TranslationContext';
 import AppLayout from '../../components/layout/AppLayout';
-import { loadDashboardStats } from './adminDashboardData';
+import { loadDashboardStats, loadOnboarding } from './adminDashboardData';
+import OnboardingChecklist from '../../components/admin/OnboardingChecklist';
 import { format } from 'date-fns';
 import { sv } from 'date-fns/locale';
 import AdminPresence from '../../components/AdminPresence';
@@ -128,6 +129,20 @@ const AdminDashboard = () => {
     fetchStats();
   }, [shopId]);
 
+  // CP9-OB: "Kom igång", what the shop has left before it can sell (null: all
+  // done, or this build has no checklist). Its own read: a failure leaves the
+  // dashboard as it was, never a checklist on a guess.
+  const [onboarding, setOnboarding] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setOnboarding(null);
+    loadOnboarding(shopId).then(
+      (next) => { if (!cancelled) setOnboarding(next); },
+      (err) => console.warn('AdminDashboard: could not read the onboarding steps:', err?.message),
+    );
+    return () => { cancelled = true; };
+  }, [shopId]);
+
   // ── Recent-orders table columns (Shopify-style: Order · Källa · Datum ·
   //    Artiklar · Belopp). Same fields the old card list rendered. ──
   const recentOrderColumns = [
@@ -210,6 +225,8 @@ const AdminDashboard = () => {
         subtitle={t('admin.dashboard.description', 'Här kan du se en översikt över systemet och hantera användare, ordrar och produkter.')}
       >
         <div className="space-y-4">
+          {onboarding && <OnboardingChecklist steps={onboarding.steps} />}
+
           {/* Primary metrics strip — revenue, B2C customers, affiliate revenue. */}
           <MetricsBar
             metrics={[

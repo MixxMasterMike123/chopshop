@@ -24,8 +24,10 @@ import {
   call,
   createPlainProduct,
   createTenant,
+  SLICE_LEGAL_IDENTITY,
   SLICE_PICKUP_LOCATION,
   expectJson,
+  giveLegalIdentity,
   platformCall,
   publishProduct,
   sha256Hex,
@@ -61,6 +63,9 @@ beforeAll(async () => {
   await bootstrapPlatform(world);
   shopA = await createTenant(world, { legallyReady: false, host: "pages-a.example.com", shopName: "Sidor A", tenantId: "pages-a" });
   shopB = await createTenant(world, { legallyReady: false, host: "pages-b.example.com", shopName: "Sidor B", tenantId: "pages-b" });
+  // CP9-OB: an adoption requires the identity the pages print (onboarding-identity.test.ts).
+  await giveLegalIdentity(world, shopA);
+  await giveLegalIdentity(world, shopB);
 }, 60_000);
 
 beforeEach(() => {
@@ -474,6 +479,7 @@ describe("adopting the legal pages", () => {
 
   it(`at most ${ACCEPT_PAGES_LIMIT} well-formed adoptions per shop per hour, then 429 with Retry-After`, async () => {
     const shopC = await createTenant(world, { legallyReady: false, host: "pages-c.example.com", shopName: "Sidor C", tenantId: "pages-c" });
+    await giveLegalIdentity(world, shopC);
     for (let index = 0; index < ACCEPT_PAGES_LIMIT; index += 1) {
       await expectJson(await adminCall(world, shopC, "POST", ACCEPT, adoption()), 201, `adoption ${index + 1}`);
     }
@@ -495,6 +501,8 @@ describe("the legal readiness gate at checkout (return address, VAT answer, page
   beforeAll(async () => {
     // Terms accepted (the harness does it through the route); nothing else yet.
     shop = await createTenant(world, { legallyReady: false, host: "ready-shop.example.com", shopName: "Redo Butik", tenantId: "ready-shop" });
+    // CP9-OB: the identity an adoption requires (not a checkout condition).
+    await giveLegalIdentity(world, shop);
     mug = await createPlainProduct(world, shop, { name: "Mugg", priceMinor: 14_900, sku: "READY-MUG" });
     await publishProduct(world, shop, mug);
     await approveProduct(world, mug);
@@ -559,7 +567,7 @@ describe("the legal readiness gate at checkout (return address, VAT answer, page
     // (With the pickup place the checkout's recipient names, D98.)
     await putSettings({
       returnAddress: "Testgatan 1\n123 45 Teststad",
-      storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION] },
+      storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION], ...SLICE_LEGAL_IDENTITY },
       vatRegistered: false,
     });
     expect(await readiness()).toEqual({ legalPagesAccepted: false, ready: false, returnAddress: true, vatAnswered: true });
@@ -625,6 +633,7 @@ describe("the legal readiness gate at checkout (return address, VAT answer, page
       "acceptedVersion",
       "currentVersion",
       "graceDeadline",
+      "identityMissing",
       "inGrace",
       "latestAcceptance",
       "readiness",

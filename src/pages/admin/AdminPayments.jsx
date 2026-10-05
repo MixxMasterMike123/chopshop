@@ -247,7 +247,9 @@ const AdminPayments = () => {
               so never show "not enabled" once charges are enabled. */}
           {!connectEnabled && !chargesEnabled && (
             <p className="text-[13px] text-admin-text-muted">
-              Utbetalningar är inte aktiverade för din butik ännu. Kontakta oss för att komma igång.
+              Plattformen har inte öppnat betalningar för din butik ännu. När den har gjort det
+              fyller du i Stripes formulär här, och sedan kan butiken ta betalt. Du behöver inte
+              göra något förrän dess.
             </p>
           )}
 

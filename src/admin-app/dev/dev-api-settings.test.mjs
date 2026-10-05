@@ -25,10 +25,21 @@ describe('settings and legal pages (dev API)', () => {
     let status = call(state, 'GET', '/_api/v1/admin/legal/status', { headers: h }).body;
     assert.deepEqual(status.readiness, { legalPagesAccepted: false, ready: false, returnAddress: false, vatAnswered: false });
 
-    const put = call(state, 'PUT', '/_api/v1/admin/settings', { headers: h, body: { storeIdentity: { tagline: 't' }, returnAddress: ' R ', vatRegistered: false } });
+    // CP9-OB: what the pages print of the seller is missing: the adoption is refused, nothing kept.
+    assert.deepEqual(status.identityMissing, ['legalName', 'address']);
+    const refused = call(state, 'POST', '/_api/v1/admin/legal/accept-pages', {
+      headers: h, body: { templateVersion: '2026-09-07', texts: TEXTS, pod: false, custom: MAP },
+    });
+    assert.equal(refused.status, 409);
+    assert.deepEqual(refused.body.error, { code: 'legal_identity_incomplete', message: "The shop's identity lacks what the legal pages print", missing: ['legalName', 'address'] });
+    assert.equal(call(state, 'GET', '/_api/v1/admin/legal/pages', { headers: h }).body.acceptance, null);
+
+    const identity = { tagline: 't', legalName: 'Test Shop C AB', address: 'Example Street 3' };
+    const put = call(state, 'PUT', '/_api/v1/admin/settings', { headers: h, body: { storeIdentity: identity, returnAddress: ' R ', vatRegistered: false } });
     assert.equal(put.status, 200);
     assert.equal(put.body.settings.returnAddress, 'R');
-    assert.deepEqual(call(state, 'GET', '/_api/v1/admin/settings', { headers: h }).body.settings.storeIdentity, { tagline: 't' });
+    assert.deepEqual(call(state, 'GET', '/_api/v1/admin/settings', { headers: h }).body.settings.storeIdentity, identity);
+    assert.deepEqual(call(state, 'GET', '/_api/v1/admin/legal/status', { headers: h }).body.identityMissing, []);
 
     const adopted = call(state, 'POST', '/_api/v1/admin/legal/accept-pages', {
       headers: h, body: { templateVersion: '2026-09-07', texts: TEXTS, pod: false, custom: MAP },

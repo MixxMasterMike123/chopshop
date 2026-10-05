@@ -442,6 +442,16 @@ describe("the refusals", () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe("the new link", () => {
+  it("CP9-OB: with no mail account a new link is still queued, and the answer says no mail can leave", async () => {
+    const person = await invitee("resend-no-mail@example.com");
+    const captured = captureQueue();
+    const response = await resend(person.userId, { env: envWith({ EMAIL_QUEUE: captured.queue, EMAIL_FROM: undefined }) });
+    expect(response.status).toBe(202);
+    const body = await response.json<{ invite: Record<string, unknown>; mailConfigured: boolean }>();
+    expect(body.mailConfigured).toBe(false);
+    expect(captured.sent).toHaveLength(1);
+  });
+
   it("answers 202 with the platform invite's shape, kills the old link, and the new one sets the password", async () => {
     const person = await invitee("resend-me@example.com");
     const captured = captureQueue();
@@ -449,8 +459,10 @@ describe("the new link", () => {
     const response = await resend(person.userId, { env: envWith({ EMAIL_QUEUE: captured.queue }) });
     expect(response.status).toBe(202);
     const text = await response.text();
-    const body = JSON.parse(text) as { invite: { expiresAt: string; surface: string; userId: string } };
-    expect(Object.keys(body)).toEqual(["invite"]);
+    const body = JSON.parse(text) as { invite: { expiresAt: string; surface: string; userId: string }; mailConfigured: boolean };
+    // CP9-OB: whether the mail can leave, beside the invite.
+    expect(Object.keys(body)).toEqual(["invite", "mailConfigured"]);
+    expect(body.mailConfigured).toBe(true);
     expect(Object.keys(body.invite).sort()).toEqual(["expiresAt", "surface", "userId"]);
     expect(body.invite).toMatchObject({ surface: "admin", userId: person.userId });
     const expires = Date.parse(body.invite.expiresAt);

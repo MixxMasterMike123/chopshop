@@ -23,6 +23,7 @@
 import {
   getTenantConnect,
   getTenantDetail,
+  patchTenant,
   setTenantConnectEnabled,
   setTenantPublished,
   setTenantStatus,
@@ -67,6 +68,18 @@ export async function setShopStatus(shop, next) {
 
 export async function setShopConnectEnabled(shop, next) {
   await setTenantConnectEnabled(shop.id, next);
+}
+
+/**
+ * CP9-OB: the shop's support address is the platform's to set (D99), and the
+ * seller cannot adopt its legal pages without it (they print it). PATCH
+ * …/:id { supportEmail } (null clears); resolves the address as stored.
+ */
+export const SUPPORT_EMAIL_EDITABLE = true;
+
+export async function setShopSupportEmail(shop, email) {
+  const detail = await patchTenant(shop.id, { supportEmail: email });
+  return detail?.tenant?.supportEmail ?? null;
 }
 
 export function storefrontUrlOf(shop) {

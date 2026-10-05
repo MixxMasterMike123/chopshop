@@ -61,9 +61,12 @@ const ShopFooter = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
           
-          {/* Company Info */}
+          {/* Company Info. CP9-OB: each line is the shop's own value or absent,
+              never a default text. */}
           <div>
-            <h3 className="font-display text-lg font-bold mb-4 tracking-tight">{store.shopName}</h3>
+            {store.shopName && (
+              <h3 className="font-display text-lg font-bold mb-4 tracking-tight">{store.shopName}</h3>
+            )}
             {store.companyDescription && (
               <p className="text-white/70 text-sm mb-4 leading-relaxed">
                 {store.companyDescription}
@@ -95,11 +98,13 @@ const ShopFooter = () => {
                   {t('footer_cart', 'Varukorg')}
                 </Link>
               </li>
-              <li>
-                <a href={`mailto:${store.supportEmail}`} className="text-white/70 hover:text-white transition-colors">
-                  {t('footer_contact', 'Kontakt')}
-                </a>
-              </li>
+              {store.supportEmail && (
+                <li>
+                  <a href={`mailto:${store.supportEmail}`} className="text-white/70 hover:text-white transition-colors">
+                    {t('footer_contact', 'Kontakt')}
+                  </a>
+                </li>
+              )}
             </ul>
           </div>
 
@@ -132,11 +137,13 @@ const ShopFooter = () => {
                   {t('footer_withdraw_here', 'Ångra avtalet här')}
                 </Link>
               </li>
-              <li>
-                <a href={`mailto:${store.supportEmail}`} className="text-white/70 hover:text-white transition-colors">
-                  {t('footer_customer_support', 'Kundtjänst')}
-                </a>
-              </li>
+              {store.supportEmail && (
+                <li>
+                  <a href={`mailto:${store.supportEmail}`} className="text-white/70 hover:text-white transition-colors">
+                    {t('footer_customer_support', 'Kundtjänst')}
+                  </a>
+                </li>
+              )}
               <li>
                 <span className="text-white/50">
                   {t('footer_business_hours', 'Mån-Fre: 09:00-17:00')}
@@ -190,7 +197,7 @@ const ShopFooter = () => {
           <div className="border-t border-white/10 mt-8 pt-8">
             <div className="flex flex-col items-center gap-6 mb-8">
               <h3 className="font-display text-lg font-bold text-white tracking-tight">
-                {`${t('footer_follow_us_prefix', 'Följ')} ${store.shopName}`}
+                {store.shopName ? `${t('footer_follow_us_prefix', 'Följ')} ${store.shopName}` : t('footer_follow_us', 'Följ oss')}
               </h3>
               <div className="flex items-center gap-4 flex-wrap justify-center">
                 {SOCIAL_LINKS.filter(s => store.social?.[s.key]).map(s => (
@@ -215,7 +222,7 @@ const ShopFooter = () => {
         <div className="border-t border-white/10 pt-8">
           <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
             <div className="text-white/50 text-sm">
-              <p>{`© ${currentYear} ${store.legalName}. `}{t('footer_rights_reserved', 'Alla rättigheter förbehållna.')}</p>
+              <p>{`© ${[currentYear, store.legalName || store.shopName].filter(Boolean).join(' ')}. `}{t('footer_rights_reserved', 'Alla rättigheter förbehållna.')}</p>
               {/* Platform/seller split, visible to the buyer: the shop above is
                   the counterparty of the purchase; the platform only provides
                   the service it runs on. */}

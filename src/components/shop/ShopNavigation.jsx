@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from 'react';
 import { getCountryAwareUrl, getCategoryUrl, buildMenuHref, isExternalMenuItem } from '../../utils/productUrls';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
+import { ownLogoUrl } from '../../utils/placeholderIdentity';
 
 // tags / activeTag / onSelectTag are optional — only the storefront home passes
 // them, to render tag links that filter the product grid. Other pages omit them.
@@ -81,8 +82,14 @@ const ShopNavigation = ({ breadcrumb, breadcrumbCategory = null, tags = [], acti
             >
               {showMobileMenu ? <XMarkIcon className="h-6 w-6" /> : <Bars3Icon className="h-6 w-6" />}
             </button>
+            {/* CP9-OB: the shop's own logo, else its name: the generic drawing
+                reads "My Shop", which is no shop's name. */}
             <Link to={getCountryAwareUrl('')} className="flex items-center">
-              <img src={store.logoUrl} alt={store.shopName} className="h-8 w-auto" />
+              {ownLogoUrl(store.logoUrl) ? (
+                <img src={store.logoUrl} alt={store.shopName} className="h-8 w-auto" />
+              ) : (
+                <span className="font-display text-lg font-bold tracking-tight text-ink">{store.shopName}</span>
+              )}
             </Link>
           </div>
 

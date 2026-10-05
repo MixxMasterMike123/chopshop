@@ -203,6 +203,7 @@ describe("CP2 vertical slice", () => {
         acceptedVersion: null,
         currentVersion: "2026-09-07",
         graceDeadline: null,
+        identityMissing: [],
         inGrace: false,
         latestAcceptance: null,
         readiness: legallyReady,
@@ -232,6 +233,7 @@ describe("CP2 vertical slice", () => {
         acceptedVersion: "2026-09-07",
         currentVersion: "2026-09-07",
         graceDeadline: null,
+        identityMissing: [],
         inGrace: false,
         // CP5-WJ: who accepted and when — the shop's own admin.
         latestAcceptance: {
@@ -436,9 +438,10 @@ describe("CP2 vertical slice", () => {
       const sent = [...resend.delivered.values()];
       const email = sent.find((mail) => /^Orderbekräftelse /.test(String(mail.payload.subject)))!;
       expect(email.payload.to).toEqual([buyerEmail]);
-      // The shop has no support address here, so its one active admin is told.
+      // CP9-OB: the shop has a support address (an adoption requires one), so
+      // it is told there; the fallback to the oldest admin is order-emails.test.ts's.
       const notice = sent.find((mail) => /^Ny beställning: /.test(String(mail.payload.subject)))!;
-      expect(notice.payload.to).toEqual([`admin@${tenant.host}`]);
+      expect(notice.payload.to).toEqual([`kundtjanst@${tenant.host}`]);
       // The seller sees ONE number, in the admin: the notice names what the
       // buyer paid and no platform figure.
       const noticeText = String((notice.payload as { text?: unknown }).text);

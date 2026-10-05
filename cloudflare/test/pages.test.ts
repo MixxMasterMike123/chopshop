@@ -11,7 +11,7 @@ import {
   reservePendingObject,
 } from "../src/storage/object-store";
 import type { TenantContext } from "../src/tenancy/resolve-tenant";
-import { ADMIN, call, type CallOptions, createTenant } from "./slice-harness";
+import { ADMIN, call, type CallOptions, createTenant, giveLegalIdentity } from "./slice-harness";
 import {
   auditCount,
   auditRows,
@@ -353,6 +353,10 @@ beforeAll(async () => {
   const setup = await tenantWorld("pg", 2);
   world = setup.world;
   [shopA, shopB] = setup.tenants as [Tenant, Tenant];
+  // CP9-OB: an adoption requires the identity the pages print.
+  for (const tenant of setup.tenants) {
+    await giveLegalIdentity(world, tenant);
+  }
 }, 120_000);
 
 beforeEach(() => {

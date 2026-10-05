@@ -7,6 +7,7 @@ import { toPageLegal, toPagePlatformTerms } from '../../storefront/adapters/lega
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useShopId } from '../../contexts/ShopContext';
+import { useStoreSettings } from '../../contexts/StoreSettingsContext';
 import ShopNavigation from '../../components/shop/ShopNavigation';
 import ShopFooter from '../../components/shop/ShopFooter';
 import { toast } from 'react-hot-toast';
@@ -24,6 +25,8 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
   const { slug: paramSlug } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  // The shop's own name for the page title (CP9-OB: never a default text).
+  const store = useStoreSettings();
   
   // Helper function to determine page type from slug for SEO
   const getPageTypeFromSlug = (slug) => {
@@ -257,11 +260,11 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
     return (
       <>
         <Helmet>
-          <title>{getLegalSeoTitle(pageType)}</title>
-          <meta name="description" content={getLegalSeoDescription(pageType)} />
+          <title>{getLegalSeoTitle(pageType, store)}</title>
+          <meta name="description" content={getLegalSeoDescription(pageType, store)} />
           <meta property="og:type" content="website" />
-          <meta property="og:title" content={getLegalSeoTitle(pageType)} />
-          <meta property="og:description" content={getLegalSeoDescription(pageType)} />
+          <meta property="og:title" content={getLegalSeoTitle(pageType, store)} />
+          <meta property="og:description" content={getLegalSeoDescription(pageType, store)} />
           <meta property="og:url" content={window.location.href} />
           {/* Until a shop completes the legal data, keep the auto-pages out of
               search indexes — they aren't truthful yet (return address / VAT). */}
@@ -407,16 +410,16 @@ const DynamicPage = ({ slug: propSlug, isCmsPage = false, children = null }) => 
   return (
     <>
       <Helmet>
-        <title>{metaTitle || getLegalSeoTitle(getPageTypeFromSlug(slug))}</title>
-        <meta name="description" content={metaDescription || getLegalSeoDescription(getPageTypeFromSlug(slug))} />
+        <title>{metaTitle || getLegalSeoTitle(getPageTypeFromSlug(slug), store)}</title>
+        <meta name="description" content={metaDescription || getLegalSeoDescription(getPageTypeFromSlug(slug), store)} />
         <meta property="og:type" content="website" />
-        <meta property="og:title" content={metaTitle || getLegalSeoTitle(getPageTypeFromSlug(slug))} />
-        <meta property="og:description" content={metaDescription || getLegalSeoDescription(getPageTypeFromSlug(slug))} />
+        <meta property="og:title" content={metaTitle || getLegalSeoTitle(getPageTypeFromSlug(slug), store)} />
+        <meta property="og:description" content={metaDescription || getLegalSeoDescription(getPageTypeFromSlug(slug), store)} />
         
         <meta property="og:url" content={window.location.href} />
         <meta name="twitter:card" content="summary" />
-        <meta name="twitter:title" content={metaTitle || getLegalSeoTitle(getPageTypeFromSlug(slug))} />
-        <meta name="twitter:description" content={metaDescription || getLegalSeoDescription(getPageTypeFromSlug(slug))} />
+        <meta name="twitter:title" content={metaTitle || getLegalSeoTitle(getPageTypeFromSlug(slug), store)} />
+        <meta name="twitter:description" content={metaDescription || getLegalSeoDescription(getPageTypeFromSlug(slug), store)} />
         
       </Helmet>
       <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100">

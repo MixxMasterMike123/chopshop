@@ -38,7 +38,8 @@ describe("the storefront's discountCodes feature", () => {
   it("names the body revision in the ETag: an ETag kept from before the deploy gets the full body", async () => {
     const version = await catalogVersion(shop.tenantId);
     const fresh = await read();
-    expect(fresh.headers.get("etag")).toBe(`"${version}-r${STOREFRONT_BODY_REVISION}"`);
+    // CP9-OB: `-x`, the seeded shop cannot take an order (no account, no legal pages).
+    expect(fresh.headers.get("etag")).toBe(`"${version}-r${STOREFRONT_BODY_REVISION}-x"`);
     expect(STOREFRONT_BODY_REVISION).toBeGreaterThanOrEqual(1);
     const body = await fresh.text();
 
@@ -47,7 +48,7 @@ describe("the storefront's discountCodes feature", () => {
     expect(stale.status).toBe(200);
     expect(await stale.text()).toBe(body);
 
-    const current = await read({ "if-none-match": `"${version}-r${STOREFRONT_BODY_REVISION}"` });
+    const current = await read({ "if-none-match": `"${version}-r${STOREFRONT_BODY_REVISION}-x"` });
     expect(current.status).toBe(304);
   });
 

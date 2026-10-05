@@ -19,6 +19,7 @@
 
 import { sameValue } from './merge.js';
 import { signerLabelOf } from './signer.js';
+import { LEGAL_IDENTITY_LABELS, SUPPORT_EMAIL_BY_PLATFORM_LABEL } from '../../utils/legalIdentity.js';
 
 /**
  * Identity keys the API refuses in `storeIdentity` (cloudflare/src/platform/
@@ -317,6 +318,21 @@ export function acceptanceFromView(view) {
     templateVersion,
     acceptanceId: typeof view.acceptanceId === 'string' ? view.acceptanceId : '',
   };
+}
+
+/** cloudflare/src/legal/legal-identity.ts LEGAL_IDENTITY_FIELDS. */
+export const LEGAL_IDENTITY_FIELDS = Object.freeze(['legalName', 'address', 'supportEmail', 'orgNumber', 'vatNumber']);
+
+/**
+ * CP9-OB: the identity fields an adoption is refused for (409
+ * legal_identity_incomplete `missing`, or the status's `identityMissing`), as
+ * the seller reads them, in the Worker's order; an unknown name is dropped.
+ * The support address is the platform's here (D99), and its line says so.
+ */
+export function identityGapLabels(missing) {
+  const names = Array.isArray(missing) ? missing : [];
+  return LEGAL_IDENTITY_FIELDS.filter((key) => names.includes(key)).map((key) =>
+    key === 'supportEmail' ? SUPPORT_EMAIL_BY_PLATFORM_LABEL : LEGAL_IDENTITY_LABELS[key]);
 }
 
 /** The per-page `custom` map: true exactly where the page is the seller's own text. */

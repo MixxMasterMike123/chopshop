@@ -58,7 +58,8 @@
         ],
         "templateId": null,
         "theme": {},
-        "accent": null
+        "accent": null,
+        "ordersOpen": true
       },
       "products": [
         {
@@ -1021,7 +1022,22 @@
           "pod": true,
           "productReviews": false
         },
-        "templateId": "sport"
+        "templateId": "sport",
+        "ordersOpen": true
+      }
+    },
+    "nybutiken": {
+      "extends": "provbutiken",
+      "storefront": {
+        "name": "Ny Butik",
+        "identity": {},
+        "branding": {
+          "emailLogo": null,
+          "favicon": null,
+          "hero": null,
+          "logo": null
+        },
+        "ordersOpen": false
       }
     }
   }

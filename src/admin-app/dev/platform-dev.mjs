@@ -25,6 +25,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { devMailConfigured } from './fp-dev.mjs';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'platform-fixtures.json');
 const json = (status, body) => ({ status, body });
@@ -405,7 +406,8 @@ export function platformShopRoutes({ connectOf, rest = [] }) {
       }
       if (user.accountType !== 'tenant_admin') return conflict('not_invitable', 'The identity cannot be invited');
       const expiresAt = new Date(Date.now() + 72 * 3600_000).toISOString();
-      return json(202, { invite: { userId: user.userId, surface: 'admin', expiresAt } });
+      // CP9-OB: whether a mail can leave (devMailConfigured: the cookie admin_dev_mail=off says no).
+      return json(202, { invite: { userId: user.userId, surface: 'admin', expiresAt }, mailConfigured: devMailConfigured(ctx.headers) });
     }],
   ];
 }

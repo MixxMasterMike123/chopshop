@@ -5,6 +5,8 @@ import {
   isPlainObject,
   sanitizeStoreIdentity,
 } from "../platform/tenant-config";
+import { takesDestinationCharges } from "../commerce/payment";
+import { isCheckoutLegallyOpen } from "../legal/legal-pages";
 import { resolvePublicImages } from "../storage/public-objects";
 import {
   galleryLinkSkus,
@@ -27,6 +29,11 @@ import {
 } from "./identity-projection";
 import { isPreview, type StorefrontTenant } from "./preview";
 import { publicShopStatement, type PublicShopRow } from "./public-shop";
+
+interface ConnectAccountRow {
+  stripe_account_id: string | null;
+  stripe_charges_enabled: number;
+}
 
 export interface PublicStorefront {
   currency: string;
@@ -58,6 +65,14 @@ export interface PublicStorefrontResponse extends PublicStorefront {
   features: Record<FeatureKey, boolean>;
   identity: PublicStoreIdentity;
   menu: PublicMenuEntry[];
+  /**
+   * CP9-OB: can the shop take an order NOW? Exactly what checkout and payment
+   * ask (THE legal gate `isCheckoutLegallyOpen`, and the account's
+   * `takesDestinationCharges`), read with this answer. The storefront says so
+   * at the cart, before a buyer fills anything in; the routes' own refusals
+   * stay as the backstop. One boolean: never why.
+   */
+  ordersOpen: boolean;
   pickupLocations: PublicPickupLocation[];
   templateId: string | null;
   theme: PublicTheme;
@@ -110,6 +125,11 @@ export function publicFeatures(
  * collections and pages, 0025 on products), so at worst the body is NEWER
  * than its label: one extra full response, never a stale 304.
  *
+ * `ordersOpen` is NOT labelled by the version: the account columns change by
+ * webhook or refresh with no trigger, and the terms gate closes by the clock
+ * when the D47 grace ends. So its caller names it in the ETag
+ * (public-routes.ts): a changed answer never meets a stale 304.
+ *
  * A tenant marked `preview` (a valid grant, preview.ts) passes the shop gate
  * while unpublished, and the gallery's product links follow the preview's
  * fragment; its caller answers without the version (no-store, no ETag).
@@ -119,8 +139,11 @@ export async function getPublicStorefrontVersioned(
   db: D1Database,
   tenant: StorefrontTenant,
 ): Promise<{ catalogVersion: number; value: PublicStorefrontResponse } | null> {
-  const [shopResult, settingsResult, featuresResult] = await db.batch<
-    PublicShopRow | { store_identity_json: string } | { enabled: number; feature_key: string }
+  const [shopResult, settingsResult, featuresResult, accountResult] = await db.batch<
+    | PublicShopRow
+    | { store_identity_json: string }
+    | { enabled: number; feature_key: string }
+    | ConnectAccountRow
   >([
     publicShopStatement(db, tenant.tenantId, isPreview(tenant)),
     db
@@ -134,6 +157,9 @@ export async function getPublicStorefrontVersioned(
          LIMIT 64`,
       )
       .bind(tenant.tenantId),
+    db
+      .prepare("SELECT stripe_account_id, stripe_charges_enabled FROM tenants WHERE tenant_id = ? LIMIT 1")
+      .bind(tenant.tenantId),
   ]);
 
   const shop = (shopResult?.results[0] as PublicShopRow | undefined) ?? null;
@@ -146,11 +172,14 @@ export async function getPublicStorefrontVersioned(
     (featuresResult?.results ?? []) as Array<{ enabled: number; feature_key: string }>,
   );
 
+  const account = (accountResult?.results[0] as ConnectAccountRow | undefined) ?? null;
+
   const menuEntries = storedMenu(identity.menu);
-  const [images, menuResolutions, productPathsBySku] = await Promise.all([
+  const [images, menuResolutions, productPathsBySku, legallyOpen] = await Promise.all([
     resolvePublicImages(env, db, tenant.tenantId, identityImageIds(identity), ["shop_branding"]),
     readMenuResolutions(db, tenant.tenantId, menuEntries),
     readProductPathsBySku(db, tenant, galleryLinkSkus(identity)),
+    isCheckoutLegallyOpen(db, tenant.tenantId, Date.now()),
   ]);
 
   return {
@@ -168,6 +197,7 @@ export async function getPublicStorefrontVersioned(
       locale: shop.default_locale,
       menu: resolveMenu(menuEntries, menuResolutions),
       name: shop.shop_name,
+      ordersOpen: legallyOpen && account !== null && takesDestinationCharges(account),
       pickupLocations: projectPickupLocations(identity.pickupLocations),
       templateId: projectTemplateId(identity.templateId),
       theme: projectTheme(identity.theme),

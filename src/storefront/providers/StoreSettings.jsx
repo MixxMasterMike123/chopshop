@@ -57,6 +57,9 @@ export function settingsFromStorefront(storefront) {
   for (const key of ['menu', 'pickupLocations', 'templateId', 'theme', 'accent']) {
     if (storefront[key] !== undefined) saved[key] = storefront[key];
   }
+  // CP9-OB: whether the shop can take an order now (the cart and the checkout
+  // say so before a buyer fills anything in). Absent = not known = open.
+  if (typeof storefront.ordersOpen === 'boolean') saved.ordersOpen = storefront.ordersOpen;
   return saved;
 }
 

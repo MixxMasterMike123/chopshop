@@ -26,6 +26,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { legalIdentityGaps } from '../../utils/legalIdentity.js';
 import { PRODUCT_ROUTES } from './products-dev.mjs';
 import { CONTENT_ROUTES } from './content-dev.mjs';
 import { SHELL_PLATFORM_ROUTES, heldGrants, shellAdminRoutes } from './shells-dev.mjs';
@@ -282,6 +283,16 @@ const FE_REFUSED_HTML = /<\s*(script|iframe|object|embed|form|style|svg)\b|\son[
 
 const feShopId = (headers) => headers['x-shop-id'];
 
+// CP9-OB: what the stored identity lacks for an adoption, in the Worker's
+// field names (legal-identity.ts; the frontend's copy of its rule).
+const feIdentityMissing = (settings, shop) => legalIdentityGaps({
+  ...(settings.storeIdentity || {}),
+  supportEmail: shop.shop?.supportEmail ?? '',
+  sellerType: settings.sellerType ?? '',
+  vatRegistered: settings.vatRegistered,
+  vatNumber: settings.vatNumber ?? '',
+}).map((gap) => gap.key);
+
 function feHeld(state, shopId) {
   state.fe ??= new Map();
   if (!state.fe.has(shopId)) state.fe.set(shopId, { settings: null, adoption: undefined });
@@ -355,6 +366,7 @@ const SETTINGS_LEGAL_ROUTES = [
       acceptedVersion: terms.accepted === true ? (terms.currentVersion ?? null) : null,
       currentVersion: terms.currentVersion ?? null,
       graceDeadline: null,
+      identityMissing: feIdentityMissing(settings, shop),
       inGrace: terms.inGrace === true,
       readiness: { legalPagesAccepted, ready: returnAddress && vatAnswered && legalPagesAccepted, returnAddress, vatAnswered },
     });
@@ -376,6 +388,11 @@ const SETTINGS_LEGAL_ROUTES = [
     const refusedPages = FE_LEGAL_KEYS.filter((k) => FE_REFUSED_HTML.test(texts[k]));
     if (refusedPages.length > 0) {
       return json(400, { error: { code: 'invalid_request', message: 'A text holds markup that cannot be published', page: refusedPages[0], pages: refusedPages, reason: 'script' } });
+    }
+    // CP9-OB: the Worker refuses an adoption without the identity the pages print.
+    const missing = feIdentityMissing(feSettings(state, shop, feShopId(headers)), shop);
+    if (missing.length > 0) {
+      return json(409, { error: { code: 'legal_identity_incomplete', message: "The shop's identity lacks what the legal pages print", missing } });
     }
     const pageSha256 = Object.fromEntries(FE_LEGAL_KEYS.map((k) => [k, createHash('sha256').update(texts[k], 'utf8').digest('hex')]));
     const acceptance = {

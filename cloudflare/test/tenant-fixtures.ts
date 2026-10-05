@@ -7,7 +7,9 @@ import {
   type CallOptions,
   createTenant,
   expectJson,
+  giveSupportAddress,
   PLATFORM,
+  SLICE_LEGAL_IDENTITY,
   SLICE_PICKUP_LOCATION,
   SliceWorld,
   type Tenant,
@@ -184,13 +186,15 @@ export async function bareTenant(world: SliceWorld, tenantId: string): Promise<s
  */
 export async function makeLegallyReady(world: SliceWorld, tenant: Tenant): Promise<void> {
   const admin = { cookie: tenant.adminCookie, shopId: tenant.tenantId };
+  // CP9-OB: an adoption requires the identity the pages print.
+  await giveSupportAddress(tenant);
   await expectJson(
     await call(world, "PUT", "https://admin.slice.test/v1/admin/settings", {
       ...admin,
       body: {
         returnAddress: "Returgatan 1, 123 45 Teststad",
         // D98: the pickup place the slice harness's default recipient names.
-        storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION] },
+        storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION], ...SLICE_LEGAL_IDENTITY },
         vatRegistered: true,
       },
     }),

@@ -6,7 +6,7 @@ import {
   routeNotFoundResponse,
 } from "../lib/responses";
 import { isSameOriginRequest } from "../lib/same-origin";
-import { isInviteConfigured, issueInvite } from "../platform/invites";
+import { isInviteConfigured, isInviteMailConfigured, issueInvite } from "../platform/invites";
 import type { TenantStatus } from "../platform/provision-tenants";
 import {
   parseTenantIdPathSegment,
@@ -41,7 +41,7 @@ import {
  *   POST /v1/platform/users/:userId/reactivate
  *        200 { user } · 409 not_suspended | platform_admin_reactivation | no_identity
  *   POST /v1/platform/users/:userId/invite
- *        202 { invite: { userId, surface, expiresAt } } · 409 not_invitable ·
+ *        202 { invite: { userId, surface, expiresAt }, mailConfigured } · 409 not_invitable ·
  *        503 email_unavailable
  *   POST /v1/platform/tenants/:tenantId/admins/:userId/revoke
  *        200 { membership } · 409 already_revoked
@@ -191,8 +191,9 @@ export async function handlePlatformUserInviteRoute(
   const result = await issueInvite(env, principal, userId, Date.now());
   switch (result.status) {
     case "ok":
-      // Accepted for delivery. The body never carries the token or the link.
-      return jsonResponse({ invite: result.invite }, 202);
+      // Accepted for delivery. The body never carries the token or the link;
+      // `mailConfigured` says whether the mail can leave (CP9-OB).
+      return jsonResponse({ invite: result.invite, mailConfigured: isInviteMailConfigured(env) }, 202);
     case "not_invitable":
       return refusalResponse("not_invitable");
     case "email_unavailable":

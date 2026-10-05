@@ -141,8 +141,9 @@ describe("/_api on the shared host (real API)", () => {
 
     expect(response.status).toBe(200);
     expectSecurityHeaders(response);
-    // "<catalog_version>-r<revision>" (CP8-DC, public-routes.ts STOREFRONT_BODY_REVISION).
-    expect(response.headers.get("etag")).toMatch(/^"\d+-r\d+"$/);
+    // "<catalog_version>-r<revision>" (CP8-DC, public-routes.ts STOREFRONT_BODY_REVISION),
+    // "-x" while the shop cannot take an order (CP9-OB).
+    expect(response.headers.get("etag")).toMatch(/^"\d+-r\d+(-x)?"$/);
     await expect(storefrontName(response)).resolves.toBe(`Shop ${SHOP_A}`);
   });
 

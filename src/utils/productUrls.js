@@ -195,19 +195,19 @@ export const isExternalMenuItem = (item) =>
  * DYNAMIC SEO TITLE GENERATOR
  * Generates a descriptive title from the product object.
  */
-export const getProductSeoTitle = (product) => {
-  if (!product) return STORE.shopName;
+export const getProductSeoTitle = (product, store) => {
+  if (!product) return shopNameOf(store);
   const name = safeGetContent(product.name);
   const size = product.size ? ` - ${product.size}` : '';
-  return `${name}${size} | ${STORE.shopName}`;
+  return `${name}${size}${seoSuffix(store)}`;
 };
 
 /**
  * DYNAMIC SEO DESCRIPTION GENERATOR
  * Generates a descriptive meta description from the product object.
  */
-export const getProductSeoDescription = (product) => {
-  if (!product) return STORE.tagline || STORE.shopName;
+export const getProductSeoDescription = (product, store) => {
+  if (!product) return store?.tagline || STORE.tagline || shopNameOf(store);
   
   const name = safeGetContent(product.name);
   // B2C-only platform: prefer the consumer description. The legacy B2B field is
@@ -216,7 +216,7 @@ export const getProductSeoDescription = (product) => {
   const b2cDesc = safeGetContent(product.descriptions?.b2c);
   const fallbackDesc = safeGetContent(product.description);
   const legacyB2bDesc = safeGetContent(product.descriptions?.b2b);
-  const defaultDesc = `${name} – ${STORE.shopName}`;
+  const defaultDesc = shopNameOf(store) ? `${name} – ${shopNameOf(store)}` : name;
 
   const description = b2cDesc || fallbackDesc || legacyB2bDesc || defaultDesc;
   
@@ -271,13 +271,16 @@ export const getShopSeoDescription = (language = 'sv-SE', store = STORE) => {
  * Generic + brand-driven (STORE.shopName) so the template carries no
  * hardcoded brand. Per-shop SEO override is a later slice.
  */
-const seoSuffix = () => ` | ${STORE.shopName}`;
+// CP9-OB: the shop's own name when the page passes its live settings, else
+// STORE's (empty since CP9-OB): never a dangling " | ".
+const shopNameOf = (store) => String(store?.shopName || STORE.shopName || '').trim();
+const seoSuffix = (store) => (shopNameOf(store) ? ` | ${shopNameOf(store)}` : '');
 
-export const getCartSeoTitle = () => `Varukorg${seoSuffix()}`;
+export const getCartSeoTitle = (store) => `Varukorg${seoSuffix(store)}`;
 export const getCartSeoDescription = () =>
   'Granska dina valda produkter. Säker kassa och snabb leverans.';
 
-export const getCheckoutSeoTitle = () => `Kassa${seoSuffix()}`;
+export const getCheckoutSeoTitle = (store) => `Kassa${seoSuffix(store)}`;
 export const getCheckoutSeoDescription = () =>
   'Säker kassa. Snabb leverans och 14 dagars ångerrätt. Betala säkert online.';
 
@@ -298,11 +301,11 @@ const LEGAL_LABELS = {
   cookies: 'Cookie-policy',
   shipping: 'Frakt & Leverans',
 };
-export const getLegalSeoTitle = (pageType = 'privacy') =>
-  `${LEGAL_LABELS[pageType] || LEGAL_LABELS.privacy}${seoSuffix()}`;
-export const getLegalSeoDescription = (pageType = 'privacy') => {
+export const getLegalSeoTitle = (pageType = 'privacy', store) =>
+  `${LEGAL_LABELS[pageType] || LEGAL_LABELS.privacy}${seoSuffix(store)}`;
+export const getLegalSeoDescription = (pageType = 'privacy', store) => {
   const label = LEGAL_LABELS[pageType] || LEGAL_LABELS.privacy;
-  return `${label} – ${STORE.shopName}.`;
+  return shopNameOf(store) ? `${label} – ${shopNameOf(store)}.` : `${label}.`;
 };
 
 /**
@@ -326,11 +329,13 @@ export const generateShopStructuredData = (language = 'sv-SE', store = STORE) =>
     // NOTE: STORE has no structured postal-address or phone fields, so the
     // PostalAddress block and telephone are intentionally omitted rather
     // than inventing data.
-    "contactPoint": {
-      "@type": "ContactPoint",
-      "contactType": "customer service",
-      "email": store.supportEmail || STORE.supportEmail
-    },
+    ...((store.supportEmail || STORE.supportEmail) && {
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "contactType": "customer service",
+        "email": store.supportEmail || STORE.supportEmail
+      }
+    }),
     ...(sameAs.length > 0 && { "sameAs": sameAs })
   };
 };

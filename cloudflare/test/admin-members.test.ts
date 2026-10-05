@@ -682,6 +682,19 @@ describe("the list", () => {
 });
 
 describe("the invite", () => {
+  it("CP9-OB: with no mail account the person is added and invited, and the answer says no mail can leave", async () => {
+    const captured = captureQueue();
+    const response = await add(
+      { email: "no-mail-yet@example.com", name: "Test No Mail" },
+      { env: envWith({ EMAIL_QUEUE: captured.queue, RESEND_API_KEY: undefined }) },
+    );
+    expect(response.status).toBe(201);
+    const body = await response.json<{ mailConfigured: boolean; member: MemberBody }>();
+    expect(Object.keys(body).sort()).toEqual(["mailConfigured", "member"]);
+    expect(body.mailConfigured).toBe(false);
+    expect(captured.sent).toHaveLength(1);
+  });
+
   it("creates a password-less tenant admin, grants the membership, and mails a link landing on the admin origin", async () => {
     const captured = captureQueue();
     const email = "new-person@example.com";
@@ -690,7 +703,9 @@ describe("the invite", () => {
       { env: envWith({ EMAIL_QUEUE: captured.queue }) },
     );
     expect(response.status).toBe(201);
-    const { member } = await response.json<{ member: MemberBody }>();
+    const { mailConfigured, member } = await response.json<{ mailConfigured: boolean; member: MemberBody }>();
+    // CP9-OB: whether the mail can leave (the test env has a mail account).
+    expect(mailConfigured).toBe(true);
     expect(Object.keys(member).sort()).toEqual(MEMBER_KEYS);
     expect(member).toMatchObject({
       email,

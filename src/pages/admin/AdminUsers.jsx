@@ -149,7 +149,8 @@ const AdminUsers = () => {
     try {
       setResendingId(user.id);
       const done = await resendInvite(user);
-      toast.success(done.message, { duration: 8000 });
+      if (done.notSent) toast(done.message, { icon: '⚠️', duration: 15000 });
+      else toast.success(done.message, { duration: 8000 });
     } catch (error) {
       console.error('Error resending the invite:', error);
       toast.error(error?.message || 'Inbjudan kunde inte skickas igen.', { duration: 10000 });
@@ -407,8 +408,10 @@ const InviteAdminDialog = ({ onClose, onInvite, onDone }) => {
     if (name.trim() === '') return setError('Ange ett namn.');
     setSaving(true);
     try {
-      await onInvite({ email: address, name: name.trim() });
-      toast.success(`Inbjudan skickad till ${address}`);
+      const added = await onInvite({ email: address, name: name.trim() });
+      // CP9-OB: "skickad" only when a mail can leave (the data layer's notice otherwise).
+      if (added?.notice) toast(`Administratören lades till. ${added.notice}`, { icon: '⚠️', duration: 15000 });
+      else toast.success(`Inbjudan skickad till ${address}`);
       onDone();
     } catch (err) {
       if (err?.mailFailed) {

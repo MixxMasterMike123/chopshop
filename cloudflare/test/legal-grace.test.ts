@@ -170,6 +170,10 @@ async function checkoutCount(tenantId: string): Promise<number> {
 
 // ═══════════════════════════════════════════════════════════════════════════
 const READY = { legalPagesAccepted: true, ready: true, returnAddress: true, vatAnswered: true };
+// CP9-OB: the fixture makes these shops ready as an IMPORT does (an adoption
+// row, no identity), so a new adoption would be refused for these fields while
+// the checkout stays open: the rule is the act of adopting, not retroactive.
+const FIXTURE_IDENTITY_MISSING = ["legalName", "address", "supportEmail"];
 
 describe("D47 grace at the real clock, through the routes", () => {
   it("status: one fixed shape — the CP2 keys, the accepted version, the grace and the readiness", async () => {
@@ -180,6 +184,7 @@ describe("D47 grace at the real clock, through the routes", () => {
       acceptedVersion: R0,
       currentVersion: R,
       graceDeadline: iso(Date.parse(rAt) + FOURTEEN_DAYS),
+      identityMissing: FIXTURE_IDENTITY_MISSING,
       inGrace: true,
       // CP5-WJ: the latest acceptance (R0). Its fixture names a user id with no
       // account behind it, so the signer is a person nobody can name.
@@ -197,6 +202,7 @@ describe("D47 grace at the real clock, through the routes", () => {
       acceptedVersion: CURRENT_TERMS_VERSION,
       currentVersion: R,
       graceDeadline: null,
+      identityMissing: FIXTURE_IDENTITY_MISSING,
       inGrace: false,
       latestAcceptance: {
         acceptedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
@@ -212,6 +218,7 @@ describe("D47 grace at the real clock, through the routes", () => {
       acceptedVersion: null,
       currentVersion: R,
       graceDeadline: null,
+      identityMissing: FIXTURE_IDENTITY_MISSING,
       inGrace: false,
       latestAcceptance: null,
       readiness: READY,
@@ -273,6 +280,7 @@ describe("D47 grace at the real clock, through the routes", () => {
       acceptedVersion: R,
       currentVersion: R,
       graceDeadline: null,
+      identityMissing: FIXTURE_IDENTITY_MISSING,
       inGrace: false,
       latestAcceptance: {
         acceptedAt,

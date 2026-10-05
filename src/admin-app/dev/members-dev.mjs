@@ -30,7 +30,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fpScenario } from './fp-dev.mjs';
+import { devMailConfigured, fpScenario } from './fp-dev.mjs';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'members-fixtures.json');
 const CAP = 20;
@@ -91,7 +91,8 @@ export const MEMBER_ROUTES = [
     // A revoked person coming back is the same row again; the dev API just appends.
     list.push(known ? { ...member, name: known.user.name, invited: false } : member);
     if (mode === 'noinvite') return refused(503, 'email_unavailable', 'The invite email could not be queued');
-    return json(201, { member: viewOf({ ...member, userId: member.userId }, entry) });
+    // CP9-OB: whether a mail can leave (devMailConfigured: the cookie admin_dev_mail=off says no).
+    return json(201, { mailConfigured: devMailConfigured(headers), member: viewOf({ ...member, userId: member.userId }, entry) });
   }],
 
   ['POST', /^\/v1\/admin\/members\/([^/]+)\/resend-invite$/, (state, { shop, headers, segments }) => {
@@ -106,7 +107,7 @@ export const MEMBER_ROUTES = [
     if (mode === 'suspended') return refused(409, 'not_invitable', 'The identity cannot be invited');
     if (mode === 'nomail') return refused(503, 'email_unavailable', 'The invite email could not be queued');
     if (mode === 'lost') return json(502, { error: { code: 'bad_gateway', message: 'The answer was lost on the way (dev scenario)' } });
-    return json(202, { invite: { userId: member.userId, surface: 'admin', expiresAt: new Date(Date.now() + 72 * 3600_000).toISOString() } });
+    return json(202, { invite: { userId: member.userId, surface: 'admin', expiresAt: new Date(Date.now() + 72 * 3600_000).toISOString() }, mailConfigured: devMailConfigured(headers) });
   }],
 
   ['POST', /^\/v1\/admin\/members\/([^/]+)\/revoke$/, (state, { shop, entry, segments }) => {

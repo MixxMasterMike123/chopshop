@@ -13,6 +13,7 @@ import {
 } from "./platform-terms";
 import { type SignerColumns, signerColumnsSql, type SignerView, type SignerViewer, signerView } from "./signer";
 import { checkHtml, type HtmlRefusal } from "../content/html-refusal";
+import { type LegalIdentityField, readLegalIdentityGaps } from "./legal-identity";
 
 /**
  * The seller ADOPTING the consumer-facing legal pages of its own shop
@@ -280,6 +281,11 @@ export type AcceptPagesResult =
   | { acceptance: NewPagesAcceptance; status: "accepted" }
   /** An acting-as principal: a platform user never adopts for the seller. */
   | { status: "forbidden" }
+  /**
+   * CP9-OB: the stored identity lacks what the pages print (legal-identity.ts),
+   * so the texts would hold a hole or a placeholder. Nothing is written.
+   */
+  | { missing: LegalIdentityField[]; status: "identity_incomplete" }
   | { retryAfterSeconds: number; status: "rate_limited" }
   /** The canonical snapshot is over LEGAL_TEXTS_MAX_BYTES. */
   | { status: "too_large" };
@@ -302,6 +308,12 @@ export async function acceptLegalPages(
   const snapshot = await canonicalTexts(input.texts);
   if (snapshot.sizeBytes > LEGAL_TEXTS_MAX_BYTES) {
     return { status: "too_large" };
+  }
+
+  // Before the rate limit: a refusal for a missing field costs no attempt.
+  const missing = await readLegalIdentityGaps(db, principal.tenantId);
+  if (missing.length > 0) {
+    return { missing, status: "identity_incomplete" };
   }
 
   const limited = await enforceRateLimit(db, {

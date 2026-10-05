@@ -106,6 +106,8 @@ describe("GET /v1/storefront", () => {
         locale: "sv-SE",
         menu: [],
         name: "Store A",
+        // CP9-OB: no account, no legal pages: the shop cannot take an order.
+        ordersOpen: false,
         pickupLocations: [],
         templateId: null,
         theme: {},

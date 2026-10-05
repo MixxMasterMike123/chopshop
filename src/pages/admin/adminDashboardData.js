@@ -90,3 +90,8 @@ export async function loadDashboardStats(shopId) {
     }))
   };
 }
+
+/** CP9-OB: the "Kom igång" checklist is the admin build's (its facts are API reads): none here. */
+export async function loadOnboarding() {
+  return null;
+}

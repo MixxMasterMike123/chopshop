@@ -18,7 +18,7 @@ import {
 const said = (message, reload = false) => Object.assign(new Error(message), { reload });
 
 /**
- * "Skicka inbjudan igen" for `user` (a page row). → { message }; rejects with
+ * "Skicka inbjudan igen" for `user` (a page row). → { message, notSent }; rejects with
  * an Error whose message is the seller's sentence and `reload` true when the
  * list must be read again. A 404 is told apart by reading the list: gone from
  * it → no longer a member; still in it → the route is off here (no invite
@@ -27,7 +27,9 @@ const said = (message, reload = false) => Object.assign(new Error(message), { re
  */
 export async function resendInvite(shopId, user) {
   try {
-    return { message: resendDoneMessage(user.email, await resendMemberInvite({ shopId, userId: user.id })) };
+    const invite = await resendMemberInvite({ shopId, userId: user.id });
+    // CP9-OB: `notSent` when no mail can leave this environment (the message says so).
+    return { message: resendDoneMessage(user.email, invite), notSent: invite?.mailConfigured === false };
   } catch (error) {
     const refusal = resendRefusal(error, user.email);
     if (refusal) throw said(refusal.message, refusal.reload);

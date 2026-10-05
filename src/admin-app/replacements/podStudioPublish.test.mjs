@@ -339,6 +339,23 @@ describe('publishing a new design', () => {
     assert.deepEqual(writes().map((r) => r.method), ['PATCH', 'POST'], 'only the product and the publish: nothing else differs');
   });
 
+  it('CP9-OB: a product held for the platform\'s review (or stopped by it) is said as such, never as live', async () => {
+    for (const [status, held, blocked] of [['pending', true, false], ['blocked', false, true], ['approved', false, false]]) {
+      inject = (r) => {
+        if (!r.url.endsWith('/publish')) return undefined;
+        const answer = route(state, 'POST', new URL(`http://dev.invalid${r.url}`), r.headers, r.body);
+        answer.body.product.screeningStatus = status;
+        return new Response(JSON.stringify(answer.body), { status: answer.status });
+      };
+      const out = await publishNewDesign({ ...design(), name: `Held ${status}` }, DEPS);
+      assert.equal(out.error, undefined, status);
+      assert.equal(out.result.published, true);
+      assert.equal(out.result.held, held, status);
+      assert.equal(out.result.blocked, blocked, status);
+      forgetPendingRun();
+    }
+  });
+
   it('a lost answer to the publish while it went live: read back, and said as published (Codex FN1 round 1)', async () => {
     inject = (r) => {
       if (r.url.endsWith('/publish')) {

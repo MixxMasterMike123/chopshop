@@ -20,6 +20,7 @@ import {
   readAllPlatformUsers,
 } from '../../api/admin/platform.js';
 import { ADMIN_ACCOUNT_TYPES, sortUsers, userActionMessage, userRowOf } from '../adapters/platformConsole.js';
+import { mailNotSentMessage } from '../adapters/member.js';
 
 /** D51: a platform admin is not created over HTTP. */
 export const CAN_CREATE_PLATFORM_ADMIN = false;
@@ -72,8 +73,16 @@ export const removeUser = (uid) => run(async () => userRowOf(await deactivatePla
 /** Switches the account on again. Resolves the user's row. A platform admin is refused (D63). */
 export const reactivateUser = (uid) => run(async () => userRowOf(await reactivatePlatformUser(uid)));
 
-/** Mails the user an invitation (a link to set a password). */
-export const inviteUser = (uid) => run(() => invitePlatformUser(uid));
+/**
+ * Mails the user an invitation (a link to set a password). Resolves the
+ * invite; `notice` is set when the Worker says no mail can leave this
+ * environment (`mailConfigured` false, CP9-OB): the sentence the page shows
+ * instead of "sent".
+ */
+export const inviteUser = (uid, email) => run(async () => {
+  const invite = await invitePlatformUser(uid);
+  return invite?.mailConfigured === false ? { ...invite, notice: mailNotSentMessage(email || 'Personen') } : invite;
+});
 
 /** Refused (D51). */
 export async function createSuperAdmin() {

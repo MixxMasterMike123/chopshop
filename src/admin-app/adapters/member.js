@@ -87,10 +87,20 @@ function waitText(seconds) {
 
 /** The sentence after a new link was sent. */
 export function resendDoneMessage(email, invite) {
+  if (invite?.mailConfigured === false) return mailNotSentMessage(email);
   const until = typeof invite?.expiresAt === 'string' && !Number.isNaN(Date.parse(invite.expiresAt))
     ? ` Den gäller till ${new Date(invite.expiresAt).toLocaleString('sv-SE', { dateStyle: 'medium', timeStyle: 'short' })}.`
     : '';
   return `En ny inbjudningslänk har skickats till ${email}. Den tidigare länken fungerar inte längre.${until}`;
+}
+
+/**
+ * CP9-OB: an invite was accepted but this environment has no mail account
+ * (the Worker's `mailConfigured` false), so no mail left. Said plainly: the
+ * person cannot sign in until mail works. Never the link or a token.
+ */
+export function mailNotSentMessage(email) {
+  return `Inget mejl skickades: e-post är inte inställd här ännu. ${email} kan inte logga in förrän e-posten fungerar och inbjudan skickas igen.`;
 }
 
 /**

@@ -10,7 +10,11 @@
 //                 Tryckjobb is added after Tryckerier (unit CP5-FP: the print
 //                 jobs and their production status)
 //   the badge     GET /v1/platform/reports?status=new → `newCount` (every
-//                 shop's unhandled reports), per mount and on the badge event
+//                 shop's unhandled reports) PLUS the products waiting for the
+//                 platform's review (GET /v1/platform/screening?status=pending,
+//                 at most 100: a new shop's first products, not in its shop
+//                 until approved; CP9-OB), per mount and on the badge event.
+//                 A flagged product is not counted: it is live already.
 //   the notices   an acting-as session that ended in this tab (ran out, or
 //                 "Avsluta") is said once when the console opens
 
@@ -41,10 +45,16 @@ export function scopePlatformNav(nav) {
     .flatMap((item) => [item, ...ADDED_PLATFORM_LINKS.filter((a) => a.after === item.path).map((a) => a.link)]);
 }
 
-/** The badge counts of a `GET /v1/platform/reports` answer (pure). */
-export function badgeCountsOf(data) {
+/**
+ * The badge counts (pure): the reports' `newCount`, plus the products waiting
+ * for review when that read answered (`screening`, the queue's rows; CP9-OB).
+ * No count without the reports' answer; a failed screening read adds nothing.
+ */
+export function badgeCountsOf(data, screening = null) {
   const n = data?.newCount;
-  return Number.isInteger(n) && n >= 0 ? { reports: n } : {};
+  if (!(Number.isInteger(n) && n >= 0)) return {};
+  const waiting = Array.isArray(screening) ? screening.filter((row) => row?.status === 'pending').length : 0;
+  return { reports: n + waiting };
 }
 
 export const useNavBadgeCounts = (override, badgesEvent) => {
@@ -53,9 +63,13 @@ export const useNavBadgeCounts = (override, badgesEvent) => {
     if (override) return undefined;
     let cancelled = false;
     const load = () => {
-      platformRequest('GET', '/v1/platform/reports?status=new&limit=1')
-        .then(({ data }) => {
-          if (!cancelled) setCounts(badgeCountsOf(data));
+      Promise.all([
+        platformRequest('GET', '/v1/platform/reports?status=new&limit=1'),
+        platformRequest('GET', '/v1/platform/screening?status=pending')
+          .then(({ data }) => (Array.isArray(data?.screening) ? data.screening : null), () => null),
+      ])
+        .then(([{ data }, screening]) => {
+          if (!cancelled) setCounts(badgeCountsOf(data, screening));
         })
         .catch(() => {});
     };

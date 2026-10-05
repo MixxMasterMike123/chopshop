@@ -333,6 +333,33 @@ const Checkout = () => {
     );
   }
 
+  // CP9-OB: the shop cannot take an order now (the storefront answer's
+  // ordersOpen: its legal pages, its terms or its payment account). Said
+  // before a single field is asked for, and never why; the server's refusal
+  // below stays the backstop.
+  if (store.ordersOpen === false && !processingPayment) {
+    return (
+      <div className="min-h-screen bg-canvas font-body text-ink">
+        <ShopNavigation />
+        <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+          <ShoppingBagIcon className="h-16 w-16 text-ink-faint mx-auto mb-4" />
+          <h1 className="font-display text-2xl font-bold text-ink mb-4">
+            {t('orders_closed_title', 'Butiken tar inte emot beställningar just nu')}
+          </h1>
+          <p className="text-ink-muted mb-8">
+            {t('orders_closed_body', 'Du kan fortfarande titta på produkterna. Försök igen lite senare.')}
+          </p>
+          <button
+            onClick={() => navigate(getCountryAwareUrl(''))}
+            className="bg-accent text-white px-6 py-3 rounded-full font-bold hover:opacity-90 transition-opacity"
+          >
+            {t('checkout_continue_shopping', 'Fortsätt handla')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Delivery & Pickup v2: the cart can't be received by any available method
   // (a pickup-only + shipping-only mix, or a pickup-only cart with no pickup
   // location at this shop). Block checkout with a clear message instead of
@@ -385,15 +412,15 @@ const Checkout = () => {
   return (
     <>
       <Helmet>
-        <title>{getCheckoutSeoTitle()}</title>
+        <title>{getCheckoutSeoTitle(store)}</title>
         <meta name="description" content={getCheckoutSeoDescription()} />
         <meta property="og:type" content="website" />
-        <meta property="og:title" content={getCheckoutSeoTitle()} />
+        <meta property="og:title" content={getCheckoutSeoTitle(store)} />
         <meta property="og:description" content={getCheckoutSeoDescription()} />
         {store.logoUrl && <meta property="og:image" content={store.logoUrl} />}
         <meta property="og:url" content={window.location.href} />
         <meta name="twitter:card" content="summary" />
-        <meta name="twitter:title" content={getCheckoutSeoTitle()} />
+        <meta name="twitter:title" content={getCheckoutSeoTitle(store)} />
         <meta name="twitter:description" content={getCheckoutSeoDescription()} />
         {store.logoUrl && <meta name="twitter:image" content={store.logoUrl} />}
       </Helmet>
@@ -784,17 +811,18 @@ const Checkout = () => {
                     </div>
                   )}
 
-                  {/* Legal gate: the shop hasn't finished its köpvillkor, so the
-                      server would refuse the PaymentIntent anyway. Show the
-                      friendly front instead of the payment form — and never the
-                      internal blocker names. */}
+                  {/* The server refused the checkout (its opaque 404: the
+                      legal pages, the terms or the payment account). Show the
+                      friendly front instead of the payment form, and never
+                      the reason (CP9-OB: the old text blamed the köpvillkor,
+                      also for a missing payment account). */}
                   {!checkoutLegallyOpen ? (
                     <div className="bg-white rounded-tile border border-ink/10 p-6 text-center">
                       <h3 className="font-display text-lg font-bold text-ink mb-2">
-                        {t('checkout_legal_not_ready_title', 'Butiken tar inte emot beställningar ännu')}
+                        {t('orders_closed_title', 'Butiken tar inte emot beställningar just nu')}
                       </h3>
                       <p className="text-sm text-ink-muted">
-                        {t('checkout_legal_not_ready_body', 'Butiken håller på att färdigställa sina köpvillkor. Försök igen lite senare.')}
+                        {t('orders_closed_body', 'Du kan fortfarande titta på produkterna. Försök igen lite senare.')}
                       </p>
                     </div>
                   ) : (

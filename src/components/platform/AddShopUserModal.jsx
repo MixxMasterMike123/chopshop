@@ -25,6 +25,9 @@ const AddShopUserModal = ({ shop, onClose }) => {
       const data = await addShopUser({ shop, email: trimmed, name });
       if (data.emailSent) {
         toast.success(`Admin tillagd för ${shop.name || shop.id}. Inloggningsuppgifter skickade till ${trimmed}.`);
+      } else if (data.emailNotice) {
+        // CP9-OB: the data layer says what happened (no mail left), in full.
+        toast(`Admin tillagd för ${shop.name || shop.id}. ${data.emailNotice}`, { icon: '⚠️', duration: 15000 });
       } else {
         // Account was created but the email didn't go out — surface clearly so
         // the operator knows to send credentials another way.

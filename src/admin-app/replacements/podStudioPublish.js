@@ -259,7 +259,7 @@ async function imageStep({ shopId, productId, rows, colours, mockups, heroKey, r
  *   heroKey                the mockup the seller picked as the main image
  * deps: { skuFromName, uniqueSku, deriveVariantsFromGroups }
  *
- * → { result: { name, sku, productId, published: true, note, screeningNotice } }
+ * → { result: { name, sku, productId, published: true, note, screeningNotice, held, blocked } }
  *   | { error, field?: 'price', changed?: true }   (changed: something was written)
  */
 export async function publishNewDesign(input, deps) {
@@ -520,6 +520,10 @@ export async function publishNewDesign(input, deps) {
       published: true,
       note: imageNote({ ...imaged.plan, missingSides: images.missingSides }),
       screeningNotice: screeningNoticeFor(after?.screeningStatus),
+      // CP9-OB: published but not shown: held for the platform's review, or
+      // stopped by it. The panel then never says "LIVE".
+      held: after?.screeningStatus === 'pending',
+      blocked: after?.screeningStatus === 'blocked',
     },
   };
 }

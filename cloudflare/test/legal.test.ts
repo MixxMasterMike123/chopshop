@@ -92,6 +92,10 @@ beforeAll(async () => {
 }, 60_000);
 
 const READY = { legalPagesAccepted: true, ready: true, returnAddress: true, vatAnswered: true };
+// CP9-OB: the fixture makes these shops ready as an IMPORT does (an adoption
+// row, no identity), so a new adoption would be refused for these fields while
+// the checkout stays open: the rule is the act of adopting, not retroactive.
+const FIXTURE_IDENTITY_MISSING = ["legalName", "address", "supportEmail"];
 
 beforeEach(() => {
   world.reset();
@@ -138,6 +142,7 @@ describe("seller: the platform-terms gate", () => {
       acceptedVersion: null,
       currentVersion: CURRENT_TERMS_VERSION,
       graceDeadline: null,
+      identityMissing: FIXTURE_IDENTITY_MISSING,
       inGrace: false,
       latestAcceptance: null,
       readiness: READY,
@@ -169,6 +174,7 @@ describe("seller: the platform-terms gate", () => {
       acceptedVersion: CURRENT_TERMS_VERSION,
       currentVersion: CURRENT_TERMS_VERSION,
       graceDeadline: null,
+      identityMissing: FIXTURE_IDENTITY_MISSING,
       inGrace: false,
       // CP5-WJ: who accepted (the shop's own admin, named to the shop) and when.
       latestAcceptance: {

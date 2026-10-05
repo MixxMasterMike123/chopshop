@@ -12,6 +12,7 @@ import {
   abandonAuthEmailDelivery,
   prepareAuthEmailDeliveryRecord,
 } from "../email/email-delivery-store";
+import { readEmailDeliveryConfig } from "../email/email-queue-consumer";
 import { readCanonicalOrigins } from "../lib/origins";
 
 /**
@@ -90,6 +91,19 @@ export type InviteResult =
 /** Same gate as the reset surface: a queue to deliver through, an allowlist to build from. */
 export function isInviteConfigured(env: Env): boolean {
   return isPasswordResetConfigured(env);
+}
+
+/**
+ * CP9-OB: can an invite's mail actually leave? The gate above does not ask
+ * (a missing Resend key never drops a queued mail: the consumer holds it),
+ * so an accepted invite can sit in the queue with no mail account at all, as
+ * on staging, and the person can never set a password. Every invite answer
+ * says it: `mailConfigured` false ⇒ queued, not sent, and not sent until the
+ * transport (RESEND_API_KEY + EMAIL_FROM, email-queue-consumer.ts) exists.
+ * A boolean only: never the link, the token or the job.
+ */
+export function isInviteMailConfigured(env: Env): boolean {
+  return readEmailDeliveryConfig(env) !== null;
 }
 
 interface TargetRow {

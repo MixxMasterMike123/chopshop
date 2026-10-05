@@ -11,6 +11,7 @@ import { ACCENT_FIELD, NEW_SHOP_NOTE, provisionShop } from './provisionShopData'
 import toast from 'react-hot-toast';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { NON_SHOP_FIRST_SEGMENTS } from '../../config/tenancy';
+import { slugifyShopId } from './shopIdSlug';
 
 // 3-30 chars, a-z 0-9 and single hyphens BETWEEN characters (no edge/double
 // hyphens — the id is a URL segment and, one day, a subdomain label).
@@ -59,18 +60,6 @@ const SHOP_TYPES = [
   },
 ];
 
-const slugifyId = (s) =>
-  (s || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[åäæ]/g, 'a')
-    .replace(/[ö ø]/g, 'o')
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 30);
-
 const ProvisionShopModal = ({ onClose, onCreated }) => {
   const [name, setName] = useState('');
   const [shopId, setShopId] = useState('');
@@ -84,7 +73,7 @@ const ProvisionShopModal = ({ onClose, onCreated }) => {
   // Auto-derive shopId from name until the operator edits it directly.
   const onNameChange = (v) => {
     setName(v);
-    if (!shopIdTouched) setShopId(slugifyId(v));
+    if (!shopIdTouched) setShopId(slugifyShopId(v));
   };
 
   const create = async (e) => {

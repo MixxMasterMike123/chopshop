@@ -343,8 +343,9 @@ describe("the ETag names the switch", () => {
   it("off \"<v>\", on \"<v>-c\": a body kept from before a flip is answered in full, never a 304", async () => {
     const version = await catalogVersion(TENANT);
     for (const path of VERSIONED_PATHS) {
-      // CP8-DC (F10): the storefront body names its code revision as well.
-      const r = path === "/v1/storefront" ? `-r${STOREFRONT_BODY_REVISION}` : "";
+      // CP8-DC (F10): the storefront body names its code revision as well;
+      // CP9-OB: and `-x`, this shop cannot take an order (no account).
+      const r = path === "/v1/storefront" ? `-r${STOREFRONT_BODY_REVISION}-x` : "";
       const off = await get(path, undefined);
       const on = await get(path, ON);
       expect([off.status, on.status], path).toEqual([200, 200]);

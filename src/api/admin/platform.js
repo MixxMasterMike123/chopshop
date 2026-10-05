@@ -103,7 +103,13 @@ export const reactivatePlatformUser = (userId) => userAction(userId, 'reactivate
 /** → { userId, surface, expiresAt }. 409 not_invitable, 503 email_unavailable, 404 where invites are not configured. */
 export async function invitePlatformUser(userId) {
   const { data } = await platformRequest('POST', `/v1/platform/users/${segment(userId)}/invite`);
-  return data?.invite ?? null;
+  // CP9-OB: `mailConfigured` false = queued, but no mail leaves this environment.
+  return data?.invite ? { ...data.invite, ...mailConfiguredOf(data) } : null;
+}
+
+/** The invite answers' `mailConfigured` (CP9-OB), when the Worker says it. */
+export function mailConfiguredOf(data) {
+  return typeof data?.mailConfigured === 'boolean' ? { mailConfigured: data.mailConfigured } : {};
 }
 
 // ── infringement reports ────────────────────────────────────────────────────

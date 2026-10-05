@@ -12,6 +12,9 @@
 
 import { adminRequest, segment } from './client.js';
 
+/** The invite answers' `mailConfigured` (CP9-OB), when the Worker says it. */
+const mailConfiguredOf = (data) => (typeof data?.mailConfigured === 'boolean' ? { mailConfigured: data.mailConfigured } : {});
+
 export const MEMBERS_PATH = '/v1/admin/members';
 
 /** The shop's active admins, oldest first (at most 100). → the API's member rows */
@@ -23,7 +26,8 @@ export async function listMembers({ shopId, signal } = {}) {
 /** Adds an admin and sends the invitation. → the API's member row */
 export async function inviteMember({ shopId, email, name }) {
   const { data } = await adminRequest('POST', MEMBERS_PATH, { shopId, json: { email, name } });
-  return data?.member ?? null;
+  // CP9-OB: `mailConfigured` false = queued, but no mail leaves this environment.
+  return data?.member ? { ...data.member, ...mailConfiguredOf(data) } : null;
 }
 
 /** Ends one person's admin access to this shop. → { userId } */
@@ -39,5 +43,5 @@ export async function revokeMember({ shopId, userId }) {
  */
 export async function resendMemberInvite({ shopId, userId }) {
   const { data } = await adminRequest('POST', `${MEMBERS_PATH}/${segment(userId)}/resend-invite`, { shopId });
-  return data?.invite ?? null;
+  return data?.invite ? { ...data.invite, ...mailConfiguredOf(data) } : null;
 }

@@ -89,8 +89,10 @@ const PlatformUsers = () => {
   const handleInvite = async (u) => {
     try {
       setWorkingId(u.uid);
-      await inviteUser(u.uid);
-      toast.success(`Inbjudan skickad till ${u.email}`);
+      const invite = await inviteUser(u.uid, u.email);
+      // CP9-OB: "skickad" only when a mail can leave; otherwise what happened.
+      if (invite?.notice) toast(invite.notice, { icon: '⚠️', duration: 15000 });
+      else toast.success(`Inbjudan skickad till ${u.email}`);
     } catch (e) {
       console.error('inviteUser failed:', e);
       toast.error(e?.message || 'Kunde inte skicka inbjudan');

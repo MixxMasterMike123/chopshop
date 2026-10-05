@@ -48,6 +48,14 @@ const lostAnswer = () => json(502, { error: { code: 'bad_gateway', message: 'The
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/**
+ * CP9-OB: the invite answers' `mailConfigured`. True unless the cookie
+ * `admin_dev_mail=off` asks for an environment with no mail account (as
+ * staging is today): the invite is accepted and no mail leaves.
+ */
+export const devMailConfigured = (headers) =>
+  !(headers.cookie || '').split(';').some((part) => part.trim() === 'admin_dev_mail=off');
+
 export function fpScenario(headers) {
   for (const part of (headers.cookie || '').split(';')) {
     const [key, ...rest] = part.trim().split('=');

@@ -13,6 +13,8 @@ import { useShopId } from '../../contexts/ShopContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { getLegalReadiness } from '../../utils/legalPageReadiness';
+import { legalIdentityGaps } from '../../utils/legalIdentity';
+import { withoutPlaceholderIdentity } from '../../utils/placeholderIdentity';
 import {
   LEGAL_ACCEPTANCE_LABEL,
   LEGAL_PAGES,
@@ -45,10 +47,22 @@ import {
   CheckIcon,
 } from '@heroicons/react/24/outline';
 
-// The form from saved settings: the static defaults under every non-empty saved value.
-const formFromSaved = (saved) => ({ ...STORE, ...Object.fromEntries(
+// The form from saved settings: the static defaults under every non-empty saved
+// value. A stored placeholder (the older admin saved its defaults as values,
+// CP9-OB) is shown as the empty field it really is.
+const formFromSaved = (saved) => ({ ...STORE, ...withoutPlaceholderIdentity(Object.fromEntries(
   Object.entries(saved || {}).filter(([, v]) => v !== undefined && v !== null && v !== '')
-) });
+)) });
+
+// The hint in each empty identity field (CP9-OB): an example, never a value.
+const IDENTITY_HINTS = {
+  shopName: 'Butikens namn',
+  legalName: 'T.ex. Mitt Företag AB, eller ditt namn om du säljer som privatperson',
+  tagline: 'T.ex. Tryck och merch från Sundsvall',
+  supportEmail: 'Inte angiven ännu',
+  address: 'T.ex. Storgatan 1<br>123 45 Sundsvall',
+  companyDescription: 'En eller två meningar om butiken. Visas i sidfoten.',
+};
 
 const AdminSettings = () => {
   const [loading, setLoading] = useState(true);
@@ -491,7 +505,12 @@ const AdminSettings = () => {
   // accepting a page that still prints "⚠️ Returadress ej angiven" would record
   // a broken text as the seller's own terms. (From the form: the acceptance
   // saves it first.)
-  const otherLegalBlockers = formReadiness.blockers.filter((b) => b.key !== 'acceptance');
+  // CP9-OB: and once the pages would print no hole: the identity they print
+  // (legalIdentity.js; the Worker refuses an adoption without it too).
+  const otherLegalBlockers = [
+    ...formReadiness.blockers.filter((b) => b.key !== 'acceptance'),
+    ...legalIdentityGaps(storeForm, { supportEmailByPlatform: PLATFORM_OWNED_FIELDS.includes('supportEmail') }),
+  ];
   const legalAcceptance = storeForm.legal?.acceptance;
   // Only the shop's own admin adopts the texts: a platform user acting as the
   // shop may not (the API refuses it), so the button says why instead.
@@ -542,10 +561,10 @@ const AdminSettings = () => {
               <CardSection title="Allmänt" bodyClassName="space-y-5">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   {[
-                    { key: 'shopName', label: 'Butiksnamn', type: 'text', placeholder: STORE.shopName },
-                    { key: 'legalName', label: 'Juridiskt företagsnamn', type: 'text', placeholder: STORE.legalName },
-                    { key: 'tagline', label: 'Slogan', type: 'text', placeholder: STORE.tagline },
-                    { key: 'supportEmail', label: 'Support-e-post', type: 'email', placeholder: STORE.supportEmail },
+                    { key: 'shopName', label: 'Butiksnamn', type: 'text', placeholder: IDENTITY_HINTS.shopName },
+                    { key: 'legalName', label: 'Juridiskt företagsnamn', type: 'text', placeholder: IDENTITY_HINTS.legalName },
+                    { key: 'tagline', label: 'Slogan', type: 'text', placeholder: IDENTITY_HINTS.tagline },
+                    { key: 'supportEmail', label: 'Support-e-post', type: 'email', placeholder: IDENTITY_HINTS.supportEmail },
                     { key: 'phone', label: 'Telefon (visas i köpvillkor & integritetspolicy)', type: 'tel', placeholder: 'T.ex. 070-123 45 67' },
                     { key: 'logoUrl', label: 'Logotyp-URL', type: 'text', placeholder: STORE.logoUrl },
                     { key: 'currency', label: 'Valuta', type: 'text', placeholder: STORE.currency },
@@ -591,7 +610,7 @@ const AdminSettings = () => {
                     <textarea
                       rows={3}
                       value={storeForm.address ?? ''}
-                      placeholder={STORE.address}
+                      placeholder={IDENTITY_HINTS.address}
                       onChange={(e) => setStoreForm(prev => ({ ...prev, address: e.target.value }))}
                       className={inputCls}
                     />
@@ -607,7 +626,7 @@ const AdminSettings = () => {
                     <textarea
                       rows={2}
                       value={storeForm.companyDescription ?? ''}
-                      placeholder={STORE.companyDescription}
+                      placeholder={IDENTITY_HINTS.companyDescription}
                       onChange={(e) => setStoreForm(prev => ({ ...prev, companyDescription: e.target.value }))}
                       className={inputCls}
                     />
@@ -744,8 +763,8 @@ const AdminSettings = () => {
                   </h4>
                   <p className="mb-3 text-[12px] text-admin-text-muted">
                     Dessa uppgifter fyller i butikens juridiska sidor automatiskt: köpvillkor,
-                    ångerrätt &amp; returer och integritetspolicy. Returadress och momsstatus måste
-                    anges innan sidorna kan publiceras på en skarp butik.
+                    ångerrätt &amp; returer och integritetspolicy. Juridiskt namn, adress, support-e-post,
+                    returadress och momsstatus måste finnas innan du kan godkänna sidorna.
                   </p>
 
                   {/* Readiness banner — clear "legal pages incomplete" state. */}

@@ -387,16 +387,54 @@ export const SLICE_RECIPIENT = { name: "Slice Köpare", pickupLocationId: SLICE_
 export const SLICE_LEGAL_TEMPLATE_VERSION = "2026-09-07";
 
 /**
+ * CP9-OB: what the legal pages print of the seller (src/legal/legal-identity.ts),
+ * which an adoption now requires: the legal name and address in the identity,
+ * the support address on the tenant (the platform's, D99: set by SQL here, as
+ * the Connect account is).
+ */
+export const SLICE_LEGAL_IDENTITY = { address: "Testgatan 1<br>123 45 Teststad", legalName: "Slice Butik AB" };
+
+export async function giveSupportAddress(tenant: Tenant): Promise<void> {
+  await env.DB.prepare("UPDATE tenants SET support_email = ? WHERE tenant_id = ?")
+    .bind(`kundtjanst@${tenant.host}`, tenant.tenantId)
+    .run();
+}
+
+/**
+ * The identity an adoption requires, alone (for a shop made with
+ * `legallyReady: false` that adopts in the test itself): the legal name and
+ * address by PATCH (merged into the identity), the support address by SQL.
+ */
+export async function giveLegalIdentity(world: SliceWorld, tenant: Tenant): Promise<void> {
+  await giveSupportAddress(tenant);
+  const current = await expectJson<{ settings: { updatedAt: string | null } }>(
+    await adminCall(world, tenant, "GET", "/v1/admin/settings"),
+    200,
+    "settings before the identity",
+  );
+  await expectJson(
+    await adminCall(world, tenant, "PATCH", "/v1/admin/settings", {
+      expectedUpdatedAt: current.settings.updatedAt,
+      storeIdentity: SLICE_LEGAL_IDENTITY,
+    }),
+    200,
+    "the identity the legal pages print",
+  );
+}
+
+/**
  * The three conditions of the legal readiness gate (src/legal/legal-pages.ts
  * isLegallyReady), met the way a seller meets them: a return address and the
  * VAT answer through PUT /v1/admin/settings, and the adoption of the three
- * legal pages through POST /v1/admin/legal/accept-pages.
+ * legal pages through POST /v1/admin/legal/accept-pages (which requires the
+ * identity the pages print, SLICE_LEGAL_IDENTITY and the support address).
  */
 export async function makeLegallyReady(world: SliceWorld, tenant: Tenant): Promise<void> {
+  await giveSupportAddress(tenant);
   await expectJson(
     await adminCall(world, tenant, "PUT", "/v1/admin/settings", {
       returnAddress: SLICE_RETURN_ADDRESS,
-      storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION] },
+      storeIdentity: { pickupLocations: [SLICE_PICKUP_LOCATION], ...SLICE_LEGAL_IDENTITY },
       vatRegistered: true,
     }),
     200,
@@ -424,6 +462,8 @@ export interface TermsStatusBody {
   acceptedVersion: string | null;
   currentVersion: string | null;
   graceDeadline: string | null;
+  /** CP9-OB: what the stored identity lacks for an adoption (legal-identity.ts). */
+  identityMissing: string[];
   inGrace: boolean;
   /** CP5-WJ: the latest acceptance, its time and its signer. */
   latestAcceptance: {

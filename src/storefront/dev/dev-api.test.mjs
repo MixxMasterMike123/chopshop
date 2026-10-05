@@ -28,9 +28,14 @@ describe('the dev API answers the storefront routes in the API\'s shapes', () =>
     const { status, body } = get('/_api/provbutiken/v1/storefront');
     assert.equal(status, 200);
     assert.deepEqual(Object.keys(body.storefront).sort(), [
-      'accent', 'branding', 'currency', 'features', 'identity', 'locale', 'menu', 'name', 'pickupLocations', 'templateId', 'theme',
+      'accent', 'branding', 'currency', 'features', 'identity', 'locale', 'menu', 'name', 'ordersOpen', 'pickupLocations', 'templateId', 'theme',
     ]);
     assert.equal(body.storefront.features.pod, true);
+    // CP9-OB: the invented new shop cannot take orders yet, and has no identity of its own.
+    assert.equal(body.storefront.ordersOpen, true);
+    const fresh = get('/_api/nybutiken/v1/storefront').body.storefront;
+    assert.equal(fresh.ordersOpen, false);
+    assert.deepEqual(fresh.identity, {});
   });
 
   it('an unknown shop is the one 404 on every route', () => {

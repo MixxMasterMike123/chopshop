@@ -4,6 +4,7 @@ import { useCart } from '../../contexts/CartContext';
 import { SHIPPING_COSTS } from '../../contexts/CartContext';
 import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { useTranslation } from '../../contexts/TranslationContext';
+import { useStoreSettings } from '../../contexts/StoreSettingsContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import toast from 'react-hot-toast';
 import ShopNavigation from '../../components/shop/ShopNavigation';
@@ -18,6 +19,7 @@ const ShoppingCart = () => {
   const { cart, updateQuantity, removeFromCart, updateShippingCountry, calculateTotals, applyDiscountCode, removeDiscount, discountPreview } = useCart();
   const { isEnabled } = useShopFeatures();
   const { t } = useTranslation();
+  const store = useStoreSettings();
   const { getContentValue } = useContentTranslation();
   const navigate = useNavigate();
   const [discountCodeInput, setDiscountCodeInput] = useState('');
@@ -101,15 +103,15 @@ const ShoppingCart = () => {
   return (
     <>
       <Helmet>
-        <title>{getCartSeoTitle()}</title>
+        <title>{getCartSeoTitle(store)}</title>
         <meta name="description" content={getCartSeoDescription()} />
         <meta property="og:type" content="website" />
-        <meta property="og:title" content={getCartSeoTitle()} />
+        <meta property="og:title" content={getCartSeoTitle(store)} />
         <meta property="og:description" content={getCartSeoDescription()} />
         {STORE.logoUrl && <meta property="og:image" content={STORE.logoUrl.startsWith("http") ? STORE.logoUrl : `${window.location.origin}${STORE.logoUrl}`} />}
         <meta property="og:url" content={window.location.href} />
         <meta name="twitter:card" content="summary" />
-        <meta name="twitter:title" content={getCartSeoTitle()} />
+        <meta name="twitter:title" content={getCartSeoTitle(store)} />
         <meta name="twitter:description" content={getCartSeoDescription()} />
         {STORE.logoUrl && <meta name="twitter:image" content={STORE.logoUrl.startsWith("http") ? STORE.logoUrl : `${window.location.origin}${STORE.logoUrl}`} />}
       </Helmet>
@@ -327,13 +329,26 @@ const ShoppingCart = () => {
                   </div>
                 </div>
 
-                {/* Checkout Button */}
-                <button
-                  onClick={handleCheckout}
-                  className="w-full bg-accent text-white px-6 sm:px-8 py-4 rounded-full text-base sm:text-lg font-bold transition-[transform,box-shadow] duration-300 ease-nord shadow-tile hover:shadow-lift hover:-translate-y-0.5 active:translate-y-0"
-                >
-                  {t('go_to_checkout', 'Gå till kassan')}
-                </button>
+                {/* Checkout Button. CP9-OB: a shop that cannot take an order
+                    now (the storefront answer's ordersOpen) says so here,
+                    before the buyer fills anything in; never why. */}
+                {store.ordersOpen === false ? (
+                  <div className="rounded-tile border border-ink/10 bg-white p-4 text-center">
+                    <p className="font-display text-base font-bold text-ink">
+                      {t('orders_closed_title', 'Butiken tar inte emot beställningar just nu')}
+                    </p>
+                    <p className="mt-1 text-sm text-ink-muted">
+                      {t('orders_closed_body', 'Du kan fortfarande titta på produkterna. Försök igen lite senare.')}
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleCheckout}
+                    className="w-full bg-accent text-white px-6 sm:px-8 py-4 rounded-full text-base sm:text-lg font-bold transition-[transform,box-shadow] duration-300 ease-nord shadow-tile hover:shadow-lift hover:-translate-y-0.5 active:translate-y-0"
+                  >
+                    {t('go_to_checkout', 'Gå till kassan')}
+                  </button>
+                )}
 
                 {/* Continue Shopping Link */}
                 <Link

@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { sha256Hex, termsTextObjectKey } from "../src/legal/platform-terms";
-import { ADMIN, call, type CallOptions, settle } from "./slice-harness";
+import { ADMIN, call, type CallOptions, giveLegalIdentity, settle } from "./slice-harness";
 import { expectJson, platform, SliceWorld, type Tenant, tenantWorld } from "./tenant-fixtures";
 
 /**
@@ -69,6 +69,10 @@ beforeAll(async () => {
   const setup = await tenantWorld("pl", 3);
   world = setup.world;
   [shopA, shopB, shopC] = setup.tenants as [Tenant, Tenant, Tenant];
+  // CP9-OB: an adoption requires the identity the pages print.
+  for (const tenant of setup.tenants) {
+    await giveLegalIdentity(world, tenant);
+  }
 }, 120_000);
 
 beforeEach(() => {

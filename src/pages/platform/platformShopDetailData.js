@@ -66,6 +66,13 @@ export async function setShopConnectEnabled(shop, next) {
   await updateDoc(doc(db, 'shops', shop.id), { 'payments.connectEnabled': next });
 }
 
+/** Here the shop sets its own support address in its settings (CP9-OB: no platform field). */
+export const SUPPORT_EMAIL_EDITABLE = false;
+
+export async function setShopSupportEmail() {
+  throw new Error('setShopSupportEmail: the shop sets its support address in its own settings in this build');
+}
+
 /** The shop's storefront address. */
 export function storefrontUrlOf(shop) {
   return `${APP_URLS.B2C_SHOP}/${shop.id}`;
