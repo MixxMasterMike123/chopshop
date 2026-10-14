@@ -37,8 +37,8 @@ Rule: nothing goes live with a SnapWear-routed order until every ☐ under **A**
 | B2 | EUR business account + virtual card for SnapWear only, monthly limit | K | ☐ |
 | B3 | Ansvarsförsäkring for Meteor PR AB + quote for IP add-on (standard policies EXCLUDE IP) | K | ☐ |
 | B4 | Accountant: reverse-charge VAT on EU purchases + production invoiced to shops with 25% moms (monthly statement per shop) | K/M | ☐ |
-| B5 | SnapWear garment certifications (Gildan, Stanley/Stella, AWD…) on file — GPSR distributor duty | K → N | ☐ |
-| B6 | DPA (EU SCC 2021/915 incorporated by reference, sub-processing structure, annexes pre-filled) → Natalia's legal team | C → K | ◐ **DRAFTED 2026-09-25**: `docs/SnapWearDocs/DPA_Meteor_PR_AB_Snapwear.md`. Kent fills placeholders, attaches official SCC PDF, sends. Want a .docx? say so |
+| B5 | SnapWear garment certifications (Gildan, Stanley/Stella, AWD…) on file — GPSR distributor duty | K → N | ⏸ requested; SnapWear forwarded it to "the relevant department" (holding reply, reported 2026-10-05) |
+| B6 | DPA (EU SCC 2021/915 incorporated by reference, sub-processing structure, annexes pre-filled) → Natalia's legal team | C → K | ◐ **DRAFTED 2026-09-25**: `docs/SnapWearDocs/DPA_Meteor_PR_AB_Snapwear.md`. Kent fills placeholders, attaches official SCC PDF, sends. **SENT by Kent** — SnapWear confirms the draft is with their legal department (holding reply, reported 2026-10-05); ⏸ waiting on their review |
 | B6b | Meteor↔shop biträdesavtal (`docs/legal-template-files/05-personuppgiftsbitradesavtal.md`) must be IN FORCE (accepted via platform terms gate) — the DPA chain is shop→Meteor→Snapwear; without it Meteor has no instructions to act on | M | ☐ |
 | B7 | Liability clause in platform terms: remedy = reprint, cap = what SnapWear makes good, no consequential damages; SnapWear's 2-week/3-month window mirrored as far as köplagen allows. Terms-version bump → re-acceptance via existing gate | C → M | ☐ |
 | B8 | 24h takedown routine (who watches the inbox, what gets unpublished, when payout is held) written down | K/M | ☐ |
@@ -51,6 +51,8 @@ Rule: nothing goes live with a SnapWear-routed order until every ☐ under **A**
 | B9 | Runbook: test API with auto-pay OFF → cancel every test order → enable auto-pay → first live order. Daily dashboard glance for unpaid orders until charge-status question answered | C | ☐ |
 
 ## C. Questions still open with Natalia
+
+> **Status 2026-10-05:** Kent sent the consolidated question list (C1–C9 + certificates + DPA). SnapWear answered with a **holding reply only** — technical questions forwarded to their technical team, C1–C5 prioritised as we asked; **no question is answered yet**. The reply was signed "Snapwear Team", came from **Marlena** (not Natalia) and landed in Kent's **spam folder** — whitelist `@snapwear.pro` and check spam before chasing. Also checked 2026-10-02: `PrintArea.xlsx` + `SKU 21.09.xlsx` do NOT answer C1 (zero frame rows for 64400, SF500, W101, B445, trucker cap, posters); `SKU 21.09` holds 21 SKUs PrintArea lacks (Gildan 18000 Caroline Blue/Purple/Orange, 64000 3XL/5XL, JH050 Black 3–5XL) → ask for one current master SKU export.
 
 | # | Question | Blocks |
 |---|---|---|
@@ -78,3 +80,9 @@ Rule: nothing goes live with a SnapWear-routed order until every ☐ under **A**
 | SnapWear shipping: flat per-order SEK in `printers/{uid}.shippingSek`, withheld once per printer per order | ☑ ok 2026-09-25 (value pending C8) |
 | Kim's fate | ☑ 2026-09-25 **REMOVED** — SnapWear is the ONLY printer; reinstate if ever needed. Consequence: sleeve slot HIDDEN in studio until a printer supports it (A3/A4 collapse to single-printer + capability gating) |
 | DPA draft | ☑ GO 2026-09-25 → `docs/SnapWearDocs/DPA_Meteor_PR_AB_Snapwear.md` |
+
+## E. Parked (not launch-blocking, kept so it is not lost)
+
+| Item | Raised | Note |
+|---|---|---|
+| **Digital products (software, files)**: protected delivery via R2 + short-lived signed links with download cap, per-order license keys (generated or from a seller-uploaded pool), `digital` product type (no shipping/pickup, withdrawal-right consent like personalized print). Not in any CP design today. Opt-in add-on after cutover; ~1 unit delivery + keys, ~½ unit admin upload/key-pool UI. Honest limit: no shop prevents copying a downloaded file; keys + vendor activation do. | Kent 2026-10-11 | parked, awaits Mikael's go for a CP9 design doc |
