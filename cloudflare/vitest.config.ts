@@ -25,6 +25,10 @@ export default defineConfig({
             // deploy config moves these vars into. The suites hardcode this
             // origin as AUTH_ORIGIN.
             APP_ENV: "staging",
+            // Opens the storefront routes on the public entrypoint for the
+            // suites that drive them there (src/app.ts, PUBLIC_STOREFRONT_ALLOWED).
+            // Test-only: the preflight refuses a deploy config that defines it.
+            TEST_PUBLIC_STOREFRONT: "open",
             AUTH_BASE_URL: "https://meteorshop-stg-api.micke-ohlen.workers.dev",
             AUTH_TRUSTED_ORIGINS:
               "https://meteorshop-stg-api.micke-ohlen.workers.dev",

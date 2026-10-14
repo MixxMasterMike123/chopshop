@@ -506,6 +506,8 @@ expect_refused "R2_PRIVATE_BUCKET_NAME != pinned r2.private → refused" "env.st
 new_tree; pin "$T" staging "$PIN_STG"
 write_jsonc "$T" "$GOOD" "$(env_section staging stg "del e['vars']['R2_JURISDICTION']")"; run staging -- deploy
 expect_refused "R2_JURISDICTION var missing while bindings are eu → refused" "env.staging.vars.R2_JURISDICTION is None, every R2 binding is in 'eu'"
+write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['TEST_PUBLIC_STOREFRONT'] = 'open'")"; run staging -- deploy
+expect_refused "the test suites' storefront binding in a deploy config → refused" "env.staging.vars.TEST_PUBLIC_STOREFRONT is defined"
 
 # --- production launch gate ---------------------------------------------------------------
 new_tree; pin "$T" production "$PIN_PROD"; write_jsonc "$T" "$GOOD" "$ENV_PRODUCTION"; run production -- deploy

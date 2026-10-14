@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# ⚠️ Since the 2026-10-14 audit (F16) the API's public entrypoint no longer answers storefront
+# routes (/v1/storefront, /v1/products…, /v1/checkout…): they are served only through the web
+# Worker (`<web host>/_api/<shop>/v1/…`). The storefront calls below need that host before this
+# script can pass again; the authenticated platform/admin calls are unaffected.
 # Live money-loop smoke (checkpoint 25): anonymous checkout with discount →
 # server-minted PaymentIntent → REAL test-mode confirm with Stripe's test card →
 # Stripe delivers payment_intent.succeeded to the staging webhook.

@@ -94,6 +94,7 @@ import {
   notFoundResponse,
   rateLimitedResponse,
   readJsonBody,
+  readTextBodyWithin,
 } from "./lib/responses";
 import { clientIp, enforceRateLimit, visitorRateKey } from "./lib/rate-limit";
 import {
@@ -496,6 +497,12 @@ const PLATFORM_USERS_PATH = "/v1/platform/users";
 // rather than /v1/platform keeps it out of the namespace whose other routes all
 // require a live platform session; nothing here has a session at all.
 const STRIPE_WEBHOOK_PATH = "/v1/webhooks/stripe";
+/**
+ * The most a webhook body is buffered before its signature is checked. A
+ * Stripe event is tens of kilobytes at most, far under this; the cap bounds
+ * what an unauthenticated caller can make this route hold (F02).
+ */
+const STRIPE_WEBHOOK_BODY_MAX_BYTES = 1_048_576;
 const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
@@ -1574,12 +1581,13 @@ async function handleStripeWebhookRoute(
   // THE RAW BODY, read as text before anything parses it. The signature is
   // computed over the exact bytes Stripe sent, so a parse-then-reserialize round
   // trip — different key order, different spacing — would break verification for
-  // every honest request. Nothing may read this body before this line.
-  let payload: string;
-  try {
-    payload = await request.text();
-  } catch {
-    // A body that could not be read cannot be verified.
+  // every honest request. Nothing may read this body before this line. It is
+  // read under STRIPE_WEBHOOK_BODY_MAX_BYTES: the header above is not yet
+  // verified, so anyone can reach this read, and a body is never buffered past
+  // the cap (the 2026-10-14 audit, F02).
+  const payload = await readTextBodyWithin(request, STRIPE_WEBHOOK_BODY_MAX_BYTES);
+  if (payload === null) {
+    // A body that could not be read, or is over the cap, cannot be verified.
     return webhookSignatureFailureResponse();
   }
 
@@ -2133,14 +2141,28 @@ async function handlePlatformTenantRoute(
 export type Surface = "internal" | "public";
 
 /**
- * TODO(PLAN §2.1, flip when chopshop-web ships): storefront routes are meant
- * to be served ONLY through the `Internal` entrypoint, i.e. only to requests
- * that `chopshop-web` forwarded over its service binding. No web worker exists
- * at CP1, so the public entrypoint still serves them by hostname. Setting this
- * to `false` is the whole switch: every storefront route then answers the
- * public entrypoint with the same 404 as an unknown route.
+ * PLAN §2.1: storefront routes are served ONLY through the `Internal`
+ * entrypoint, i.e. only to requests that `chopshop-web` forwarded over its
+ * service binding (its method/path allowlist is then the one public boundary).
+ * Open at CP1, when no web Worker existed; closed since the 2026-10-14 audit
+ * (F16), the web Worker having shipped at CP3. Every storefront route now
+ * answers the public entrypoint with the same 404 as an unknown route. The
+ * staging shell scripts that called storefront routes on the API host directly
+ * (cloudflare/scripts/stg-*.sh) are from before this and need the web host.
+ *
+ * The test suites drive storefront routes through the public entrypoint by the
+ * hundreds (they test the routes, not the surface): vitest.config.ts binds
+ * TEST_PUBLIC_STOREFRONT = "open", which opens the switch for that process
+ * only. No deployed configuration may define that var: the preflight refuses
+ * a wrangler.jsonc that does (scripts/cf-preflight.sh), and the generated Env
+ * type does not know it — it is read off the bindings by name on purpose.
  */
-export const PUBLIC_STOREFRONT_ALLOWED: boolean = true;
+export const PUBLIC_STOREFRONT_ALLOWED: boolean = false;
+export const TEST_PUBLIC_STOREFRONT_VAR = "TEST_PUBLIC_STOREFRONT";
+
+function storefrontOpenForTests(env: Env): boolean {
+  return (env as unknown as Record<string, unknown>)[TEST_PUBLIC_STOREFRONT_VAR] === "open";
+}
 
 /**
  * The Hono environment every route sees: the Worker bindings and the surface
@@ -2236,6 +2258,9 @@ function onMethods(
 export function createApp(options: AppOptions): Hono<AppEnv> {
   const publicStorefrontAllowed =
     options.publicStorefrontAllowed ?? PUBLIC_STOREFRONT_ALLOWED;
+  // An app built with the option set — the tests that pin the closed switch —
+  // never opens under the suites' binding; only the entrypoints' default does.
+  const testBindingMayOpen = options.publicStorefrontAllowed === undefined;
   const app = new Hono<AppEnv>({
     getPath: (request) => new URL(request.url).pathname,
   });
@@ -2262,11 +2287,13 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   });
 
   // Storefront routes answer the public entrypoint only while
-  // PUBLIC_STOREFRONT_ALLOWED holds; see its TODO.
+  // PUBLIC_STOREFRONT_ALLOWED holds (it does not; see it).
   const storefront =
     (handler: Endpoint): Endpoint =>
     (c) =>
-      c.var.surface === "internal" || publicStorefrontAllowed
+      c.var.surface === "internal" ||
+      publicStorefrontAllowed ||
+      (testBindingMayOpen && storefrontOpenForTests(c.env))
         ? handler(c)
         : notFoundResponse("Route not found");
 

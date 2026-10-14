@@ -101,48 +101,11 @@ export async function canonicalTexts(
 
 // ── request body ────────────────────────────────────────────────────────────
 
-export type BoundedBody = { status: "ok"; value: unknown } | { status: "too_large" };
-
-/**
- * JSON body read under a byte cap: a declared Content-Length over the cap is
- * refused unread, and a stream is cut off as soon as it passes the cap.
- * Malformed JSON or UTF-8 reads as `undefined` (the parsers then refuse it).
- */
-export async function readJsonBodyWithin(request: Request, maxBytes: number): Promise<BoundedBody> {
-  const declared = request.headers.get("content-length");
-  if (declared !== null && Number(declared) > maxBytes) {
-    return { status: "too_large" };
-  }
-  if (request.body === null) {
-    return { status: "ok", value: undefined };
-  }
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      return { status: "too_large" };
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return { status: "ok", value: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) };
-  } catch {
-    return { status: "ok", value: undefined };
-  }
-}
+// The bounded reader lives in src/lib/responses.ts since the 2026-10-14 audit
+// (F02: every JSON route reads under a cap); re-exported for the routes that
+// import it from here.
+export { readJsonBodyWithin } from "../lib/responses";
+export type { BoundedBody } from "../lib/responses";
 
 // ── adopting the pages ──────────────────────────────────────────────────────
 

@@ -26,11 +26,15 @@ import { isOrderEmailJob, orderEmailReplyTo } from "./order-emails";
  * CP5-WE also the three order mails (order-emails.ts: the buyer's status
  * update and refund notice, with the shop's support address as Reply-To, and
  * the shop's new-order notice). Since CP9-AC the abandoned-checkout reminder
- * (checkout-reminder-email.ts): for that kind ONLY, the sender's display name
- * is the shop's, Reply-To is the shop's support address, the body carries the
- * two List-Unsubscribe headers, and an address that unsubscribed since the job
- * was built is never sent to (the job is held while no mail account exists,
- * up to its 2 hours). Every other kind's request is byte for byte as before.
+ * (checkout-reminder-email.ts): Reply-To is the shop's support address, the
+ * body carries the two List-Unsubscribe headers, and an address that
+ * unsubscribed since the job was built is never sent to (the job is held while
+ * no mail account exists, up to its 2 hours). Since the 2026-10-14 audit (F05)
+ * EVERY mail a buyer receives — the confirmation, the status update, the
+ * refund notice, the reminder — is sent under the shop's display name
+ * (shopSenderName below): the buyer bought from the shop, not from the
+ * platform. The address stays the platform's configured one. The shop's own
+ * new-order notice, the auth mails and the digest keep the configured sender.
  *
  * ── EXACTLY-ONCE ON TOP OF AT-LEAST-ONCE ─────────────────────────────────────
  * Queues deliver at least once, so every message first CLAIMS its ledger row
@@ -139,6 +143,24 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500;
 }
 
+/**
+ * The shop whose name a buyer-facing mail is sent under (F05), null for a
+ * mail the platform sends in its own name — then the From is the configured
+ * one, unchanged.
+ */
+export function shopSenderName(job: AuthEmailJob): string | null {
+  if (isCheckoutReminderEmailJob(job)) {
+    return job.content.shopName;
+  }
+  if (job.kind === "order_confirmation") {
+    return job.order.shopName;
+  }
+  if (isOrderEmailJob(job) && job.kind !== "order_notice_shop") {
+    return job.content.shopName;
+  }
+  return null;
+}
+
 type SendOutcome =
   | { kind: "sent"; providerMessageId: string | null }
   | { delaySeconds: number; errorCode: string; kind: "retry" }
@@ -166,7 +188,7 @@ async function sendThroughResend(
     response = await send(
       new Request(RESEND_EMAILS_URL, {
         body: JSON.stringify({
-          from: reminder === null ? config.from : checkoutReminderFrom(config.from, reminder.content.shopName),
+          from: checkoutReminderFrom(config.from, shopSenderName(job)),
           ...(reminder === null ? {} : { headers: checkoutReminderHeaders(reminder) }),
           html: message.html,
           ...(replyTo === null ? {} : { reply_to: replyTo }),

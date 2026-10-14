@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import worker, { Internal } from "../src/index";
-import { createApp, PUBLIC_STOREFRONT_ALLOWED } from "../src/app";
+import { createApp, PUBLIC_STOREFRONT_ALLOWED, TEST_PUBLIC_STOREFRONT_VAR } from "../src/app";
 import {
   hasTenantHeader,
   stripTenantHeaders,
@@ -119,62 +119,46 @@ describe("handler-layer guard", () => {
   });
 });
 
+/**
+ * Since the 2026-10-14 audit (F16) the public entrypoint serves NO storefront
+ * route: a shop's hostname, a tenant header, nothing opens one. The proofs
+ * that the hostname — never a header — picks the tenant live on the Internal
+ * entrypoint below, the one surface that serves them.
+ */
 describe("public entrypoint", () => {
-  it("serves the HOSTNAME's tenant when a tenant header names another", async () => {
-    const response = await worker.fetch(
-      new Request(`https://${HOST_A}/v1/storefront`, {
-        headers: TENANT_HEADERS,
-      }),
-      env,
-    );
+  /** The deployed bindings: the test suites' TEST_PUBLIC_STOREFRONT is not among them. */
+  const deployedEnv = { ...env, [TEST_PUBLIC_STOREFRONT_VAR]: undefined } as unknown as Env;
 
-    expect(response.status).toBe(200);
-    await expect(storefrontName(response)).resolves.toBe(`Shop ${TENANT_A}`);
-  });
-
-  it("serves the hostname's tenant through the deployed default export too", async () => {
-    const response = await exports.default.fetch(
-      new Request(`https://${HOST_A}/v1/storefront`, {
-        headers: TENANT_HEADERS,
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    await expect(storefrontName(response)).resolves.toBe(`Shop ${TENANT_A}`);
-  });
-
-  it("gives an unknown hostname the opaque 404 whatever tenant header it sends", async () => {
-    const response = await worker.fetch(
+  it("answers a storefront route with the unknown-route 404, on a shop's own hostname and whatever header it carries", async () => {
+    for (const request of [
+      new Request(`https://${HOST_A}/v1/storefront`, { headers: TENANT_HEADERS }),
+      new Request(`https://${HOST_A}/v1/storefront`),
+      new Request(`https://${HOST_B}/v1/products`),
       new Request("https://unknown.entry.test/v1/storefront", {
         headers: { "X-Tenant-Host": HOST_A, "X-Tenant-Id": TENANT_A },
       }),
-      env,
-    );
-
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({
-      error: { code: "not_found", message: "Storefront not found" },
-    });
+    ]) {
+      const response = await worker.fetch(request, deployedEnv);
+      expect(response.status, request.url).toBe(404);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "not_found", message: "Route not found" },
+      });
+    }
   });
 
-  it("does not let a tenant header steer a product read to the other shop", async () => {
-    const response = await worker.fetch(
-      new Request(`https://${HOST_B}/v1/products`, {
-        headers: { "X-Tenant-Id": TENANT_A },
-      }),
-      env,
-    );
+  it("opens only under the test suites' binding, and only to exactly its value", async () => {
+    const open = await worker.fetch(new Request(`https://${HOST_A}/v1/storefront`, { headers: TENANT_HEADERS }), env);
+    expect(open.status).toBe(200);
+    await expect(storefrontName(open)).resolves.toBe(`Shop ${TENANT_A}`);
 
-    // B has no products; A's list would be equally empty, so pin the tenant by
-    // the storefront read as well — the point is the 200 for the host's shop.
+    const wrongValue = { ...env, [TEST_PUBLIC_STOREFRONT_VAR]: "true" } as unknown as Env;
+    const closed = await worker.fetch(new Request(`https://${HOST_A}/v1/storefront`), wrongValue);
+    expect(closed.status).toBe(404);
+  });
+
+  it("still serves what is not a storefront route", async () => {
+    const response = await worker.fetch(new Request(`https://${HOST_A}/health`), deployedEnv);
     expect(response.status).toBe(200);
-    const storefront = await worker.fetch(
-      new Request(`https://${HOST_B}/v1/storefront`, {
-        headers: { "X-Tenant-Id": TENANT_A },
-      }),
-      env,
-    );
-    await expect(storefrontName(storefront)).resolves.toBe(`Shop ${TENANT_B}`);
   });
 });
 
@@ -205,12 +189,35 @@ describe("internal entrypoint", () => {
     await expect(storefrontName(response)).resolves.toBe(`Shop ${TENANT_B}`);
   });
 
-  it("answers the opaque 404 for an unknown hostname", async () => {
+  it("gives an unknown hostname the opaque 404 whatever tenant header it sends", async () => {
     const response = await exports.Internal.fetch(
-      new Request("https://unknown.entry.test/v1/storefront"),
+      new Request("https://unknown.entry.test/v1/storefront", {
+        headers: { "X-Tenant-Host": HOST_A, "X-Tenant-Id": TENANT_A },
+      }),
     );
 
     expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "not_found", message: "Storefront not found" },
+    });
+  });
+
+  it("does not let a tenant header steer a product read to the other shop", async () => {
+    const response = await exports.Internal.fetch(
+      new Request(`https://${HOST_B}/v1/products`, {
+        headers: { "X-Tenant-Id": TENANT_A },
+      }),
+    );
+
+    // B has no products; A's list would be equally empty, so pin the tenant by
+    // the storefront read as well — the point is the 200 for the host's shop.
+    expect(response.status).toBe(200);
+    const storefront = await exports.Internal.fetch(
+      new Request(`https://${HOST_B}/v1/storefront`, {
+        headers: { "X-Tenant-Id": TENANT_A },
+      }),
+    );
+    await expect(storefrontName(storefront)).resolves.toBe(`Shop ${TENANT_B}`);
   });
 });
 
@@ -290,8 +297,8 @@ describe("internal entrypoint: fetchForShop (D77)", () => {
 });
 
 describe("storefront surface switch (PLAN §2.1 TODO)", () => {
-  it("is open to the public entrypoint at CP1", () => {
-    expect(PUBLIC_STOREFRONT_ALLOWED).toBe(true);
+  it("is closed to the public entrypoint since the 2026-10-14 audit (F16)", () => {
+    expect(PUBLIC_STOREFRONT_ALLOWED).toBe(false);
   });
 
   it("confines storefront routes to the internal surface once flipped", async () => {

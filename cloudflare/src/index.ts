@@ -88,8 +88,8 @@ export default {
  * authenticates the CALLER, not the headers it relays.
  *
  * The request is marked `internal` by building it through the internal app,
- * which is what later checkpoints use to confine storefront routes to this
- * entrypoint (see PUBLIC_STOREFRONT_ALLOWED in src/app.ts).
+ * which is what confines storefront routes to this entrypoint (see
+ * PUBLIC_STOREFRONT_ALLOWED in src/app.ts, closed since the 2026-10-14 audit).
  */
 export class Internal extends WorkerEntrypoint<Env> {
   override fetch(request: Request): Promise<Response> {

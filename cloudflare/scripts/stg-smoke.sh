@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# ⚠️ Since the 2026-10-14 audit (F16) the API's public entrypoint no longer answers storefront
+# routes (/v1/storefront, /v1/products…, /v1/checkout…): they are served only through the web
+# Worker (`<web host>/_api/<shop>/v1/…`). The storefront calls below need that host before this
+# script can pass again; the authenticated platform/admin calls are unaffected.
 # Staging platform smoke: signs in as the platform admin (credentials prompted
 # locally, never leave this shell), provisions the demo tenant bound to the
 # workers.dev hostname, and verifies live tenant resolution, the suspend gate,

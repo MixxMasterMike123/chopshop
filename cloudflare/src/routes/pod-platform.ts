@@ -412,7 +412,7 @@ export async function handlePlatformPrinterCatalogRoute(
   if (Number.isFinite(declared) && declared > CATALOG_BODY_MAX_BYTES) {
     return platformError(413, "payload_too_large", "The catalogue exceeds the maximum allowed size");
   }
-  const parsed = parseCatalogPutInput(await readJsonBody(request));
+  const parsed = parseCatalogPutInput(await readJsonBody(request, CATALOG_BODY_MAX_BYTES));
   if (parsed.status === "too_large") {
     return platformError(413, "payload_too_large", "The catalogue exceeds the maximum allowed size");
   }

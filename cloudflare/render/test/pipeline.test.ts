@@ -191,6 +191,24 @@ describe("byte, pixel and format gates", () => {
     expect(!result.ok && result.reasons[0]?.code).toBe("format_heic");
   });
 
+  it("refuses an SVG on its first bytes, before any loader sees it (F01)", async () => {
+    for (const text of [
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>',
+      '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"/>',
+      "\ufeff\n  <!DOCTYPE svg><svg/>",
+      "<html><script>1</script></html>",
+    ]) {
+      const { result } = await run(Buffer.from(text, "utf8"));
+      expect(!result.ok && result.reasons[0]?.code, text).toBe("format_svg");
+      expect(!result.ok && result.reasons[0]?.message).toContain("SVG stöds inte");
+    }
+  });
+
+  it("refuses a PDF on its first bytes", async () => {
+    const { result } = await run(Buffer.from("%PDF-1.7\n%âãÏÓ\n1 0 obj", "latin1"));
+    expect(!result.ok && result.reasons[0]?.code).toBe("format_pdf");
+  });
+
   it("calls garbage unreadable", async () => {
     const { result } = await run(Buffer.from("this is not an image at all, just text"));
     expect(!result.ok && result.reasons[0]?.code).toBe("unreadable");

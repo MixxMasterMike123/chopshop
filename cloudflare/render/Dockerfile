@@ -17,6 +17,10 @@ RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 # ── runtime ──
 FROM --platform=linux/amd64 node:22-bookworm-slim
 ENV NODE_ENV=production
+# libvips never runs the loaders it marks untrusted (SVG via librsvg among them):
+# the pipeline refuses those formats before sharp sees them, and this closes the
+# loader itself should a file ever slip past that sniff (F01, audit 2026-10-14).
+ENV VIPS_BLOCK_UNTRUSTED=1
 WORKDIR /app
 # Root-owned and read-only to the process: the non-root user can run the code but
 # not change it. Job files go to the per-job temp dir under /tmp.

@@ -70,6 +70,27 @@ export interface AuthorizedObjectWithDimensions {
 export interface DeliveredObject {
   body: ReadableStream;
   contentType: string;
+  /** The stored file name (the key's last segment, sanitized at reservation). */
+  fileName: string;
+}
+
+/**
+ * Who performs a transition (the 2026-10-14 audit, F07): the user's own id —
+ * under an acting-as grant the PLATFORM user's, never an impersonated admin —
+ * and the grant, so the audit row says who and under which permission
+ * (auditMetadataJson's rule, src/auth/live-authorization.ts).
+ */
+export interface ObjectActor {
+  actingAsGrantId: string | null;
+  userId: string;
+}
+
+/**
+ * The tenant a transition is made for, with its actor when a person made it.
+ * Without one (a pipeline, a cron) the audit row's actor column stays null.
+ */
+export interface ObjectTenant extends TenantContext {
+  actor?: ObjectActor;
 }
 
 interface StoredObjectRow {
@@ -188,30 +209,56 @@ function isUniqueConstraintFailure(error: unknown): boolean {
   return message.includes("UNIQUE constraint failed");
 }
 
+/**
+ * The audit row of a transition. With `afterTransition` the row is written
+ * only when the statement right before it in the same batch changed a row
+ * (SQLite's changes() of this connection): a conditional UPDATE that
+ * matched nothing — the row moved under us between the read and the write —
+ * leaves no audit evidence of a transition that did not happen (F06).
+ */
 function auditStatement(
   db: D1Database,
-  tenant: TenantContext,
+  tenant: ObjectTenant,
   action: string,
   objectId: string,
   now: number,
-  metadata: unknown,
+  metadata: Record<string, unknown> | null,
+  afterTransition = false,
 ): D1PreparedStatement {
+  const actor = tenant.actor ?? null;
+  const metadataJson =
+    actor === null || actor.actingAsGrantId === null
+      ? metadata === null
+        ? null
+        : JSON.stringify(metadata)
+      : JSON.stringify({ ...(metadata ?? {}), actingAsGrantId: actor.actingAsGrantId });
   return db
     .prepare(
       `INSERT INTO audit_events (
         event_id, tenant_id, actor_user_id, action, resource_type,
         resource_id, request_id, metadata_json, created_at
-      ) VALUES (?, ?, NULL, ?, 'stored_object', ?, ?, ?, ?)`,
+      ) SELECT ?, ?, ?, ?, 'stored_object', ?, ?, ?, ?${afterTransition ? " WHERE changes() > 0" : ""}`,
     )
     .bind(
       crypto.randomUUID(),
       tenant.tenantId,
+      actor === null ? null : actor.userId,
       action,
       objectId,
       crypto.randomUUID(),
-      metadata === null ? null : JSON.stringify(metadata),
+      metadataJson,
       now,
     );
+}
+
+/**
+ * True when the batch's first statement (the conditional UPDATE) moved its
+ * row. D1's count includes the rows the public-shape triggers (0043) write
+ * on a public object's status change, so "at least one" is the test; a
+ * matched-nothing UPDATE fires no trigger and counts zero.
+ */
+function transitioned(results: D1Result[]): boolean {
+  return (results[0]?.meta.changes ?? 0) > 0;
 }
 
 async function loadObject(
@@ -231,7 +278,7 @@ async function loadObject(
  */
 export async function reservePendingObject(
   db: D1Database,
-  tenant: TenantContext,
+  tenant: ObjectTenant,
   input: ReserveObjectInput,
   now: number,
 ): Promise<ReserveObjectResult> {
@@ -298,7 +345,7 @@ export async function reservePendingObject(
  */
 export async function activateObject(
   db: D1Database,
-  tenant: TenantContext,
+  tenant: ObjectTenant,
   objectId: string,
   input: ActivateObjectInput,
   now: number,
@@ -321,7 +368,10 @@ export async function activateObject(
     return { status: "conflict" };
   }
 
-  await db.batch([
+  // The read above is not the authority: the conditional UPDATE is. A row
+  // tombstoned between the two matches nothing, and that is a conflict, not
+  // the success the read promised (F06).
+  const results = await db.batch([
     db
       .prepare(
         `UPDATE stored_objects
@@ -340,10 +390,11 @@ export async function activateObject(
         tenant.tenantId,
         objectId,
       ),
-    auditStatement(db, tenant, "object.activate", objectId, now, {
-      kind: existing.kind,
-    }),
+    auditStatement(db, tenant, "object.activate", objectId, now, { kind: existing.kind }, true),
   ]);
+  if (!transitioned(results)) {
+    return { status: "conflict" };
+  }
 
   return {
     object: toStoredObject({
@@ -362,7 +413,7 @@ export async function activateObject(
  */
 export async function markObjectImmutable(
   db: D1Database,
-  tenant: TenantContext,
+  tenant: ObjectTenant,
   objectId: string,
   now: number,
 ): Promise<ObjectMutationResult> {
@@ -377,7 +428,7 @@ export async function markObjectImmutable(
     return { object: toStoredObject(existing), status: "ok" };
   }
 
-  await db.batch([
+  const results = await db.batch([
     db
       .prepare(
         `UPDATE stored_objects
@@ -387,10 +438,11 @@ export async function markObjectImmutable(
            AND status = 'active'`,
       )
       .bind(now, tenant.tenantId, objectId),
-    auditStatement(db, tenant, "object.freeze", objectId, now, {
-      kind: existing.kind,
-    }),
+    auditStatement(db, tenant, "object.freeze", objectId, now, { kind: existing.kind }, true),
   ]);
+  if (!transitioned(results)) {
+    return { status: "conflict" };
+  }
 
   return {
     object: toStoredObject({ ...existing, immutable: 1 }),
@@ -457,7 +509,7 @@ export async function getUploadTargetObject(
  */
 export async function deletePendingOrMutableObject(
   db: D1Database,
-  tenant: TenantContext,
+  tenant: ObjectTenant,
   objectId: string,
   now: number,
 ): Promise<ObjectMutationResult> {
@@ -469,20 +521,24 @@ export async function deletePendingOrMutableObject(
     return { status: "conflict" };
   }
 
-  await db.batch([
+  // A freeze that landed between the read and this write matches nothing:
+  // the object is now paid-for and stays (F06).
+  const results = await db.batch([
     db
       .prepare(
         `UPDATE stored_objects
          SET status = 'deleted', updated_at = ?
          WHERE tenant_id = ?
            AND object_id = ?
-           AND immutable = 0`,
+           AND immutable = 0
+           AND status <> 'deleted'`,
       )
       .bind(now, tenant.tenantId, objectId),
-    auditStatement(db, tenant, "object.delete", objectId, now, {
-      kind: existing.kind,
-    }),
+    auditStatement(db, tenant, "object.delete", objectId, now, { kind: existing.kind }, true),
   ]);
+  if (!transitioned(results)) {
+    return { status: "conflict" };
+  }
 
   return {
     object: toStoredObject({ ...existing, status: "deleted" }),
@@ -516,5 +572,9 @@ export async function deliverPrivateObject(
     return null;
   }
 
-  return { body: object.body, contentType: authorized.contentType };
+  return {
+    body: object.body,
+    contentType: authorized.contentType,
+    fileName: authorized.objectKey.slice(authorized.objectKey.lastIndexOf("/") + 1),
+  };
 }

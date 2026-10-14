@@ -5,7 +5,7 @@ import {
   isPasswordResetConfigured,
 } from "./password-reset";
 import { readCanonicalOrigins } from "../lib/origins";
-import { routeNotFoundResponse } from "../lib/responses";
+import { readBodyWithin, routeNotFoundResponse } from "../lib/responses";
 
 const AUTH_PATH_PREFIX = "/api/auth/";
 
@@ -28,6 +28,30 @@ const SUBMIT_PASSWORD_RESET = "POST /api/auth/reset-password";
 // rather than "anything but a slash".
 const RESET_LINK_PATH = /^\/api\/auth\/reset-password\/[A-Za-z0-9_-]{16,128}$/;
 
+/**
+ * The most an auth request body is buffered (F02, the 2026-10-14 audit). The
+ * largest honest body here is a sign-in or a reset submission: an email, a
+ * password and a callback address, well under a kilobyte. Better Auth reads
+ * the body itself, so the bound is applied before the handler sees it.
+ */
+export const AUTH_BODY_MAX_BYTES = 16_384;
+
+/**
+ * The request with its body read under AUTH_BODY_MAX_BYTES, or null when the
+ * body is over it. The copy carries the original's method, URL and headers,
+ * so Better Auth's origin and cookie checks see exactly what was sent.
+ */
+async function boundedAuthRequest(request: Request): Promise<Request | null> {
+  if (request.method === "GET" || request.method === "HEAD") {
+    return request;
+  }
+  const read = await readBodyWithin(request, AUTH_BODY_MAX_BYTES);
+  if (read.status === "too_large") {
+    return null;
+  }
+  return new Request(request, { body: read.bytes === null ? null : (read.bytes as Uint8Array<ArrayBuffer>) });
+}
+
 export async function handleAuthRoute(
   env: Env,
   request: Request,
@@ -46,7 +70,8 @@ export async function handleAuthRoute(
   const route = `${request.method} ${url.pathname}`;
 
   if (ALLOWED_AUTH_ROUTES.has(route)) {
-    return createAuth(env).handler(request);
+    const bounded = await boundedAuthRequest(request);
+    return bounded === null ? payloadTooLargeResponse() : createAuth(env).handler(bounded);
   }
 
   const isResetLink =
@@ -66,15 +91,28 @@ export async function handleAuthRoute(
 
   const auth = createAuth(env);
 
-  if (route === REQUEST_PASSWORD_RESET) {
-    return handleRequestPasswordReset(env, request, (forwarded) =>
-      auth.handler(forwarded),
-    );
-  }
-
   if (isResetLink) {
     return auth.handler(canonicalResetLinkRequest(request, origins));
   }
 
-  return auth.handler(request);
+  const bounded = await boundedAuthRequest(request);
+  if (bounded === null) {
+    return payloadTooLargeResponse();
+  }
+
+  if (route === REQUEST_PASSWORD_RESET) {
+    return handleRequestPasswordReset(env, bounded, (forwarded) =>
+      auth.handler(forwarded),
+    );
+  }
+
+  return auth.handler(bounded);
+}
+
+/** The one answer a body over the cap gets: nothing of it was parsed. */
+function payloadTooLargeResponse(): Response {
+  return Response.json(
+    { error: { code: "payload_too_large", message: "Request body is too large" } },
+    { status: 413 },
+  );
 }

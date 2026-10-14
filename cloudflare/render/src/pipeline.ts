@@ -107,10 +107,32 @@ function looksLikeHeic(head: Buffer): boolean {
   );
 }
 
+/**
+ * An SVG, XML or HTML document: after an optional UTF-8 BOM and whitespace
+ * the first byte is `<`. No accepted raster begins that way. Caught here so
+ * the bytes never reach libvips's SVG loader (librsvg) — the format is
+ * refused anyway, and a refused format must not be parsed first (the
+ * 2026-10-14 audit, F01).
+ */
+function looksLikeMarkup(head: Buffer): boolean {
+  let i = 0;
+  if (head.length >= 3 && head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) {
+    i = 3;
+  }
+  while (i < head.length && (head[i] === 0x20 || head[i] === 0x09 || head[i] === 0x0a || head[i] === 0x0d)) {
+    i += 1;
+  }
+  return i < head.length && head[i] === 0x3c;
+}
+
+function looksLikePdf(head: Buffer): boolean {
+  return head.length >= 4 && head.subarray(0, 4).toString("ascii") === "%PDF";
+}
+
 async function readHead(path: string): Promise<Buffer> {
   const handle = await open(path, "r");
   try {
-    const head = Buffer.alloc(16);
+    const head = Buffer.alloc(64);
     const { bytesRead } = await handle.read(head, 0, head.length, 0);
     return head.subarray(0, bytesRead);
   } finally {
@@ -144,6 +166,17 @@ export async function runArtworkPipeline(
   }
 
   // ── identify by CONTENT (wrong extensions are normalized away here) ──
+  // A text document (SVG and kin) or a PDF is refused on its first bytes,
+  // before any native loader parses it: both are refused formats, and the
+  // message is the same one their sharp-detected format would have got.
+  const head = await readHead(input.path);
+  if (looksLikeMarkup(head)) {
+    return reject("format_svg", SPECIAL_FORMAT_FAIL.svg as string);
+  }
+  if (looksLikePdf(head)) {
+    return reject("format_pdf", SPECIAL_FORMAT_FAIL.pdf as string);
+  }
+
   // metadata() only reads headers, so NO pixel limit here — an oversized image
   // must reach the px_too_large branch below (actionable "Skala ner" message),
   // not die in this try as "korrupt fil". Decode ops keep the limit as backstop.
@@ -151,7 +184,7 @@ export async function runArtworkPipeline(
   try {
     meta = await sharp(input.path, { limitInputPixels: false }).metadata();
   } catch {
-    if (looksLikeHeic(await readHead(input.path))) {
+    if (looksLikeHeic(head)) {
       return reject("format_heic", SPECIAL_FORMAT_FAIL.heif as string);
     }
     return reject(

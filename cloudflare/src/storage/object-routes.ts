@@ -13,6 +13,7 @@ import {
 } from "./image-sniff";
 import type { ObjectBucket, ObjectKind, StoredObject } from "./object-store";
 import {
+  type ObjectTenant,
   activateObject,
   bucketForKind,
   deletePendingOrMutableObject,
@@ -465,14 +466,49 @@ async function storeProvenSvg(
   };
 }
 
-function tenantOf(principal: TenantAdminPrincipal): TenantContext {
+function tenantOf(principal: TenantAdminPrincipal): ObjectTenant {
   // The object store is keyed by tenant, and the principal has already been
-  // proven to administer exactly this tenant.
+  // proven to administer exactly this tenant. The actor rides along so every
+  // transition's audit row names who made it, and under which grant (F07).
   return {
+    actor: {
+      actingAsGrantId: principal.actingAs?.grantId ?? null,
+      userId: principal.userId,
+    },
     domainKind: "admin",
     hostname: "",
     tenantId: principal.tenantId,
   };
+}
+
+/**
+ * The types a private object may be shown inline on the admin origin: rasters
+ * only. Everything else — a declared HTML, SVG, XHTML, PDF, anything — is a
+ * download (F19): a private reservation accepts any well-formed type, and a
+ * document that can carry script must never render in the admin's own origin.
+ * Every delivery also carries a sandboxing CSP, so even a mis-declared body
+ * that a browser chose to render could run nothing.
+ */
+const INLINE_PRIVATE_TYPES: ReadonlySet<string> = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+export function privateDeliveryHeaders(contentType: string, fileName: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": "sandbox",
+    "Content-Type": contentType,
+    "X-Content-Type-Options": "nosniff",
+  };
+  if (!INLINE_PRIVATE_TYPES.has(contentType.toLowerCase())) {
+    // The stored name is already [a-z0-9._-] (safeFileName); the replace is belt and braces.
+    headers["Content-Disposition"] = `attachment; filename="${fileName.replace(/[^A-Za-z0-9._-]/g, "_")}"`;
+  }
+  return headers;
 }
 
 export async function reserveAdminObject(
@@ -740,11 +776,7 @@ export async function deliverAdminObject(
   }
 
   return new Response(delivered.body, {
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": delivered.contentType,
-      "X-Content-Type-Options": "nosniff",
-    },
+    headers: privateDeliveryHeaders(delivered.contentType, delivered.fileName),
   });
 }
 

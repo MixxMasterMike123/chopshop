@@ -412,6 +412,10 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     app_env = v.get("APP_ENV")
     if app_env != env:
         refuse(f"{jsonc} env.{env}.vars.APP_ENV is {app_env!r}, expected {env!r}")
+    # The storefront routes answer the public entrypoint only under this test-suite binding
+    # (src/app.ts, PUBLIC_STOREFRONT_ALLOWED); a deployed Worker must never carry it.
+    if "TEST_PUBLIC_STOREFRONT" in v:
+        refuse(f"{jsonc} env.{env}.vars.TEST_PUBLIC_STOREFRONT is defined: that binding opens the storefront routes on the public entrypoint and exists for the test suites only")
     origins = p["origins"]
     want_canonical = dict(origins)
     if want_canonical["admin"] is None:  # no admin host pinned yet (production before its domain)
