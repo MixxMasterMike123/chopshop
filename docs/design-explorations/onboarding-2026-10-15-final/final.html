@@ -340,7 +340,7 @@ const F = {
     <div class="grid2"><div class="field"><label>Adress</label><div class="input">Nattviolsgatan 4</div></div><div class="field"><label>Postnummer och ort</label><div class="input">852 34 Sundsvall</div></div></div>
     <div class="grid2"><div class="field"><label>Momsregistrerad</label><div class="seg"><span class="on">Nej</span><span>Ja</span></div></div><div class="field"><label>Returadress</label><div class="seg"><span class="on">Samma som ovan</span><span>Annan</span></div></div></div>
     <div class="field"><label>E-post för kundfrågor</label><div class="input ro">hej@${SH.slug}.se<span class="tag">Läggs in av ChopShop</span></div><span class="help">Står i dina köpvillkor och i kundernas orderbekräftelse.</span></div>`,
-  terms: `<div class="check"><span class="bx">${ic.check}</span><span>Jag godkänner <a>ChopShops villkor för säljare</a> och <a>personuppgiftsbiträdesavtalet</a>.</span></div>`,
+  terms: `<div class="check"><span class="bx">${ic.check}</span><span>Jag har läst mina köpvillkor, integritetspolicy och ångerrätt och godkänner dem som mina. Jag godkänner även <a>ChopShops villkor för säljare</a> och <a>personuppgiftsbiträdesavtalet</a>.</span></div>`,
   motif: `<div class="drop"><div class="box">${moth(46, 32, '#2a2140')}</div><div><b>nattfjaril-motiv.png</b><span class="m">4 200 × 2 900 px · transparent bakgrund</span><br><span class="pill pill-ok" style="margin-top:6px"><span class="dot"></span>Skarpt nog för tryck på framsidan</span></div></div>`,
   garments: `<div class="garments">
       <div class="g sel"><div class="ph"><svg width="56" height="56" style="color:#f4f2ee;filter:drop-shadow(0 1px 1px #0002)"><use href="#tee"/></svg></div><b>T-shirt</b><span>Inköp 149 kr</span></div>
@@ -357,7 +357,7 @@ const F = {
 const gates = `<div class="gates">${ic.info}<span>Du kan skapa produkter direkt. Innan butiken öppnar behöver du <b>godkänna villkoren</b> och <b>ansluta Stripe</b>.${SH.review ? ' Vi granskar också din första produkt.' : ''}</span></div>`;
 
 const legalDoc = `<div class="doc"><div class="tabs"><span class="on">Köpvillkor</span><span>Integritetspolicy</span><span>Ångerrätt</span></div>
-  <h2>Köpvillkor</h2><div class="upd">Skrivs av ChopShop utifrån dina uppgifter · gäller när du godkänt dem</div>
+  <h2>Köpvillkor</h2><div class="upd">Mall ifylld med dina uppgifter · gäller mellan dig och dina kunder när du godkänt den</div>
   <h4>1. Säljare</h4><p>Du handlar av <mark>${SH.company}</mark>, som drivs av <mark>${SH.legalName}</mark> (enskild firma, org.nr <mark>880412-••••</mark>), <mark>Nattviolsgatan 4, 852 34 Sundsvall</mark>. Frågor om din beställning besvaras på <mark>hej@${SH.slug}.se</mark>.</p>
   <h4>2. Beställning och betalning</h4><p>Ett avtal är ingått när du fått en orderbekräftelse via e-post. Du betalar med kort, Klarna, Apple Pay eller Google Pay. Alla priser anges i svenska kronor inklusive moms.</p>
   <h4>3. ${SH.pod ? 'Tillverkning och leverans' : 'Leverans'}</h4><p>${SH.pod ? 'Plaggen trycks när du beställer, av vårt tryckeri, och skickas därefter till den adress du angett.' : 'Varan skickas inom 1–3 vardagar till den adress du angett, eller hämtas enligt överenskommelse.'} Beräknad leveranstid visas i kassan.</p>
@@ -438,8 +438,8 @@ const SCREENS = {
         pvHeadPriv, browser(store({ prods: [{ ...MUG }] })), 'Fortsätt'),
   '03c-egen-produkt': () => wizard(2, 'Lägg till en egen produkt', 'Något du själv har på lager och skickar – prints, böcker, keramik. En bild, ett namn och ett pris.',
       F.pickKind('thing') + F.product(PRINT), pvHeadPriv, browser(store({ prods: [{ ...TEE, held: true }, { ...PRINT, isNew: true }] })), 'Lägg i butiken'),
-  '04-uppgifter-och-villkor': () => wizard(3, 'Vem säljer?', 'Kunderna har rätt att veta vem de handlar av. Vi skriver dina köpvillkor, integritetspolicy och ångerrätt med de här uppgifterna – du ser dem växa fram till höger.',
-      F.company + F.terms, '<span class="live"><i></i>Dina juridiska sidor – skrivs åt dig</span>', legalDoc, 'Godkänn och fortsätt'),
+  '04-uppgifter-och-villkor': () => wizard(3, 'Vem säljer?', 'Kunderna har rätt att veta vem de handlar av. Dina köpvillkor, integritetspolicy och ångerrätt utgår från en mall och fylls i med de här uppgifterna. Du läser igenom, godkänner och ansvarar för dem – de är ditt avtal med dina kunder.',
+      F.company + F.terms, '<span class="live"><i></i>Dina juridiska sidor – förhandsvisning av mallen med dina uppgifter</span>', legalDoc, 'Godkänn och fortsätt'),
   '05-stripe-inte-paborjat': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('none'), stripeHead, moneyCard(firstProd), 'Fortsätt', '<button class="btn btn-plain">Gör det senare</button>'),
   '05-stripe-granskar': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('review'), stripeHead, moneyCard(firstProd), 'Fortsätt'),
   '05-stripe-behover-mer': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('more'), stripeHead, moneyCard(firstProd), 'Fortsätt'),
