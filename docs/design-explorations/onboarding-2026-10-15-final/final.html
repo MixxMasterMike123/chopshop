@@ -255,12 +255,27 @@
 <svg width="0" height="0" style="position:absolute"><defs>
   <symbol id="tee" viewBox="0 0 120 120"><path d="M42 14 L24 20 L8 38 L20 50 L30 42 L30 108 L90 108 L90 42 L100 50 L112 38 L96 20 L78 14 C74 22 67 26 60 26 C53 26 46 22 42 14 Z" fill="currentColor"/></symbol>
   <symbol id="moth" viewBox="0 0 60 40"><g fill="currentColor"><path d="M30 8 C22 -2 4 2 6 16 C7 24 18 24 28 20 Z"/><path d="M30 8 C38 -2 56 2 54 16 C53 24 42 24 32 20 Z"/><path d="M28 21 C20 26 14 36 22 38 C27 39 29 30 29.5 24 Z"/><path d="M32 21 C40 26 46 36 38 38 C33 39 31 30 30.5 24 Z"/><rect x="29" y="6" width="2" height="26" rx="1"/></g></symbol>
+  <symbol id="bowl" viewBox="0 0 60 40"><g fill="currentColor"><path d="M6 14h48c0 14-10 22-24 22S6 28 6 14z"/><rect x="18" y="8" width="24" height="4" rx="2"/></g></symbol>
   <symbol id="check" viewBox="0 0 16 16"><path d="M4 8.5 L7 11.2 L12 5.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
 </defs></svg>
 <div id="root"></div>
 <script>
-const P = 'Nattfjäril';
-const ACC = '#5B3FA8';
+/* ---------------- the three flows ---------------- */
+const FLOWS = {
+  varor: { name: 'Lerbruket', owner: 'Nora', email: 'nora@lerbruket.se', slug: 'lerbruket', logoFile: 'lerbruket-logga.svg', logo: 'bowl', acc: '#8A4B2B', logoInk: '#3b2a1e',
+    typeLabel: 'Fysiska varor', links: ['Produkter', 'Om oss'], hero: { h: 'Handgjort i Sundsvall.', p: 'Keramik från verkstaden vid älven – varje mugg är unik.' },
+    heroHint: { h: 'Välkommen till Lerbruket', p: 'En rad om vad du gör kommer i nästa steg.' }, pod: false, things: true, review: false, company: 'Lerbruket', legalName: 'Nora Lindqvist' },
+  pod: { name: 'Nattfjäril', owner: 'Nora', email: 'nora@nattfjaril.se', slug: 'nattfjaril', logoFile: 'nattfjaril-logga.svg', logo: 'moth', acc: '#5B3FA8', logoInk: '#2a2140',
+    typeLabel: 'Print on demand', links: ['Kläder', 'Om mig'], hero: { h: 'Motiv för den som vaknar sent.', p: 'Illustrationer från natten, tryckta på riktiga plagg när du beställer.' },
+    heroHint: { h: 'Välkommen till Nattfjäril', p: 'En rad om vad du gör kommer i nästa steg.' }, pod: true, things: false, review: true, company: 'Nattfjäril', legalName: 'Nora Lindqvist' },
+  mixed: { name: 'Nattfjäril', owner: 'Nora', email: 'nora@nattfjaril.se', slug: 'nattfjaril', logoFile: 'nattfjaril-logga.svg', logo: 'moth', acc: '#5B3FA8', logoInk: '#2a2140',
+    typeLabel: 'Print on demand + fysiska varor', links: ['Kläder', 'Prints', 'Om mig'], hero: { h: 'Motiv för den som vaknar sent.', p: 'Illustrationer från natten – på plagg som trycks när du beställer, och som signerade prints.' },
+    heroHint: { h: 'Välkommen till Nattfjäril', p: 'En rad om vad du gör kommer i nästa steg.' }, pod: true, things: true, review: true, company: 'Nattfjäril', legalName: 'Nora Lindqvist' },
+};
+const q = new URLSearchParams(location.search);
+const FK = q.get('f') || 'pod';
+const SH = FLOWS[FK];
+const P = SH.name, ACC = SH.acc;
 const STEPS = ['Din butik','Välj utseende','Din första produkt','Uppgifter och villkor','Ta betalt med Stripe','Begär publicering'];
 const TIMES = ['ca 1 min','ca 2 min','ca 2 min','ca 3 min','ca 5 min',''];
 const ic = {
@@ -275,48 +290,53 @@ const ic = {
   mail: '<svg class="i" viewBox="0 0 16 16"><path d="M3 4h10v8H3z M3 4l5 4 5-4"/></svg>',
   copy: '<svg class="i" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>',
   plus: '<svg class="i" viewBox="0 0 16 16"><path d="M8 3v10 M3 8h10"/></svg>',
+  box: '<svg class="i" viewBox="0 0 16 16"><path d="M2.5 5.5 8 2.5l5.5 3v5L8 13.5l-5.5-3z M2.5 5.5 8 8.5l5.5-3 M8 8.5v5"/></svg>',
 };
 const caret = '<span class="caret"></span>';
+const logo = (w, h, c) => `<svg width="${w}" height="${h}" style="color:${c}"><use href="#${SH.logo}"/></svg>`;
 const moth = (w, h, c) => `<svg width="${w}" height="${h}" style="color:${c}"><use href="#moth"/></svg>`;
 const teeImg = (size, col, mc) => `<svg width="${size}" height="${size}" viewBox="0 0 120 120" style="color:${col};filter:drop-shadow(0 2px 3px #0002)"><use href="#tee"/><svg x="44" y="42" width="32" height="22" viewBox="0 0 60 40" style="color:${mc}"><use href="#moth"/></svg></svg>`;
-const mugImg = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 120 120" style="filter:drop-shadow(0 3px 4px #0003)"><defs><linearGradient id="mg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#3b2a63"/><stop offset=".55" stop-color="#3b2a63"/><stop offset=".56" stop-color="#e9e3d6"/><stop offset="1" stop-color="#d9d2c3"/></linearGradient></defs><path d="M30 34h52v54a12 12 0 0 1-12 12H42a12 12 0 0 1-12-12z" fill="url(#mg)"/><path d="M82 44h8a10 10 0 0 1 0 28h-8" fill="none" stroke="#3b2a63" stroke-width="7"/><ellipse cx="56" cy="34" rx="26" ry="6" fill="#4a3879"/></svg>`;
+const mugImg = (size, glaze = '#3b2a63') => `<svg width="${size}" height="${size}" viewBox="0 0 120 120" style="filter:drop-shadow(0 3px 4px #0003)"><path d="M30 34h52v54a12 12 0 0 1-12 12H42a12 12 0 0 1-12-12z" fill="#e9e3d6"/><path d="M30 34h52v30H30z" fill="${glaze}"/><path d="M82 44h8a10 10 0 0 1 0 28h-8" fill="none" stroke="${glaze}" stroke-width="7"/><ellipse cx="56" cy="34" rx="26" ry="6" fill="${glaze}" style="filter:brightness(1.15)"/></svg>`;
+const bowlImg = (size, glaze = '#2f5d57') => `<svg width="${size}" height="${size}" viewBox="0 0 120 120" style="filter:drop-shadow(0 3px 4px #0003)"><path d="M14 44h92c0 30-20 48-46 48S14 74 14 44z" fill="${glaze}"/><ellipse cx="60" cy="44" rx="46" ry="9" fill="${glaze}" style="filter:brightness(1.2)"/><path d="M44 92h32v8H44z" fill="#d9d2c3"/></svg>`;
+const printImg = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 120 120" style="filter:drop-shadow(0 3px 4px #0003)"><rect x="22" y="14" width="76" height="92" fill="#fff"/><rect x="30" y="22" width="60" height="68" fill="#1d1730"/><svg x="40" y="38" width="40" height="28" viewBox="0 0 60 40" style="color:#c9b8f5"><use href="#moth"/></svg></svg>`;
 const TEE = { t: 'Nattfjäril – t-shirt', p: '349 kr', col: '#f4f2ee', mc: '#2a2140' };
-const MUG = { t: 'Handgjord keramikmugg', p: '249 kr', mug: true };
+const MUG = { t: 'Handgjord keramikmugg', p: '249 kr', img: (s) => mugImg(s, '#6b3a2a') };
+const BOWL = { t: 'Skål, 20 cm', p: '390 kr', img: (s) => bowlImg(s) };
+const MUG2 = { t: 'Mugg, blå', p: '249 kr', img: (s) => mugImg(s, '#2f4a7a') };
+const PRINT = { t: 'Signerad print, A3', p: '450 kr', img: (s) => printImg(s) };
+const firstProd = SH.things && !SH.pod ? MUG : TEE;
 
 function store(o = {}) {
-  const name = o.name ?? P, logo = o.logo ?? true;
-  const links = o.links ?? ['Kläder', 'Om mig'];
-  const hero = o.hero ?? { h: 'Motiv för den som vaknar sent.', p: 'Illustrationer från natten, tryckta på riktiga plagg när du beställer.' };
-  const prods = o.prods ?? [];
+  const name = o.name ?? P, prods = o.prods ?? [], hero = o.hero ?? SH.hero, links = o.links ?? SH.links;
   const cards = [];
-  prods.forEach(x => cards.push(`<div class="s-card ${x.isNew ? 'new' : ''} ${x.held ? 'held' : ''}">${x.isNew ? '<span class="flag">Ny</span>' : ''}<div class="img">${x.mug ? mugImg(o.teeSize ?? 140) : teeImg(o.teeSize ?? 140, x.col, x.mc)}</div>${x.held ? '<span class="flagwait">Förhandsvisning · inväntar granskning</span>' : ''}<div class="body"><div class="t">${x.t}</div><div class="row"><span class="price">${x.p}</span><span class="add">Lägg till</span></div></div></div>`));
+  prods.forEach(x => cards.push(`<div class="s-card ${x.isNew ? 'new' : ''} ${x.held ? 'held' : ''}">${x.isNew ? '<span class="flag">Ny</span>' : ''}<div class="img">${x.img ? x.img(o.teeSize ?? 140) : teeImg(o.teeSize ?? 140, x.col, x.mc)}</div>${x.held ? '<span class="flagwait">Förhandsvisning · inväntar granskning</span>' : ''}<div class="body"><div class="t">${x.t}</div><div class="row"><span class="price">${x.p}</span><span class="add">Lägg till</span></div></div></div>`));
   while (cards.length < 3) cards.push(`<div class="s-card ghost"><div class="img"></div><div class="body"><div class="t">Din produkt</div><div class="row"><span class="price">— kr</span></div></div></div>`);
-  return `<div class="store ${logo ? '' : 'nologo'}" style="--n-accent:${o.acc ?? ACC}">
-    <div class="s-nav"><span class="s-logo">${moth(26, 18, 'var(--n-accent)')}${name}</span><span class="s-links">${links.map(l => `<span>${l}</span>`).join('')}</span><span class="s-cart">Varukorg <b>0</b></span></div>
-    <div class="s-hero ${o.plain ? 'plain' : ''}"><h2 class="${hero.hint ? 'hint' : ''}">${hero.h}</h2><p class="${hero.hint ? 'hint' : ''}">${hero.p}</p><span class="cta">Se kollektionen</span></div>
+  return `<div class="store" style="--n-accent:${o.acc ?? ACC}">
+    <div class="s-nav"><span class="s-logo">${logo(26, 18, 'var(--n-accent)')}${name}</span><span class="s-links">${links.map(l => `<span>${l}</span>`).join('')}</span><span class="s-cart">Varukorg <b>0</b></span></div>
+    <div class="s-hero ${o.plain ? 'plain' : ''}"><h2 class="${hero.hint ? 'hint' : ''}">${hero.h}</h2><p class="${hero.hint ? 'hint' : ''}">${hero.p}</p><span class="cta">Se ${SH.pod && !SH.things ? 'kollektionen' : 'alla produkter'}</span></div>
     <div class="s-grid">${cards.join('')}</div></div>`;
 }
-const browser = (inner) => `<div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">chopshop.se/nattfjaril</div><div style="width:46px"></div></div>${inner}</div>`;
+const browser = (inner) => `<div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">chopshop.se/${SH.slug}</div><div style="width:46px"></div></div>${inner}</div>`;
 const topbar = (sub, right) => `<div class="topbar"><span class="brand">ChopShop</span>${sub ? `<span class="sub">${sub}</span>` : ''}<div class="right">${right ?? '<span class="avatar">N</span>'}</div></div>`;
 
 const F = {
-  name: `<div class="field"><label>Butikens namn</label><div class="input focus">Nattfjäril${caret}</div></div>
-    <div class="grid2"><div class="field"><label>Butikstyp</label><div class="input ro">Print on demand</div><span class="help">Bestämd vid inbjudan. Fel? Hör av dig så ändrar vi.</span></div>
-    <div class="field"><label>Webbadress</label><div class="input ro"><span class="pre">chopshop.se/</span>nattfjaril</div><span class="help">Egen domän kan kopplas senare.</span></div></div>`,
-  logo: `<div class="field"><label>Logga</label><div class="drop"><div class="box">${moth(44, 30, '#2a2140')}</div><div><b>nattfjaril-logga.svg</b><span class="m">Visas i butikens meny och på kvitton</span></div><button class="btn btn-secondary act">Byt</button></div></div>`,
-  colors: `<div class="field"><label>Färg</label><div class="colors"><i class="sw sel" style="background:${ACC}"></i><i class="sw" style="background:#2a2140"></i><i class="sw" style="background:#0E5E63"></i><i class="sw" style="background:#B0492B"></i><i class="sw" style="background:#1A1C1E"></i><span class="help" style="margin-left:6px">Förslag från din logga</span></div></div>`,
+  name: `<div class="field"><label>Butikens namn</label><div class="input focus">${P}${caret}</div></div>
+    <div class="grid2"><div class="field"><label>Butikstyp</label><div class="input ro">${SH.typeLabel}</div><span class="help">Bestämd vid inbjudan. Fel? Hör av dig så ändrar vi.</span></div>
+    <div class="field"><label>Webbadress</label><div class="input ro"><span class="pre">chopshop.se/</span>${SH.slug}</div><span class="help">Egen domän kan kopplas senare.</span></div></div>`,
+  logo: `<div class="field"><label>Logga</label><div class="drop"><div class="box">${logo(44, 30, SH.logoInk)}</div><div><b>${SH.logoFile}</b><span class="m">Visas i butikens meny och på kvitton</span></div><button class="btn btn-secondary act">Byt</button></div></div>`,
+  colors: `<div class="field"><label>Färg</label><div class="colors"><i class="sw sel" style="background:${ACC}"></i><i class="sw" style="background:${SH.logoInk}"></i><i class="sw" style="background:#0E5E63"></i><i class="sw" style="background:#B0492B"></i><i class="sw" style="background:#1A1C1E"></i><span class="help" style="margin-left:6px">Förslag från din logga</span></div></div>`,
   templates: `<div class="field"><label>Mall</label><div class="grid2" style="grid-template-columns:1fr 1fr 1fr">
-      <div class="tpl sel"><div class="ph" style="background:#F3F1EC"><div style="position:absolute;inset:10px 10px auto 10px;height:40px;border-radius:6px;background:#2a2140"></div><div style="position:absolute;left:10px;right:10px;bottom:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px"><i style="height:28px;border-radius:4px;background:#fff"></i><i style="height:28px;border-radius:4px;background:#fff"></i><i style="height:28px;border-radius:4px;background:#fff"></i></div></div><b>Nord</b><span>Lugn och luftig</span></div>
+      <div class="tpl sel"><div class="ph" style="background:#F3F1EC"><div style="position:absolute;inset:10px 10px auto 10px;height:40px;border-radius:6px;background:${SH.logoInk}"></div><div style="position:absolute;left:10px;right:10px;bottom:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px"><i style="height:28px;border-radius:4px;background:#fff"></i><i style="height:28px;border-radius:4px;background:#fff"></i><i style="height:28px;border-radius:4px;background:#fff"></i></div></div><b>Nord</b><span>Lugn och luftig</span></div>
       <div class="tpl"><div class="ph" style="background:#111"><div style="position:absolute;inset:10px 10px auto 10px;height:40px;border-radius:2px;background:linear-gradient(90deg,#e8ff3a 0 30%,#222 30%)"></div><div style="position:absolute;left:10px;right:10px;bottom:10px;display:grid;grid-template-columns:1fr 1fr;gap:5px"><i style="height:28px;background:#2a2a2a"></i><i style="height:28px;background:#2a2a2a"></i></div></div><b>Sport</b><span>Kraftig och snabb</span></div>
       <div class="tpl" style="display:grid;place-items:center;background:var(--a-surface-2);box-shadow:none"><span>Fler mallar<br>kommer</span></div>
     </div></div>`,
-  heroText: `<div class="field"><label>Rubrik</label><div class="input">Motiv för den som vaknar sent.</div></div>
-    <div class="field"><label>En rad om dig</label><div class="input focus" style="font-size:13.5px">Illustrationer från natten, tryckta på riktiga plagg när du beställer.${caret}</div></div>`,
+  heroText: `<div class="field"><label>Rubrik</label><div class="input">${SH.hero.h}</div></div>
+    <div class="field"><label>En rad om dig</label><div class="input focus" style="font-size:13.5px">${SH.hero.p}${caret}</div></div>`,
   company: `<div class="field"><label>Jag säljer som</label><div class="seg"><span class="on">Enskild firma</span><span>Aktiebolag</span></div></div>
-    <div class="grid2"><div class="field"><label>Namn</label><div class="input">Nora Lindqvist</div></div><div class="field"><label>Organisationsnummer</label><div class="input">880412-••••</div><span class="help">För enskild firma är det ditt personnummer. Lagen kräver att det står i köpvillkoren.</span></div></div>
+    <div class="grid2"><div class="field"><label>Namn</label><div class="input">${SH.legalName}</div></div><div class="field"><label>Organisationsnummer</label><div class="input">880412-••••</div><span class="help">För enskild firma är det ditt personnummer. Lagen kräver att det står i köpvillkoren.</span></div></div>
     <div class="grid2"><div class="field"><label>Adress</label><div class="input">Nattviolsgatan 4</div></div><div class="field"><label>Postnummer och ort</label><div class="input">852 34 Sundsvall</div></div></div>
     <div class="grid2"><div class="field"><label>Momsregistrerad</label><div class="seg"><span class="on">Nej</span><span>Ja</span></div></div><div class="field"><label>Returadress</label><div class="seg"><span class="on">Samma som ovan</span><span>Annan</span></div></div></div>
-    <div class="field"><label>E-post för kundfrågor</label><div class="input ro">hej@nattfjaril.se<span class="tag">Läggs in av ChopShop</span></div><span class="help">Står i dina köpvillkor och i kundernas orderbekräftelse.</span></div>`,
+    <div class="field"><label>E-post för kundfrågor</label><div class="input ro">hej@${SH.slug}.se<span class="tag">Läggs in av ChopShop</span></div><span class="help">Står i dina köpvillkor och i kundernas orderbekräftelse.</span></div>`,
   terms: `<div class="check"><span class="bx">${ic.check}</span><span>Jag godkänner <a>ChopShops villkor för säljare</a> och <a>personuppgiftsbiträdesavtalet</a>.</span></div>`,
   motif: `<div class="drop"><div class="box">${moth(46, 32, '#2a2140')}</div><div><b>nattfjaril-motiv.png</b><span class="m">4 200 × 2 900 px · transparent bakgrund</span><br><span class="pill pill-ok" style="margin-top:6px"><span class="dot"></span>Skarpt nog för tryck på framsidan</span></div></div>`,
   garments: `<div class="garments">
@@ -325,28 +345,29 @@ const F = {
       <div class="g"><div class="ph"><svg width="56" height="56" style="color:#c9c2b4"><use href="#tee"/></svg></div><b>Långärmad</b><span>Inköp 199 kr</span></div></div>`,
   price: `<div class="grid2"><div class="field"><label>Färger</label><div class="colors"><i class="sw sel" style="background:#f4f2ee"></i><i class="sw" style="background:#1d1d1f"></i><i class="sw" style="background:${ACC}"></i><i class="sw" style="background:#9aa79a"></i></div></div>
       <div class="field"><label>Ditt pris</label><div class="input focus">349 kr${caret}</div><span class="money">Du får <b>ca 172 kr</b> per såld tröja</span></div></div>`,
-  product: `<div class="field"><label>Produktbilder</label><div class="drop"><div class="box">${mugImg(52)}</div><div><b>keramikmugg.jpg</b><span class="m">2 400 × 2 400 px</span></div><button class="btn btn-secondary act">Lägg till fler</button></div></div>
-    <div class="field"><label>Produktnamn</label><div class="input">Handgjord keramikmugg</div></div>
-    <div class="field"><label>Beskrivning</label><div class="input focus" style="height:56px;align-items:flex-start;padding-top:8px;font-size:13.5px">Stengodsmugg i mörk lila glasyr, 3 dl.${caret}</div></div>
-    <div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><div class="field"><label>Pris (inkl. moms)</label><div class="input">249 kr</div></div><div class="field"><label>Lagersaldo</label><div class="input">15 st</div></div><div class="field"><label>Leverans</label><div class="input" style="font-size:13px">Frakt 49 kr · Hämtning</div></div></div>`,
+  product: (prod) => `<div class="field"><label>Produktbilder</label><div class="drop"><div class="box">${prod.img(52)}</div><div><b>${prod === PRINT ? 'print-a3.jpg' : 'keramikmugg.jpg'}</b><span class="m">2 400 × 2 400 px</span></div><button class="btn btn-secondary act">Lägg till fler</button></div></div>
+    <div class="field"><label>Produktnamn</label><div class="input">${prod.t}</div></div>
+    <div class="field"><label>Beskrivning</label><div class="input focus" style="height:56px;align-items:flex-start;padding-top:8px;font-size:13.5px">${prod === PRINT ? 'Giclée-print på 310 g bomullspapper, signerad och numrerad, upplaga 50.' : 'Stengodsmugg i mörk glasyr, 3 dl. Tål diskmaskin.'}${caret}</div></div>
+    <div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><div class="field"><label>Pris (inkl. moms)</label><div class="input">${prod.p}</div></div><div class="field"><label>Lagersaldo</label><div class="input">${prod === PRINT ? '50 st' : '15 st'}</div></div><div class="field"><label>Leverans</label><div class="input" style="font-size:13px">Frakt 49 kr · Hämtning</div></div></div>`,
+  pickKind: (sel) => `<div class="field"><label>Vad vill du lägga till först?</label><div class="seg"><span class="${sel === 'tee' ? 'on' : ''}">T-shirt med motiv</span><span class="${sel === 'thing' ? 'on' : ''}">Egen produkt</span></div></div>`,
 };
-const gates = (pod) => `<div class="gates">${ic.info}<span>Du kan skapa produkter direkt. Innan butiken öppnar behöver du <b>godkänna villkoren</b> och <b>ansluta Stripe</b>.${pod ? ' Vi granskar också din första produkt.' : ''}</span></div>`;
+const gates = `<div class="gates">${ic.info}<span>Du kan skapa produkter direkt. Innan butiken öppnar behöver du <b>godkänna villkoren</b> och <b>ansluta Stripe</b>.${SH.review ? ' Vi granskar också din första produkt.' : ''}</span></div>`;
 
 const legalDoc = `<div class="doc"><div class="tabs"><span class="on">Köpvillkor</span><span>Integritetspolicy</span><span>Ångerrätt</span></div>
   <h2>Köpvillkor</h2><div class="upd">Skrivs av ChopShop utifrån dina uppgifter · gäller när du godkänt dem</div>
-  <h4>1. Säljare</h4><p>Du handlar av <mark>Nattfjäril</mark>, som drivs av <mark>Nora Lindqvist</mark> (enskild firma, org.nr <mark>880412-••••</mark>), <mark>Nattviolsgatan 4, 852 34 Sundsvall</mark>. Frågor om din beställning besvaras på <mark>hej@nattfjaril.se</mark>.</p>
+  <h4>1. Säljare</h4><p>Du handlar av <mark>${SH.company}</mark>, som drivs av <mark>${SH.legalName}</mark> (enskild firma, org.nr <mark>880412-••••</mark>), <mark>Nattviolsgatan 4, 852 34 Sundsvall</mark>. Frågor om din beställning besvaras på <mark>hej@${SH.slug}.se</mark>.</p>
   <h4>2. Beställning och betalning</h4><p>Ett avtal är ingått när du fått en orderbekräftelse via e-post. Du betalar med kort, Klarna, Apple Pay eller Google Pay. Alla priser anges i svenska kronor inklusive moms.</p>
-  <h4>3. Tillverkning och leverans</h4><p>Plaggen trycks när du beställer, av vårt tryckeri, och skickas därefter till den adress du angett. Beräknad leveranstid visas i kassan.</p>
+  <h4>3. ${SH.pod ? 'Tillverkning och leverans' : 'Leverans'}</h4><p>${SH.pod ? 'Plaggen trycks när du beställer, av vårt tryckeri, och skickas därefter till den adress du angett.' : 'Varan skickas inom 1–3 vardagar till den adress du angett, eller hämtas enligt överenskommelse.'} Beräknad leveranstid visas i kassan.</p>
   <h4>4. Ångerrätt</h4><p>Du har 14 dagars ångerrätt enligt lagen om distansavtal. Ångerfristen börjar dagen efter att du tagit emot varan. Returer skickas till <mark>Nattviolsgatan 4, 852 34 Sundsvall</mark> …</p></div>`;
 
-const moneyCard = (prod) => `<div class="moneycard"><h3>Så går pengarna</h3><div class="sub">Räknat på din första produkt</div>
-  <div class="mprod"><span class="th">${prod.mug ? mugImg(48) : teeImg(48, '#f4f2ee', '#2a2140')}</span><div><b>${prod.t}</b><div class="muted">1 st</div></div></div>
-  <div class="mline"><span>Kunden betalar</span><span>${prod.mug ? '249 kr' : '349 kr'}</span></div>
-  <div class="mline"><span>Avgift (plattform och produktion)</span><span>${prod.mug ? '−21 kr' : '−177 kr'}</span></div>
-  <div class="mline total"><span>Till dig</span><span>${prod.mug ? '228 kr' : '172 kr'}</span></div>
-  <div class="flowrow"><div>${ic.lock}<b>Kunden betalar</b><span>Kort, Klarna, Apple Pay</span></div><div><svg class="i" viewBox="0 0 16 16"><path d="M2.5 5.5 8 2.5l5.5 3v5L8 13.5l-5.5-3z M2.5 5.5 8 8.5l5.5-3 M8 8.5v5"/></svg><b>${prod.mug ? 'Du skickar' : 'Vi trycker och skickar'}</b><span>${prod.mug ? 'Du får ett mejl per order' : 'Du behöver inte göra något'}</span></div><div><svg class="i" viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="8.5" rx="1.5"/><path d="M2 7h12"/></svg><b>Pengar till ditt konto</b><span>Automatiskt via Stripe</span></div></div></div>`;
+const moneyCard = (prod) => { const pod = !prod.img; return `<div class="moneycard"><h3>Så går pengarna</h3><div class="sub">Räknat på din första produkt</div>
+  <div class="mprod"><span class="th">${prod.img ? prod.img(48) : teeImg(48, '#f4f2ee', '#2a2140')}</span><div><b>${prod.t}</b><div class="muted">1 st</div></div></div>
+  <div class="mline"><span>Kunden betalar</span><span>${pod ? '349 kr' : '249 kr'}</span></div>
+  <div class="mline"><span>Avgift (plattform${pod ? ' och produktion' : ''})</span><span>${pod ? '−177 kr' : '−21 kr'}</span></div>
+  <div class="mline total"><span>Till dig</span><span>${pod ? '172 kr' : '228 kr'}</span></div>
+  <div class="flowrow"><div>${ic.lock}<b>Kunden betalar</b><span>Kort, Klarna, Apple Pay</span></div><div>${ic.box}<b>${pod ? 'Vi trycker och skickar' : 'Du packar och skickar'}</b><span>${pod ? 'Du behöver inte göra något' : 'Du får ett mejl per order'}</span></div><div><svg class="i" viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="8.5" rx="1.5"/><path d="M2 7h12"/></svg><b>Pengar till ditt konto</b><span>Automatiskt via Stripe</span></div></div></div>`; };
 
-function wizard(i, title, lede, form, rhead, right, primary, extraFoot, foot) {
+function wizard(i, title, lede, form, rhead, right, primary, extraFoot) {
   const bars = STEPS.map((_, k) => `<i class="${k < i ? 'done' : k === i ? 'now' : ''}"></i>`).join('');
   return topbar(`Kom igång · ${P}`, '<span>Sparat</span><span class="avatar">N</span>') + `<div class="stage"><section class="panel">
     <div class="bars">${bars}</div><div class="stepmeta"><span>Steg ${i + 1} av 6 · ${STEPS[i]}</span><span>${TIMES[i]}</span></div>
@@ -355,6 +376,7 @@ function wizard(i, title, lede, form, rhead, right, primary, extraFoot, foot) {
   </section><section class="rcol"><div class="rhead">${rhead}</div>${right}</section></div>`;
 }
 const pvHead = '<span class="live"><i></i>Din butik – ändras medan du fyller i</span><div class="seg"><span class="on">Dator</span><span>Mobil</span></div>';
+const pvHeadPriv = '<span class="live"><i></i>Din butik – bara du ser den än</span><div class="seg"><span class="on">Dator</span><span>Mobil</span></div>';
 
 const stripeState = (kind) => {
   const asks = `<div class="asks"><span>${ic.id}Legitimation</span><span>${ic.bank}Bankkonto för utbetalningar</span><span>${ic.phone}Mobilnummer</span><span>${ic.mail}E-post</span></div>`;
@@ -368,64 +390,68 @@ const stripeHead = '<span class="live"><i></i>Så går pengarna – räknat på 
 
 const owners = (rows) => `<div class="owners">${rows.map(([state, t, v, who]) => `<div>${state === 'done' ? `<span class="ck">${ic.check}</span>` : state === 'wait' ? `<span class="ck wait">${ic.clock}</span>` : '<span class="ck me"></span>'}<span>${t}</span><span class="v" style="margin-left:8px">${v}</span>${state !== 'done' ? '' : '<a>Ändra</a>'}<span class="who">${who === 'done' ? '<span class="pill pill-ok"><span class="dot"></span>Klart</span>' : who === 'stripe' ? '<span class="pill pill-info"><span class="dot"></span>Granskas av Stripe</span>' : who === 'chop' ? '<span class="pill pill-info"><span class="dot"></span>Granskas av ChopShop</span>' : '<span class="pill pill-caution"><span class="dot"></span>Behöver göras av dig</span>'}</span></div>`).join('')}</div>`;
 
+/* per-flow facts for steps 3, 6 and the ending */
+const savedProds = SH.pod && SH.things ? [{ ...TEE, held: true }, { ...PRINT }] : SH.pod ? [{ ...TEE, held: true }] : [{ ...MUG }];
+const prodSummary = SH.pod && SH.things ? '1 t-shirt, 1 print' : SH.pod ? '1 t-shirt' : '1 produkt';
+const openProds = SH.pod && SH.things ? [TEE, { t: 'Nattfjäril – hoodie', p: '649 kr', col: '#26262a', mc: '#c9b8f5' }, PRINT] : SH.pod ? [TEE, { t: 'Nattfjäril – hoodie', p: '649 kr', col: '#26262a', mc: '#c9b8f5' }, { t: 'Mossa – t-shirt', p: '349 kr', col: '#9aa79a', mc: '#1d2a1d' }] : [MUG, BOWL, MUG2];
+const reviewRow = SH.review ? ['wait', 'Första produkten', prodSummary, 'chop'] : ['done', 'Första produkten', prodSummary, 'done'];
+const nextSteps = SH.pod && !SH.things ? [`${ic.plus}Lägg till fler motiv och färger`, `${ic.mail}Berätta för dina följare – länken ovan räcker`, `${ic.bank}Första utbetalningen kommer automatiskt efter första köpet`] : SH.things && !SH.pod ? [`${ic.plus}Lägg till fler produkter – butiker med fler än tre säljer bättre`, `${ic.mail}Berätta för dina kunder – länken ovan räcker`, `${ic.box}Första ordern kommer som mejl: packa, skicka, markera som skickad`] : [`${ic.plus}Lägg till fler motiv, färger och prints`, `${ic.mail}Berätta för dina följare – länken ovan räcker`, `${ic.bank}Första utbetalningen kommer automatiskt efter första köpet`];
+
 const SCREENS = {
-  /* 0 — before the wizard */
   '00-konsol-ny-butik': () => `<div class="console"><div class="modal"><h2>Ny butik</h2>
-      <div class="f"><label>Butiksnamn</label><div class="in">Nattfjäril</div></div>
-      <div class="f"><label>Webbadress</label><div class="in"><span class="pre">chopshop.se/</span>nattfjaril</div><div class="hint">Bestäm den med ägaren innan inbjudan – den går inte att byta.</div></div>
-      <div class="f"><label>Vad säljer butiken?</label><div class="types"><div class="type"><b>Fysiska varor</b><span>Eget lager, egen frakt eller hämtning</span></div><div class="type sel"><b>Print on demand</b><span>Motiv på plagg, tryck per order</span></div><div class="type off"><b>Digitala produkter och tjänster</b><span>Kommer senare · kan inte väljas ännu</span></div></div></div>
-      <div class="f"><label>Ägarens e-post</label><div class="in">nora@nattfjaril.se</div></div>
+      <div class="f"><label>Butiksnamn</label><div class="in">${P}</div></div>
+      <div class="f"><label>Webbadress</label><div class="in"><span class="pre">chopshop.se/</span>${SH.slug}</div><div class="hint">Bestäm den med ägaren innan inbjudan – den går inte att byta.</div></div>
+      <div class="f"><label>Vad säljer butiken?</label><div class="types"><div class="type ${SH.things && !SH.pod ? 'sel' : ''}"><b>Fysiska varor</b><span>Eget lager, egen frakt eller hämtning</span></div><div class="type ${SH.pod ? 'sel' : ''}"><b>Print on demand</b><span>Motiv på plagg, tryck per order</span></div><div class="type off"><b>Digitala produkter och tjänster</b><span>Kommer senare · kan inte väljas ännu</span></div></div>${SH.pod && SH.things ? '<div class="hint" style="margin-top:10px">☑ Butiken säljer även egna fysiska varor (prints, böcker …)</div>' : ''}</div>
+      <div class="f"><label>Ägarens e-post</label><div class="in">${SH.email}</div></div>
       <div class="foot"><button class="btn btn-secondary">Avbryt</button><button class="btn btn-primary">Skapa och bjud in</button></div></div></div>`,
-  '00-losenord': () => topbar() + `<div class="auth"><div class="card"><div style="margin-bottom:18px">${moth(40, 28, ACC)}</div><h1>Välj ditt lösenord för Nattfjäril</h1><p class="lede">För nora@nattfjaril.se. Sedan bygger vi butiken tillsammans, steg för steg.</p>
+  '00-losenord': () => topbar() + `<div class="auth"><div class="card"><div style="margin-bottom:18px">${logo(40, 28, ACC)}</div><h1>Välj ditt lösenord för ${P}</h1><p class="lede">För ${SH.email}. Sedan bygger vi butiken tillsammans, steg för steg.</p>
       <div class="stack"><div class="field"><label>Lösenord</label><div class="input focus">••••••••••••${caret}</div><div class="strength"><i></i><i></i><i></i><i class="off"></i></div><span class="help">Bra lösenord</span></div>
       <button class="btn btn-primary btn-lg" style="justify-content:center">Fortsätt</button></div>
       <div class="next">Sex steg, ungefär en kvart:<ol>${STEPS.map(s => `<li>${s}</li>`).join('')}</ol></div></div></div>`,
-  /* 1 */
   '01-din-butik': () => wizard(0, 'Din butik', 'Namn, logga och en färg – det räcker för att butiken ska kännas som din. Allt går att ändra senare.',
-      gates(true) + F.name + F.logo + F.colors, pvHead,
-      browser(store({ hero: { h: 'Välkommen till Nattfjäril', p: 'En rad om vad du gör kommer i nästa steg.', hint: true }, plain: true })), 'Fortsätt'),
-  /* 2 */
+      gates + F.name + F.logo + F.colors, pvHead, browser(store({ hero: { ...SH.heroHint, hint: true }, plain: true })), 'Fortsätt'),
   '02-valj-utseende': () => wizard(1, 'Välj hur butiken ska se ut', 'Välj en mall och skriv en rubrik. Utan toppbild använder vi din färg – det ser genomtänkt ut ändå.',
       F.templates + F.heroText, pvHead, browser(store({})), 'Fortsätt'),
-  /* 3 — the branch */
-  '03-pod-designa-tshirt': () => wizard(2, 'Designa din första t-shirt', 'Ladda upp ett motiv så lägger vi det på ett plagg. Inget lager – vi trycker när någon köper.',
-      F.motif + `<div class="field"><label>Välj plagg</label>${F.garments}</div>` + F.price, pvHead,
-      browser(store({ prods: [{ ...TEE, isNew: true }] })), 'Lägg i butiken', '<button class="btn btn-secondary btn-lg">Öppna designstudion</button>'),
-  '03-pod-inlagd-granskas': () => wizard(2, 'Din t-shirt är i butiken', 'Vi granskar din första produkt innan kunder ser den. Det stoppar inte dig – fortsätt med nästa steg så länge.',
-      `<div class="wait">${ic.clock}<span><b>Granskas av ChopShop.</b> Du får ett mejl när den är godkänd. Vill du ändra något kan du göra det när som helst under Produkter.</span></div>
-       <div class="sum"><div><span class="ck">${ic.check}</span>Nattfjäril – t-shirt<span class="v">349 kr · du får ca 172 kr</span><a>Ändra</a></div></div>
-       <button class="btn btn-secondary" style="align-self:flex-start">${ic.plus} Lägg till ett motiv till</button>`,
-      '<span class="live"><i></i>Din butik – bara du ser den än</span><div class="seg"><span class="on">Dator</span><span>Mobil</span></div>',
-      browser(store({ prods: [{ ...TEE, held: true }] })), 'Fortsätt'),
-  '03-varor-ladda-upp-produkt': () => wizard(2, 'Ladda upp din första produkt', 'En bild, ett namn och ett pris. Du kan ändra allt senare och lägga till fler produkter i adminen.',
-      F.product, pvHead,
-      browser(store({ links: ['Produkter', 'Om oss'], hero: { h: 'Handgjort i Sundsvall.', p: 'Keramik från verkstaden vid älven – varje mugg är unik.' }, prods: [{ ...MUG, isNew: true }] })), 'Lägg i butiken'),
-  /* 4 */
+  '03-forsta-produkten': () => SH.pod
+    ? wizard(2, 'Designa din första t-shirt', 'Ladda upp ett motiv så lägger vi det på ett plagg. Inget lager – vi trycker när någon köper.',
+        (SH.things ? F.pickKind('tee') : '') + F.motif + `<div class="field"><label>Välj plagg</label>${F.garments}</div>` + F.price, pvHead,
+        browser(store({ prods: [{ ...TEE, isNew: true }] })), 'Lägg i butiken', '<button class="btn btn-secondary btn-lg">Öppna designstudion</button>')
+    : wizard(2, 'Ladda upp din första produkt', 'En bild, ett namn och ett pris. Du kan ändra allt senare och lägga till fler produkter i adminen.',
+        F.product(MUG), pvHead, browser(store({ prods: [{ ...MUG, isNew: true }] })), 'Lägg i butiken'),
+  '03b-inlagd': () => SH.pod
+    ? wizard(2, 'Din t-shirt är i butiken', 'Vi granskar din första produkt innan kunder ser den. Det stoppar inte dig – fortsätt med nästa steg så länge.',
+        `<div class="wait">${ic.clock}<span><b>Granskas av ChopShop.</b> Du får ett mejl när den är godkänd. Vill du ändra något kan du göra det när som helst under Produkter.</span></div>
+         <div class="sum"><div><span class="ck">${ic.check}</span>Nattfjäril – t-shirt<span class="v">349 kr · du får ca 172 kr</span><a>Ändra</a></div></div>
+         <div style="display:flex;gap:8px"><button class="btn btn-secondary">${ic.plus} Ett motiv till</button>${SH.things ? `<button class="btn btn-secondary">${ic.plus} Lägg till en egen produkt</button>` : ''}</div>`,
+        pvHeadPriv, browser(store({ prods: [{ ...TEE, held: true }] })), 'Fortsätt')
+    : wizard(2, 'Din produkt är i butiken', 'Klart. Du kan lägga till fler nu eller senare under Produkter i adminen – butiken växer medan du fyller på.',
+        `<div class="sum"><div><span class="ck">${ic.check}</span>Handgjord keramikmugg<span class="v">249 kr · 15 st i lager</span><a>Ändra</a></div></div>
+         <button class="btn btn-secondary" style="align-self:flex-start">${ic.plus} Lägg till en produkt till</button>`,
+        pvHeadPriv, browser(store({ prods: [{ ...MUG }] })), 'Fortsätt'),
+  '03c-egen-produkt': () => wizard(2, 'Lägg till en egen produkt', 'Något du själv har på lager och skickar – prints, böcker, keramik. En bild, ett namn och ett pris.',
+      F.pickKind('thing') + F.product(PRINT), pvHeadPriv, browser(store({ prods: [{ ...TEE, held: true }, { ...PRINT, isNew: true }] })), 'Lägg i butiken'),
   '04-uppgifter-och-villkor': () => wizard(3, 'Vem säljer?', 'Kunderna har rätt att veta vem de handlar av. Vi skriver dina köpvillkor, integritetspolicy och ångerrätt med de här uppgifterna – du ser dem växa fram till höger.',
       F.company + F.terms, '<span class="live"><i></i>Dina juridiska sidor – skrivs åt dig</span>', legalDoc, 'Godkänn och fortsätt'),
-  /* 5 — four states */
-  '05-stripe-inte-paborjat': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('none'), stripeHead, moneyCard(TEE), 'Fortsätt', '<button class="btn btn-plain">Gör det senare</button>'),
-  '05-stripe-granskar': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('review'), stripeHead, moneyCard(TEE), 'Fortsätt'),
-  '05-stripe-behover-mer': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('more'), stripeHead, moneyCard(TEE), 'Fortsätt'),
-  '05-stripe-klart': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('done'), stripeHead, moneyCard(TEE), 'Fortsätt'),
-  /* 6 — review, request, open */
+  '05-stripe-inte-paborjat': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('none'), stripeHead, moneyCard(firstProd), 'Fortsätt', '<button class="btn btn-plain">Gör det senare</button>'),
+  '05-stripe-granskar': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('review'), stripeHead, moneyCard(firstProd), 'Fortsätt'),
+  '05-stripe-behover-mer': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('more'), stripeHead, moneyCard(firstProd), 'Fortsätt'),
+  '05-stripe-klart': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('done'), stripeHead, moneyCard(firstProd), 'Fortsätt'),
   '06-granska-och-begar': () => wizard(5, 'Granska och begär publicering', 'Titta igenom en sista gång. När du begär publicering öppnar vi butiken så snart det som är kvar är klart.',
-      owners([['done','Din butik','Nattfjäril','done'],['done','Utseende','Nord, lila','done'],['wait','Första produkten','1 t-shirt','chop'],['done','Uppgifter och villkor','Nora Lindqvist, enskild firma','done'],['wait','Ta betalt med Stripe','Inskickat','stripe']]),
-      pvHead, browser(store({ prods: [{ ...TEE, held: true }] })), 'Begär publicering'),
-  '06-vi-forbereder': () => wizard(5, 'Vi förbereder publiceringen', 'Din begäran är mottagen. Det här är kvar innan butiken öppnar – inget av det behöver du göra själv just nu.',
+      owners([['done','Din butik',P,'done'],['done','Utseende',`Nord, ${SH.pod ? 'lila' : 'terrakotta'}`,'done'],reviewRow,['done','Uppgifter och villkor',`${SH.legalName}, enskild firma`,'done'],['wait','Ta betalt med Stripe','Inskickat','stripe']]),
+      pvHead, browser(store({ prods: savedProds })), 'Begär publicering'),
+  '06b-vi-forbereder': () => wizard(5, 'Vi förbereder publiceringen', 'Din begäran är mottagen. Det här är kvar innan butiken öppnar – inget av det behöver du göra själv just nu.',
       `<div class="wait">${ic.clock}<span><b>Begärd 15 oktober 14:32.</b> Vi hör av oss när butiken är öppen. Du kan fortsätta lägga till produkter under tiden.</span></div>` +
-      owners([['wait','Första produkten','1 t-shirt','chop'],['wait','Ta betalt med Stripe','Inskickat','stripe'],['done','Din butik','Nattfjäril','done'],['done','Utseende','Nord, lila','done'],['done','Uppgifter och villkor','Nora Lindqvist, enskild firma','done']]),
-      '<span class="live"><i></i>Din butik – bara du ser den än</span><div class="seg"><span class="on">Dator</span><span>Mobil</span></div>', browser(store({ prods: [{ ...TEE, held: true }] })), null, '<button class="btn btn-secondary btn-lg">Till adminen</button>'),
+      owners([...(SH.review ? [['wait','Första produkten',prodSummary,'chop']] : []),['wait','Ta betalt med Stripe','Inskickat','stripe'],['done','Din butik',P,'done'],['done','Utseende',`Nord, ${SH.pod ? 'lila' : 'terrakotta'}`,'done'],...(SH.review ? [] : [['done','Första produkten',prodSummary,'done']]),['done','Uppgifter och villkor',`${SH.legalName}, enskild firma`,'done']]),
+      pvHeadPriv, browser(store({ prods: savedProds })), null, '<button class="btn btn-secondary btn-lg">Till adminen</button>'),
   '07-oppen-for-kop': () => `<div style="background:#161616">${topbar('', '<span style="color:#ffffff8c">Till adminen</span><span class="avatar">N</span>')}<div class="open">
-    <div><div class="browser3"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">${ic.lock.replace('class="i"', 'class="i" style="width:12px;height:12px;color:#2a845a"')}chopshop.se/nattfjaril</div><div style="width:46px"></div></div>${store({ prods: [TEE, { t: 'Nattfjäril – hoodie', p: '649 kr', col: '#26262a', mc: '#c9b8f5' }, { t: 'Mossa – t-shirt', p: '349 kr', col: '#9aa79a', mc: '#1d2a1d' }], teeSize: 104 })}</div></div>
-    <div class="right"><span class="statusline"><i></i>Öppen för köp</span><h1>Nattfjäril är öppen.</h1><p class="lede">Produkter, villkor och betalning är på plats och granskade. Nu handlar det om att folk hittar hit.</p>
-      <div class="linkbox"><span>chopshop.se/nattfjaril</span><button class="btn btn-light">${ic.copy} Kopiera länk</button></div>
+    <div><div class="browser3"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">${ic.lock.replace('class="i"', 'class="i" style="width:12px;height:12px;color:#2a845a"')}chopshop.se/${SH.slug}</div><div style="width:46px"></div></div>${store({ prods: openProds, teeSize: 104 })}</div></div>
+    <div class="right"><span class="statusline"><i></i>Öppen för köp</span><h1>${P} är öppen.</h1><p class="lede">Produkter, villkor och betalning är på plats${SH.review ? ' och granskade' : ''}. Nu handlar det om att folk hittar hit.</p>
+      <div class="linkbox"><span>chopshop.se/${SH.slug}</span><button class="btn btn-light">${ic.copy} Kopiera länk</button></div>
       <div class="acts"><button class="btn btn-ghost">Öppna butiken ${ic.ext}</button><button class="btn btn-ghost">Till adminen</button></div>
-      <div class="next"><h3>Bra nästa steg</h3><ul><li>${ic.plus}Lägg till fler motiv och färger</li><li>${ic.mail}Berätta för dina följare – länken ovan räcker</li><li>${ic.bank}Första utbetalningen kommer automatiskt efter första köpet</li></ul></div>
+      <div class="next"><h3>Bra nästa steg</h3><ul>${nextSteps.map(n => `<li>${n}</li>`).join('')}</ul></div>
     </div></div></div>`,
 };
-
-const key = new URLSearchParams(location.search).get('s') || '01-din-butik';
+const key = q.get('s') || '01-din-butik';
 document.getElementById('root').innerHTML = SCREENS[key]();
 </script>
 </body></html>
