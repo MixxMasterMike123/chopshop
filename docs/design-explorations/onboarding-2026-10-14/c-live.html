@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>C – Gå live</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  body { background: #161616; color: #fff; }
+  .topbar { background: transparent; }
+  .stage { display: grid; grid-template-columns: 1fr 470px; gap: 56px; padding: 30px 72px 0; height: calc(900px - 56px); align-items: start; }
+  .left { position: relative; }
+  .browser { border-radius: 14px; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px #ffffff14, 0 40px 90px -30px #000000cc; transform: perspective(1800px) rotateY(6deg) rotateX(2deg); transform-origin: left center; }
+  .chrome { height: 36px; background: #f7f7f7; border-bottom: 1px solid #ebebeb; display: flex; align-items: center; gap: 12px; padding: 0 14px; }
+  .dots { display: flex; gap: 6px; } .dots i { width: 10px; height: 10px; border-radius: 50%; background: #dcdcdc; }
+  .url { flex: 1; max-width: 360px; margin: 0 auto; height: 22px; border-radius: 6px; background: #fff; box-shadow: 0 0 0 1px #e3e3e3 inset; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: #616161; }
+  .url svg { color: #2a845a; }
+  .store { height: 600px; } .store .s-hero { padding: 22px 26px; } .store .s-hero h2 { font-size: 30px; max-width: 16ch; } .store .s-card .img { aspect-ratio: 4/3; }
+  .order { position: absolute; right: -24px; bottom: -34px; background: #fff; color: var(--a-text); border-radius: 12px; padding: 12px 14px; width: 300px; display: flex; gap: 12px; align-items: center; box-shadow: 0 24px 50px -20px #000000aa, 0 0 0 1px #0000000d; }
+  .order .ic { width: 36px; height: 36px; border-radius: 8px; background: var(--a-ok-bg); color: var(--a-ok-dot); display: grid; place-items: center; }
+  .order b { display: block; }
+  .order span { color: var(--a-muted); font-size: 12px; }
+
+  .col-r { padding-top: 34px; }
+  .status { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: 999px; background: #2a845a26; color: #8fdcb4; font-weight: 600; font-size: 12.5px; }
+  .status i { width: 7px; height: 7px; border-radius: 50%; background: #3fcf8e; box-shadow: 0 0 0 4px #3fcf8e33; }
+  h1 { font-size: 44px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 700; margin-top: 18px; text-wrap: balance; }
+  .lede { color: #ffffffa6; font-size: 15px; line-height: 23px; margin-top: 14px; max-width: 40ch; }
+  .linkbox { margin-top: 28px; display: flex; align-items: center; gap: 10px; background: #ffffff0d; box-shadow: 0 0 0 1px #ffffff1a inset; border-radius: 10px; padding: 6px 6px 6px 14px; }
+  .linkbox span { flex: 1; font-size: 15px; font-weight: 500; }
+  .btn-light { background: #fff; color: #1a1a1a; }
+  .share { margin-top: 28px; display: grid; grid-template-columns: 112px 1fr; gap: 18px; align-items: center; }
+  .qr { width: 112px; height: 112px; border-radius: 10px; background: #fff; padding: 9px; }
+  .share b { font-size: 14px; display: block; }
+  .share p { color: #ffffffa6; margin-top: 4px; }
+  .chips { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .chip { height: 30px; padding: 0 12px; border-radius: 8px; background: #ffffff12; box-shadow: 0 0 0 1px #ffffff1a inset; display: inline-flex; align-items: center; gap: 7px; color: #fff; font-weight: 500; }
+  .next { margin-top: 32px; border-top: 1px solid #ffffff1a; padding-top: 18px; }
+  .next h3 { font-size: 13px; color: #ffffffa6; font-weight: 500; }
+  .next ul { list-style: none; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .next li { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+  .next li svg { color: #ffffff73; }
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="tee" viewBox="0 0 120 120"><path d="M42 14 L24 20 L8 38 L20 50 L30 42 L30 108 L90 108 L90 42 L100 50 L112 38 L96 20 L78 14 C74 22 67 26 60 26 C53 26 46 22 42 14 Z" fill="currentColor"/></symbol>
+  <symbol id="moth" viewBox="0 0 60 40"><g fill="currentColor"><path d="M30 8 C22 -2 4 2 6 16 C7 24 18 24 28 20 Z"/><path d="M30 8 C38 -2 56 2 54 16 C53 24 42 24 32 20 Z"/><path d="M28 21 C20 26 14 36 22 38 C27 39 29 30 29.5 24 Z"/><path d="M32 21 C40 26 46 36 38 38 C33 39 31 30 30.5 24 Z"/><rect x="29" y="6" width="2" height="26" rx="1"/></g></symbol>
+</defs></svg>
+
+<div class="topbar"><span class="brand">ChopShop</span><div class="right"><span style="color:#ffffff8c">Till adminen</span><span class="avatar">N</span></div></div>
+
+<div class="stage">
+  <div class="left">
+    <div class="browser">
+      <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url"><svg class="i" viewBox="0 0 16 16" style="width:12px;height:12px"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>chopshop.se/nattfjaril</div><div style="width:46px"></div></div>
+      <div class="store">
+        <div class="s-nav"><span class="s-logo"><svg width="26" height="18" style="color:var(--n-accent)"><use href="#moth"/></svg>Nattfjäril</span><span class="s-links"><span>Kläder</span><span>Om mig</span></span><span class="s-cart">Varukorg <b>0</b></span></div>
+        <div class="s-hero"><h2>Motiv för den som vaknar sent.</h2><p>Illustrationer från natten, tryckta på riktiga plagg när du beställer.</p><span class="cta">Se kollektionen</span></div>
+        <div class="s-grid">
+          <div class="s-card"><div class="img"><svg width="140" height="140" viewBox="0 0 120 120" style="color:#f4f2ee;filter:drop-shadow(0 2px 3px #0002)"><use href="#tee"/><svg x="44" y="42" width="32" height="22" viewBox="0 0 60 40" style="color:#2a2140"><use href="#moth"/></svg></svg></div><div class="body"><div class="t">Nattfjäril – t-shirt</div><div class="row"><span class="price">349 kr</span><span class="add">Lägg till</span></div></div></div>
+          <div class="s-card"><div class="img"><svg width="140" height="140" viewBox="0 0 120 120" style="color:#26262a;filter:drop-shadow(0 2px 3px #0003)"><use href="#tee"/><svg x="44" y="42" width="32" height="22" viewBox="0 0 60 40" style="color:#c9b8f5"><use href="#moth"/></svg></svg></div><div class="body"><div class="t">Nattfjäril – hoodie</div><div class="row"><span class="price">649 kr</span><span class="add">Lägg till</span></div></div></div>
+          <div class="s-card"><div class="img"><svg width="140" height="140" viewBox="0 0 120 120" style="color:#9aa79a;filter:drop-shadow(0 2px 3px #0002)"><use href="#tee"/><svg x="44" y="42" width="32" height="22" viewBox="0 0 60 40" style="color:#1d2a1d"><use href="#moth"/></svg></svg></div><div class="body"><div class="t">Mossa – t-shirt</div><div class="row"><span class="price">349 kr</span><span class="add">Lägg till</span></div></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="order"><span class="ic"><svg class="i" viewBox="0 0 16 16" style="width:18px;height:18px"><path d="M3 4.5h10l-1 8.5H4z M5.5 4.5a2.5 2.5 0 0 1 5 0"/></svg></span><div><b>Så ser din första order ut</b><span>Du får ett mejl och en notis här direkt när någon köper.</span></div></div>
+  </div>
+
+  <div class="col-r">
+    <span class="status"><i></i>Live just nu</span>
+    <h1>Nattfjäril är öppen för köp.</h1>
+    <p class="lede">Allt är på plats: produkter, betalning och villkor. Nu handlar det om att folk hittar hit – här är det enklaste sättet att börja.</p>
+
+    <div class="linkbox"><span>chopshop.se/nattfjaril</span><button class="btn btn-light">Kopiera länk</button></div>
+
+    <div class="share">
+      <svg class="qr" viewBox="0 0 29 29" shape-rendering="crispEdges"><g fill="#1a1a1a">
+        <path d="M0 0h7v7H0zM1 1v5h5V1zM2 2h3v3H2z" fill-rule="evenodd"/><path d="M22 0h7v7h-7zM23 1v5h5V1zM24 2h3v3h-3z" fill-rule="evenodd"/><path d="M0 22h7v7H0zM1 23v5h5v-5zM2 24h3v3H2z" fill-rule="evenodd"/>
+        <path d="M9 0h1v1H9zM11 0h2v1h-2zM14 1h1v2h-1zM9 2h2v1H9zM12 3h2v1h-2zM16 0h2v2h-2zM18 3h2v1h-2zM9 5h1v2H9zM11 5h3v1h-3zM15 5h1v1h-1zM17 6h2v1h-2zM0 9h2v1H0zM3 9h1v2H3zM5 10h2v1H5zM8 9h3v1H8zM12 9h1v3h-1zM14 8h2v1h-2zM17 9h3v1h-3zM21 9h1v2h-1zM23 9h2v1h-2zM26 9h3v1h-3zM1 12h2v1H1zM4 12h4v1H4zM9 11h2v2H9zM14 11h1v1h-1zM16 12h2v1h-2zM19 11h1v3h-1zM22 12h3v1h-3zM27 11h2v2h-2zM0 14h1v2H0zM2 15h3v1H2zM6 14h2v1H6zM10 14h3v1h-3zM14 14h1v2h-1zM16 15h2v1h-2zM21 14h2v1h-2zM24 15h1v2h-1zM26 14h2v1h-2zM1 17h1v2H1zM3 18h3v1H3zM7 17h1v1H7zM9 17h2v2H9zM12 18h3v1h-3zM16 17h1v1h-1zM18 17h3v1h-3zM22 18h1v2h-1zM25 18h3v1h-3zM9 20h1v2H9zM11 21h2v1h-2zM14 20h1v1h-1zM16 21h1v3h-1zM18 20h2v1h-2zM21 21h2v1h-2zM24 21h1v1h-1zM26 20h2v2h-2zM9 23h3v1H9zM13 24h2v1h-2zM18 23h1v2h-1zM20 24h3v1h-3zM24 23h2v1h-2zM27 24h2v2h-2zM9 26h1v3H9zM11 27h3v1h-3zM15 26h2v1h-2zM18 27h1v2h-1zM20 26h2v1h-2zM23 27h3v1h-3zM27 27h2v2h-2zM12 25h1v1h-1zM10 8h1v1h-1zM20 15h1v1h-1z"/>
+      </g></svg>
+      <div><b>Dela på första dagen</b><p>QR-kod för merchbordet och en färdig bild för Instagram.</p>
+        <div class="chips">
+          <span class="chip"><svg class="i" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="3"/><circle cx="8" cy="8" r="2.6"/></svg>Bild till Instagram</span>
+          <span class="chip"><svg class="i" viewBox="0 0 16 16"><path d="M8 2.5v8 M5 7.5l3 3 3-3 M3 13h10"/></svg>Ladda ner QR</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="next">
+      <h3>Bra nästa steg</h3>
+      <ul>
+        <li><svg class="i" viewBox="0 0 16 16"><path d="M8 3v10 M3 8h10"/></svg>Lägg till fler motiv och färger</li>
+        <li><svg class="i" viewBox="0 0 16 16"><path d="M3 4h10v8H3z M3 4l5 4 5-4"/></svg>Berätta för din mejllista</li>
+      </ul>
+    </div>
+  </div>
+</div>
+</body></html>

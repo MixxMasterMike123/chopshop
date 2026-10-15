@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>A – Bygg din butik</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .stage { display: grid; grid-template-columns: 560px 1fr; height: calc(900px - 56px); }
+  .panel { background: var(--a-surface); border-right: 1px solid var(--a-border); display: flex; flex-direction: column; }
+  .steps { display: flex; gap: 6px; padding: 18px 28px 0; }
+  .steps .s { flex: 1; height: 4px; border-radius: 4px; background: var(--a-border); }
+  .steps .s.done { background: var(--a-ok-dot); }
+  .steps .s.now { background: var(--a-primary); }
+  .stepmeta { display: flex; justify-content: space-between; padding: 10px 28px 0; color: var(--a-muted); font-size: 12px; }
+  .content { padding: 30px 28px 0; flex: 1; }
+  h1 { font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.02em; }
+  .lede { color: var(--a-muted); font-size: 14px; line-height: 22px; margin-top: 8px; max-width: 46ch; }
+
+  .drop { margin-top: 24px; border-radius: 10px; background: var(--a-surface-2); box-shadow: 0 0 0 1px var(--a-border) inset; padding: 16px; display: flex; gap: 16px; align-items: center; }
+  .motif { width: 84px; height: 84px; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px var(--a-border) inset; display: grid; place-items: center; }
+  .drop .meta b { display: block; font-size: 14px; }
+  .drop .meta span { color: var(--a-muted); font-size: 12px; }
+  .drop .meta .pill { margin-top: 8px; }
+
+  h3 { font-size: 14px; font-weight: 600; margin: 26px 0 10px; }
+  .garments { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .g { border-radius: 10px; padding: 10px; box-shadow: 0 0 0 1px var(--a-border) inset; background: #fff; }
+  .g.sel { box-shadow: 0 0 0 2px var(--a-primary) inset; }
+  .g .ph { height: 92px; border-radius: 6px; background: var(--a-surface-2); display: grid; place-items: center; }
+  .g b { display: block; margin-top: 8px; font-size: 13px; }
+  .g span { color: var(--a-muted); font-size: 12px; }
+
+  .colors { display: flex; gap: 8px; margin-top: 4px; }
+  .sw { width: 28px; height: 28px; border-radius: 50%; box-shadow: 0 0 0 1px #0000001f inset; }
+  .sw.sel { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--a-primary); }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 22px; }
+  .money { font-size: 12px; color: var(--a-muted); margin-top: 6px; }
+  .money b { color: var(--a-ok-text); font-weight: 600; }
+
+  .foot { display: flex; align-items: center; justify-content: space-between; padding: 16px 28px; border-top: 1px solid var(--a-border-soft); }
+
+  .preview { position: relative; padding: 28px 40px; display: flex; flex-direction: column; }
+  .pv-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; color: var(--a-muted); }
+  .pv-head .live { display: flex; align-items: center; gap: 8px; }
+  .pv-head .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--a-ok-dot); box-shadow: 0 0 0 4px #2a845a22; }
+  .seg { display: flex; background: #e6e6e6; border-radius: 8px; padding: 2px; }
+  .seg span { height: 26px; padding: 0 10px; display: flex; align-items: center; gap: 6px; border-radius: 6px; }
+  .seg span.on { background: #fff; color: var(--a-text); box-shadow: var(--a-shadow); }
+  .browser { flex: 1; border-radius: 12px; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px #00000014, 0 24px 60px -24px #00000040; display: flex; flex-direction: column; }
+  .chrome { height: 36px; background: #f7f7f7; border-bottom: 1px solid var(--a-border-soft); display: flex; align-items: center; gap: 12px; padding: 0 14px; }
+  .dots { display: flex; gap: 6px; } .dots i { width: 10px; height: 10px; border-radius: 50%; background: #dcdcdc; }
+  .url { flex: 1; max-width: 360px; margin: 0 auto; height: 22px; border-radius: 6px; background: #fff; box-shadow: 0 0 0 1px var(--a-border) inset; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--a-muted); }
+  .store { flex: 1; }
+  .s-card.new { box-shadow: 0 0 0 2px var(--n-accent), 0 18px 40px -16px color-mix(in srgb, var(--n-accent) 55%, transparent); position: relative; }
+  .s-card.new .flag { position: absolute; top: 8px; left: 8px; background: var(--n-ink); color: #fff; font-size: 10.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; }
+  .note { position: absolute; right: 64px; bottom: 54px; background: var(--a-topbar); color: #fff; border-radius: 10px; padding: 12px 14px; width: 260px; box-shadow: var(--a-shadow-lift); font-size: 12.5px; line-height: 18px; }
+  .note b { display: block; font-size: 13px; margin-bottom: 2px; }
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="tee" viewBox="0 0 120 120"><path d="M42 14 L24 20 L8 38 L20 50 L30 42 L30 108 L90 108 L90 42 L100 50 L112 38 L96 20 L78 14 C74 22 67 26 60 26 C53 26 46 22 42 14 Z" fill="currentColor"/></symbol>
+  <symbol id="moth" viewBox="0 0 60 40"><g fill="currentColor"><path d="M30 8 C22 -2 4 2 6 16 C7 24 18 24 28 20 Z"/><path d="M30 8 C38 -2 56 2 54 16 C53 24 42 24 32 20 Z"/><path d="M28 21 C20 26 14 36 22 38 C27 39 29 30 29.5 24 Z"/><path d="M32 21 C40 26 46 36 38 38 C33 39 31 30 30.5 24 Z"/><rect x="29" y="6" width="2" height="26" rx="1"/></g></symbol>
+</defs></svg>
+
+<div class="topbar">
+  <span class="brand">ChopShop</span><span class="sub">Kom igång · Nattfjäril</span>
+  <div class="right"><span>Sparas automatiskt</span><span class="avatar">N</span></div>
+</div>
+
+<div class="stage">
+  <section class="panel">
+    <div class="steps"><i class="s done"></i><i class="s done"></i><i class="s done"></i><i class="s now"></i><i class="s"></i><i class="s"></i></div>
+    <div class="stepmeta"><span>Steg 4 av 6 · Första produkten</span><span>ca 2 min</span></div>
+    <div class="content">
+      <h1>Gör din första t-shirt</h1>
+      <p class="lede">Ladda upp ett motiv så lägger vi det på ett plagg åt dig. Du ser produkten i din butik direkt – inget lager, vi trycker när någon köper.</p>
+
+      <div class="drop">
+        <div class="motif"><svg width="58" height="40" style="color:#2a2140"><use href="#moth"/></svg></div>
+        <div class="meta"><b>nattfjaril-motiv.png</b><span>4 200 × 2 900 px · transparent bakgrund</span><br><span class="pill pill-ok"><span class="dot"></span>Skarpt nog för tryck</span></div>
+      </div>
+
+      <h3>Välj plagg</h3>
+      <div class="garments">
+        <div class="g sel"><div class="ph"><svg width="64" height="64" style="color:#f4f2ee;filter:drop-shadow(0 1px 1px #0002)"><use href="#tee"/></svg></div><b>T-shirt</b><span>från 149 kr i inköp</span></div>
+        <div class="g"><div class="ph"><svg width="64" height="64" style="color:#3a3a3a"><use href="#tee"/></svg></div><b>Hoodie</b><span>från 389 kr</span></div>
+        <div class="g"><div class="ph"><svg width="64" height="64" style="color:#c9c2b4"><use href="#tee"/></svg></div><b>Långärmad</b><span>från 199 kr</span></div>
+      </div>
+
+      <div class="row2">
+        <div class="field"><label>Färger</label>
+          <div class="colors"><i class="sw sel" style="background:#f4f2ee"></i><i class="sw" style="background:#1d1d1f"></i><i class="sw" style="background:#5B3FA8"></i><i class="sw" style="background:#9aa79a"></i></div>
+        </div>
+        <div class="field"><label>Ditt pris</label>
+          <div class="input focus">349 kr<span class="caret"></span></div>
+          <div class="money">Du får <b>ca 172 kr</b> per såld tröja</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="btn btn-plain">Tillbaka</button>
+      <div style="display:flex;gap:8px"><button class="btn btn-secondary">Hoppa över</button><button class="btn btn-primary btn-lg">Lägg i butiken</button></div>
+    </div>
+  </section>
+
+  <section class="preview">
+    <div class="pv-head">
+      <span class="live"><i></i>Förhandsvisning – ändras medan du väljer</span>
+      <div class="seg"><span class="on">Dator</span><span>Mobil</span></div>
+    </div>
+    <div class="browser">
+      <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">chopshop.se/nattfjaril</div><div style="width:46px"></div></div>
+      <div class="store">
+        <div class="s-nav"><span class="s-logo"><svg width="26" height="18" style="color:var(--n-accent)"><use href="#moth"/></svg>Nattfjäril</span><span class="s-links"><span>Kläder</span><span>Om mig</span></span><span class="s-cart">Varukorg <b>0</b></span></div>
+        <div class="s-hero"><h2>Motiv för den som vaknar sent.</h2><p>Illustrationer från natten, tryckta på riktiga plagg när du beställer.</p><span class="cta">Se kollektionen</span></div>
+        <div class="s-grid">
+          <div class="s-card new"><span class="flag">Ny</span><div class="img"><svg width="150" height="150" viewBox="0 0 120 120" style="color:#f4f2ee;filter:drop-shadow(0 2px 3px #0002)"><use href="#tee"/><svg x="44" y="42" width="32" height="22" viewBox="0 0 60 40" style="color:#2a2140"><use href="#moth"/></svg></svg></div><div class="body"><div class="t">Nattfjäril – t-shirt</div><div class="row"><span class="price">349 kr</span><span class="add">Lägg till</span></div></div></div>
+          <div class="s-card ghost"><div class="img"></div><div class="body"><div class="t">Nästa motiv</div><div class="row"><span class="price">— kr</span></div></div></div>
+          <div class="s-card ghost"><div class="img"></div><div class="body"><div class="t">Nästa motiv</div><div class="row"><span class="price">— kr</span></div></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+</body></html>

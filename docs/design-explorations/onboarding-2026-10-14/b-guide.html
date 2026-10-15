@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>B – Startguide i adminen</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .shell { display: grid; grid-template-columns: 232px 1fr; height: calc(900px - 56px); }
+  nav { padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+  nav a { height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border-radius: 6px; color: var(--a-text); font-weight: 500; text-decoration: none; }
+  nav a.on { background: #00000014; }
+  nav a .badge { margin-left: auto; background: #e3e3e3; border-radius: 6px; font-size: 11px; padding: 0 6px; color: #5a5a5a; }
+  main { overflow: hidden; padding: 20px 28px; }
+  .wrap { max-width: 1120px; display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 20px; }
+  .pagehead { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; }
+  .pagehead h1 { font-size: 20px; line-height: 28px; font-weight: 600; }
+  .card { background: var(--a-surface); border-radius: 12px; box-shadow: var(--a-shadow), 0 0 0 1px #0000000a; overflow: hidden; }
+  .guide-head { padding: 18px 20px 16px; }
+  .guide-head h2 { font-size: 16px; font-weight: 600; }
+  .guide-head p { color: var(--a-muted); margin-top: 2px; }
+  .prog { display: flex; align-items: center; gap: 12px; margin-top: 14px; color: var(--a-muted); font-size: 12px; }
+  .bar { flex: 1; height: 6px; border-radius: 6px; background: var(--a-surface-3); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 50%; background: var(--a-primary); border-radius: 6px; }
+  .step { display: flex; align-items: center; gap: 12px; padding: 11px 20px; border-top: 1px solid var(--a-border-soft); }
+  .step .ck { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+  .step.done .ck { background: var(--a-primary); color: #fff; }
+  .step.todo .ck { box-shadow: 0 0 0 1.5px #8a8a8a inset; border: 0; }
+  .step.todo .ck { box-shadow: inset 0 0 0 1.5px #b5b5b5; }
+  .step .t { font-weight: 500; }
+  .step.done .t { color: var(--a-muted); }
+  .step .r { margin-left: auto; color: var(--a-faint); font-size: 12px; }
+  .step.open { background: var(--a-surface-2); align-items: flex-start; padding: 16px 20px 20px; }
+  .step.open .ck { box-shadow: inset 0 0 0 1.5px var(--a-primary); margin-top: 1px; }
+  .open-body { flex: 1; }
+  .open-body .t { font-size: 14px; font-weight: 600; }
+  .open-body p { color: var(--a-muted); margin-top: 4px; max-width: 60ch; }
+  .embed { margin-top: 14px; background: #fff; border-radius: 10px; box-shadow: 0 0 0 1px var(--a-border); padding: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .embed .full { grid-column: 1 / -1; }
+  .embed-foot { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+  .secure { display: flex; align-items: center; gap: 6px; color: var(--a-muted); font-size: 12px; }
+  .stripe { font-weight: 700; color: #635bff; letter-spacing: -0.02em; }
+  .why { display: flex; gap: 8px; margin-top: 12px; color: var(--a-muted); font-size: 12px; }
+
+  .side h3 { font-size: 14px; font-weight: 600; }
+  .mini { padding: 16px; }
+  .thumb { margin-top: 12px; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px var(--a-border); height: 238px; position: relative; }
+  .thumb .store { transform: scale(0.42); transform-origin: top left; width: 238%; height: 238%; }
+  .thumb .store .s-grid { grid-template-columns: repeat(3,1fr); }
+  .golive { margin-top: 14px; }
+  .golive .btn { width: 100%; justify-content: center; height: 38px; font-size: 14px; }
+  .btn[disabled] { background: #e3e3e3; color: #8a8a8a; box-shadow: none; }
+  .missing { margin-top: 10px; font-size: 12px; color: var(--a-muted); display: flex; flex-direction: column; gap: 4px; }
+  .missing span { display: flex; align-items: center; gap: 6px; }
+  .missing i { width: 6px; height: 6px; border-radius: 50%; background: #b98900; }
+  .help { padding: 14px 16px; display: flex; gap: 12px; align-items: center; }
+  .help .face { width: 36px; height: 36px; border-radius: 50%; background: #d9d4ea; display: grid; place-items: center; font-weight: 600; color: #3b2e66; }
+  .help b { display: block; }
+  .help span { color: var(--a-muted); font-size: 12px; }
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="tee" viewBox="0 0 120 120"><path d="M42 14 L24 20 L8 38 L20 50 L30 42 L30 108 L90 108 L90 42 L100 50 L112 38 L96 20 L78 14 C74 22 67 26 60 26 C53 26 46 22 42 14 Z" fill="currentColor"/></symbol>
+  <symbol id="moth" viewBox="0 0 60 40"><g fill="currentColor"><path d="M30 8 C22 -2 4 2 6 16 C7 24 18 24 28 20 Z"/><path d="M30 8 C38 -2 56 2 54 16 C53 24 42 24 32 20 Z"/><path d="M28 21 C20 26 14 36 22 38 C27 39 29 30 29.5 24 Z"/><path d="M32 21 C40 26 46 36 38 38 C33 39 31 30 30.5 24 Z"/><rect x="29" y="6" width="2" height="26" rx="1"/></g></symbol>
+  <symbol id="check" viewBox="0 0 16 16"><path d="M4 8.5 L7 11.2 L12 5.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</defs></svg>
+
+<div class="topbar">
+  <span class="brand">ChopShop</span>
+  <div class="right"><span class="pill" style="background:#ffffff1a;color:#ffffffcc">Inte live än</span><span class="avatar">N</span></div>
+</div>
+
+<div class="shell">
+  <nav>
+    <a class="on"><svg class="i" viewBox="0 0 16 16"><path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z"/></svg>Hem</a>
+    <a><svg class="i" viewBox="0 0 16 16"><path d="M3 4.5h10l-1 8.5H4z M5.5 4.5a2.5 2.5 0 0 1 5 0"/></svg>Ordrar</a>
+    <a><svg class="i" viewBox="0 0 16 16"><path d="M2.5 5.5 8 2.5l5.5 3v5L8 13.5l-5.5-3z M2.5 5.5 8 8.5l5.5-3 M8 8.5v5"/></svg>Produkter</a>
+    <a><svg class="i" viewBox="0 0 16 16"><path d="M3 13c0-3 2.2-4.5 5-4.5s5 1.5 5 4.5 M8 7a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5"/></svg>Kunder</a>
+    <a><svg class="i" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 6.5h11"/></svg>Butiken</a>
+    <a><svg class="i" viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="8.5" rx="1.5"/><path d="M2 7h12 M4.5 10h2"/></svg>Utbetalningar<span class="badge">1</span></a>
+    <a><svg class="i" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/></svg>Inställningar</a>
+  </nav>
+  <main>
+    <div class="wrap">
+      <div class="pagehead"><h1>Hej Nora! Nu bygger vi Nattfjäril.</h1><button class="btn btn-secondary">Visa butiken</button></div>
+
+      <div class="card">
+        <div class="guide-head">
+          <h2>Startguide</h2>
+          <p>Sex steg från tom butik till första beställningen. Du kan göra dem i vilken ordning du vill.</p>
+          <div class="prog"><span>3 av 6 klara</span><div class="bar"><i></i></div></div>
+        </div>
+        <div class="step done"><span class="ck"><svg width="14" height="14"><use href="#check"/></svg></span><span class="t">Namn, logga och färg</span><span class="r">Klart</span></div>
+        <div class="step done"><span class="ck"><svg width="14" height="14"><use href="#check"/></svg></span><span class="t">Välj utseende</span><span class="r">Nord</span></div>
+        <div class="step done"><span class="ck"><svg width="14" height="14"><use href="#check"/></svg></span><span class="t">Företagsuppgifter och villkor</span><span class="r">Klart</span></div>
+        <div class="step open"><span class="ck"></span>
+          <div class="open-body">
+            <span class="t">Aktivera utbetalningar</span>
+            <p>Så att pengarna från varje köp hamnar på ditt konto. Det tar ungefär fem minuter, och du gör det här – utan att lämna sidan.</p>
+            <div class="embed">
+              <div class="field full"><label>Personnummer</label><div class="input focus">19880412-<span class="caret"></span></div></div>
+              <div class="field"><label>Bank</label><div class="input">Swedbank</div></div>
+              <div class="field"><label>Kontonummer</label><div class="input" style="color:#8a8a8a">Clearing + konto</div></div>
+              <div class="embed-foot"><span class="secure"><svg class="i" viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>Hanteras säkert av <span class="stripe">stripe</span></span><button class="btn btn-primary">Fortsätt</button></div>
+            </div>
+            <div class="why"><svg class="i" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.8 M8 5h.01"/></svg>Varför behövs personnummer? Banker kräver att vi vet vem som får utbetalningarna.</div>
+          </div>
+        </div>
+        <div class="step todo"><span class="ck"></span><span class="t">Lägg upp din första produkt</span><span class="r">ca 2 min</span></div>
+        <div class="step todo"><span class="ck"></span><span class="t">Gå live</span><span class="r">När allt ovan är klart</span></div>
+      </div>
+
+      <div class="side" style="display:flex;flex-direction:column;gap:16px">
+        <div class="card mini">
+          <h3>Din butik just nu</h3>
+          <div class="thumb"><div class="store">
+            <div class="s-nav"><span class="s-logo"><svg width="26" height="18" style="color:var(--n-accent)"><use href="#moth"/></svg>Nattfjäril</span><span class="s-cart">Varukorg <b>0</b></span></div>
+            <div class="s-hero"><h2>Motiv för den som vaknar sent.</h2><span class="cta">Se kollektionen</span></div>
+            <div class="s-grid"><div class="s-card ghost"><div class="img"></div></div><div class="s-card ghost"><div class="img"></div></div><div class="s-card ghost"><div class="img"></div></div></div>
+          </div></div>
+          <div class="golive"><button class="btn btn-primary" disabled>Gå live</button>
+            <div class="missing"><span><i></i>Utbetalningar saknas</span><span><i></i>Minst en produkt behövs</span></div>
+          </div>
+        </div>
+        <div class="card help"><span class="face">K</span><div><b>Fastnat? Vi hjälper dig.</b><span>Skriv till oss så hjälper vi dig vidare.</span></div></div>
+      </div>
+    </div>
+  </main>
+</div>
+</body></html>
