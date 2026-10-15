@@ -1,0 +1,90 @@
+@import url('https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Familjen+Grotesk:wght@500;700&family=Instrument+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --a-bg: #f1f1f1;
+  --a-surface: #ffffff;
+  --a-surface-2: #f7f7f7;
+  --a-surface-3: #f1f1f1;
+  --a-border: #e3e3e3;
+  --a-border-soft: #ebebeb;
+  --a-text: #303030;
+  --a-muted: #616161;
+  --a-faint: #8a8a8a;
+  --a-primary: #303030;
+  --a-topbar: #1a1a1a;
+  --a-ok-bg: #e0f0e9; --a-ok-text: #1c5c41; --a-ok-dot: #2a845a;
+  --a-info-bg: #e4ecf6; --a-info-text: #2c4b6e; --a-info-dot: #3f6fb0;
+  --a-caution-bg: #fbeed3; --a-caution-text: #69500e;
+  --a-shadow: 0 1px 0 #0000000D, 0 1px 2px -1px #0000001A;
+  --a-shadow-lift: 0 1px 0 #0000000D, 0 12px 32px -12px #00000033;
+
+  /* NORD storefront (preview only) */
+  --n-canvas: #F3F1EC;
+  --n-ink: #1A1C1E;
+  --n-muted: #71757C;
+  --n-accent: #5B3FA8;
+  --n-accent-soft: color-mix(in srgb, #5B3FA8 9%, #FFFFFF);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1440px; height: 900px; overflow: hidden; }
+body {
+  font-family: 'Figtree', ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px; line-height: 20px; color: var(--a-text);
+  background: var(--a-bg);
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+::selection { background: #30303022; }
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.topbar {
+  height: 56px; background: var(--a-topbar); color: #fff;
+  display: flex; align-items: center; padding: 0 20px; gap: 14px;
+}
+.brand { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+.topbar .sub { color: #ffffff8c; font-size: 13px; }
+.topbar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; color: #ffffffcc; }
+.avatar { width: 28px; height: 28px; border-radius: 6px; background: var(--a-ok-dot); color: #fff; display: grid; place-items: center; font-weight: 600; font-size: 12px; }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 6px; font: 600 13px/20px 'Figtree', sans-serif; border: 0; cursor: pointer; }
+.btn-primary { background: var(--a-primary); color: #fff; box-shadow: inset 0 -1px 0 #00000066, 0 1px 0 #ffffff22 inset; }
+.btn-secondary { background: var(--a-surface); color: var(--a-text); box-shadow: 0 0 0 1px var(--a-border) inset, 0 1px 0 #0000000D; }
+.btn-plain { background: transparent; color: var(--a-muted); padding: 0 8px; }
+.btn-lg { height: 40px; padding: 0 18px; font-size: 14px; border-radius: 8px; }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-weight: 500; }
+.field .help { font-size: 12px; color: var(--a-muted); }
+.input { height: 36px; border-radius: 6px; border: 1px solid #8a8a8a66; background: #fff; padding: 0 12px; font: 400 14px 'Figtree', sans-serif; color: var(--a-text); display: flex; align-items: center; }
+.input.focus { border-color: var(--a-primary); box-shadow: 0 0 0 3px #30303018; }
+.caret { display: inline-block; width: 1px; height: 17px; background: var(--a-text); margin-left: 1px; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; }
+.pill-ok { background: var(--a-ok-bg); color: var(--a-ok-text); } .pill-ok .dot { background: var(--a-ok-dot); }
+.pill-info { background: var(--a-info-bg); color: var(--a-info-text); } .pill-info .dot { background: var(--a-info-dot); }
+.pill-neutral { background: #e3e3e3; color: #5a5a5a; } .pill-neutral .dot { background: #8a8a8a; }
+
+/* ---------- storefront preview (NORD) ---------- */
+.store { background: var(--n-canvas); font-family: 'Instrument Sans', sans-serif; color: var(--n-ink); }
+.store .s-nav { display: flex; align-items: center; padding: 16px 20px; gap: 16px; }
+.store .s-logo { font: 700 19px 'Familjen Grotesk', sans-serif; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
+.store .s-links { display: flex; gap: 14px; color: var(--n-muted); font-size: 13px; }
+.store .s-cart { margin-left: auto; background: var(--n-ink); color: #fff; border-radius: 999px; height: 32px; padding: 0 14px; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
+.store .s-cart b { background: var(--n-accent); border-radius: 999px; min-width: 18px; height: 18px; display: grid; place-items: center; font-size: 11px; }
+.store .s-hero { margin: 0 16px; border-radius: 20px; padding: 28px; color: #fff; position: relative; overflow: hidden;
+  background: radial-gradient(120% 90% at 85% 10%, color-mix(in srgb, var(--n-accent) 75%, #fff 0%) 0%, transparent 60%), #1d1730; }
+.store .s-hero h2 { font: 700 34px/1.04 'Familjen Grotesk', sans-serif; letter-spacing: -0.022em; max-width: 12ch; }
+.store .s-hero p { color: #ffffffbf; font-size: 14px; margin-top: 10px; max-width: 34ch; }
+.store .s-hero .cta { margin-top: 18px; display: inline-flex; background: #fff; color: var(--n-ink); border-radius: 999px; height: 36px; padding: 0 16px; align-items: center; font-weight: 600; font-size: 13px; }
+.store .s-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 14px 16px; }
+.store .s-card { background: #fff; border-radius: 18px; overflow: hidden; box-shadow: 0 1px 2px #1A1C1E08, 0 8px 24px -12px #1A1C1E1F; }
+.store .s-card .img { aspect-ratio: 4/3.6; background: #ECE9E2; display: grid; place-items: center; }
+.store .s-card .body { padding: 10px 12px 12px; }
+.store .s-card .t { font: 700 14px 'Familjen Grotesk', sans-serif; letter-spacing: -0.01em; }
+.store .s-card .row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+.store .s-card .price { font: 700 14px 'Familjen Grotesk', sans-serif; }
+.store .s-card .add { background: var(--n-accent); color: #fff; border-radius: 999px; font-size: 11.5px; font-weight: 600; height: 24px; padding: 0 10px; display: flex; align-items: center; }
+.store .s-card.ghost .img { background: repeating-linear-gradient(135deg, #ECE9E2 0 10px, #E7E3DB 10px 20px); }
+.store .s-card.ghost .t, .store .s-card.ghost .price { color: #A8ABB0; }

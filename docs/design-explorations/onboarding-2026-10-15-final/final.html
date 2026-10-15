@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Kom igång – decided flow 2026-10-15</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  /* ---------- shared bits ---------- */
+  .card { background: var(--a-surface); border-radius: 12px; box-shadow: var(--a-shadow), 0 0 0 1px #0000000a; overflow: hidden; }
+  .drop { border-radius: 10px; background: var(--a-surface-2); box-shadow: 0 0 0 1px var(--a-border) inset; padding: 14px; display: flex; gap: 14px; align-items: center; }
+  .drop .box { width: 64px; height: 64px; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px var(--a-border) inset; display: grid; place-items: center; flex: none; }
+  .drop b { display: block; font-size: 13.5px; }
+  .drop span.m { color: var(--a-muted); font-size: 12px; }
+  .drop .act { margin-left: auto; }
+  .colors { display: flex; gap: 9px; align-items: center; }
+  .sw { width: 28px; height: 28px; border-radius: 50%; box-shadow: 0 0 0 1px #0000001f inset; }
+  .sw.sel { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--a-primary); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .stack { display: flex; flex-direction: column; gap: 16px; }
+  .seg { display: inline-flex; background: #e6e6e6; border-radius: 8px; padding: 2px; }
+  .seg span { height: 28px; padding: 0 12px; display: flex; align-items: center; border-radius: 6px; color: var(--a-muted); font-weight: 500; }
+  .seg span.on { background: #fff; color: var(--a-text); box-shadow: var(--a-shadow); }
+  .check { display: flex; gap: 10px; align-items: flex-start; }
+  .check .bx { width: 18px; height: 18px; border-radius: 5px; background: var(--a-primary); color: #fff; display: grid; place-items: center; flex: none; margin-top: 1px; }
+  .check a { color: var(--a-text); text-decoration: underline; text-underline-offset: 2px; }
+  .input .ok { margin-left: auto; }
+  .input .pre { color: var(--a-faint); }
+  .muted { color: var(--a-muted); }
+  .tpl { border-radius: 10px; padding: 8px; box-shadow: 0 0 0 1px var(--a-border) inset; background: #fff; }
+  .tpl.sel { box-shadow: 0 0 0 2px var(--a-primary) inset; }
+  .tpl .ph { height: 96px; border-radius: 6px; overflow: hidden; position: relative; }
+  .tpl b { display: block; margin-top: 8px; font-size: 13px; }
+  .tpl span { color: var(--a-muted); font-size: 12px; }
+  .stripe { font-weight: 700; color: #635bff; letter-spacing: -0.02em; }
+  .secure { display: flex; align-items: center; gap: 6px; color: var(--a-muted); font-size: 12px; }
+  .info { display: flex; gap: 10px; background: var(--a-info-bg); color: var(--a-info-text); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 18px; }
+  .garments { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .g { border-radius: 10px; padding: 8px; box-shadow: 0 0 0 1px var(--a-border) inset; background: #fff; }
+  .g.sel { box-shadow: 0 0 0 2px var(--a-primary) inset; }
+  .g .ph { height: 78px; border-radius: 6px; background: var(--a-surface-2); display: grid; place-items: center; }
+  .g b { display: block; margin-top: 6px; font-size: 13px; }
+  .g span { color: var(--a-muted); font-size: 12px; }
+  .money { font-size: 12px; color: var(--a-muted); }
+  .money b { color: var(--a-ok-text); font-weight: 600; }
+
+  /* ---------- wizard (A) ---------- */
+  .stage { display: grid; grid-template-columns: 560px 1fr; height: calc(900px - 56px); }
+  .panel { background: var(--a-surface); border-right: 1px solid var(--a-border); display: flex; flex-direction: column; }
+  .bars { display: flex; gap: 6px; padding: 18px 28px 0; }
+  .bars i { flex: 1; height: 4px; border-radius: 4px; background: var(--a-border); }
+  .bars i.done { background: var(--a-ok-dot); } .bars i.now { background: var(--a-primary); }
+  .stepmeta { display: flex; justify-content: space-between; padding: 10px 28px 0; color: var(--a-muted); font-size: 12px; }
+  .content { padding: 28px 28px 0; flex: 1; }
+  .content h1 { font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.02em; }
+  .content .lede { color: var(--a-muted); font-size: 14px; line-height: 22px; margin: 8px 0 24px; max-width: 46ch; }
+  .foot { display: flex; align-items: center; justify-content: space-between; padding: 16px 28px; border-top: 1px solid var(--a-border-soft); }
+  .rcol { position: relative; padding: 28px 40px; display: flex; flex-direction: column; min-height: 0; }
+  .rhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; color: var(--a-muted); height: 30px; }
+  .rhead .live { display: flex; align-items: center; gap: 8px; }
+  .rhead .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--a-ok-dot); box-shadow: 0 0 0 4px #2a845a22; }
+  .browser { flex: 1; min-height: 0; border-radius: 12px; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px #00000014, 0 24px 60px -24px #00000040; display: flex; flex-direction: column; }
+  .chrome { height: 36px; flex: none; background: #f7f7f7; border-bottom: 1px solid var(--a-border-soft); display: flex; align-items: center; gap: 12px; padding: 0 14px; }
+  .dots { display: flex; gap: 6px; } .dots i { width: 10px; height: 10px; border-radius: 50%; background: #dcdcdc; }
+  .url { flex: 1; max-width: 360px; margin: 0 auto; height: 22px; border-radius: 6px; background: #fff; box-shadow: 0 0 0 1px var(--a-border) inset; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--a-muted); }
+  .browser .store { flex: 1; overflow: hidden; }
+  .s-card.new { box-shadow: 0 0 0 2px var(--n-accent), 0 18px 40px -16px color-mix(in srgb, var(--n-accent) 55%, transparent); position: relative; }
+  .s-card .flag { position: absolute; top: 8px; left: 8px; background: var(--n-ink); color: #fff; font-size: 10.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; }
+  .s-hero.plain { background: radial-gradient(120% 90% at 85% 10%, color-mix(in srgb, var(--n-accent) 70%, #fff 0%) 0%, transparent 60%), color-mix(in srgb, var(--n-accent) 25%, #15121f); }
+  .s-hero h2.hint, .s-hero p.hint { opacity: .55; }
+  .store.nologo .s-logo svg { display: none; }
+
+  /* legal doc preview */
+  .doc { flex: 1; background: #fff; border-radius: 12px; box-shadow: 0 0 0 1px #00000014, 0 24px 60px -24px #00000040; padding: 26px 34px; overflow: hidden; font-family: 'Instrument Sans', sans-serif; color: #1A1C1E; }
+  .doc .tabs { display: flex; gap: 6px; margin-bottom: 22px; }
+  .doc .tabs span { height: 28px; padding: 0 12px; border-radius: 999px; display: flex; align-items: center; font-size: 12.5px; color: #71757C; background: #F3F1EC; }
+  .doc .tabs span.on { background: #1A1C1E; color: #fff; }
+  .doc h2 { font: 700 26px 'Familjen Grotesk', sans-serif; letter-spacing: -0.02em; }
+  .doc .upd { color: #71757C; font-size: 12.5px; margin-top: 4px; }
+  .doc h4 { font: 700 15px 'Familjen Grotesk', sans-serif; margin: 20px 0 6px; }
+  .doc p { font-size: 13.5px; line-height: 21px; color: #3b3e42; max-width: 66ch; }
+  .doc mark { background: #fbeed3; color: #1A1C1E; border-radius: 4px; padding: 1px 4px; }
+
+  /* money explainer */
+  .moneycard { background: #fff; border-radius: 12px; box-shadow: 0 0 0 1px #00000014, 0 24px 60px -24px #00000040; padding: 28px 30px; }
+  .moneycard h3 { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .moneycard .sub { color: var(--a-muted); margin-top: 4px; }
+  .mline { display: flex; justify-content: space-between; align-items: baseline; padding: 14px 0; border-bottom: 1px solid var(--a-border-soft); font-size: 15px; }
+  .mline span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .mline.total { border-bottom: 0; font-size: 18px; }
+  .mline.total span:last-child { color: var(--a-ok-text); font-size: 22px; font-weight: 700; }
+  .mprod { display: flex; gap: 14px; align-items: center; padding: 18px 0 8px; }
+  .mprod .th { width: 56px; height: 56px; border-radius: 8px; background: #ECE9E2; display: grid; place-items: center; }
+  .flowrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 18px; }
+  .flowrow div { background: var(--a-surface-2); border-radius: 10px; padding: 14px; }
+  .flowrow b { display: block; font-size: 13px; margin-top: 8px; }
+  .flowrow span { color: var(--a-muted); font-size: 12px; }
+
+  /* summary list (A6) */
+  .sum { display: flex; flex-direction: column; border-radius: 10px; box-shadow: 0 0 0 1px var(--a-border) inset; }
+  .sum div { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--a-border-soft); }
+  .sum div:first-child { border-top: 0; }
+  .sum .ck { width: 20px; height: 20px; border-radius: 50%; background: var(--a-ok-dot); color: #fff; display: grid; place-items: center; flex: none; }
+  .sum .v { margin-left: auto; color: var(--a-muted); }
+  .sum a { color: var(--a-muted); text-decoration: underline; text-underline-offset: 2px; margin-left: 10px; font-size: 12px; }
+
+  /* ---------- guide (B) ---------- */
+  .shell { display: grid; grid-template-columns: 232px 1fr; height: calc(900px - 56px); }
+  nav { padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+  nav a { height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border-radius: 6px; color: var(--a-text); font-weight: 500; }
+  nav a.on { background: #00000014; }
+  nav a .badge { margin-left: auto; background: #e3e3e3; border-radius: 6px; font-size: 11px; padding: 0 6px; color: #5a5a5a; }
+  main { overflow: hidden; padding: 20px 28px; }
+  .wrap { max-width: 1120px; display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 20px; align-items: start; }
+  .pagehead { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; }
+  .pagehead h1 { font-size: 20px; line-height: 28px; font-weight: 600; }
+  .guide-head { padding: 18px 20px 16px; }
+  .guide-head h2 { font-size: 16px; font-weight: 600; }
+  .guide-head p { color: var(--a-muted); margin-top: 2px; }
+  .prog { display: flex; align-items: center; gap: 12px; margin-top: 14px; color: var(--a-muted); font-size: 12px; }
+  .bar { flex: 1; height: 6px; border-radius: 6px; background: var(--a-surface-3); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--a-primary); border-radius: 6px; }
+  .step { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-top: 1px solid var(--a-border-soft); }
+  .step .ck { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; box-shadow: inset 0 0 0 1.5px #b5b5b5; }
+  .step.done .ck { background: var(--a-primary); color: #fff; box-shadow: none; }
+  .step .t { font-weight: 500; }
+  .step.done .t { color: var(--a-muted); }
+  .step .r { margin-left: auto; color: var(--a-faint); font-size: 12px; }
+  .step.open { background: var(--a-surface-2); align-items: flex-start; padding: 16px 20px 18px; }
+  .step.open .ck { box-shadow: inset 0 0 0 1.5px var(--a-primary); margin-top: 1px; }
+  .ob { flex: 1; min-width: 0; }
+  .ob > .t { font-size: 14px; font-weight: 600; }
+  .ob > p { color: var(--a-muted); margin-top: 3px; max-width: 64ch; }
+  .ob .embed { margin-top: 12px; background: #fff; border-radius: 10px; box-shadow: 0 0 0 1px var(--a-border); padding: 16px; }
+  .ob .efoot { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
+  .mini { padding: 16px; }
+  .mini h3 { font-size: 14px; font-weight: 600; }
+  .thumb { margin-top: 12px; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px var(--a-border); height: 230px; position: relative; }
+  .thumb .store { transform: scale(0.4); transform-origin: top left; width: 250%; height: 250%; }
+  .golive { margin-top: 14px; }
+  .golive .btn { width: 100%; justify-content: center; height: 38px; font-size: 14px; }
+  .btn[disabled] { background: #e3e3e3; color: #8a8a8a; box-shadow: none; }
+  .missing { margin-top: 10px; font-size: 12px; color: var(--a-muted); display: flex; flex-direction: column; gap: 4px; }
+  .missing span { display: flex; align-items: center; gap: 6px; }
+  .missing i { width: 6px; height: 6px; border-radius: 50%; background: #b98900; }
+  .missing.ok i { background: var(--a-ok-dot); }
+  .helpc { padding: 14px 16px; display: flex; gap: 12px; align-items: center; }
+  .helpc .face { width: 36px; height: 36px; border-radius: 50%; background: #d9d4ea; display: grid; place-items: center; font-weight: 600; color: #3b2e66; flex: none; }
+  .helpc b { display: block; }
+  .helpc span { color: var(--a-muted); font-size: 12px; }
+  .ready { display: flex; gap: 16px; align-items: center; margin-top: 12px; background: #fff; border-radius: 10px; box-shadow: 0 0 0 1px var(--a-border); padding: 16px; }
+
+  /* ---------- start (S) ---------- */
+  .mailwin { margin: 40px auto 0; width: 1080px; height: 780px; background: #fff; border-radius: 12px; box-shadow: 0 0 0 1px #00000014, 0 30px 70px -30px #00000055; display: grid; grid-template-columns: 300px 1fr; overflow: hidden; }
+  .inbox { background: #f7f7f7; border-right: 1px solid var(--a-border-soft); }
+  .inbox .row { padding: 14px 16px; border-bottom: 1px solid var(--a-border-soft); }
+  .inbox .row.on { background: #e8eef8; }
+  .inbox .row b { display: block; }
+  .inbox .row span { color: var(--a-muted); font-size: 12px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mail { padding: 26px 34px; overflow: hidden; }
+  .mail .hdr { border-bottom: 1px solid var(--a-border-soft); padding-bottom: 16px; }
+  .mail .hdr h2 { font-size: 20px; font-weight: 600; }
+  .mail .hdr span { color: var(--a-muted); }
+  .mbody { max-width: 520px; margin: 30px auto 0; font-size: 15px; line-height: 24px; color: #303030; }
+  .mbody .logo { font-weight: 700; font-size: 18px; margin-bottom: 26px; }
+  .mbody h3 { font-size: 24px; line-height: 30px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; }
+  .mbody p { margin-bottom: 14px; }
+  .mbody .cta { display: inline-flex; height: 44px; padding: 0 22px; background: #303030; color: #fff; border-radius: 8px; align-items: center; font-weight: 600; margin: 8px 0 22px; }
+  .mbody .shopchip { display: flex; align-items: center; gap: 12px; background: #F3F1EC; border-radius: 10px; padding: 14px 16px; margin: 18px 0; }
+  .mbody .small { color: var(--a-muted); font-size: 13px; }
+  .auth { height: calc(900px - 56px); display: grid; place-items: center; }
+  .auth .card { width: 440px; padding: 32px; }
+  .auth h1 { font-size: 24px; line-height: 30px; font-weight: 700; letter-spacing: -0.02em; }
+  .auth .lede { color: var(--a-muted); font-size: 14px; margin: 6px 0 24px; }
+  .strength { display: flex; gap: 4px; margin-top: 8px; } .strength i { flex: 1; height: 4px; border-radius: 4px; background: var(--a-ok-dot); } .strength i.off { background: var(--a-border); }
+  .auth .next { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--a-border-soft); color: var(--a-muted); font-size: 12.5px; }
+  .auth .next ol { margin: 8px 0 0 18px; line-height: 22px; color: var(--a-text); }
+</style>
+<style>
+  /* ---- additions for the decided flow (2026-10-15) ---- */
+  .ro { background: var(--a-surface-2); color: var(--a-text); border-color: transparent; box-shadow: 0 0 0 1px var(--a-border) inset; }
+  .ro .tag { margin-left: auto; color: var(--a-faint); font-size: 12px; }
+  .gates { display: flex; gap: 10px; background: var(--a-surface-2); border-radius: 10px; padding: 12px 14px; font-size: 12.5px; line-height: 18px; color: var(--a-muted); box-shadow: 0 0 0 1px var(--a-border) inset; }
+  .gates b { color: var(--a-text); font-weight: 600; }
+  .types { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .type { border-radius: 10px; padding: 14px; box-shadow: 0 0 0 1px var(--a-border) inset; background: #fff; }
+  .type.sel { box-shadow: 0 0 0 2px var(--a-primary) inset; }
+  .type.off { background: var(--a-surface-2); color: var(--a-faint); box-shadow: 0 0 0 1px var(--a-border-soft) inset; }
+  .type b { display: block; font-size: 13.5px; }
+  .type span { display: block; color: var(--a-muted); font-size: 12px; margin-top: 2px; }
+  .type.off span, .type.off b { color: var(--a-faint); }
+  .wait { display: flex; gap: 10px; align-items: flex-start; background: var(--a-info-bg); color: var(--a-info-text); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 18px; }
+  .wait b { font-weight: 600; }
+  .status { border-radius: 10px; padding: 16px; box-shadow: 0 0 0 1px var(--a-border) inset; display: flex; gap: 14px; align-items: flex-start; background: #fff; }
+  .status .ic { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; flex: none; }
+  .status b { display: block; font-size: 14px; }
+  .status p { color: var(--a-muted); margin-top: 2px; max-width: 48ch; }
+  .status .act { margin-top: 12px; display: flex; gap: 8px; }
+  .asks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-top: 4px; }
+  .asks span { display: flex; gap: 8px; align-items: center; color: var(--a-muted); font-size: 12.5px; }
+  .asks span svg { color: var(--a-faint); }
+  .owners { display: flex; flex-direction: column; border-radius: 10px; box-shadow: 0 0 0 1px var(--a-border) inset; }
+  .owners > div { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-top: 1px solid var(--a-border-soft); }
+  .owners > div:first-child { border-top: 0; }
+  .owners .who { margin-left: auto; }
+  .owners .ck { width: 20px; height: 20px; border-radius: 50%; background: var(--a-ok-dot); color: #fff; display: grid; place-items: center; flex: none; }
+  .owners .v { color: var(--a-muted); }
+  .owners a { color: var(--a-muted); text-decoration: underline; text-underline-offset: 2px; font-size: 12px; margin-left: 2px; }
+  .ck.wait { background: var(--a-caution-bg); color: var(--a-caution-text); box-shadow: none; padding: 0; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; }
+  .ck.me { background: #fff; box-shadow: inset 0 0 0 1.5px var(--a-primary); width: 20px; height: 20px; border-radius: 50%; }
+  .pill-caution { background: var(--a-caution-bg); color: var(--a-caution-text); } .pill-caution .dot { background: #c99a2e; }
+  .mug { width: 150px; height: 150px; display: grid; place-items: center; }
+  .s-card .flagwait { position: absolute; left: 8px; right: 8px; bottom: 76px; background: #1A1C1Ecc; color: #fff; font-size: 10.5px; font-weight: 500; padding: 4px 8px; border-radius: 6px; text-align: center; }
+  .s-card.held { box-shadow: 0 0 0 2px var(--n-accent), 0 18px 40px -16px color-mix(in srgb, var(--n-accent) 55%, transparent); position: relative; }
+  /* the open screen (dark, from c-live) */
+  .open { background: #161616; color: #fff; height: 844px; display: grid; grid-template-columns: 1fr 470px; gap: 56px; padding: 30px 72px 0; align-items: start; }
+  .open .topbar { background: transparent; }
+  .open .browser3 { border-radius: 14px; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px #ffffff14, 0 40px 90px -30px #000000cc; transform: perspective(1800px) rotateY(6deg) rotateX(2deg); transform-origin: left center; }
+  .open .store { height: 600px; }
+  .open .s-hero { padding: 22px 28px; }
+  .open .s-hero h2 { font-size: 30px; }
+  .open .s-card .img { aspect-ratio: 4/3; }
+  .open .statusline { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: 999px; background: #2a845a26; color: #8fdcb4; font-weight: 600; font-size: 12.5px; }
+  .open .statusline i { width: 7px; height: 7px; border-radius: 50%; background: #3fcf8e; box-shadow: 0 0 0 4px #3fcf8e33; }
+  .open h1 { font-size: 44px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 700; margin-top: 18px; text-wrap: balance; }
+  .open .lede { color: #ffffffa6; font-size: 15px; line-height: 23px; margin-top: 14px; max-width: 40ch; }
+  .open .linkbox { margin-top: 28px; display: flex; align-items: center; gap: 10px; background: #ffffff0d; box-shadow: 0 0 0 1px #ffffff1a inset; border-radius: 10px; padding: 6px 6px 6px 14px; }
+  .open .linkbox span { flex: 1; font-size: 15px; font-weight: 500; }
+  .open .btn-light { background: #fff; color: #1a1a1a; }
+  .open .btn-ghost { background: #ffffff12; color: #fff; box-shadow: 0 0 0 1px #ffffff1a inset; }
+  .open .acts { display: flex; gap: 8px; margin-top: 14px; }
+  .open .next { margin-top: 32px; border-top: 1px solid #ffffff1a; padding-top: 18px; }
+  .open .next h3 { font-size: 13px; color: #ffffffa6; font-weight: 500; }
+  .open .next ul { list-style: none; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .open .next li { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+  .open .next li svg { color: #ffffff73; }
+  .open .right { padding-top: 34px; }
+  .open .tick { display: inline-flex; align-items: center; gap: 6px; color: #8fdcb4; font-size: 12.5px; margin-top: 8px; }
+  /* platform console (dark) */
+  .console { background: #0f1115; color: #e6e8ec; height: 900px; display: grid; place-items: center; }
+  .modal { width: 640px; background: #171a21; border-radius: 14px; box-shadow: 0 0 0 1px #ffffff14, 0 40px 90px -30px #000; padding: 24px 26px; }
+  .modal h2 { font-size: 18px; font-weight: 600; }
+  .modal .f { margin-top: 16px; }
+  .modal label { display: block; font-size: 12px; color: #9aa0ab; margin-bottom: 6px; }
+  .modal .in { height: 36px; border-radius: 8px; background: #0f1115; box-shadow: 0 0 0 1px #ffffff1f inset; display: flex; align-items: center; padding: 0 12px; font-size: 14px; color: #e6e8ec; }
+  .modal .in .pre { color: #6b7280; }
+  .modal .types { margin-top: 2px; }
+  .modal .type { background: #0f1115; box-shadow: 0 0 0 1px #ffffff1f inset; color: #e6e8ec; }
+  .modal .type.sel { box-shadow: 0 0 0 2px #8fb8ff inset; }
+  .modal .type.off { background: #12141a; box-shadow: 0 0 0 1px #ffffff10 inset; }
+  .modal .type b { color: inherit; } .modal .type span { color: #9aa0ab; } .modal .type.off b, .modal .type.off span { color: #5c6370; }
+  .modal .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; padding: 0; border: 0; }
+  .modal .btn-secondary { background: transparent; color: #e6e8ec; box-shadow: 0 0 0 1px #ffffff1f inset; }
+  .modal .btn-primary { background: #8fb8ff; color: #0f1115; box-shadow: none; }
+  .modal .hint { font-size: 12px; color: #9aa0ab; margin-top: 6px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="tee" viewBox="0 0 120 120"><path d="M42 14 L24 20 L8 38 L20 50 L30 42 L30 108 L90 108 L90 42 L100 50 L112 38 L96 20 L78 14 C74 22 67 26 60 26 C53 26 46 22 42 14 Z" fill="currentColor"/></symbol>
+  <symbol id="moth" viewBox="0 0 60 40"><g fill="currentColor"><path d="M30 8 C22 -2 4 2 6 16 C7 24 18 24 28 20 Z"/><path d="M30 8 C38 -2 56 2 54 16 C53 24 42 24 32 20 Z"/><path d="M28 21 C20 26 14 36 22 38 C27 39 29 30 29.5 24 Z"/><path d="M32 21 C40 26 46 36 38 38 C33 39 31 30 30.5 24 Z"/><rect x="29" y="6" width="2" height="26" rx="1"/></g></symbol>
+  <symbol id="check" viewBox="0 0 16 16"><path d="M4 8.5 L7 11.2 L12 5.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</defs></svg>
+<div id="root"></div>
+<script>
+const P = 'Nattfjäril';
+const ACC = '#5B3FA8';
+const STEPS = ['Din butik','Välj utseende','Din första produkt','Uppgifter och villkor','Ta betalt med Stripe','Begär publicering'];
+const TIMES = ['ca 1 min','ca 2 min','ca 2 min','ca 3 min','ca 5 min',''];
+const ic = {
+  check: '<svg width="14" height="14"><use href="#check"/></svg>',
+  lock: '<svg class="i" viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>',
+  info: '<svg class="i" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.8 M8 5h.01"/></svg>',
+  clock: '<svg class="i" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>',
+  ext: '<svg class="i" viewBox="0 0 16 16"><path d="M9 3h4v4 M13 3 7 9 M11 9.5V13H3V5h3.5"/></svg>',
+  id: '<svg class="i" viewBox="0 0 16 16"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><circle cx="5.8" cy="7.5" r="1.4"/><path d="M8.8 6.5h3 M8.8 9h3 M4 11c.4-1 1-1.5 1.8-1.5S7.2 10 7.6 11"/></svg>',
+  bank: '<svg class="i" viewBox="0 0 16 16"><path d="M2 6.5 8 3l6 3.5 M3 6.5v5 M6.5 6.5v5 M9.5 6.5v5 M13 6.5v5 M2 13h12"/></svg>',
+  phone: '<svg class="i" viewBox="0 0 16 16"><rect x="4.5" y="2" width="7" height="12" rx="1.5"/><path d="M7 12h2"/></svg>',
+  mail: '<svg class="i" viewBox="0 0 16 16"><path d="M3 4h10v8H3z M3 4l5 4 5-4"/></svg>',
+  copy: '<svg class="i" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>',
+  plus: '<svg class="i" viewBox="0 0 16 16"><path d="M8 3v10 M3 8h10"/></svg>',
+};
+const caret = '<span class="caret"></span>';
+const moth = (w, h, c) => `<svg width="${w}" height="${h}" style="color:${c}"><use href="#moth"/></svg>`;
+const teeImg = (size, col, mc) => `<svg width="${size}" height="${size}" viewBox="0 0 120 120" style="color:${col};filter:drop-shadow(0 2px 3px #0002)"><use href="#tee"/><svg x="44" y="42" width="32" height="22" viewBox="0 0 60 40" style="color:${mc}"><use href="#moth"/></svg></svg>`;
+const mugImg = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 120 120" style="filter:drop-shadow(0 3px 4px #0003)"><defs><linearGradient id="mg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#3b2a63"/><stop offset=".55" stop-color="#3b2a63"/><stop offset=".56" stop-color="#e9e3d6"/><stop offset="1" stop-color="#d9d2c3"/></linearGradient></defs><path d="M30 34h52v54a12 12 0 0 1-12 12H42a12 12 0 0 1-12-12z" fill="url(#mg)"/><path d="M82 44h8a10 10 0 0 1 0 28h-8" fill="none" stroke="#3b2a63" stroke-width="7"/><ellipse cx="56" cy="34" rx="26" ry="6" fill="#4a3879"/></svg>`;
+const TEE = { t: 'Nattfjäril – t-shirt', p: '349 kr', col: '#f4f2ee', mc: '#2a2140' };
+const MUG = { t: 'Handgjord keramikmugg', p: '249 kr', mug: true };
+
+function store(o = {}) {
+  const name = o.name ?? P, logo = o.logo ?? true;
+  const links = o.links ?? ['Kläder', 'Om mig'];
+  const hero = o.hero ?? { h: 'Motiv för den som vaknar sent.', p: 'Illustrationer från natten, tryckta på riktiga plagg när du beställer.' };
+  const prods = o.prods ?? [];
+  const cards = [];
+  prods.forEach(x => cards.push(`<div class="s-card ${x.isNew ? 'new' : ''} ${x.held ? 'held' : ''}">${x.isNew ? '<span class="flag">Ny</span>' : ''}<div class="img">${x.mug ? mugImg(o.teeSize ?? 140) : teeImg(o.teeSize ?? 140, x.col, x.mc)}</div>${x.held ? '<span class="flagwait">Förhandsvisning · inväntar granskning</span>' : ''}<div class="body"><div class="t">${x.t}</div><div class="row"><span class="price">${x.p}</span><span class="add">Lägg till</span></div></div></div>`));
+  while (cards.length < 3) cards.push(`<div class="s-card ghost"><div class="img"></div><div class="body"><div class="t">Din produkt</div><div class="row"><span class="price">— kr</span></div></div></div>`);
+  return `<div class="store ${logo ? '' : 'nologo'}" style="--n-accent:${o.acc ?? ACC}">
+    <div class="s-nav"><span class="s-logo">${moth(26, 18, 'var(--n-accent)')}${name}</span><span class="s-links">${links.map(l => `<span>${l}</span>`).join('')}</span><span class="s-cart">Varukorg <b>0</b></span></div>
+    <div class="s-hero ${o.plain ? 'plain' : ''}"><h2 class="${hero.hint ? 'hint' : ''}">${hero.h}</h2><p class="${hero.hint ? 'hint' : ''}">${hero.p}</p><span class="cta">Se kollektionen</span></div>
+    <div class="s-grid">${cards.join('')}</div></div>`;
+}
+const browser = (inner) => `<div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">chopshop.se/nattfjaril</div><div style="width:46px"></div></div>${inner}</div>`;
+const topbar = (sub, right) => `<div class="topbar"><span class="brand">ChopShop</span>${sub ? `<span class="sub">${sub}</span>` : ''}<div class="right">${right ?? '<span class="avatar">N</span>'}</div></div>`;
+
+const F = {
+  name: `<div class="field"><label>Butikens namn</label><div class="input focus">Nattfjäril${caret}</div></div>
+    <div class="grid2"><div class="field"><label>Butikstyp</label><div class="input ro">Print on demand</div><span class="help">Bestämd vid inbjudan. Fel? Hör av dig så ändrar vi.</span></div>
+    <div class="field"><label>Webbadress</label><div class="input ro"><span class="pre">chopshop.se/</span>nattfjaril</div><span class="help">Egen domän kan kopplas senare.</span></div></div>`,
+  logo: `<div class="field"><label>Logga</label><div class="drop"><div class="box">${moth(44, 30, '#2a2140')}</div><div><b>nattfjaril-logga.svg</b><span class="m">Visas i butikens meny och på kvitton</span></div><button class="btn btn-secondary act">Byt</button></div></div>`,
+  colors: `<div class="field"><label>Färg</label><div class="colors"><i class="sw sel" style="background:${ACC}"></i><i class="sw" style="background:#2a2140"></i><i class="sw" style="background:#0E5E63"></i><i class="sw" style="background:#B0492B"></i><i class="sw" style="background:#1A1C1E"></i><span class="help" style="margin-left:6px">Förslag från din logga</span></div></div>`,
+  templates: `<div class="field"><label>Mall</label><div class="grid2" style="grid-template-columns:1fr 1fr 1fr">
+      <div class="tpl sel"><div class="ph" style="background:#F3F1EC"><div style="position:absolute;inset:10px 10px auto 10px;height:40px;border-radius:6px;background:#2a2140"></div><div style="position:absolute;left:10px;right:10px;bottom:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px"><i style="height:28px;border-radius:4px;background:#fff"></i><i style="height:28px;border-radius:4px;background:#fff"></i><i style="height:28px;border-radius:4px;background:#fff"></i></div></div><b>Nord</b><span>Lugn och luftig</span></div>
+      <div class="tpl"><div class="ph" style="background:#111"><div style="position:absolute;inset:10px 10px auto 10px;height:40px;border-radius:2px;background:linear-gradient(90deg,#e8ff3a 0 30%,#222 30%)"></div><div style="position:absolute;left:10px;right:10px;bottom:10px;display:grid;grid-template-columns:1fr 1fr;gap:5px"><i style="height:28px;background:#2a2a2a"></i><i style="height:28px;background:#2a2a2a"></i></div></div><b>Sport</b><span>Kraftig och snabb</span></div>
+      <div class="tpl" style="display:grid;place-items:center;background:var(--a-surface-2);box-shadow:none"><span>Fler mallar<br>kommer</span></div>
+    </div></div>`,
+  heroText: `<div class="field"><label>Rubrik</label><div class="input">Motiv för den som vaknar sent.</div></div>
+    <div class="field"><label>En rad om dig</label><div class="input focus" style="font-size:13.5px">Illustrationer från natten, tryckta på riktiga plagg när du beställer.${caret}</div></div>`,
+  company: `<div class="field"><label>Jag säljer som</label><div class="seg"><span class="on">Enskild firma</span><span>Aktiebolag</span></div></div>
+    <div class="grid2"><div class="field"><label>Namn</label><div class="input">Nora Lindqvist</div></div><div class="field"><label>Organisationsnummer</label><div class="input">880412-••••</div><span class="help">För enskild firma är det ditt personnummer. Lagen kräver att det står i köpvillkoren.</span></div></div>
+    <div class="grid2"><div class="field"><label>Adress</label><div class="input">Nattviolsgatan 4</div></div><div class="field"><label>Postnummer och ort</label><div class="input">852 34 Sundsvall</div></div></div>
+    <div class="grid2"><div class="field"><label>Momsregistrerad</label><div class="seg"><span class="on">Nej</span><span>Ja</span></div></div><div class="field"><label>Returadress</label><div class="seg"><span class="on">Samma som ovan</span><span>Annan</span></div></div></div>
+    <div class="field"><label>E-post för kundfrågor</label><div class="input ro">hej@nattfjaril.se<span class="tag">Läggs in av ChopShop</span></div><span class="help">Står i dina köpvillkor och i kundernas orderbekräftelse.</span></div>`,
+  terms: `<div class="check"><span class="bx">${ic.check}</span><span>Jag godkänner <a>ChopShops villkor för säljare</a> och <a>personuppgiftsbiträdesavtalet</a>.</span></div>`,
+  motif: `<div class="drop"><div class="box">${moth(46, 32, '#2a2140')}</div><div><b>nattfjaril-motiv.png</b><span class="m">4 200 × 2 900 px · transparent bakgrund</span><br><span class="pill pill-ok" style="margin-top:6px"><span class="dot"></span>Skarpt nog för tryck på framsidan</span></div></div>`,
+  garments: `<div class="garments">
+      <div class="g sel"><div class="ph"><svg width="56" height="56" style="color:#f4f2ee;filter:drop-shadow(0 1px 1px #0002)"><use href="#tee"/></svg></div><b>T-shirt</b><span>Inköp 149 kr</span></div>
+      <div class="g"><div class="ph"><svg width="56" height="56" style="color:#3a3a3a"><use href="#tee"/></svg></div><b>Hoodie</b><span>Inköp 389 kr</span></div>
+      <div class="g"><div class="ph"><svg width="56" height="56" style="color:#c9c2b4"><use href="#tee"/></svg></div><b>Långärmad</b><span>Inköp 199 kr</span></div></div>`,
+  price: `<div class="grid2"><div class="field"><label>Färger</label><div class="colors"><i class="sw sel" style="background:#f4f2ee"></i><i class="sw" style="background:#1d1d1f"></i><i class="sw" style="background:${ACC}"></i><i class="sw" style="background:#9aa79a"></i></div></div>
+      <div class="field"><label>Ditt pris</label><div class="input focus">349 kr${caret}</div><span class="money">Du får <b>ca 172 kr</b> per såld tröja</span></div></div>`,
+  product: `<div class="field"><label>Produktbilder</label><div class="drop"><div class="box">${mugImg(52)}</div><div><b>keramikmugg.jpg</b><span class="m">2 400 × 2 400 px</span></div><button class="btn btn-secondary act">Lägg till fler</button></div></div>
+    <div class="field"><label>Produktnamn</label><div class="input">Handgjord keramikmugg</div></div>
+    <div class="field"><label>Beskrivning</label><div class="input focus" style="height:56px;align-items:flex-start;padding-top:8px;font-size:13.5px">Stengodsmugg i mörk lila glasyr, 3 dl.${caret}</div></div>
+    <div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><div class="field"><label>Pris (inkl. moms)</label><div class="input">249 kr</div></div><div class="field"><label>Lagersaldo</label><div class="input">15 st</div></div><div class="field"><label>Leverans</label><div class="input" style="font-size:13px">Frakt 49 kr · Hämtning</div></div></div>`,
+};
+const gates = (pod) => `<div class="gates">${ic.info}<span>Du kan skapa produkter direkt. Innan butiken öppnar behöver du <b>godkänna villkoren</b> och <b>ansluta Stripe</b>.${pod ? ' Vi granskar också din första produkt.' : ''}</span></div>`;
+
+const legalDoc = `<div class="doc"><div class="tabs"><span class="on">Köpvillkor</span><span>Integritetspolicy</span><span>Ångerrätt</span></div>
+  <h2>Köpvillkor</h2><div class="upd">Skrivs av ChopShop utifrån dina uppgifter · gäller när du godkänt dem</div>
+  <h4>1. Säljare</h4><p>Du handlar av <mark>Nattfjäril</mark>, som drivs av <mark>Nora Lindqvist</mark> (enskild firma, org.nr <mark>880412-••••</mark>), <mark>Nattviolsgatan 4, 852 34 Sundsvall</mark>. Frågor om din beställning besvaras på <mark>hej@nattfjaril.se</mark>.</p>
+  <h4>2. Beställning och betalning</h4><p>Ett avtal är ingått när du fått en orderbekräftelse via e-post. Du betalar med kort, Klarna, Apple Pay eller Google Pay. Alla priser anges i svenska kronor inklusive moms.</p>
+  <h4>3. Tillverkning och leverans</h4><p>Plaggen trycks när du beställer, av vårt tryckeri, och skickas därefter till den adress du angett. Beräknad leveranstid visas i kassan.</p>
+  <h4>4. Ångerrätt</h4><p>Du har 14 dagars ångerrätt enligt lagen om distansavtal. Ångerfristen börjar dagen efter att du tagit emot varan. Returer skickas till <mark>Nattviolsgatan 4, 852 34 Sundsvall</mark> …</p></div>`;
+
+const moneyCard = (prod) => `<div class="moneycard"><h3>Så går pengarna</h3><div class="sub">Räknat på din första produkt</div>
+  <div class="mprod"><span class="th">${prod.mug ? mugImg(48) : teeImg(48, '#f4f2ee', '#2a2140')}</span><div><b>${prod.t}</b><div class="muted">1 st</div></div></div>
+  <div class="mline"><span>Kunden betalar</span><span>${prod.mug ? '249 kr' : '349 kr'}</span></div>
+  <div class="mline"><span>Avgift (plattform och produktion)</span><span>${prod.mug ? '−21 kr' : '−177 kr'}</span></div>
+  <div class="mline total"><span>Till dig</span><span>${prod.mug ? '228 kr' : '172 kr'}</span></div>
+  <div class="flowrow"><div>${ic.lock}<b>Kunden betalar</b><span>Kort, Klarna, Apple Pay</span></div><div><svg class="i" viewBox="0 0 16 16"><path d="M2.5 5.5 8 2.5l5.5 3v5L8 13.5l-5.5-3z M2.5 5.5 8 8.5l5.5-3 M8 8.5v5"/></svg><b>${prod.mug ? 'Du skickar' : 'Vi trycker och skickar'}</b><span>${prod.mug ? 'Du får ett mejl per order' : 'Du behöver inte göra något'}</span></div><div><svg class="i" viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="8.5" rx="1.5"/><path d="M2 7h12"/></svg><b>Pengar till ditt konto</b><span>Automatiskt via Stripe</span></div></div></div>`;
+
+function wizard(i, title, lede, form, rhead, right, primary, extraFoot, foot) {
+  const bars = STEPS.map((_, k) => `<i class="${k < i ? 'done' : k === i ? 'now' : ''}"></i>`).join('');
+  return topbar(`Kom igång · ${P}`, '<span>Sparat</span><span class="avatar">N</span>') + `<div class="stage"><section class="panel">
+    <div class="bars">${bars}</div><div class="stepmeta"><span>Steg ${i + 1} av 6 · ${STEPS[i]}</span><span>${TIMES[i]}</span></div>
+    <div class="content"><h1>${title}</h1><p class="lede">${lede}</p><div class="stack">${form}</div></div>
+    <div class="foot">${i ? '<button class="btn btn-plain">Tillbaka</button>' : '<span></span>'}<div style="display:flex;gap:8px">${extraFoot ?? ''}${primary ? `<button class="btn btn-primary btn-lg">${primary}</button>` : ''}</div></div>
+  </section><section class="rcol"><div class="rhead">${rhead}</div>${right}</section></div>`;
+}
+const pvHead = '<span class="live"><i></i>Din butik – ändras medan du fyller i</span><div class="seg"><span class="on">Dator</span><span>Mobil</span></div>';
+
+const stripeState = (kind) => {
+  const asks = `<div class="asks"><span>${ic.id}Legitimation</span><span>${ic.bank}Bankkonto för utbetalningar</span><span>${ic.phone}Mobilnummer</span><span>${ic.mail}E-post</span></div>`;
+  if (kind === 'none') return `<div class="status"><span class="ic" style="background:var(--a-surface-2)">${ic.ext}</span><div><b>Inte påbörjat</b><p>Stripe frågar efter det här. Du fyller i hos Stripe, inget av det sparas hos ChopShop.</p>${asks}<div class="act"><button class="btn btn-primary">Fortsätt till Stripe ${ic.ext}</button></div></div></div>`;
+  if (kind === 'review') return `<div class="status"><span class="ic" style="background:var(--a-info-bg);color:var(--a-info-text)">${ic.clock}</span><div><b>Stripe granskar dina uppgifter</b><p>Allt är inskickat. Det brukar ta en kort stund, ibland upp till ett par dagar. Du behöver inte göra något – fortsätt med nästa steg så länge.</p><div class="act"><button class="btn btn-secondary">Uppdatera status</button></div></div></div>`;
+  if (kind === 'more') return `<div class="status"><span class="ic" style="background:var(--a-caution-bg);color:var(--a-caution-text)">${ic.info}</span><div><b>Stripe behöver mer från dig</b><p>Du sparade för senare hos Stripe, eller så saknas något. Det som är kvar:</p><div class="asks"><span>${ic.bank}Bankkonto för utbetalningar</span></div><div class="act"><button class="btn btn-primary">Fortsätt hos Stripe ${ic.ext}</button></div></div></div>`;
+  return `<div class="status"><span class="ic" style="background:var(--a-ok-bg);color:var(--a-ok-text)">${ic.check}</span><div><b>Klart – du kan ta betalt och få utbetalningar</b><p>Pengarna från varje köp går till ditt bankkonto, automatiskt. Du kan se saldo och utbetalningar under Betalningar i adminen.</p><div class="act"><button class="btn btn-secondary">Öppna Stripe ${ic.ext}</button></div></div></div>`;
+};
+const stripeLede = 'Pengarna från varje köp går till ditt bankkonto via Stripe. Stripe frågar efter legitimation och kontonummer – hos Stripe, inte hos oss. Det tar ungefär fem minuter.';
+const stripeHead = '<span class="live"><i></i>Så går pengarna – räknat på din första produkt</span>';
+
+const owners = (rows) => `<div class="owners">${rows.map(([state, t, v, who]) => `<div>${state === 'done' ? `<span class="ck">${ic.check}</span>` : state === 'wait' ? `<span class="ck wait">${ic.clock}</span>` : '<span class="ck me"></span>'}<span>${t}</span><span class="v" style="margin-left:8px">${v}</span>${state !== 'done' ? '' : '<a>Ändra</a>'}<span class="who">${who === 'done' ? '<span class="pill pill-ok"><span class="dot"></span>Klart</span>' : who === 'stripe' ? '<span class="pill pill-info"><span class="dot"></span>Granskas av Stripe</span>' : who === 'chop' ? '<span class="pill pill-info"><span class="dot"></span>Granskas av ChopShop</span>' : '<span class="pill pill-caution"><span class="dot"></span>Behöver göras av dig</span>'}</span></div>`).join('')}</div>`;
+
+const SCREENS = {
+  /* 0 — before the wizard */
+  '00-konsol-ny-butik': () => `<div class="console"><div class="modal"><h2>Ny butik</h2>
+      <div class="f"><label>Butiksnamn</label><div class="in">Nattfjäril</div></div>
+      <div class="f"><label>Webbadress</label><div class="in"><span class="pre">chopshop.se/</span>nattfjaril</div><div class="hint">Bestäm den med ägaren innan inbjudan – den går inte att byta.</div></div>
+      <div class="f"><label>Vad säljer butiken?</label><div class="types"><div class="type"><b>Fysiska varor</b><span>Eget lager, egen frakt eller hämtning</span></div><div class="type sel"><b>Print on demand</b><span>Motiv på plagg, tryck per order</span></div><div class="type off"><b>Digitala produkter och tjänster</b><span>Kommer senare · kan inte väljas ännu</span></div></div></div>
+      <div class="f"><label>Ägarens e-post</label><div class="in">nora@nattfjaril.se</div></div>
+      <div class="foot"><button class="btn btn-secondary">Avbryt</button><button class="btn btn-primary">Skapa och bjud in</button></div></div></div>`,
+  '00-losenord': () => topbar() + `<div class="auth"><div class="card"><div style="margin-bottom:18px">${moth(40, 28, ACC)}</div><h1>Välj ditt lösenord för Nattfjäril</h1><p class="lede">För nora@nattfjaril.se. Sedan bygger vi butiken tillsammans, steg för steg.</p>
+      <div class="stack"><div class="field"><label>Lösenord</label><div class="input focus">••••••••••••${caret}</div><div class="strength"><i></i><i></i><i></i><i class="off"></i></div><span class="help">Bra lösenord</span></div>
+      <button class="btn btn-primary btn-lg" style="justify-content:center">Fortsätt</button></div>
+      <div class="next">Sex steg, ungefär en kvart:<ol>${STEPS.map(s => `<li>${s}</li>`).join('')}</ol></div></div></div>`,
+  /* 1 */
+  '01-din-butik': () => wizard(0, 'Din butik', 'Namn, logga och en färg – det räcker för att butiken ska kännas som din. Allt går att ändra senare.',
+      gates(true) + F.name + F.logo + F.colors, pvHead,
+      browser(store({ hero: { h: 'Välkommen till Nattfjäril', p: 'En rad om vad du gör kommer i nästa steg.', hint: true }, plain: true })), 'Fortsätt'),
+  /* 2 */
+  '02-valj-utseende': () => wizard(1, 'Välj hur butiken ska se ut', 'Välj en mall och skriv en rubrik. Utan toppbild använder vi din färg – det ser genomtänkt ut ändå.',
+      F.templates + F.heroText, pvHead, browser(store({})), 'Fortsätt'),
+  /* 3 — the branch */
+  '03-pod-designa-tshirt': () => wizard(2, 'Designa din första t-shirt', 'Ladda upp ett motiv så lägger vi det på ett plagg. Inget lager – vi trycker när någon köper.',
+      F.motif + `<div class="field"><label>Välj plagg</label>${F.garments}</div>` + F.price, pvHead,
+      browser(store({ prods: [{ ...TEE, isNew: true }] })), 'Lägg i butiken', '<button class="btn btn-secondary btn-lg">Öppna designstudion</button>'),
+  '03-pod-inlagd-granskas': () => wizard(2, 'Din t-shirt är i butiken', 'Vi granskar din första produkt innan kunder ser den. Det stoppar inte dig – fortsätt med nästa steg så länge.',
+      `<div class="wait">${ic.clock}<span><b>Granskas av ChopShop.</b> Du får ett mejl när den är godkänd. Vill du ändra något kan du göra det när som helst under Produkter.</span></div>
+       <div class="sum"><div><span class="ck">${ic.check}</span>Nattfjäril – t-shirt<span class="v">349 kr · du får ca 172 kr</span><a>Ändra</a></div></div>
+       <button class="btn btn-secondary" style="align-self:flex-start">${ic.plus} Lägg till ett motiv till</button>`,
+      '<span class="live"><i></i>Din butik – bara du ser den än</span><div class="seg"><span class="on">Dator</span><span>Mobil</span></div>',
+      browser(store({ prods: [{ ...TEE, held: true }] })), 'Fortsätt'),
+  '03-varor-ladda-upp-produkt': () => wizard(2, 'Ladda upp din första produkt', 'En bild, ett namn och ett pris. Du kan ändra allt senare och lägga till fler produkter i adminen.',
+      F.product, pvHead,
+      browser(store({ links: ['Produkter', 'Om oss'], hero: { h: 'Handgjort i Sundsvall.', p: 'Keramik från verkstaden vid älven – varje mugg är unik.' }, prods: [{ ...MUG, isNew: true }] })), 'Lägg i butiken'),
+  /* 4 */
+  '04-uppgifter-och-villkor': () => wizard(3, 'Vem säljer?', 'Kunderna har rätt att veta vem de handlar av. Vi skriver dina köpvillkor, integritetspolicy och ångerrätt med de här uppgifterna – du ser dem växa fram till höger.',
+      F.company + F.terms, '<span class="live"><i></i>Dina juridiska sidor – skrivs åt dig</span>', legalDoc, 'Godkänn och fortsätt'),
+  /* 5 — four states */
+  '05-stripe-inte-paborjat': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('none'), stripeHead, moneyCard(TEE), 'Fortsätt', '<button class="btn btn-plain">Gör det senare</button>'),
+  '05-stripe-granskar': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('review'), stripeHead, moneyCard(TEE), 'Fortsätt'),
+  '05-stripe-behover-mer': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('more'), stripeHead, moneyCard(TEE), 'Fortsätt'),
+  '05-stripe-klart': () => wizard(4, 'Ta betalt med Stripe', stripeLede, stripeState('done'), stripeHead, moneyCard(TEE), 'Fortsätt'),
+  /* 6 — review, request, open */
+  '06-granska-och-begar': () => wizard(5, 'Granska och begär publicering', 'Titta igenom en sista gång. När du begär publicering öppnar vi butiken så snart det som är kvar är klart.',
+      owners([['done','Din butik','Nattfjäril','done'],['done','Utseende','Nord, lila','done'],['wait','Första produkten','1 t-shirt','chop'],['done','Uppgifter och villkor','Nora Lindqvist, enskild firma','done'],['wait','Ta betalt med Stripe','Inskickat','stripe']]),
+      pvHead, browser(store({ prods: [{ ...TEE, held: true }] })), 'Begär publicering'),
+  '06-vi-forbereder': () => wizard(5, 'Vi förbereder publiceringen', 'Din begäran är mottagen. Det här är kvar innan butiken öppnar – inget av det behöver du göra själv just nu.',
+      `<div class="wait">${ic.clock}<span><b>Begärd 15 oktober 14:32.</b> Vi hör av oss när butiken är öppen. Du kan fortsätta lägga till produkter under tiden.</span></div>` +
+      owners([['wait','Första produkten','1 t-shirt','chop'],['wait','Ta betalt med Stripe','Inskickat','stripe'],['done','Din butik','Nattfjäril','done'],['done','Utseende','Nord, lila','done'],['done','Uppgifter och villkor','Nora Lindqvist, enskild firma','done']]),
+      '<span class="live"><i></i>Din butik – bara du ser den än</span><div class="seg"><span class="on">Dator</span><span>Mobil</span></div>', browser(store({ prods: [{ ...TEE, held: true }] })), null, '<button class="btn btn-secondary btn-lg">Till adminen</button>'),
+  '07-oppen-for-kop': () => `<div style="background:#161616">${topbar('', '<span style="color:#ffffff8c">Till adminen</span><span class="avatar">N</span>')}<div class="open">
+    <div><div class="browser3"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">${ic.lock.replace('class="i"', 'class="i" style="width:12px;height:12px;color:#2a845a"')}chopshop.se/nattfjaril</div><div style="width:46px"></div></div>${store({ prods: [TEE, { t: 'Nattfjäril – hoodie', p: '649 kr', col: '#26262a', mc: '#c9b8f5' }, { t: 'Mossa – t-shirt', p: '349 kr', col: '#9aa79a', mc: '#1d2a1d' }], teeSize: 104 })}</div></div>
+    <div class="right"><span class="statusline"><i></i>Öppen för köp</span><h1>Nattfjäril är öppen.</h1><p class="lede">Produkter, villkor och betalning är på plats och granskade. Nu handlar det om att folk hittar hit.</p>
+      <div class="linkbox"><span>chopshop.se/nattfjaril</span><button class="btn btn-light">${ic.copy} Kopiera länk</button></div>
+      <div class="acts"><button class="btn btn-ghost">Öppna butiken ${ic.ext}</button><button class="btn btn-ghost">Till adminen</button></div>
+      <div class="next"><h3>Bra nästa steg</h3><ul><li>${ic.plus}Lägg till fler motiv och färger</li><li>${ic.mail}Berätta för dina följare – länken ovan räcker</li><li>${ic.bank}Första utbetalningen kommer automatiskt efter första köpet</li></ul></div>
+    </div></div></div>`,
+};
+
+const key = new URLSearchParams(location.search).get('s') || '01-din-butik';
+document.getElementById('root').innerHTML = SCREENS[key]();
+</script>
+</body></html>
