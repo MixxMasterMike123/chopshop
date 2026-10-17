@@ -12,3 +12,11 @@ Six screens answering Mikael's four tests: is it understandable in the admin, un
 | S1 | Storefront desktop: the Vinyl panel built from the tree, one column per child with its children, "Alla i Rock (180) →", one featured tile |
 | S2 | Collection page Rock: breadcrumb, child chips with counts as the filter, "← Vinyl", density switch (2/4/6 per row), six-per-row grid |
 | S3 | Phone: hamburger shows the tree as expandable rows; the collection page uses the same chips |
+
+## The product side (added the same day)
+
+| Screen | What it shows |
+|---|---|
+| P1 | The product form's "Samlingar" card: the chosen collections as chips with their full path (Vinyl › Rock › 70-tal), tag-filled memberships shown as read-only "via taggen" chips, "Lägg i samling"; the rail says where the customer finds the product |
+| P2 | The picker open: type to filter the tree (matches highlighted, parents kept for context, matches elsewhere shown with their parent), checkboxes at every level, parents half-checked when a child is chosen, "Ny samling under Rock…" inline under the node you are in, tag collections greyed with the reason |
+| P3 | The product list with 14 selected and the bulk bar: "Lägg i samling" opens the same picker; "Utan samling" filter finds the orphans |

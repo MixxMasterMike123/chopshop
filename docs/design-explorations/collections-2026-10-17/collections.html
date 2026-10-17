@@ -139,6 +139,33 @@
   .phone h2 { font: 700 26px 'Familjen Grotesk', sans-serif; letter-spacing: -0.02em; padding: 6px 18px 0; }
   .phone .pg { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px 18px; }
   .phone .pc .img { aspect-ratio: 1; }
+
+  /* ---------- product form: the collection picker ---------- */
+  .pform { max-width: 1120px; display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 20px; align-items: start; }
+  .chipsel { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chipsel span { height: 28px; padding: 0 6px 0 10px; border-radius: 6px; background: var(--a-surface-2); box-shadow: 0 0 0 1px var(--a-border) inset; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+  .chipsel span .path { color: var(--a-faint); }
+  .chipsel span .x { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; color: var(--a-faint); }
+  .chipsel span.auto { background: var(--a-info-bg); color: var(--a-info-text); box-shadow: none; }
+  .picker { border-radius: 8px; box-shadow: 0 0 0 1px var(--a-border) inset; overflow: hidden; }
+  .picker .srch { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-bottom: 1px solid var(--a-border-soft); font-size: 13.5px; }
+  .picker .srch .q { font-weight: 500; }
+  .picker .r { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; }
+  .picker .r.d1 { padding-left: 30px; } .picker .r.d2 { padding-left: 48px; } .picker .r.d3 { padding-left: 66px; }
+  .picker .r .cb { width: 16px; height: 16px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px #b5b5b5; display: grid; place-items: center; flex: none; }
+  .picker .r .cb.on { background: var(--a-primary); box-shadow: none; color: #fff; }
+  .picker .r .cb.half { background: #fff; box-shadow: inset 0 0 0 1.5px var(--a-primary); }
+  .picker .r .cb.half::after { content: ""; width: 8px; height: 2px; background: var(--a-primary); }
+  .picker .r .n { color: var(--a-faint); font-size: 12px; }
+  .picker .r .tg { width: 16px; color: var(--a-muted); display: grid; place-items: center; }
+  .picker .r.dim { color: var(--a-faint); }
+  .picker .r.hit b { background: #fbeed3; border-radius: 2px; padding: 0; font-weight: 500; }
+  .picker .r.newrow { color: var(--a-muted); border-top: 1px dashed var(--a-border); }
+  .picker .r.newrow .input { height: 28px; font-size: 13px; flex: 1; max-width: 260px; }
+  .picker .foot { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-top: 1px solid var(--a-border-soft); color: var(--a-muted); font-size: 12px; }
+  .bulk { display: flex; align-items: center; gap: 10px; background: var(--a-topbar); color: #fff; border-radius: 10px; padding: 10px 14px; box-shadow: var(--a-shadow-lift); }
+  .bulk b { font-weight: 600; }
+  .bulk .btn { height: 28px; }
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs>
@@ -164,7 +191,7 @@
 const I = (id, w = 16, c) => `<svg width="${w}" height="${w}" ${c ? `style="color:${c}"` : ''}><use href="#${id}"/></svg>`;
 const topbar = (sub, right) => `<div class="topbar"><span class="brand">ChopShop</span>${sub ? `<span class="sub">${sub}</span>` : ''}<div class="right">${right ?? '<span class="avatar">E</span>'}</div></div>`;
 const navAdmin = (on) => `<nav>
-  <a class="${on === 'hem' ? 'on' : ''}">Hem</a><a>Ordrar</a><a>Produkter</a><a class="${on === 'sam' ? 'on' : ''}">Samlingar</a><a>Sidor</a><a>Butiken</a><a>Betalningar</a><a>Inställningar</a></nav>`;
+  <a class="${on === 'hem' ? 'on' : ''}">Hem</a><a>Ordrar</a><a class="${on === 'prod' ? 'on' : ''}">Produkter</a><a class="${on === 'sam' ? 'on' : ''}">Samlingar</a><a>Sidor</a><a>Butiken</a><a>Betalningar</a><a>Inställningar</a></nav>`;
 
 /* the tree used everywhere */
 const TREE = [
@@ -281,7 +308,59 @@ const S3 = () => `<div class="phonewrap">
     <div class="pg">${prods.slice(0, 6).map(([a, t, p, c]) => `<div class="pc"><div class="img" style="background:#ECE9E2">${I('vinyl', 90, c)}</div><div class="body"><div class="t">${a} – ${t}</div><div class="p">${p}</div></div></div>`).join('')}</div>
   </div></div>`;
 
+
+/* ---------- P1: product form, picker closed ---------- */
+const prodShell = (inner) => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navAdmin('prod')}<main>
+  <div class="crumb">Produkter ${I('chev', 12)} <b>Television – Marquee Moon</b></div>
+  <div class="pagehead" style="margin-top:6px"><div><h1>Television – Marquee Moon</h1><p>LP · 1977 · 229 kr · 3 i lager</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">Visa i butiken</button><button class="btn btn-primary">Spara</button></div></div>
+  <div class="pform"><div class="stack">
+    <div class="card" style="padding:18px"><div class="stack"><div class="field"><label>Namn</label><div class="input">Television – Marquee Moon</div></div>
+      <div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><div class="field"><label>Pris (inkl. moms)</label><div class="input">229 kr</div></div><div class="field"><label>Lagersaldo</label><div class="input">3 st</div></div><div class="field"><label>Taggar</label><div class="input" style="font-size:13px">lp, 1977, nyinkommet</div></div></div></div></div>
+    ${inner}
+  </div>
+  <div class="card mini rail"><h3>Var kunden hittar den</h3><p>En produkt kan ligga i flera samlingar. Den syns på varje samlings sida och på föräldrarnas.</p>
+    <div style="margin-top:12px;border-radius:10px;background:var(--n-canvas);padding:12px;font-family:'Instrument Sans',sans-serif;font-size:12.5px;color:var(--n-muted);display:flex;flex-direction:column;gap:6px"><span>Vinyl › Rock › <b style="color:var(--n-ink)">70-tal</b></span><span>Vinyl › Rock › <b style="color:var(--n-ink)">Punk</b></span><span style="color:var(--a-info-text)">Nyinkommet <i style="font-style:normal;opacity:.8">· via taggen</i></span></div></div>
+  </div></main></div>`;
+
+const chipsClosed = `<div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between"><b>Samlingar</b><span class="muted" style="font-size:12px">2 valda · 1 automatisk</span></div>
+  <div class="chipsel" style="margin-top:12px"><span><span class="path">Vinyl › Rock ›</span> 70-tal <span class="x">✕</span></span><span><span class="path">Vinyl › Rock ›</span> Punk <span class="x">✕</span></span><span class="auto">${I('tag', 12)} Nyinkommet · via taggen</span><span style="background:#fff;color:var(--a-muted)">${I('plus', 12)} Lägg i samling</span></div></div>`;
+const P1 = () => prodShell(chipsClosed);
+
+/* ---------- P2: picker open, filtered by "ro" ---------- */
+const pickerOpen = `<div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between"><b>Samlingar</b><span class="muted" style="font-size:12px">2 valda · 1 automatisk</span></div>
+  <div class="chipsel" style="margin:12px 0"><span><span class="path">Vinyl › Rock ›</span> 70-tal <span class="x">✕</span></span><span><span class="path">Vinyl › Rock ›</span> Punk <span class="x">✕</span></span><span class="auto">${I('tag', 12)} Nyinkommet · via taggen</span></div>
+  <div class="picker">
+    <div class="srch">${I('search', 14)}<span class="q">ro</span><span class="caret"></span><span class="muted" style="margin-left:auto;font-size:12px">Skriv för att hitta – trädet filtreras</span></div>
+    <div class="r d0"><span class="tg">${I('chevd', 14)}</span><span class="cb half"></span>Vinyl <span class="n">412</span></div>
+    <div class="r d1 hit"><span class="tg">${I('chevd', 14)}</span><span class="cb half"></span><span><b>Ro</b>ck</span> <span class="n">180</span></div>
+    <div class="r d2"><span class="tg"></span><span class="cb"></span>60-tal <span class="n">44</span></div>
+    <div class="r d2"><span class="tg"></span><span class="cb on">${I('check', 11)}</span>70-tal <span class="n">71</span></div>
+    <div class="r d2"><span class="tg"></span><span class="cb on">${I('check', 11)}</span>Punk <span class="n">30</span></div>
+    <div class="r d2 newrow"><span class="tg"></span>${I('plus', 14)}<div class="input">Ny samling under Rock…</div></div>
+    <div class="r d1 hit"><span class="tg"></span><span class="cb"></span><span>P<b>ro</b>gg</span> <span class="n">22</span><span class="n" style="margin-left:6px">i Svenskt</span></div>
+    <div class="r d0 hit"><span class="tg">${I('chev', 14)}</span><span class="cb"></span>CD <span class="n">230</span><span class="n" style="margin-left:6px">· <b>Ro</b>ck 90</span></div>
+    <div class="r dim"><span class="tg"></span><span class="cb"></span>Rea <span class="n">24</span><span class="n" style="margin-left:6px">fylls av taggen "rea" – välj via taggar</span></div>
+    <div class="foot"><span>Bocka i så många du vill. Föräldrarna följer med automatiskt.</span><button class="btn btn-primary" style="height:28px">Klar</button></div>
+  </div></div>`;
+const P2 = () => prodShell(pickerOpen);
+
+/* ---------- P3: product list, bulk assign ---------- */
+const P3 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navAdmin('prod')}<main>
+  <div class="pagehead"><div><h1>Produkter</h1><p>678 produkter</p></div><button class="btn btn-primary">${I('plus', 14)} Ny produkt</button></div>
+  <div class="bulk" style="max-width:1120px;margin-bottom:12px"><b>14 valda</b><span style="color:#ffffffa6">·</span><button class="btn btn-secondary">${I('plus', 14)} Lägg i samling</button><button class="btn btn-secondary">Ta bort ur samling</button><button class="btn btn-secondary">Sätt taggar</button><span style="margin-left:auto;color:#ffffffa6;font-size:12px">Esc avmarkerar</span></div>
+  <div class="card" style="max-width:1120px"><div class="toolbar"><div class="input search" style="height:32px;font-size:13px;gap:8px;color:var(--a-faint)">${I('search', 14)} Sök produkt</div><span style="flex:1"></span><div class="seg"><span class="on">Alla</span><span>Utan samling <span class="muted" style="margin-left:4px">31</span></span></div></div>
+    ${[['Television – Marquee Moon','Vinyl › Rock › 70-tal, Punk',1],['Patti Smith – Horses','Vinyl › Rock › 70-tal',1],['Wire – Pink Flag','Vinyl › Rock › Punk',1],['Ramones – Rocket to Russia','Vinyl › Rock › Punk',1],['Kebnekajse – II','Vinyl › Svenskt',0],['Big Star – #1 Record','—',1],['Pere Ubu – Dub Housing','—',1],['Blue Öyster Cult – Agents of Fortune','Vinyl › Rock › 70-tal',0]].map(([t, c, on]) => `<div class="row" style="padding-left:14px;height:42px"><span class="cb" style="width:16px;height:16px;border-radius:4px;${on ? 'background:var(--a-primary);color:#fff;display:grid;place-items:center' : 'box-shadow:inset 0 0 0 1.5px #b5b5b5'}">${on ? I('check', 11) : ''}</span><span style="width:28px;height:28px;border-radius:6px;background:var(--a-surface-2);display:grid;place-items:center">${I('vinyl', 20, '#1F3A5F')}</span><span class="t">${t}</span><span class="sp"></span><span class="muted" style="font-size:12.5px;${c === '—' ? 'color:var(--a-caution-text)' : ''}">${c === '—' ? 'Ingen samling' : c}</span></div>`).join('')}</div>
+  <div class="card" style="position:absolute;left:560px;top:270px;width:420px;box-shadow:var(--a-shadow-lift),0 0 0 1px #0000000a"><div class="picker" style="box-shadow:none">
+    <div class="srch">${I('search', 14)}<span class="muted">Sök samling</span></div>
+    <div class="r"><span class="tg">${I('chevd', 14)}</span><span class="cb"></span>Vinyl</div>
+    <div class="r d1"><span class="tg">${I('chevd', 14)}</span><span class="cb"></span>Rock</div>
+    <div class="r d2"><span class="tg"></span><span class="cb"></span>60-tal</div><div class="r d2"><span class="tg"></span><span class="cb on">${I('check', 11)}</span>70-tal</div><div class="r d2"><span class="tg"></span><span class="cb"></span>Punk</div>
+    <div class="r d1"><span class="tg">${I('chev', 14)}</span><span class="cb"></span>Jazz</div>
+    <div class="r"><span class="tg">${I('chev', 14)}</span><span class="cb"></span>CD</div>
+    <div class="foot"><span>Lägger 14 produkter i 70-tal</span><button class="btn btn-primary" style="height:28px">Lägg till</button></div></div></div>
+  </main></div>`;
+
 const key = new URLSearchParams(location.search).get('s') || 'A1';
-document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3 })[key]();
+document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3 })[key]();
 </script>
 </body></html>
