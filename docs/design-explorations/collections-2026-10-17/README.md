@@ -20,3 +20,15 @@ Six screens answering Mikael's four tests: is it understandable in the admin, un
 | P1 | The product form's "Samlingar" card: the chosen collections as chips with their full path (Vinyl › Rock › 70-tal), tag-filled memberships shown as read-only "via taggen" chips, "Lägg i samling"; the rail says where the customer finds the product |
 | P2 | The picker open: type to filter the tree (matches highlighted, parents kept for context, matches elsewhere shown with their parent), checkboxes at every level, parents half-checked when a child is chosen, "Ny samling under Rock…" inline under the node you are in, tag collections greyed with the reason |
 | P3 | The product list with 14 selected and the bulk bar: "Lägg i samling" opens the same picker; "Utan samling" filter finds the orphans |
+
+## The simple end: how it scales down (Z screens, the artist Nora)
+
+The UI grows with the data. Nothing from the next stage shows before the seller takes the first step toward it.
+
+| Stage | Screen | What the seller sees |
+|---|---|---|
+| 0 — no collections | Z0 | "Samlingar" is an empty state: all products on one page is the right answer at six products; three example chips; the tag tip. No tree, no eyes, no drag. |
+| 1 — a few flat collections | Z1, Z2, Z3 | A plain list with thumbnails and counts, one eye per row, the menu preview shows "a tab per collection". The product form has a short checkbox list with "Ny samling…" at the bottom. The storefront nav is pills, no dropdown, no breadcrumb beyond the title. One hint row explains how to nest, when the seller wants it. |
+| 2 — nested | A1–A3, S1–S3, P1–P3 | The tree, the drop lines, "Ligger under", path chips, the filtering picker, the mega panel, breadcrumbs and chips. Appears the moment a collection gets a child. |
+
+Same component in all three stages: the tree renders a one-level tree as a list. The seller never switches a mode.

@@ -166,6 +166,29 @@
   .bulk { display: flex; align-items: center; gap: 10px; background: var(--a-topbar); color: #fff; border-radius: 10px; padding: 10px 14px; box-shadow: var(--a-shadow-lift); }
   .bulk b { font-weight: 600; }
   .bulk .btn { height: 28px; }
+
+  /* ---------- the simple stages ---------- */
+  .empty { padding: 44px 28px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .empty h2 { font-size: 16px; font-weight: 600; }
+  .empty p { color: var(--a-muted); max-width: 44ch; }
+  .empty .ex { display: flex; gap: 8px; margin-top: 6px; }
+  .empty .ex span { height: 30px; padding: 0 12px; border-radius: 999px; background: var(--a-surface-2); display: flex; align-items: center; color: var(--a-muted); box-shadow: 0 0 0 1px var(--a-border) inset; }
+  .flatrow { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; border-top: 1px solid var(--a-border-soft); }
+  .flatrow:first-child { border-top: 0; }
+  .flatrow .th { display: flex; }
+  .flatrow .th i { width: 26px; height: 26px; border-radius: 6px; background: var(--a-surface-2); box-shadow: 0 0 0 2px #fff; margin-left: -8px; display: grid; place-items: center; }
+  .flatrow .th i:first-child { margin-left: 0; }
+  .flatrow .t { font-weight: 500; }
+  .flatrow .n { color: var(--a-faint); font-size: 12px; }
+  .flatrow .sp { flex: 1; }
+  .hint { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; background: var(--a-surface-2); color: var(--a-muted); font-size: 12.5px; line-height: 18px; border-top: 1px solid var(--a-border-soft); }
+  .artnav .links span.on { background: #fff; }
+  .artist { --n-accent: #8A4B2B; }
+  .arthero { margin: 10px 48px 0; border-radius: 22px; padding: 30px 40px; color: #fff; background: radial-gradient(120% 90% at 85% 10%, color-mix(in srgb, var(--n-accent) 75%, #fff 0%) 0%, transparent 60%), #1d1510; }
+  .arthero h1 { font: 700 36px/1.04 'Familjen Grotesk', sans-serif; letter-spacing: -0.022em; max-width: 14ch; }
+  .arthero p { color: #ffffffbf; margin-top: 12px; max-width: 40ch; font-size: 15px; }
+  .artgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; padding: 16px 48px; }
+  .art { aspect-ratio: 5/4 !important; }
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs>
@@ -360,7 +383,55 @@ const P3 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;co
     <div class="foot"><span>Lägger 14 produkter i 70-tal</span><button class="btn btn-primary" style="height:28px">Lägg till</button></div></div></div>
   </main></div>`;
 
+
+/* ---------- Stage 0: an artist, no collections ---------- */
+const artNav = (on) => `<nav><a>Hem</a><a>Ordrar</a><a class="${on === 'prod' ? 'on' : ''}">Produkter</a><a class="${on === 'sam' ? 'on' : ''}">Samlingar</a><a>Sidor</a><a>Butiken</a><a>Betalningar</a><a>Inställningar</a></nav>`;
+const artTop = topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Nora Lindqvist</span><span class="avatar">N</span>');
+const paint = (c, size = 22) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" fill="${c}"/><path d="M6 16l4-5 3 4 2-2 3 3" fill="none" stroke="#fff8" stroke-width="1.5"/></svg>`;
+const Z0 = () => artTop + `<div class="shell">${artNav('sam')}<main>
+  <div class="pagehead"><div><h1>Samlingar</h1><p>Gruppera produkter så att kunderna hittar rätt. Du behöver inga än – med 6 produkter är en enda sida lättast att handla på.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
+  <div class="card" style="max-width:760px"><div class="empty"><div style="display:flex;gap:-6px">${paint('#8A4B2B', 34)}${paint('#1F3A5F', 34)}${paint('#2a845a', 34)}</div>
+    <h2>Alla dina produkter visas på en sida</h2><p>När du får fler, eller vill skilja på till exempel originalmålningar och tryck, gör du en samling per grupp. Kunden får då en flik per samling i menyn.</p>
+    <div class="ex"><span>Original</span><span>Tryck</span><span>Kort</span></div></div>
+    <div class="hint">${I('tag', 14)}<span>Tips: en samling kan fyllas automatiskt av en tagg. Tagga dina tryck med "tryck" så finns de i samlingen Tryck utan att du gör något mer.</span></div></div>
+  </main></div>`;
+
+/* ---------- Stage 1: two flat collections, no nesting shown ---------- */
+const Z1 = () => artTop + `<div class="shell">${artNav('sam')}<main>
+  <div class="pagehead"><div><h1>Samlingar</h1><p>Varje samling är en flik i kundens meny. Dra för att ändra ordningen.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
+  <div class="wrap"><div class="card">
+    <div class="flatrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="th"><i>${paint('#8A4B2B')}</i><i>${paint('#1F3A5F')}</i><i>${paint('#2a845a')}</i></span><span class="t">Original</span><span class="n">4</span><span class="sp"></span><span class="eye">${I('eye')}</span><span class="more">${I('more')}</span></div>
+    <div class="flatrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="th"><i>${paint('#c9a227')}</i><i>${paint('#5B3FA8')}</i></span><span class="t">Tryck</span><span class="n">8</span><span class="pill pill-info" style="margin-left:6px"><span class="dot"></span>Taggen "tryck"</span><span class="sp"></span><span class="eye">${I('eye')}</span><span class="more">${I('more')}</span></div>
+    <div class="hint">${I('info', 14)}<span>Behöver en samling egna undergrupper, till exempel Tryck › A3 och Tryck › A4? Dra en samling in under en annan, eller välj "Ny samling under…" i menyn ${I('more', 12)}. Då visas de som undermeny i butiken.</span></div></div>
+  <div class="card mini rail"><h3>Så ser kunden menyn</h3><p>En flik per samling.</p>
+    <div class="menuprev" style="--n-accent:#8A4B2B"><div class="bar"><b>Nora Lindqvist</b><span class="on">Original</span><span>Tryck</span><span>Om mig</span></div></div>
+    <div style="margin-top:14px;color:var(--a-muted);font-size:12.5px;line-height:18px">Inga undermenyer: kunden klickar på en flik och ser produkterna direkt.</div></div></div>
+  </main></div>`;
+
+/* ---------- Stage 1, the product form: a short list ---------- */
+const Z2 = () => artTop + `<div class="shell">${artNav('prod')}<main>
+  <div class="crumb">Produkter ${I('chev', 12)} <b>Morgon vid älven</b></div>
+  <div class="pagehead" style="margin-top:6px"><div><h1>Morgon vid älven</h1><p>Original · 60 × 80 cm · 6 500 kr</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">Visa i butiken</button><button class="btn btn-primary">Spara</button></div></div>
+  <div class="pform"><div class="stack">
+    <div class="card" style="padding:18px"><div class="stack"><div class="field"><label>Namn</label><div class="input">Morgon vid älven</div></div>
+      <div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><div class="field"><label>Pris (inkl. moms)</label><div class="input">6 500 kr</div></div><div class="field"><label>Lagersaldo</label><div class="input">1 st</div></div><div class="field"><label>Taggar</label><div class="input" style="font-size:13px">original, akryl</div></div></div></div></div>
+    <div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between"><b>Samling</b><span class="muted" style="font-size:12px">Var kunden hittar den</span></div>
+      <div class="picker" style="margin-top:12px;max-width:420px">
+        <div class="r"><span class="cb on">${I('check', 11)}</span>Original <span class="n">4</span></div>
+        <div class="r dim"><span class="cb"></span>Tryck <span class="n">8</span><span class="n" style="margin-left:6px">fylls av taggen "tryck"</span></div>
+        <div class="r newrow">${I('plus', 14)}<div class="input" style="color:var(--a-faint)">Ny samling…</div></div></div>
+      <span class="help" style="display:block;margin-top:10px">Ingen samling vald? Då syns produkten ändå under Alla produkter.</span></div>
+  </div>
+  <div class="card mini rail"><h3>I butiken</h3><p>Under fliken Original, och på startsidan.</p></div></div>
+  </main></div>`;
+
+/* ---------- Stage 1 storefront ---------- */
+const Z3 = () => `<div class="sf artist"><div class="nav artnav"><span class="logo">Nora Lindqvist</span><div class="links"><span class="on">Original</span><span>Tryck</span><span>Om mig</span></div><span class="cart">Varukorg <b>0</b></span></div>
+  <div class="arthero"><h1>Måleri från Indalsälven.</h1><p>Original i akryl och ett litet antal signerade tryck. Allt skickas från ateljén i Sundsvall.</p></div>
+  <div class="page" style="padding-top:22px"><div class="toprow"><div><h1 style="font-size:30px;margin-top:0">Original</h1><div class="count">4 verk</div></div></div></div>
+  <div class="artgrid">${[['#8A4B2B','Morgon vid älven','6 500 kr'],['#1F3A5F','Novemberljus','4 800 kr'],['#2a845a','Strandskog','5 200 kr'],['#c9a227','Augusti','3 900 kr']].map(([c, t, p]) => `<div class="pc"><div class="img art" style="background:${c}"></div><div class="body"><div class="t" style="font-size:15px">${t}</div><div class="a">Akryl på duk · 60 × 80 cm</div><div class="p" style="font-size:15px">${p}</div></div></div>`).join('')}</div></div>`;
+
 const key = new URLSearchParams(location.search).get('s') || 'A1';
-document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3 })[key]();
+document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3, Z0, Z1, Z2, Z3 })[key]();
 </script>
 </body></html>
