@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="sv"><head><meta charset="utf-8"><title>Samlingar – nested collections concept</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  /* ---------- admin shell (from the onboarding mocks) ---------- */
+  .shell { display: grid; grid-template-columns: 232px 1fr; height: calc(900px - 56px); }
+  nav { padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+  nav a { height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border-radius: 6px; color: var(--a-text); font-weight: 500; }
+  nav a.on { background: #00000014; }
+  main { overflow: hidden; padding: 20px 28px; }
+  .card { background: var(--a-surface); border-radius: 12px; box-shadow: var(--a-shadow), 0 0 0 1px #0000000a; overflow: hidden; }
+  .pagehead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .pagehead h1 { font-size: 20px; line-height: 28px; font-weight: 600; }
+  .pagehead p { color: var(--a-muted); margin-top: 2px; }
+  .wrap { max-width: 1120px; display: grid; grid-template-columns: minmax(0,1fr) 330px; gap: 20px; align-items: start; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .stack { display: flex; flex-direction: column; gap: 16px; }
+  .seg { display: inline-flex; background: #e6e6e6; border-radius: 8px; padding: 2px; }
+  .seg span { height: 28px; padding: 0 12px; display: flex; align-items: center; border-radius: 6px; color: var(--a-muted); font-weight: 500; }
+  .seg span.on { background: #fff; color: var(--a-text); box-shadow: var(--a-shadow); }
+  .muted { color: var(--a-muted); }
+
+  /* ---------- the tree (admin) ---------- */
+  .tree { display: flex; flex-direction: column; }
+  .row { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px 0 0; border-top: 1px solid var(--a-border-soft); position: relative; }
+  .row:first-child { border-top: 0; }
+  .row .grip { width: 28px; color: var(--a-faint); display: grid; place-items: center; cursor: grab; }
+  .row .tog { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; color: var(--a-muted); }
+  .row .tog.leaf { visibility: hidden; }
+  .row .t { font-weight: 500; }
+  .row .n { color: var(--a-faint); font-size: 12px; margin-left: 2px; }
+  .row .kind { margin-left: 6px; }
+  .row .sp { flex: 1; }
+  .row .eye { width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; color: var(--a-text); }
+  .row .eye.off { color: var(--a-faint); }
+  .row .more { width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; color: var(--a-faint); }
+  .row.d1 { padding-left: 28px; } .row.d2 { padding-left: 56px; } .row.d3 { padding-left: 84px; }
+  .row.d1::before, .row.d2::before, .row.d3::before { content: ""; position: absolute; top: 0; bottom: 0; width: 1px; background: var(--a-border); }
+  .row.d1::before { left: 28px; } .row.d2::before { left: 56px; } .row.d3::before { left: 84px; }
+  .row.sel { background: var(--a-surface-2); }
+  .row.ghost { background: #fff; box-shadow: 0 0 0 2px var(--a-primary) inset, var(--a-shadow-lift); border-radius: 8px; border-top: 0; }
+  .row .addin { color: var(--a-muted); font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+  .addrow { height: 40px; padding-left: 56px; color: var(--a-muted); border-top: 1px dashed var(--a-border); }
+  .dropzone { height: 6px; margin: 0 14px 0 56px; border-radius: 3px; background: var(--a-primary); }
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--a-border-soft); }
+  .toolbar .search { flex: 1; max-width: 300px; }
+  .legend { display: flex; gap: 14px; padding: 10px 14px; border-top: 1px solid var(--a-border-soft); color: var(--a-muted); font-size: 12px; }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+
+  /* right rail: the visitor's menu, live */
+  .rail h3 { font-size: 14px; font-weight: 600; }
+  .rail p { color: var(--a-muted); margin-top: 2px; }
+  .mini { padding: 16px; }
+  .menuprev { margin-top: 12px; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px var(--a-border); background: var(--n-canvas); font-family: 'Instrument Sans', sans-serif; color: var(--n-ink); }
+  .menuprev .bar { display: flex; gap: 12px; padding: 12px 14px; font-size: 12.5px; color: var(--n-muted); align-items: center; }
+  .menuprev .bar b { color: var(--n-ink); font: 700 14px 'Familjen Grotesk', sans-serif; margin-right: 4px; }
+  .menuprev .bar .on { color: var(--n-ink); font-weight: 600; border-bottom: 2px solid var(--n-accent); padding-bottom: 2px; }
+  .menuprev .panel { background: #fff; margin: 0 10px 10px; border-radius: 10px; padding: 10px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; font-size: 12.5px; }
+  .menuprev .panel span { padding: 3px 0; }
+  .menuprev .panel span.h { font-weight: 600; grid-column: 1 / -1; margin-top: 4px; }
+  .menuprev .panel span.sub { color: var(--n-muted); padding-left: 10px; }
+
+  /* ---------- edit page ---------- */
+  .parentpick { display: flex; flex-direction: column; border-radius: 8px; box-shadow: 0 0 0 1px var(--a-border) inset; max-height: 230px; overflow: hidden; }
+  .parentpick div { height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px; }
+  .parentpick div.d1 { padding-left: 30px; } .parentpick div.d2 { padding-left: 48px; }
+  .parentpick div.on { background: var(--a-surface-2); font-weight: 600; }
+  .parentpick div.dim { color: var(--a-faint); }
+  .check { display: flex; gap: 10px; align-items: flex-start; }
+  .check .bx { width: 18px; height: 18px; border-radius: 5px; background: var(--a-primary); color: #fff; display: grid; place-items: center; flex: none; margin-top: 1px; }
+  .check .bx.off { background: #fff; box-shadow: inset 0 0 0 1.5px #b5b5b5; }
+  .crumb { color: var(--a-muted); font-size: 12.5px; display: flex; gap: 6px; align-items: center; }
+  .crumb b { color: var(--a-text); font-weight: 500; }
+  .prodlist { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .prod { border-radius: 8px; box-shadow: 0 0 0 1px var(--a-border) inset; padding: 8px; }
+  .prod .ph { height: 70px; border-radius: 6px; background: var(--a-surface-2); display: grid; place-items: center; }
+  .prod b { display: block; margin-top: 6px; font-size: 12.5px; }
+  .prod span { color: var(--a-muted); font-size: 12px; }
+
+  /* ---------- storefront (NORD) ---------- */
+  .sf { height: 844px; background: var(--n-canvas); font-family: 'Instrument Sans', sans-serif; color: var(--n-ink); --n-accent: #1F3A5F; }
+  .sf .nav { display: flex; align-items: center; gap: 18px; padding: 18px 48px; }
+  .sf .logo { font: 700 22px 'Familjen Grotesk', sans-serif; letter-spacing: -0.02em; margin-right: 10px; }
+  .sf .links { display: flex; gap: 6px; }
+  .sf .links span { height: 34px; padding: 0 14px; border-radius: 999px; display: flex; align-items: center; color: var(--n-muted); font-size: 15px; }
+  .sf .links span.on { background: #fff; color: var(--n-ink); font-weight: 600; box-shadow: 0 1px 2px #1A1C1E08, 0 8px 24px -12px #1A1C1E1F; }
+  .sf .cart { margin-left: auto; background: var(--n-ink); color: #fff; border-radius: 999px; height: 38px; padding: 0 16px; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+  .sf .cart b { background: var(--n-accent); border-radius: 999px; min-width: 20px; height: 20px; display: grid; place-items: center; font-size: 12px; }
+  .mega { margin: 0 48px; background: #fff; border-radius: 22px; box-shadow: 0 2px 4px #1A1C1E0A, 0 20px 44px -16px #1A1C1E2E; padding: 26px 30px; display: grid; grid-template-columns: repeat(4, 1fr) 1.2fr; gap: 24px; }
+  .mega h4 { font: 700 15px 'Familjen Grotesk', sans-serif; margin-bottom: 8px; }
+  .mega ul { list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: #3b3e42; }
+  .mega li.all { color: var(--n-muted); font-size: 13px; margin-top: 6px; }
+  .mega .feat { border-radius: 16px; overflow: hidden; background: #1d1730; color: #fff; padding: 18px; display: flex; flex-direction: column; justify-content: flex-end; min-height: 200px; background-image: radial-gradient(120% 90% at 85% 10%, color-mix(in srgb, var(--n-accent) 75%, #fff 0%) 0%, transparent 60%); }
+  .mega .feat b { font: 700 20px 'Familjen Grotesk', sans-serif; letter-spacing: -0.02em; }
+  .mega .feat span { color: #ffffffbf; font-size: 13px; margin-top: 4px; }
+  .page { padding: 10px 48px; }
+  .crumbs { display: flex; gap: 8px; color: var(--n-muted); font-size: 13.5px; align-items: center; }
+  .crumbs b { color: var(--n-ink); font-weight: 500; }
+  .page h1 { font: 700 42px/1.04 'Familjen Grotesk', sans-serif; letter-spacing: -0.022em; margin-top: 14px; }
+  .page .count { color: var(--n-muted); margin-top: 6px; font-size: 14px; }
+  .chips { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  .chips span { height: 36px; padding: 0 14px; border-radius: 999px; background: #fff; display: flex; align-items: center; gap: 8px; font-size: 14px; box-shadow: 0 1px 2px #1A1C1E08, 0 8px 24px -12px #1A1C1E1F; }
+  .chips span.on { background: var(--n-ink); color: #fff; }
+  .chips span.all { background: transparent; box-shadow: 0 0 0 1px #1A1C1E1A inset; }
+  .chips span i { color: var(--n-muted); font-style: normal; font-size: 12px; }
+  .chips span.on i { color: #ffffffa6; }
+  .pgrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-top: 22px; }
+  .pc { background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 1px 2px #1A1C1E08, 0 8px 24px -12px #1A1C1E1F; }
+  .pc .img { aspect-ratio: 1; display: grid; place-items: center; }
+  .pc .body { padding: 8px 10px 10px; }
+  .pc .t { font: 700 13px 'Familjen Grotesk', sans-serif; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc .a { color: var(--n-muted); font-size: 12px; }
+  .pc .p { font: 700 13px 'Familjen Grotesk', sans-serif; margin-top: 4px; }
+  .dense { display: flex; gap: 6px; margin-left: auto; align-items: center; color: var(--n-muted); font-size: 12.5px; }
+  .dense i { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; background: #fff; }
+  .dense i.on { background: var(--n-ink); color: #fff; }
+  .toprow { display: flex; align-items: flex-end; }
+
+  /* phone */
+  .phonewrap { height: 844px; background: #e9e9e9; display: grid; place-items: center; grid-template-columns: 1fr 1fr; }
+  .phone { width: 360px; height: 740px; border-radius: 36px; background: var(--n-canvas); box-shadow: 0 0 0 10px #1a1a1a, 0 30px 60px -20px #0008; overflow: hidden; font-family: 'Instrument Sans', sans-serif; color: var(--n-ink); --n-accent: #1F3A5F; position: relative; }
+  .phone .pn { display: flex; align-items: center; justify-content: space-between; padding: 18px 18px 10px; }
+  .phone .pn b { font: 700 19px 'Familjen Grotesk', sans-serif; }
+  .phone .burger { width: 36px; height: 36px; border-radius: 999px; background: #fff; display: grid; place-items: center; }
+  .sheet { position: absolute; inset: 64px 0 0; background: #fff; border-radius: 28px 28px 0 0; padding: 18px 20px; box-shadow: 0 -10px 40px -20px #0004; }
+  .sheet .r { display: flex; align-items: center; height: 46px; font-size: 16px; font-weight: 500; border-top: 1px solid #1A1C1E0F; }
+  .sheet .r:first-child { border-top: 0; }
+  .sheet .r.open { font-weight: 700; }
+  .sheet .r .chev { margin-left: auto; color: var(--n-muted); }
+  .sheet .r.c1 { padding-left: 16px; font-weight: 400; font-size: 15px; }
+  .sheet .r.c1.on { font-weight: 600; color: var(--n-accent); }
+  .sheet .r.c2 { padding-left: 32px; font-weight: 400; font-size: 14.5px; color: #3b3e42; }
+  .sheet .r .n { margin-left: 8px; color: var(--n-muted); font-size: 12px; font-weight: 400; }
+  .phone .pchips { display: flex; gap: 8px; padding: 6px 18px 0; overflow: hidden; }
+  .phone .pchips span { height: 32px; padding: 0 12px; border-radius: 999px; background: #fff; display: flex; align-items: center; font-size: 13px; white-space: nowrap; box-shadow: 0 1px 2px #1A1C1E08, 0 8px 24px -12px #1A1C1E1F; }
+  .phone .pchips span.on { background: var(--n-ink); color: #fff; }
+  .phone .pcr { padding: 10px 18px 0; color: var(--n-muted); font-size: 12px; }
+  .phone h2 { font: 700 26px 'Familjen Grotesk', sans-serif; letter-spacing: -0.02em; padding: 6px 18px 0; }
+  .phone .pg { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px 18px; }
+  .phone .pc .img { aspect-ratio: 1; }
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="vinyl" viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="#1b1b1f"/><circle cx="60" cy="60" r="44" fill="none" stroke="#2c2c33" stroke-width="2"/><circle cx="60" cy="60" r="34" fill="none" stroke="#2c2c33" stroke-width="2"/><circle cx="60" cy="60" r="18" fill="currentColor"/><circle cx="60" cy="60" r="3" fill="#1b1b1f"/></symbol>
+  <symbol id="cd" viewBox="0 0 120 120"><circle cx="60" cy="60" r="48" fill="#dfe3ea"/><circle cx="60" cy="60" r="46" fill="none" stroke="#fff" stroke-width="3"/><circle cx="60" cy="60" r="14" fill="#fff" stroke="#c9cfd8" stroke-width="2"/><path d="M26 38 A40 40 0 0 1 60 14" fill="none" stroke="#fff" stroke-width="8" opacity=".8"/></symbol>
+  <symbol id="tee" viewBox="0 0 120 120"><path d="M42 14 L24 20 L8 38 L20 50 L30 42 L30 108 L90 108 L90 42 L100 50 L112 38 L96 20 L78 14 C74 22 67 26 60 26 C53 26 46 22 42 14 Z" fill="currentColor"/></symbol>
+  <symbol id="chev" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="chevd" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="grip" viewBox="0 0 16 16"><g fill="currentColor"><circle cx="6" cy="4" r="1.3"/><circle cx="10" cy="4" r="1.3"/><circle cx="6" cy="8" r="1.3"/><circle cx="10" cy="8" r="1.3"/><circle cx="6" cy="12" r="1.3"/><circle cx="10" cy="12" r="1.3"/></g></symbol>
+  <symbol id="eye" viewBox="0 0 16 16"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="eyeoff" viewBox="0 0 16 16"><path d="M2 2l12 12 M6.3 6.4A2 2 0 0 0 9.6 9.7 M4 4.6C2.6 5.8 1.5 8 1.5 8s2.5 4.5 6.5 4.5c1.2 0 2.3-.4 3.2-.9 M7 3.6c.3 0 .7-.1 1-.1 4 0 6.5 4.5 6.5 4.5s-.7 1.3-2 2.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="tag" viewBox="0 0 16 16"><path d="M2.5 8.5V3a.5.5 0 0 1 .5-.5h5.5l5 5-6 6z M5.5 5.5h.01" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+  <symbol id="more" viewBox="0 0 16 16"><g fill="currentColor"><circle cx="4" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="12" cy="8" r="1.4"/></g></symbol>
+  <symbol id="plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="g2" viewBox="0 0 16 16"><g fill="currentColor"><rect x="2" y="2" width="5" height="12" rx="1"/><rect x="9" y="2" width="5" height="12" rx="1"/></g></symbol>
+  <symbol id="g4" viewBox="0 0 16 16"><g fill="currentColor"><rect x="2" y="2" width="2.5" height="12" rx=".8"/><rect x="5.2" y="2" width="2.5" height="12" rx=".8"/><rect x="8.4" y="2" width="2.5" height="12" rx=".8"/><rect x="11.6" y="2" width="2.5" height="12" rx=".8"/></g></symbol>
+  <symbol id="g6" viewBox="0 0 16 16"><g fill="currentColor"><rect x="2" y="2" width="1.6" height="12"/><rect x="4.1" y="2" width="1.6" height="12"/><rect x="6.2" y="2" width="1.6" height="12"/><rect x="8.3" y="2" width="1.6" height="12"/><rect x="10.4" y="2" width="1.6" height="12"/><rect x="12.5" y="2" width="1.6" height="12"/></g></symbol>
+  <symbol id="check" viewBox="0 0 16 16"><path d="M4 8.5 L7 11.2 L12 5.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</defs></svg>
+<div id="root"></div>
+<script>
+const I = (id, w = 16, c) => `<svg width="${w}" height="${w}" ${c ? `style="color:${c}"` : ''}><use href="#${id}"/></svg>`;
+const topbar = (sub, right) => `<div class="topbar"><span class="brand">ChopShop</span>${sub ? `<span class="sub">${sub}</span>` : ''}<div class="right">${right ?? '<span class="avatar">E</span>'}</div></div>`;
+const navAdmin = (on) => `<nav>
+  <a class="${on === 'hem' ? 'on' : ''}">Hem</a><a>Ordrar</a><a>Produkter</a><a class="${on === 'sam' ? 'on' : ''}">Samlingar</a><a>Sidor</a><a>Butiken</a><a>Betalningar</a><a>Inställningar</a></nav>`;
+
+/* the tree used everywhere */
+const TREE = [
+  { t: 'Vinyl', n: 412, open: true, k: [
+      { t: 'Rock', n: 180, open: true, k: [{ t: '60-tal', n: 44 }, { t: '70-tal', n: 71 }, { t: 'Punk', n: 30 }] },
+      { t: 'Jazz', n: 96 }, { t: 'Soul & funk', n: 58 }, { t: 'Svenskt', n: 78, smart: true } ] },
+  { t: 'CD', n: 230, k: [{ t: 'Rock', n: 90 }, { t: 'Jazz', n: 40 }, { t: 'Boxar', n: 12 }] },
+  { t: 'Merch', n: 36, k: [{ t: 'T-shirts', n: 20 }, { t: 'Affischer', n: 16 }] },
+  { t: 'Rea', n: 24, smart: true, hidden: true },
+];
+
+/* ---------- A1: the collections page = the tree = the menu ---------- */
+function treeRows() {
+  const out = [];
+  const walk = (nodes, d) => nodes.forEach((x, i) => {
+    const hasK = x.k && x.k.length;
+    out.push(`<div class="row d${d} ${x.t === 'Rock' && d === 1 ? 'sel' : ''}"><span class="grip">${I('grip')}</span><span class="tog ${hasK ? '' : 'leaf'}">${I(x.open ? 'chevd' : 'chev', 14)}</span><span class="t">${x.t}</span><span class="n">${x.n}</span>${x.smart ? `<span class="pill pill-info kind"><span class="dot"></span>Taggen "${x.t.toLowerCase()}"</span>` : ''}<span class="sp"></span><span class="eye ${x.hidden ? 'off' : ''}">${I(x.hidden ? 'eyeoff' : 'eye')}</span><span class="more">${I('more')}</span></div>`);
+    if (hasK && x.open) walk(x.k, d + 1);
+    if (x.t === 'Rock' && d === 1) out.push(`<div class="row d2 addin" style="height:36px;border-top:0"><span class="grip"></span><span class="tog leaf"></span><span class="addin">${I('plus', 14)} Ny samling under Rock</span></div>`);
+  });
+  walk(TREE, 0);
+  return out.join('');
+}
+const menuPreview = `<div class="menuprev"><div class="bar"><b>Skivbörsen</b><span class="on">Vinyl</span><span>CD</span><span>Merch</span></div>
+  <div class="panel"><span class="h">Rock</span><span class="sub">60-tal</span><span class="sub">70-tal</span><span class="sub">Punk</span><span class="sub" style="color:var(--n-ink)">Alla i Rock →</span><span class="h">Jazz</span><span class="h">Soul & funk</span><span class="h">Svenskt</span></div></div>`;
+
+const A1 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navAdmin('sam')}<main>
+  <div class="pagehead"><div><h1>Samlingar</h1><p>Dra för att flytta. Det du ser här är exakt det kunderna ser i menyn – ögat döljer en samling från menyn utan att ta bort den.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
+  <div class="wrap"><div class="card">
+    <div class="toolbar"><div class="input search" style="height:32px;font-size:13px;gap:8px;color:var(--a-faint)">${I('search', 14)} Sök samling</div><span class="sp" style="flex:1"></span><div class="seg"><span class="on">Träd</span><span>Lista</span></div></div>
+    <div class="tree">${treeRows()}</div>
+    <div class="legend"><span>${I('eye', 14)} Visas i menyn</span><span>${I('eyeoff', 14)} Dold i menyn (nås via länk och sök)</span><span><span class="pill pill-info"><span class="dot"></span>Tagg</span> fylls automatiskt</span></div>
+  </div>
+  <div class="card mini rail"><h3>Så ser kunden menyn</h3><p>Uppdateras när du flyttar något.</p>${menuPreview}
+    <div style="margin-top:14px;color:var(--a-muted);font-size:12.5px;line-height:18px">Vinyl visar allt som ligger under den (412). Rock visar sina 180, även de i 60-tal, 70-tal och Punk.</div></div>
+  </div></main></div>`;
+
+/* ---------- A2: drag in progress ---------- */
+const A2 = () => A1().replace(
+  `<div class="row d1 "><span class="grip">${I('grip')}</span><span class="tog leaf">${I('chev', 14)}</span><span class="t">Jazz</span>`,
+  `<div class="dropzone"></div><div class="row d1 ghost"><span class="grip">${I('grip')}</span><span class="tog leaf">${I('chev', 14)}</span><span class="t">Jazz</span>`
+).replace('<p>Dra för att flytta. Det du ser här är exakt det kunderna ser i menyn – ögat döljer en samling från menyn utan att ta bort den.</p>', '<p>Du drar Jazz. Släpp här så hamnar den under Vinyl, efter Rock – dra lite åt höger så blir den en undersamling till Rock i stället.</p>');
+
+/* ---------- A3: edit one collection ---------- */
+const A3 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navAdmin('sam')}<main>
+  <div class="crumb">Samlingar ${I('chev', 12)} Vinyl ${I('chev', 12)} <b>Rock</b></div>
+  <div class="pagehead" style="margin-top:6px"><div><h1>Rock</h1><p>180 produkter · varav 145 i undersamlingar</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">Visa i butiken</button><button class="btn btn-primary">Spara</button></div></div>
+  <div class="wrap"><div class="stack">
+    <div class="card" style="padding:18px"><div class="stack">
+      <div class="grid2"><div class="field"><label>Namn</label><div class="input">Rock</div></div><div class="field"><label>Webbadress</label><div class="input"><span class="muted">skivborsen.se/samling/</span>rock</div></div></div>
+      <div class="field"><label>Ligger under</label><div class="parentpick">
+        <div>Översta nivån (visas i huvudmenyn)</div>
+        <div class="on d1">${I('chevd', 14)} Vinyl</div>
+        <div class="d2 dim">Rock – kan inte ligga under sig själv</div><div class="d2">Jazz</div><div class="d2">Soul & funk</div><div class="d2">Svenskt</div>
+        <div class="d1">${I('chev', 14)} CD</div><div class="d1">${I('chev', 14)} Merch</div><div class="d1">Rea</div></div>
+        <span class="help">Flytta samlingen genom att välja en ny förälder. Undersamlingarna (60-tal, 70-tal, Punk) följer med.</span></div>
+      <div class="field"><label>Fylls med</label><div class="seg"><span class="on">Produkter jag väljer</span><span>Alla med en tagg</span></div></div>
+      <div class="check"><span class="bx">${I('check', 12)}</span><span>Visa även produkterna i undersamlingarna på Rocks sida <span class="muted">(60-tal, 70-tal, Punk)</span></span></div>
+      <div class="check"><span class="bx">${I('check', 12)}</span><span>Visa i menyn</span></div>
+    </div></div>
+    <div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><b>Produkter direkt i Rock (35)</b><button class="btn btn-secondary">${I('plus', 14)} Lägg till</button></div>
+      <div class="prodlist">${[['The Band – Music From Big Pink','LP · 1968'],['Patti Smith – Horses','LP · 1975'],['Kebnekajse – II','LP · 1973'],['Television – Marquee Moon','LP · 1977']].map(([a, b], i) => `<div class="prod"><div class="ph">${I('vinyl', 48, ['#B0492B', '#1F3A5F', '#2a845a', '#5B3FA8'][i])}</div><b>${a}</b><span>${b}</span></div>`).join('')}</div></div>
+  </div>
+  <div class="card mini rail"><h3>Undersamlingar</h3><p>Rock innehåller tre. Dra i trädet för att ändra ordningen.</p>
+    <div class="tree" style="margin-top:10px;border-radius:8px;box-shadow:0 0 0 1px var(--a-border) inset">
+      <div class="row" style="height:40px"><span class="grip">${I('grip')}</span><span class="t">60-tal</span><span class="n">44</span><span class="sp"></span><span class="eye">${I('eye')}</span></div>
+      <div class="row" style="height:40px"><span class="grip">${I('grip')}</span><span class="t">70-tal</span><span class="n">71</span><span class="sp"></span><span class="eye">${I('eye')}</span></div>
+      <div class="row" style="height:40px"><span class="grip">${I('grip')}</span><span class="t">Punk</span><span class="n">30</span><span class="sp"></span><span class="eye">${I('eye')}</span></div>
+      <div class="row addin" style="height:36px"><span class="grip"></span><span class="addin">${I('plus', 14)} Ny undersamling</span></div></div>
+    <h3 style="margin-top:18px">Så ser kunden den</h3><p>Brödsmulor och chips kommer från trädet.</p>
+    <div style="margin-top:10px;border-radius:10px;background:var(--n-canvas);padding:12px;font-family:'Instrument Sans',sans-serif;font-size:12px;color:var(--n-muted)">Hem › Vinyl › <b style="color:var(--n-ink)">Rock</b><div style="display:flex;gap:6px;margin-top:8px"><span style="background:#1A1C1E;color:#fff;border-radius:999px;padding:4px 10px">Alla 180</span><span style="background:#fff;border-radius:999px;padding:4px 10px">60-tal</span><span style="background:#fff;border-radius:999px;padding:4px 10px">70-tal</span><span style="background:#fff;border-radius:999px;padding:4px 10px">Punk</span></div></div></div>
+  </div></main></div>`;
+
+/* ---------- S1: desktop menu open ---------- */
+const sfNav = (on) => `<div class="nav"><span class="logo">Skivbörsen</span><div class="links"><span class="${on === 'Vinyl' ? 'on' : ''}">Vinyl</span><span>CD</span><span>Merch</span><span>Rea</span></div><span class="cart">Varukorg <b>2</b></span></div>`;
+const S1 = () => `<div class="sf">${sfNav('Vinyl')}
+  <div class="mega">
+    <div><h4>Rock</h4><ul><li>60-tal</li><li>70-tal</li><li>Punk</li><li class="all">Alla i Rock (180) →</li></ul></div>
+    <div><h4>Jazz</h4><ul><li>Bebop</li><li>Modal</li><li>Nordiskt</li><li class="all">Alla i Jazz (96) →</li></ul></div>
+    <div><h4>Soul & funk</h4><ul><li>Motown</li><li>Stax</li><li class="all">Alla (58) →</li></ul></div>
+    <div><h4>Svenskt</h4><ul><li>Progg</li><li>Visor</li><li>Nytt svenskt</li><li class="all">Alla (78) →</li></ul></div>
+    <div class="feat"><b>Nyinkommet på vinyl</b><span>38 skivor den här veckan</span></div>
+  </div>
+  <div class="page" style="opacity:.35;margin-top:14px"><div class="crumbs">Hem</div><h1>Skivor som låter som de ska.</h1></div></div>`;
+
+/* ---------- S2: collection page, dense grid ---------- */
+const prods = [['The Band','Big Pink','249 kr','#B0492B'],['Patti Smith','Horses','199 kr','#1F3A5F'],['Kebnekajse','II','349 kr','#2a845a'],['Television','Marquee Moon','229 kr','#5B3FA8'],['Ramones','Rocket to Russia','259 kr','#c9a227'],['November','En ny tid','299 kr','#1b1b1f'],['Wire','Pink Flag','219 kr','#0E5E63'],['Ebba Grön','We’re Only In It…','279 kr','#B0492B'],['Neil Young','Harvest','239 kr','#1F3A5F'],['Big Star','#1 Record','269 kr','#5B3FA8'],['Pere Ubu','Dub Housing','249 kr','#2a845a'],['Blue Öyster Cult','Agents of Fortune','189 kr','#c9a227']];
+const S2 = () => `<div class="sf">${sfNav('Vinyl')}
+  <div class="page">
+    <div class="crumbs">Hem ${I('chev', 12)} Vinyl ${I('chev', 12)} <b>Rock</b></div>
+    <div class="toprow"><div><h1>Rock</h1><div class="count">180 skivor · 60-tal, 70-tal och punk</div></div>
+      <div class="dense"><span>Visa</span><i>${I('g2', 14)}</i><i>${I('g4', 14)}</i><i class="on">${I('g6', 14)}</i></div></div>
+    <div class="chips"><span class="on">Alla <i>180</i></span><span>60-tal <i>44</i></span><span>70-tal <i>71</i></span><span>Punk <i>30</i></span><span class="all">← Vinyl</span></div>
+    <div class="pgrid">${prods.map(([a, t, p, c]) => `<div class="pc"><div class="img" style="background:#ECE9E2">${I('vinyl', 96, c)}</div><div class="body"><div class="t">${a} – ${t}</div><div class="a">LP</div><div class="p">${p}</div></div></div>`).join('')}</div>
+  </div></div>`;
+
+/* ---------- S3: phone: hamburger tree + collection page ---------- */
+const S3 = () => `<div class="phonewrap">
+  <div class="phone"><div class="pn"><b>Skivbörsen</b><span class="burger">✕</span></div>
+    <div class="sheet">
+      <div class="r open">Vinyl <span class="n">412</span><span class="chev">${I('chevd', 16)}</span></div>
+      <div class="r c1 on">Rock <span class="n">180</span><span class="chev">${I('chevd', 16)}</span></div>
+      <div class="r c2">60-tal <span class="n">44</span></div><div class="r c2">70-tal <span class="n">71</span></div><div class="r c2">Punk <span class="n">30</span></div>
+      <div class="r c1">Jazz <span class="n">96</span><span class="chev">${I('chev', 16)}</span></div>
+      <div class="r c1">Soul & funk <span class="n">58</span><span class="chev">${I('chev', 16)}</span></div>
+      <div class="r c1">Svenskt <span class="n">78</span><span class="chev">${I('chev', 16)}</span></div>
+      <div class="r">CD <span class="n">230</span><span class="chev">${I('chev', 16)}</span></div>
+      <div class="r">Merch <span class="n">36</span><span class="chev">${I('chev', 16)}</span></div>
+      <div class="r">Rea <span class="n">24</span></div>
+    </div></div>
+  <div class="phone"><div class="pn"><b>Skivbörsen</b><span class="burger">☰</span></div>
+    <div class="pcr">Vinyl › Rock</div><h2>Rock</h2>
+    <div class="pchips"><span class="on">Alla 180</span><span>60-tal</span><span>70-tal</span><span>Punk</span></div>
+    <div class="pg">${prods.slice(0, 6).map(([a, t, p, c]) => `<div class="pc"><div class="img" style="background:#ECE9E2">${I('vinyl', 90, c)}</div><div class="body"><div class="t">${a} – ${t}</div><div class="p">${p}</div></div></div>`).join('')}</div>
+  </div></div>`;
+
+const key = new URLSearchParams(location.search).get('s') || 'A1';
+document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3 })[key]();
+</script>
+</body></html>
