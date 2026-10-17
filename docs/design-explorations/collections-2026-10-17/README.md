@@ -32,3 +32,7 @@ The UI grows with the data. Nothing from the next stage shows before the seller 
 | 2 — nested | A1–A3, S1–S3, P1–P3 | The tree, the drop lines, "Ligger under", path chips, the filtering picker, the mega panel, breadcrumbs and chips. Appears the moment a collection gets a child. |
 
 Same component in all three stages: the tree renders a one-level tree as a list. The seller never switches a mode.
+
+## The Meny page (M1)
+
+Hierarchy lives in Samlingar only. The Meny page keeps what surrounds the collections: Hem, pages, links, a tag quick-link, and ONE block "Samlingar (från trädet)" that renders the tree read-only, drags as a unit, and links to Samlingar. A single collection can no longer be a menu item; the eye in Samlingar is the only switch. The "Utvald" star on a collection becomes the mega panel's featured tile. Kategori (the free-text product field with `/kategori/` pages) is proposed folded into collections at migration (one collection per existing category, redirects kept); tags stay.

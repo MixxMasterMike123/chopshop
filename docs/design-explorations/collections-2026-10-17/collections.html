@@ -189,6 +189,21 @@
   .arthero p { color: #ffffffbf; margin-top: 12px; max-width: 40ch; font-size: 15px; }
   .artgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; padding: 16px 48px; }
   .art { aspect-ratio: 5/4 !important; }
+
+  .mrow { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; border-top: 1px solid var(--a-border-soft); }
+  .mrow:first-child { border-top: 0; }
+  .mrow .kind { height: 28px; padding: 0 10px; border-radius: 6px; background: var(--a-surface-2); box-shadow: 0 0 0 1px var(--a-border) inset; display: inline-flex; align-items: center; gap: 6px; color: var(--a-muted); font-size: 12.5px; min-width: 96px; }
+  .mrow .lbl { font-weight: 500; }
+  .mrow .sp { flex: 1; }
+  .mblock { border-top: 1px solid var(--a-border-soft); background: var(--a-surface-2); padding: 12px 16px 14px; }
+  .mblock .head { display: flex; align-items: center; gap: 12px; }
+  .mblock .head .kind { background: #fff; }
+  .mblock .inner { margin: 10px 0 0 40px; background: #fff; border-radius: 8px; box-shadow: 0 0 0 1px var(--a-border) inset; padding: 6px 0; }
+  .mblock .inner .r { height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 13px; color: var(--a-muted); }
+  .mblock .inner .r.d0 { color: var(--a-text); font-weight: 500; }
+  .mblock .inner .r.d1 { padding-left: 30px; } .mblock .inner .r.d2 { padding-left: 48px; font-size: 12.5px; }
+  .mblock .foot { display: flex; align-items: center; gap: 14px; margin: 10px 0 0 40px; color: var(--a-muted); font-size: 12.5px; }
+  .mblock .foot a { color: var(--a-text); text-decoration: underline; text-underline-offset: 2px; }
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs>
@@ -431,7 +446,30 @@ const Z3 = () => `<div class="sf artist"><div class="nav artnav"><span class="lo
   <div class="page" style="padding-top:22px"><div class="toprow"><div><h1 style="font-size:30px;margin-top:0">Original</h1><div class="count">4 verk</div></div></div></div>
   <div class="artgrid">${[['#8A4B2B','Morgon vid älven','6 500 kr'],['#1F3A5F','Novemberljus','4 800 kr'],['#2a845a','Strandskog','5 200 kr'],['#c9a227','Augusti','3 900 kr']].map(([c, t, p]) => `<div class="pc"><div class="img art" style="background:${c}"></div><div class="body"><div class="t" style="font-size:15px">${t}</div><div class="a">Akryl på duk · 60 × 80 cm</div><div class="p" style="font-size:15px">${p}</div></div></div>`).join('')}</div></div>`;
 
+
+/* ---------- M1: the Meny page after the change ---------- */
+const navM = `<nav><a>Hem</a><a>Ordrar</a><a>Produkter</a><a>Samlingar</a><a class="on">Meny</a><a>Sidor</a><a>Butiken</a><a>Betalningar</a><a>Inställningar</a></nav>`;
+const M1 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navM}<main>
+  <div class="pagehead"><div><h1>Meny</h1><p>Det som står runt dina samlingar i butikens toppmeny. Samlingarna själva, och vad som ligger under vad, sköter du under Samlingar.</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">${I('plus', 14)} Lägg till punkt</button><button class="btn btn-primary">Spara meny</button></div></div>
+  <div class="wrap"><div class="card">
+    <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Hem</span><span class="lbl">Hem</span><span class="sp"></span><span class="more">${I('more')}</span></div>
+    <div class="mblock"><div class="head"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Samlingar</span><span class="lbl">Från trädet, automatiskt</span><span class="sp"></span><span class="pill pill-ok"><span class="dot"></span>4 i menyn · 1 dold</span></div>
+      <div class="inner">
+        <div class="r d0">${I('chevd', 12)} Vinyl <span class="n" style="color:var(--a-faint);font-size:12px">412</span></div>
+        <div class="r d1">Rock <span style="color:var(--a-faint);font-size:12px">· 60-tal, 70-tal, Punk</span></div><div class="r d1">Jazz</div><div class="r d1">Soul & funk</div><div class="r d1">Svenskt</div>
+        <div class="r d0">${I('chev', 12)} CD</div><div class="r d0">${I('chev', 12)} Merch</div>
+        <div class="r d0" style="color:var(--a-faint);font-weight:400">${I('eyeoff', 12)} Rea <span style="font-size:12px">· dold, nås via länk</span></div></div>
+      <div class="foot"><span>Ordning, undernivåer och vad som syns ändrar du i</span><a>Samlingar →</a></div></div>
+    <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Tagg</span><span class="lbl">Nyinkommet</span><span class="n" style="color:var(--a-faint);font-size:12px">taggen "nyinkommet"</span><span class="sp"></span><span class="more">${I('more')}</span></div>
+    <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Sida</span><span class="lbl">Om butiken</span><span class="sp"></span><span class="more">${I('more')}</span></div>
+    <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Länk</span><span class="lbl">Spelningar</span><span class="n" style="color:var(--a-faint);font-size:12px">skivborsen.se/live</span><span class="sp"></span><span class="more">${I('more')}</span></div>
+    <div class="hint">${I('info', 14)}<span>En enskild samling kan inte läggas till här – den är i menyn när ögat är tänt under Samlingar. Då kan samma samling aldrig stå på två ställen.</span></div></div>
+  <div class="card mini rail"><h3>Så ser kunden menyn</h3><p>I den här ordningen.</p>
+    <div class="menuprev"><div class="bar"><b>Skivbörsen</b><span>Hem</span><span class="on">Vinyl</span><span>CD</span><span>Merch</span><span>Nyinkommet</span><span>Om butiken</span><span>Spelningar</span></div>
+      <div class="panel"><span class="h">Rock</span><span class="sub">60-tal</span><span class="sub">70-tal</span><span class="sub">Punk</span><span class="h">Jazz</span><span class="h">Soul & funk</span><span class="h">Svenskt</span></div></div></div></div>
+  </main></div>`;
+
 const key = new URLSearchParams(location.search).get('s') || 'A1';
-document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3, Z0, Z1, Z2, Z3 })[key]();
+document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3, Z0, Z1, Z2, Z3, M1 })[key]();
 </script>
 </body></html>
