@@ -36,3 +36,7 @@ Same component in all three stages: the tree renders a one-level tree as a list.
 ## The Meny page (M1)
 
 Hierarchy lives in Samlingar only. The Meny page keeps what surrounds the collections: Hem, pages, links, a tag quick-link, and ONE block "Samlingar (från trädet)" that renders the tree read-only, drags as a unit, and links to Samlingar. A single collection can no longer be a menu item; the eye in Samlingar is the only switch. The "Utvald" star on a collection becomes the mega panel's featured tile. Kategori (the free-text product field with `/kategori/` pages) is proposed folded into collections at migration (one collection per existing category, redirects kept); tags stay.
+
+## Two axes at once (N screens, Ninetone)
+
+A record label: every product sits in its artist AND its format. N1 the tree after migration (Artister with six children; Vinyl, CD, Essentials from the old Kategori field, marked "Var kategorin"; Artist Merch from a tag) and the menu it yields. N2 the product with two memberships, picked with two ticks. N3 the Vinyl page offering the other axis as filter chips: a collection page with no children shows, instead, the collections its products also belong to.

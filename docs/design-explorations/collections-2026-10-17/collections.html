@@ -204,6 +204,11 @@
   .mblock .inner .r.d1 { padding-left: 30px; } .mblock .inner .r.d2 { padding-left: 48px; font-size: 12.5px; }
   .mblock .foot { display: flex; align-items: center; gap: 14px; margin: 10px 0 0 40px; color: var(--a-muted); font-size: 12.5px; }
   .mblock .foot a { color: var(--a-text); text-decoration: underline; text-underline-offset: 2px; }
+
+  .av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 600; flex: none; }
+  .xf { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .xf .lab { color: var(--n-muted); font-size: 13px; margin-right: 4px; }
+  .xf .chips .av { width: 14px; height: 14px; font-size: 0; }
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs>
@@ -469,7 +474,62 @@ const M1 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;co
       <div class="panel"><span class="h">Rock</span><span class="sub">60-tal</span><span class="sub">70-tal</span><span class="sub">Punk</span><span class="h">Jazz</span><span class="h">Soul & funk</span><span class="h">Svenskt</span></div></div></div></div>
   </main></div>`;
 
+
+/* ---------- N: Ninetone, two axes ---------- */
+const ART = [['Eva Eastwood','#B0492B',1],['Karakou','#1F3A5F',3],['Mekbrudarna','#2a845a',7],['Ronny & Ragge','#5B3FA8',2],['Tim Liljegren','#c9a227',1],['Tommy Nilsson','#0E5E63',1]];
+const av = (n, c) => `<span class="av" style="background:${c}">${n.split(' ').map(w => w[0]).join('').slice(0, 2)}</span>`;
+const nTop = topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Ninetone Group</span><span class="avatar">NG</span>');
+const nRow = (d, inner, extra = '') => `<div class="row d${d}"><span class="grip">${I('grip')}</span>${inner}<span class="sp"></span>${extra}<span class="eye">${I('eye')}</span><span class="more">${I('more')}</span></div>`;
+const N1 = () => nTop + `<div class="shell">${navAdmin('sam')}<main>
+  <div class="pagehead"><div><h1>Samlingar</h1><p>Två sätt att hitta samma skiva: via artisten och via formatet. En produkt ligger i båda.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
+  <div class="wrap"><div class="card"><div class="tree">
+    ${nRow(0, `<span class="tog">${I('chevd', 14)}</span><span class="t">Artister</span><span class="n">15</span>`)}
+    ${ART.map(([n, c, k]) => nRow(1, `<span class="tog leaf"></span>${av(n, c)}<span class="t">${n}</span><span class="n">${k}</span>`)).join('')}
+    <div class="row d1 addin" style="height:36px;border-top:0"><span class="grip"></span><span class="tog leaf"></span><span class="addin">${I('plus', 14)} Ny artist under Artister</span></div>
+    ${nRow(0, `<span class="tog leaf"></span><span class="t">Vinyl</span><span class="n">9</span>`, '<span class="pill pill-neutral kind" style="margin-right:10px"><span class="dot"></span>Var kategorin "Vinyl"</span>')}
+    ${nRow(0, `<span class="tog leaf"></span><span class="t">CD</span><span class="n">6</span>`, '<span class="pill pill-neutral kind" style="margin-right:10px"><span class="dot"></span>Var kategorin "Cd"</span>')}
+    ${nRow(0, `<span class="tog leaf"></span><span class="t">Ninetone Essentials</span><span class="n">4</span>`, '<span class="pill pill-neutral kind" style="margin-right:10px"><span class="dot"></span>Var kategorin</span>')}
+    ${nRow(0, `<span class="tog leaf"></span><span class="t">Artist Merch</span><span class="n">5</span><span class="pill pill-info kind"><span class="dot"></span>Taggen "merch"</span>`)}
+    </div><div class="legend"><span>${I('eye', 14)} Visas i menyn</span><span><span class="pill pill-neutral"><span class="dot"></span>Var kategorin</span> flyttad hit från det gamla fältet Kategori</span><span>${I('tag', 14)} fylls av en tagg</span></div></div>
+  <div class="card mini rail"><h3>Så ser kunden menyn</h3><p>Artister får en meny, formaten är rena flikar.</p>
+    <div class="menuprev" style="--n-accent:#1F3A5F"><div class="bar"><b>Ninetone</b><span class="on">Artister</span><span>Vinyl</span><span>CD</span><span>Essentials</span><span>Merch</span></div>
+      <div class="panel">${ART.map(([n]) => `<span class="h" style="grid-column:auto;margin-top:0">${n}</span>`).join('')}</div></div>
+    <div style="margin-top:14px;color:var(--a-muted);font-size:12.5px;line-height:18px">Karakous vinyl ligger både under Artister › Karakou och under Vinyl. Kunden hittar den från båda hållen.</div></div></div>
+  </main></div>`;
+
+const N2 = () => nTop + `<div class="shell">${navAdmin('prod')}<main>
+  <div class="crumb">Produkter ${I('chev', 12)} <b>Karakou – Första LP:n</b></div>
+  <div class="pagehead" style="margin-top:6px"><div><h1>Karakou – Första LP:n</h1><p>Vinyl · 2024 · 279 kr · 40 i lager</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">Visa i butiken</button><button class="btn btn-primary">Spara</button></div></div>
+  <div class="pform"><div class="stack">
+    <div class="card" style="padding:18px"><div class="stack"><div class="field"><label>Namn</label><div class="input">Karakou – Första LP:n</div></div>
+      <div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><div class="field"><label>Pris (inkl. moms)</label><div class="input">279 kr</div></div><div class="field"><label>Lagersaldo</label><div class="input">40 st</div></div><div class="field"><label>Taggar</label><div class="input" style="font-size:13px">vinyl, 2024</div></div></div></div></div>
+    <div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between"><b>Samlingar</b><span class="muted" style="font-size:12px">2 valda</span></div>
+      <div class="chipsel" style="margin:12px 0"><span><span class="path">Artister ›</span> Karakou <span class="x">✕</span></span><span>Vinyl <span class="x">✕</span></span></div>
+      <div class="picker">
+        <div class="srch">${I('search', 14)}<span class="muted">Sök samling</span></div>
+        <div class="r"><span class="tg">${I('chevd', 14)}</span><span class="cb half"></span>Artister <span class="n">15</span></div>
+        ${ART.map(([n, c, k]) => `<div class="r d1"><span class="tg"></span><span class="cb ${n === 'Karakou' ? 'on' : ''}">${n === 'Karakou' ? I('check', 11) : ''}</span>${av(n, c)}${n} <span class="n">${k}</span></div>`).join('')}
+        <div class="r"><span class="tg"></span><span class="cb on">${I('check', 11)}</span>Vinyl <span class="n">9</span></div>
+        <div class="r"><span class="tg"></span><span class="cb"></span>CD <span class="n">6</span></div>
+        <div class="r"><span class="tg"></span><span class="cb"></span>Ninetone Essentials <span class="n">4</span></div>
+        <div class="r dim"><span class="tg"></span><span class="cb"></span>Artist Merch <span class="n">5</span><span class="n" style="margin-left:6px">fylls av taggen "merch"</span></div>
+        <div class="foot"><span>En skiva ligger normalt i sin artist och sitt format.</span><button class="btn btn-primary" style="height:28px">Klar</button></div></div></div>
+  </div>
+  <div class="card mini rail"><h3>Var kunden hittar den</h3><p>Från två håll.</p>
+    <div style="margin-top:12px;border-radius:10px;background:var(--n-canvas);padding:12px;font-family:'Instrument Sans',sans-serif;font-size:12.5px;color:var(--n-muted);display:flex;flex-direction:column;gap:6px"><span>Artister › <b style="color:var(--n-ink)">Karakou</b></span><span><b style="color:var(--n-ink)">Vinyl</b></span></div>
+    <h3 style="margin-top:18px">Alla 3 av Karakou</h3><p>Samma två samlingar? Markera dem i produktlistan och välj Lägg i samling.</p></div></div>
+  </main></div>`;
+
+/* N3: the Vinyl page offers the other axis as filters */
+const N3 = () => `<div class="sf" style="--n-accent:#1F3A5F"><div class="nav"><span class="logo">Ninetone</span><div class="links"><span>Artister</span><span class="on">Vinyl</span><span>CD</span><span>Essentials</span><span>Merch</span></div><span class="cart">Varukorg <b>0</b></span></div>
+  <div class="page">
+    <div class="crumbs">Hem ${I('chev', 12)} <b>Vinyl</b></div>
+    <div class="toprow"><div><h1>Vinyl</h1><div class="count">9 skivor</div></div><div class="dense"><span>Visa</span><i>${I('g2', 14)}</i><i class="on">${I('g4', 14)}</i><i>${I('g6', 14)}</i></div></div>
+    <div class="xf"><span class="lab">Artist</span><div class="chips" style="margin-top:0"><span class="on">Alla <i>9</i></span>${ART.map(([n, c, k]) => `<span>${av(n, c).replace('width: 26px', 'width: 18px')}${n} <i>${k}</i></span>`).join('')}</div></div>
+    <div class="pgrid" style="grid-template-columns:repeat(4,1fr)">${[['Karakou','Första LP:n','279 kr','#1F3A5F'],['Mekbrudarna','Live i Umeå','299 kr','#2a845a'],['Eva Eastwood','Sun Dance','249 kr','#B0492B'],['Ronny & Ragge','Dubbel-LP','349 kr','#5B3FA8'],['Mekbrudarna','Rolig Rock','279 kr','#2a845a'],['Tim Liljegren','Norrsken','259 kr','#c9a227'],['Tommy Nilsson','Allt det här','249 kr','#0E5E63'],['Mekbrudarna','Bästa','299 kr','#2a845a']].map(([a, t, p, c]) => `<div class="pc"><div class="img" style="background:#ECE9E2">${I('vinyl', 120, c)}</div><div class="body"><div class="t">${a} – ${t}</div><div class="a">LP</div><div class="p">${p}</div></div></div>`).join('')}</div>
+  </div></div>`;
+
 const key = new URLSearchParams(location.search).get('s') || 'A1';
-document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3, Z0, Z1, Z2, Z3, M1 })[key]();
+document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3, Z0, Z1, Z2, Z3, M1, N1, N2, N3 })[key]();
 </script>
 </body></html>
