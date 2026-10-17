@@ -48,3 +48,18 @@ A record label: every product sits in its artist AND its format. N1 the tree aft
 **Parked, in `renders/parked/`:** V1 suggestions + "senast använda", V2 bulk sorting with suggestions, N3 cross-axis filter chips, A2 drag-to-nest (the editor's "Ligger under" does the job).
 
 The seller's model in three sentences: a samling can contain products and other samlingar; the Samlingar page shows that as a tree, and the tree is the menu; on a product you type a samling's name and tick it.
+
+
+## Distilled (final), 2026-10-17 — `renders/` is now this set; the earlier renders are in `old/`, parked ideas in `parked/`
+
+**The feature in three sentences, for a seller:** a samling holds products and can hold other samlingar; the Samlingar page shows that as a tree, and the tree is the menu; on a product you type a samling's name and tick it.
+
+**Removed in the distill pass, and why:**
+- Samlingar page: the Träd/Lista toggle (one view), the search box (search lives on the product; the tree is browsed), the per-row "…" menu (open the row), the legend (the rows say it), the explanatory paragraph in the rail.
+- Collection editor: the Webbadress field (shown as a line; it follows the name), "Fylls med" segmented control (a link "Fyll automatiskt från en tagg" instead), the "visa även undersamlingarnas produkter" checkbox (always on — the one rule), the second preview in the rail (A1 already shows the menu).
+- Product: the tree browser (search + results only, same shape for 2 or 400 samlingar), the "var kunden hittar den" rail (the chips say it), the counts summary.
+- Storefront: the featured tile in the mega panel, "Alla i Rock →" rows (the column heading is the link), the "← Vinyl" chip (breadcrumb), the density switch (its own feature, Kent's request, not part of this).
+- Meny page: the copy of the tree inside the block (one row: "Samlingar · Vinyl, CD, Merch · Ändra i Samlingar"), the explanatory hint.
+- Stage 0/1: the tag tip on day one, the nesting paragraph (one line), the "ingen samling vald" help.
+
+**The 12 screens:** A1 tree · A3 editor · P2 product picker · P3 bulk · S1 menu open · S2 collection page · S3 phone · M1 Meny · Z0–Z3 the artist's shop at stage 0 and 1.

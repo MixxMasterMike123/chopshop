@@ -141,7 +141,7 @@
   .phone .pc .img { aspect-ratio: 1; }
 
   /* ---------- product form: the collection picker ---------- */
-  .pform { max-width: 1120px; display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 20px; align-items: start; }
+  .pform { max-width: 1120px; display: grid; grid-template-columns: minmax(0,1fr); gap: 20px; align-items: start; }
   .chipsel { display: flex; flex-wrap: wrap; gap: 6px; }
   .chipsel span { height: 28px; padding: 0 6px 0 10px; border-radius: 6px; background: var(--a-surface-2); box-shadow: 0 0 0 1px var(--a-border) inset; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
   .chipsel span .path { color: var(--a-faint); }
@@ -271,7 +271,7 @@ function treeRows() {
   const out = [];
   const walk = (nodes, d) => nodes.forEach((x, i) => {
     const hasK = x.k && x.k.length;
-    out.push(`<div class="row d${d} ${x.t === 'Rock' && d === 1 ? 'sel' : ''}"><span class="grip">${I('grip')}</span><span class="tog ${hasK ? '' : 'leaf'}">${I(x.open ? 'chevd' : 'chev', 14)}</span><span class="t">${x.t}</span><span class="n">${x.n}</span>${x.smart ? `<span class="pill pill-info kind"><span class="dot"></span>Taggen "${x.t.toLowerCase()}"</span>` : ''}<span class="sp"></span><span class="eye ${x.hidden ? 'off' : ''}">${I(x.hidden ? 'eyeoff' : 'eye')}</span><span class="more">${I('more')}</span></div>`);
+    out.push(`<div class="row d${d} ${x.t === 'Rock' && d === 1 ? 'sel' : ''}"><span class="grip">${I('grip')}</span><span class="tog ${hasK ? '' : 'leaf'}">${I(x.open ? 'chevd' : 'chev', 14)}</span><span class="t">${x.t}</span><span class="n">${x.n}</span>${x.smart ? `<span class="n" style="margin-left:8px">fylls av taggen "${x.t.toLowerCase()}"</span>` : ''}<span class="sp"></span><span class="eye ${x.hidden ? 'off' : ''}">${I(x.hidden ? 'eyeoff' : 'eye')}</span></div>`);
     if (hasK && x.open) walk(x.k, d + 1);
     if (x.t === 'Rock' && d === 1) out.push(`<div class="row d2 addin" style="height:36px;border-top:0"><span class="grip"></span><span class="tog leaf"></span><span class="addin">${I('plus', 14)} Ny samling under Rock</span></div>`);
   });
@@ -279,17 +279,14 @@ function treeRows() {
   return out.join('');
 }
 const menuPreview = `<div class="menuprev"><div class="bar"><b>Skivbörsen</b><span class="on">Vinyl</span><span>CD</span><span>Merch</span></div>
-  <div class="panel"><span class="h">Rock</span><span class="sub">60-tal</span><span class="sub">70-tal</span><span class="sub">Punk</span><span class="sub" style="color:var(--n-ink)">Alla i Rock →</span><span class="h">Jazz</span><span class="h">Soul & funk</span><span class="h">Svenskt</span></div></div>`;
+  <div class="panel"><span class="h">Rock →</span><span class="sub">60-tal</span><span class="sub">70-tal</span><span class="sub">Punk</span><span class="h">Jazz</span><span class="h">Soul & funk</span><span class="h">Svenskt</span></div></div>`;
 
 const A1 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navAdmin('sam')}<main>
-  <div class="pagehead"><div><h1>Samlingar</h1><p>Dra för att flytta. Det du ser här är exakt det kunderna ser i menyn – ögat döljer en samling från menyn utan att ta bort den.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
+  <div class="pagehead"><div><h1>Samlingar</h1><p>Det här är butikens meny. Dra för att flytta, ögat döljer från menyn.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
   <div class="wrap"><div class="card">
-    <div class="toolbar"><div class="input search" style="height:32px;font-size:13px;gap:8px;color:var(--a-faint)">${I('search', 14)} Sök samling</div><span class="sp" style="flex:1"></span><div class="seg"><span class="on">Träd</span><span>Lista</span></div></div>
     <div class="tree">${treeRows()}</div>
-    <div class="legend"><span>${I('eye', 14)} Visas i menyn</span><span>${I('eyeoff', 14)} Dold i menyn (nås via länk och sök)</span><span><span class="pill pill-info"><span class="dot"></span>Tagg</span> fylls automatiskt</span></div>
   </div>
-  <div class="card mini rail"><h3>Så ser kunden menyn</h3><p>Uppdateras när du flyttar något.</p>${menuPreview}
-    <div style="margin-top:14px;color:var(--a-muted);font-size:12.5px;line-height:18px">Vinyl visar allt som ligger under den (412). Rock visar sina 180, även de i 60-tal, 70-tal och Punk.</div></div>
+  <div class="card mini rail"><h3>Så ser kunden menyn</h3>${menuPreview}</div>
   </div></main></div>`;
 
 /* ---------- A2: drag in progress ---------- */
@@ -301,42 +298,39 @@ const A2 = () => A1().replace(
 /* ---------- A3: edit one collection ---------- */
 const A3 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navAdmin('sam')}<main>
   <div class="crumb">Samlingar ${I('chev', 12)} Vinyl ${I('chev', 12)} <b>Rock</b></div>
-  <div class="pagehead" style="margin-top:6px"><div><h1>Rock</h1><p>180 produkter · varav 145 i undersamlingar</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">Visa i butiken</button><button class="btn btn-primary">Spara</button></div></div>
+  <div class="pagehead" style="margin-top:6px"><div><h1>Rock</h1><p>180 produkter · skivborsen.se/samling/rock</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">Visa i butiken</button><button class="btn btn-primary">Spara</button></div></div>
   <div class="wrap"><div class="stack">
     <div class="card" style="padding:18px"><div class="stack">
-      <div class="grid2"><div class="field"><label>Namn</label><div class="input">Rock</div></div><div class="field"><label>Webbadress</label><div class="input"><span class="muted">skivborsen.se/samling/</span>rock</div></div></div>
+      <div class="field"><label>Namn</label><div class="input">Rock</div></div>
       <div class="field"><label>Ligger under</label><div class="parentpick">
         <div>Översta nivån (visas i huvudmenyn)</div>
         <div class="on d1">${I('chevd', 14)} Vinyl</div>
         <div class="d2 dim">Rock – kan inte ligga under sig själv</div><div class="d2">Jazz</div><div class="d2">Soul & funk</div><div class="d2">Svenskt</div>
         <div class="d1">${I('chev', 14)} CD</div><div class="d1">${I('chev', 14)} Merch</div><div class="d1">Rea</div></div>
-        <span class="help">Flytta samlingen genom att välja en ny förälder. Undersamlingarna (60-tal, 70-tal, Punk) följer med.</span></div>
-      <div class="field"><label>Fylls med</label><div class="seg"><span class="on">Produkter jag väljer</span><span>Alla med en tagg</span></div></div>
-      <div class="check"><span class="bx">${I('check', 12)}</span><span>Visa även produkterna i undersamlingarna på Rocks sida <span class="muted">(60-tal, 70-tal, Punk)</span></span></div>
+        <span class="help">Undersamlingarna följer med.</span></div>
       <div class="check"><span class="bx">${I('check', 12)}</span><span>Visa i menyn</span></div>
+      <span class="help" style="margin-top:-6px"><a style="text-decoration:underline;text-underline-offset:2px">Fyll automatiskt från en tagg</a></span>
     </div></div>
     <div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><b>Produkter direkt i Rock (35)</b><button class="btn btn-secondary">${I('plus', 14)} Lägg till</button></div>
       <div class="prodlist">${[['The Band – Music From Big Pink','LP · 1968'],['Patti Smith – Horses','LP · 1975'],['Kebnekajse – II','LP · 1973'],['Television – Marquee Moon','LP · 1977']].map(([a, b], i) => `<div class="prod"><div class="ph">${I('vinyl', 48, ['#B0492B', '#1F3A5F', '#2a845a', '#5B3FA8'][i])}</div><b>${a}</b><span>${b}</span></div>`).join('')}</div></div>
   </div>
-  <div class="card mini rail"><h3>Undersamlingar</h3><p>Rock innehåller tre. Dra i trädet för att ändra ordningen.</p>
+  <div class="card mini rail"><h3>Undersamlingar</h3>
     <div class="tree" style="margin-top:10px;border-radius:8px;box-shadow:0 0 0 1px var(--a-border) inset">
       <div class="row" style="height:40px"><span class="grip">${I('grip')}</span><span class="t">60-tal</span><span class="n">44</span><span class="sp"></span><span class="eye">${I('eye')}</span></div>
       <div class="row" style="height:40px"><span class="grip">${I('grip')}</span><span class="t">70-tal</span><span class="n">71</span><span class="sp"></span><span class="eye">${I('eye')}</span></div>
       <div class="row" style="height:40px"><span class="grip">${I('grip')}</span><span class="t">Punk</span><span class="n">30</span><span class="sp"></span><span class="eye">${I('eye')}</span></div>
       <div class="row addin" style="height:36px"><span class="grip"></span><span class="addin">${I('plus', 14)} Ny undersamling</span></div></div>
-    <h3 style="margin-top:18px">Så ser kunden den</h3><p>Brödsmulor och chips kommer från trädet.</p>
-    <div style="margin-top:10px;border-radius:10px;background:var(--n-canvas);padding:12px;font-family:'Instrument Sans',sans-serif;font-size:12px;color:var(--n-muted)">Hem › Vinyl › <b style="color:var(--n-ink)">Rock</b><div style="display:flex;gap:6px;margin-top:8px"><span style="background:#1A1C1E;color:#fff;border-radius:999px;padding:4px 10px">Alla 180</span><span style="background:#fff;border-radius:999px;padding:4px 10px">60-tal</span><span style="background:#fff;border-radius:999px;padding:4px 10px">70-tal</span><span style="background:#fff;border-radius:999px;padding:4px 10px">Punk</span></div></div></div>
+</div>
   </div></main></div>`;
 
 /* ---------- S1: desktop menu open ---------- */
 const sfNav = (on) => `<div class="nav"><span class="logo">Skivbörsen</span><div class="links"><span class="${on === 'Vinyl' ? 'on' : ''}">Vinyl</span><span>CD</span><span>Merch</span><span>Rea</span></div><span class="cart">Varukorg <b>2</b></span></div>`;
 const S1 = () => `<div class="sf">${sfNav('Vinyl')}
-  <div class="mega">
-    <div><h4>Rock</h4><ul><li>60-tal</li><li>70-tal</li><li>Punk</li><li class="all">Alla i Rock (180) →</li></ul></div>
-    <div><h4>Jazz</h4><ul><li>Bebop</li><li>Modal</li><li>Nordiskt</li><li class="all">Alla i Jazz (96) →</li></ul></div>
-    <div><h4>Soul & funk</h4><ul><li>Motown</li><li>Stax</li><li class="all">Alla (58) →</li></ul></div>
-    <div><h4>Svenskt</h4><ul><li>Progg</li><li>Visor</li><li>Nytt svenskt</li><li class="all">Alla (78) →</li></ul></div>
-    <div class="feat"><b>Nyinkommet på vinyl</b><span>38 skivor den här veckan</span></div>
+  <div class="mega" style="grid-template-columns:repeat(4,1fr)">
+    <div><h4>Rock →</h4><ul><li>60-tal</li><li>70-tal</li><li>Punk</li></ul></div>
+    <div><h4>Jazz →</h4><ul><li>Bebop</li><li>Modal</li><li>Nordiskt</li></ul></div>
+    <div><h4>Soul & funk →</h4><ul><li>Motown</li><li>Stax</li></ul></div>
+    <div><h4>Svenskt →</h4><ul><li>Progg</li><li>Visor</li><li>Nytt svenskt</li></ul></div>
   </div>
   <div class="page" style="opacity:.35;margin-top:14px"><div class="crumbs">Hem</div><h1>Skivor som låter som de ska.</h1></div></div>`;
 
@@ -345,9 +339,8 @@ const prods = [['The Band','Big Pink','249 kr','#B0492B'],['Patti Smith','Horses
 const S2 = () => `<div class="sf">${sfNav('Vinyl')}
   <div class="page">
     <div class="crumbs">Hem ${I('chev', 12)} Vinyl ${I('chev', 12)} <b>Rock</b></div>
-    <div class="toprow"><div><h1>Rock</h1><div class="count">180 skivor · 60-tal, 70-tal och punk</div></div>
-      <div class="dense"><span>Visa</span><i>${I('g2', 14)}</i><i>${I('g4', 14)}</i><i class="on">${I('g6', 14)}</i></div></div>
-    <div class="chips"><span class="on">Alla <i>180</i></span><span>60-tal <i>44</i></span><span>70-tal <i>71</i></span><span>Punk <i>30</i></span><span class="all">← Vinyl</span></div>
+    <div class="toprow"><div><h1>Rock</h1><div class="count">180 skivor</div></div></div>
+    <div class="chips"><span class="on">Alla <i>180</i></span><span>60-tal <i>44</i></span><span>70-tal <i>71</i></span><span>Punk <i>30</i></span></div>
     <div class="pgrid">${prods.map(([a, t, p, c]) => `<div class="pc"><div class="img" style="background:#ECE9E2">${I('vinyl', 96, c)}</div><div class="body"><div class="t">${a} – ${t}</div><div class="a">LP</div><div class="p">${p}</div></div></div>`).join('')}</div>
   </div></div>`;
 
@@ -381,8 +374,6 @@ const prodShell = (inner) => topbar(null, '<span class="pill" style="background:
       <div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><div class="field"><label>Pris (inkl. moms)</label><div class="input">229 kr</div></div><div class="field"><label>Lagersaldo</label><div class="input">3 st</div></div><div class="field"><label>Taggar</label><div class="input" style="font-size:13px">lp, 1977, nyinkommet</div></div></div></div></div>
     ${inner}
   </div>
-  <div class="card mini rail"><h3>Var kunden hittar den</h3><p>En produkt kan ligga i flera samlingar. Den syns på varje samlings sida och på föräldrarnas.</p>
-    <div style="margin-top:12px;border-radius:10px;background:var(--n-canvas);padding:12px;font-family:'Instrument Sans',sans-serif;font-size:12.5px;color:var(--n-muted);display:flex;flex-direction:column;gap:6px"><span>Vinyl › Rock › <b style="color:var(--n-ink)">70-tal</b></span><span>Vinyl › Rock › <b style="color:var(--n-ink)">Punk</b></span><span style="color:var(--a-info-text)">Nyinkommet <i style="font-style:normal;opacity:.8">· via taggen</i></span></div></div>
   </div></main></div>`;
 
 const chipsClosed = `<div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between"><b>Samlingar</b><span class="muted" style="font-size:12px">2 valda · 1 automatisk</span></div>
@@ -390,20 +381,17 @@ const chipsClosed = `<div class="card" style="padding:18px"><div style="display:
 const P1 = () => prodShell(chipsClosed);
 
 /* ---------- P2: picker open, filtered by "ro" ---------- */
-const pickerOpen = `<div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between"><b>Samlingar</b><span class="muted" style="font-size:12px">2 valda · 1 automatisk</span></div>
+const pickerOpen = `<div class="card" style="padding:18px"><b>Samlingar</b>
   <div class="chipsel" style="margin:12px 0"><span><span class="path">Vinyl › Rock ›</span> 70-tal <span class="x">✕</span></span><span><span class="path">Vinyl › Rock ›</span> Punk <span class="x">✕</span></span><span class="auto">${I('tag', 12)} Nyinkommet · via taggen</span></div>
-  <div class="picker">
-    <div class="srch">${I('search', 14)}<span class="q">ro</span><span class="caret"></span><span class="muted" style="margin-left:auto;font-size:12px">Skriv för att hitta – trädet filtreras</span></div>
-    <div class="r d0"><span class="tg">${I('chevd', 14)}</span><span class="cb half"></span>Vinyl <span class="n">412</span></div>
-    <div class="r d1 hit"><span class="tg">${I('chevd', 14)}</span><span class="cb half"></span><span><b>Ro</b>ck</span> <span class="n">180</span></div>
-    <div class="r d2"><span class="tg"></span><span class="cb"></span>60-tal <span class="n">44</span></div>
-    <div class="r d2"><span class="tg"></span><span class="cb on">${I('check', 11)}</span>70-tal <span class="n">71</span></div>
-    <div class="r d2"><span class="tg"></span><span class="cb on">${I('check', 11)}</span>Punk <span class="n">30</span></div>
-    <div class="r d2 newrow"><span class="tg"></span>${I('plus', 14)}<div class="input">Ny samling under Rock…</div></div>
-    <div class="r d1 hit"><span class="tg"></span><span class="cb"></span><span>P<b>ro</b>gg</span> <span class="n">22</span><span class="n" style="margin-left:6px">i Svenskt</span></div>
-    <div class="r d0 hit"><span class="tg">${I('chev', 14)}</span><span class="cb"></span>CD <span class="n">230</span><span class="n" style="margin-left:6px">· <b>Ro</b>ck 90</span></div>
-    <div class="r dim"><span class="tg"></span><span class="cb"></span>Rea <span class="n">24</span><span class="n" style="margin-left:6px">fylls av taggen "rea" – välj via taggar</span></div>
-    <div class="foot"><span>Bocka i så många du vill. Föräldrarna följer med automatiskt.</span><button class="btn btn-primary" style="height:28px">Klar</button></div>
+  <div class="picker" style="max-width:520px">
+    <div class="srch">${I('search', 14)}<span class="q">ro</span><span class="caret"></span></div>
+    <div class="r hit"><span class="cb half"></span><span><span class="n">Vinyl › </span><b>Ro</b>ck</span><span class="n">180</span></div>
+    <div class="r d1"><span class="cb"></span>60-tal <span class="n">44</span></div>
+    <div class="r d1"><span class="cb on">${I('check', 11)}</span>70-tal <span class="n">71</span></div>
+    <div class="r d1"><span class="cb on">${I('check', 11)}</span>Punk <span class="n">30</span></div>
+    <div class="r hit"><span class="cb"></span><span><span class="n">Vinyl › Svenskt › </span>P<b>ro</b>gg</span><span class="n">22</span></div>
+    <div class="r hit"><span class="cb"></span><span><span class="n">CD › </span><b>Ro</b>ck</span><span class="n">90</span></div>
+    <div class="r newrow">${I('plus', 14)}<span class="muted">Ny samling "ro"…</span></div>
   </div></div>`;
 const P2 = () => prodShell(pickerOpen);
 
@@ -429,23 +417,21 @@ const artNav = (on) => `<nav><a>Hem</a><a>Ordrar</a><a class="${on === 'prod' ? 
 const artTop = topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Nora Lindqvist</span><span class="avatar">N</span>');
 const paint = (c, size = 22) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" fill="${c}"/><path d="M6 16l4-5 3 4 2-2 3 3" fill="none" stroke="#fff8" stroke-width="1.5"/></svg>`;
 const Z0 = () => artTop + `<div class="shell">${artNav('sam')}<main>
-  <div class="pagehead"><div><h1>Samlingar</h1><p>Gruppera produkter så att kunderna hittar rätt. Du behöver inga än – med 6 produkter är en enda sida lättast att handla på.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
+  <div class="pagehead"><div><h1>Samlingar</h1><p>Du behöver inga än – med 6 produkter är en sida lättast att handla på.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
   <div class="card" style="max-width:760px"><div class="empty"><div style="display:flex;gap:-6px">${paint('#8A4B2B', 34)}${paint('#1F3A5F', 34)}${paint('#2a845a', 34)}</div>
-    <h2>Alla dina produkter visas på en sida</h2><p>När du får fler, eller vill skilja på till exempel originalmålningar och tryck, gör du en samling per grupp. Kunden får då en flik per samling i menyn.</p>
-    <div class="ex"><span>Original</span><span>Tryck</span><span>Kort</span></div></div>
-    <div class="hint">${I('tag', 14)}<span>Tips: en samling kan fyllas automatiskt av en tagg. Tagga dina tryck med "tryck" så finns de i samlingen Tryck utan att du gör något mer.</span></div></div>
+    <h2>Alla dina produkter visas på en sida</h2><p>Vill du skilja på till exempel original och tryck gör du en samling per grupp. Varje samling blir en flik i menyn.</p>
+    <div class="ex"><span>Original</span><span>Tryck</span><span>Kort</span></div></div></div>
   </main></div>`;
 
 /* ---------- Stage 1: two flat collections, no nesting shown ---------- */
 const Z1 = () => artTop + `<div class="shell">${artNav('sam')}<main>
-  <div class="pagehead"><div><h1>Samlingar</h1><p>Varje samling är en flik i kundens meny. Dra för att ändra ordningen.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
+  <div class="pagehead"><div><h1>Samlingar</h1><p>Det här är butikens meny.</p></div><button class="btn btn-primary">${I('plus', 14)} Ny samling</button></div>
   <div class="wrap"><div class="card">
-    <div class="flatrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="th"><i>${paint('#8A4B2B')}</i><i>${paint('#1F3A5F')}</i><i>${paint('#2a845a')}</i></span><span class="t">Original</span><span class="n">4</span><span class="sp"></span><span class="eye">${I('eye')}</span><span class="more">${I('more')}</span></div>
-    <div class="flatrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="th"><i>${paint('#c9a227')}</i><i>${paint('#5B3FA8')}</i></span><span class="t">Tryck</span><span class="n">8</span><span class="pill pill-info" style="margin-left:6px"><span class="dot"></span>Taggen "tryck"</span><span class="sp"></span><span class="eye">${I('eye')}</span><span class="more">${I('more')}</span></div>
-    <div class="hint">${I('info', 14)}<span>Behöver en samling egna undergrupper, till exempel Tryck › A3 och Tryck › A4? Dra en samling in under en annan, eller välj "Ny samling under…" i menyn ${I('more', 12)}. Då visas de som undermeny i butiken.</span></div></div>
-  <div class="card mini rail"><h3>Så ser kunden menyn</h3><p>En flik per samling.</p>
-    <div class="menuprev" style="--n-accent:#8A4B2B"><div class="bar"><b>Nora Lindqvist</b><span class="on">Original</span><span>Tryck</span><span>Om mig</span></div></div>
-    <div style="margin-top:14px;color:var(--a-muted);font-size:12.5px;line-height:18px">Inga undermenyer: kunden klickar på en flik och ser produkterna direkt.</div></div></div>
+    <div class="flatrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="th"><i>${paint('#8A4B2B')}</i><i>${paint('#1F3A5F')}</i><i>${paint('#2a845a')}</i></span><span class="t">Original</span><span class="n">4</span><span class="sp"></span><span class="eye">${I('eye')}</span></div>
+    <div class="flatrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="th"><i>${paint('#c9a227')}</i><i>${paint('#5B3FA8')}</i></span><span class="t">Tryck</span><span class="n">8</span><span class="n" style="margin-left:8px">fylls av taggen "tryck"</span><span class="sp"></span><span class="eye">${I('eye')}</span></div>
+    <div class="hint">${I('info', 14)}<span>Undergrupper, till exempel Tryck › A3? Öppna en samling och välj vad den ska ligga under.</span></div></div>
+  <div class="card mini rail"><h3>Så ser kunden menyn</h3>
+    <div class="menuprev" style="--n-accent:#8A4B2B"><div class="bar"><b>Nora Lindqvist</b><span class="on">Original</span><span>Tryck</span><span>Om mig</span></div></div></div></div>
   </main></div>`;
 
 /* ---------- Stage 1, the product form: a short list ---------- */
@@ -455,14 +441,13 @@ const Z2 = () => artTop + `<div class="shell">${artNav('prod')}<main>
   <div class="pform"><div class="stack">
     <div class="card" style="padding:18px"><div class="stack"><div class="field"><label>Namn</label><div class="input">Morgon vid älven</div></div>
       <div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><div class="field"><label>Pris (inkl. moms)</label><div class="input">6 500 kr</div></div><div class="field"><label>Lagersaldo</label><div class="input">1 st</div></div><div class="field"><label>Taggar</label><div class="input" style="font-size:13px">original, akryl</div></div></div></div></div>
-    <div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between"><b>Samling</b><span class="muted" style="font-size:12px">Var kunden hittar den</span></div>
+    <div class="card" style="padding:18px"><b>Samlingar</b>
       <div class="picker" style="margin-top:12px;max-width:420px">
         <div class="r"><span class="cb on">${I('check', 11)}</span>Original <span class="n">4</span></div>
         <div class="r dim"><span class="cb"></span>Tryck <span class="n">8</span><span class="n" style="margin-left:6px">fylls av taggen "tryck"</span></div>
         <div class="r newrow">${I('plus', 14)}<div class="input" style="color:var(--a-faint)">Ny samling…</div></div></div>
-      <span class="help" style="display:block;margin-top:10px">Ingen samling vald? Då syns produkten ändå under Alla produkter.</span></div>
-  </div>
-  <div class="card mini rail"><h3>I butiken</h3><p>Under fliken Original, och på startsidan.</p></div></div>
+      </div>
+  </div></div>
   </main></div>`;
 
 /* ---------- Stage 1 storefront ---------- */
@@ -475,20 +460,14 @@ const Z3 = () => `<div class="sf artist"><div class="nav artnav"><span class="lo
 /* ---------- M1: the Meny page after the change ---------- */
 const navM = `<nav><a>Hem</a><a>Ordrar</a><a>Produkter</a><a>Samlingar</a><a class="on">Meny</a><a>Sidor</a><a>Butiken</a><a>Betalningar</a><a>Inställningar</a></nav>`;
 const M1 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navM}<main>
-  <div class="pagehead"><div><h1>Meny</h1><p>Det som står runt dina samlingar i butikens toppmeny. Samlingarna själva, och vad som ligger under vad, sköter du under Samlingar.</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">${I('plus', 14)} Lägg till punkt</button><button class="btn btn-primary">Spara meny</button></div></div>
+  <div class="pagehead"><div><h1>Meny</h1><p>Det som står runt samlingarna i toppmenyn.</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">${I('plus', 14)} Lägg till punkt</button><button class="btn btn-primary">Spara meny</button></div></div>
   <div class="wrap"><div class="card">
-    <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Hem</span><span class="lbl">Hem</span><span class="sp"></span><span class="more">${I('more')}</span></div>
-    <div class="mblock"><div class="head"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Samlingar</span><span class="lbl">Från trädet, automatiskt</span><span class="sp"></span><span class="pill pill-ok"><span class="dot"></span>4 i menyn · 1 dold</span></div>
-      <div class="inner">
-        <div class="r d0">${I('chevd', 12)} Vinyl <span class="n" style="color:var(--a-faint);font-size:12px">412</span></div>
-        <div class="r d1">Rock <span style="color:var(--a-faint);font-size:12px">· 60-tal, 70-tal, Punk</span></div><div class="r d1">Jazz</div><div class="r d1">Soul & funk</div><div class="r d1">Svenskt</div>
-        <div class="r d0">${I('chev', 12)} CD</div><div class="r d0">${I('chev', 12)} Merch</div>
-        <div class="r d0" style="color:var(--a-faint);font-weight:400">${I('eyeoff', 12)} Rea <span style="font-size:12px">· dold, nås via länk</span></div></div>
-      <div class="foot"><span>Ordning, undernivåer och vad som syns ändrar du i</span><a>Samlingar →</a></div></div>
+    <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Hem</span><span class="lbl">Hem</span><span class="sp"></span></div>
+    <div class="mrow" style="background:var(--a-surface-2)"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Samlingar</span><span class="lbl">Vinyl, CD, Merch</span><span class="n" style="color:var(--a-faint);font-size:12px">med undermenyer</span><span class="sp"></span><a style="color:var(--a-muted);text-decoration:underline;text-underline-offset:2px;font-size:12.5px">Ändra i Samlingar</a></div>
     <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Tagg</span><span class="lbl">Nyinkommet</span><span class="n" style="color:var(--a-faint);font-size:12px">taggen "nyinkommet"</span><span class="sp"></span><span class="more">${I('more')}</span></div>
     <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Sida</span><span class="lbl">Om butiken</span><span class="sp"></span><span class="more">${I('more')}</span></div>
     <div class="mrow"><span class="grip" style="color:var(--a-faint)">${I('grip')}</span><span class="kind">Länk</span><span class="lbl">Spelningar</span><span class="n" style="color:var(--a-faint);font-size:12px">skivborsen.se/live</span><span class="sp"></span><span class="more">${I('more')}</span></div>
-    <div class="hint">${I('info', 14)}<span>En enskild samling kan inte läggas till här – den är i menyn när ögat är tänt under Samlingar. Då kan samma samling aldrig stå på två ställen.</span></div></div>
+</div>
   <div class="card mini rail"><h3>Så ser kunden menyn</h3><p>I den här ordningen.</p>
     <div class="menuprev"><div class="bar"><b>Skivbörsen</b><span>Hem</span><span class="on">Vinyl</span><span>CD</span><span>Merch</span><span>Nyinkommet</span><span>Om butiken</span><span>Spelningar</span></div>
       <div class="panel"><span class="h">Rock</span><span class="sub">60-tal</span><span class="sub">70-tal</span><span class="sub">Punk</span><span class="h">Jazz</span><span class="h">Soul & funk</span><span class="h">Svenskt</span></div></div></div></div>
