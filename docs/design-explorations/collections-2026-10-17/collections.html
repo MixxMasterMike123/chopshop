@@ -209,6 +209,26 @@
   .xf { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   .xf .lab { color: var(--n-muted); font-size: 13px; margin-right: 4px; }
   .xf .chips .av { width: 14px; height: 14px; font-size: 0; }
+
+  .sug { display: flex; flex-direction: column; gap: 8px; }
+  .sug .h { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--a-muted); margin-top: 6px; }
+  .sug .h b { color: var(--a-text); font-weight: 600; font-size: 13px; }
+  .sugrow { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sugchip { height: 32px; padding: 0 10px 0 8px; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px var(--a-border) inset; display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .sugchip .path { color: var(--a-faint); }
+  .sugchip .why { color: var(--a-faint); font-size: 11.5px; padding-left: 6px; border-left: 1px solid var(--a-border); }
+  .sugchip .add { width: 20px; height: 20px; border-radius: 5px; background: var(--a-primary); color: #fff; display: grid; place-items: center; }
+  .sugchip.picked { background: var(--a-surface-2); box-shadow: 0 0 0 2px var(--a-primary) inset; }
+  .sugchip.picked .add { background: var(--a-ok-dot); }
+  .fold { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-top: 1px solid var(--a-border-soft); color: var(--a-muted); font-size: 12.5px; }
+  .orph { display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 14px; border-top: 1px solid var(--a-border-soft); }
+  .orph:first-child { border-top: 0; }
+  .orph .t { font-weight: 500; min-width: 300px; }
+  .orph .arrow { color: var(--a-faint); }
+  .orph .pick { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 6px; background: var(--a-surface-2); box-shadow: 0 0 0 1px var(--a-border) inset; font-size: 12.5px; }
+  .orph .pick .path { color: var(--a-faint); }
+  .orph .conf { color: var(--a-faint); font-size: 11.5px; }
+  .orph .sp { flex: 1; }
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs>
@@ -529,7 +549,32 @@ const N3 = () => `<div class="sf" style="--n-accent:#1F3A5F"><div class="nav"><s
     <div class="pgrid" style="grid-template-columns:repeat(4,1fr)">${[['Karakou','Första LP:n','279 kr','#1F3A5F'],['Mekbrudarna','Live i Umeå','299 kr','#2a845a'],['Eva Eastwood','Sun Dance','249 kr','#B0492B'],['Ronny & Ragge','Dubbel-LP','349 kr','#5B3FA8'],['Mekbrudarna','Rolig Rock','279 kr','#2a845a'],['Tim Liljegren','Norrsken','259 kr','#c9a227'],['Tommy Nilsson','Allt det här','249 kr','#0E5E63'],['Mekbrudarna','Bästa','299 kr','#2a845a']].map(([a, t, p, c]) => `<div class="pc"><div class="img" style="background:#ECE9E2">${I('vinyl', 120, c)}</div><div class="body"><div class="t">${a} – ${t}</div><div class="a">LP</div><div class="p">${p}</div></div></div>`).join('')}</div>
   </div></div>`;
 
+
+/* ---------- V1: the picker in a 400-collection shop: suggestions first ---------- */
+const sugChip = (path, name, why, picked) => `<span class="sugchip ${picked ? 'picked' : ''}"><span class="add">${I(picked ? 'check' : 'plus', 11)}</span>${path ? `<span class="path">${path} ›</span>` : ''}${name}<span class="why">${why}</span></span>`;
+const V1 = () => prodShell(`<div class="card" style="padding:18px"><div style="display:flex;align-items:center;justify-content:space-between"><b>Samlingar</b><span class="muted" style="font-size:12px">412 samlingar i butiken · 2 valda</span></div>
+  <div class="chipsel" style="margin:12px 0"><span><span class="path">Vinyl › Rock ›</span> 70-tal <span class="x">✕</span></span><span><span class="path">Vinyl › Rock ›</span> Punk <span class="x">✕</span></span></div>
+  <div class="picker">
+    <div class="srch">${I('search', 14)}<span class="muted">Sök bland 412 samlingar – skriv "jazz 60" för att hoppa rakt dit</span></div>
+    <div style="padding:10px 12px 12px" class="sug">
+      <div class="h"><b>Föreslagna för den här skivan</b><span>utifrån namn, taggar och var liknande skivor ligger</span></div>
+      <div class="sugrow">${sugChip('Vinyl › Rock', '70-tal', 'året 1977', true)}${sugChip('Vinyl › Rock', 'Punk', 'taggen "punk"', true)}${sugChip('Vinyl', 'New wave', '3 liknande skivor', false)}${sugChip('', 'Nyinkommet', 'skapad i veckan', false)}${sugChip('Vinyl › Artister', 'Television', 'artist', false)}</div>
+      <div class="h"><b>Senast använda</b></div>
+      <div class="sugrow">${sugChip('Vinyl › Rock', '60-tal', '', false)}${sugChip('Vinyl › Jazz', 'Bebop', '', false)}${sugChip('CD › Rock', '70-tal', '', false)}</div>
+    </div>
+    <div class="fold">${I('chev', 14)}<span>Alla samlingar (412) – visa trädet</span></div>
+    <div class="foot"><span>Förslagen är gissningar. Inget läggs till förrän du bockar i.</span><button class="btn btn-primary" style="height:28px">Klar</button></div>
+  </div></div>`);
+
+/* ---------- V2: sorting many at once, with suggestions per product ---------- */
+const V2 = () => topbar(null, '<span class="pill" style="background:#ffffff1a;color:#ffffffcc">Skivbörsen</span><span class="avatar">E</span>') + `<div class="shell">${navAdmin('prod')}<main>
+  <div class="pagehead"><div><h1>Produkter utan samling</h1><p>31 skivor saknar samling. Vi föreslår en plats för varje – godkänn raden, ändra, eller hoppa över.</p></div><div style="display:flex;gap:8px"><button class="btn btn-secondary">Hoppa över alla</button><button class="btn btn-primary">${I('check', 14)} Godkänn 28 förslag</button></div></div>
+  <div class="card" style="max-width:1120px">
+    ${[['Big Star – #1 Record','Vinyl › Rock','70-tal','året 1972 · liknande skivor',1],['Pere Ubu – Dub Housing','Vinyl › Rock','Punk','taggen "punk"',1],['Monica Zetterlund – Waltz for Debby','Vinyl › Jazz','Svenskt','artist + jazz',1],['Kraftwerk – Trans-Europe Express','Vinyl','Elektroniskt','3 liknande skivor',1],['Okänd – Testpress 1983','','','inget förslag – välj själv',0],['The Band – Stage Fright','Vinyl › Rock','70-tal','samma artist som 2 andra',1],['Ebba Grön – Kärlek & uppror','Vinyl › Rock','Punk','artist + taggen "punk"',1]].map(([t, path, c, why, ok]) => `<div class="orph"><span class="cb" style="width:16px;height:16px;border-radius:4px;${ok ? 'background:var(--a-primary);color:#fff;display:grid;place-items:center' : 'box-shadow:inset 0 0 0 1.5px #b5b5b5'}">${ok ? I('check', 11) : ''}</span><span style="width:28px;height:28px;border-radius:6px;background:var(--a-surface-2);display:grid;place-items:center">${I('vinyl', 20, '#1F3A5F')}</span><span class="t">${t}</span><span class="arrow">→</span>${ok ? `<span class="pick"><span class="path">${path} ›</span>${c} ${I('chevd', 12)}</span><span class="conf">${why}</span>` : `<span class="pick" style="color:var(--a-muted)">${I('search', 12)} Välj samling…</span><span class="conf">${why}</span>`}<span class="sp"></span><span class="more">${I('more')}</span></div>`).join('')}
+    <div class="hint">${I('info', 14)}<span>Förslagen bygger på skivans namn, år och taggar, och på var dina andra skivor av samma artist ligger. Ju mer du sorterat, desto bättre blir de.</span></div></div>
+  </main></div>`;
+
 const key = new URLSearchParams(location.search).get('s') || 'A1';
-document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3, Z0, Z1, Z2, Z3, M1, N1, N2, N3 })[key]();
+document.getElementById('root').innerHTML = ({ A1, A2, A3, S1, S2, S3, P1, P2, P3, Z0, Z1, Z2, Z3, M1, N1, N2, N3, V1, V2 })[key]();
 </script>
 </body></html>

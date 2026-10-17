@@ -40,3 +40,11 @@ Hierarchy lives in Samlingar only. The Meny page keeps what surrounds the collec
 ## Two axes at once (N screens, Ninetone)
 
 A record label: every product sits in its artist AND its format. N1 the tree after migration (Artister with six children; Vinyl, CD, Essentials from the old Kategori field, marked "Var kategorin"; Artist Merch from a tag) and the menu it yields. N2 the product with two memberships, picked with two ticks. N3 the Vinyl page offering the other axis as filter chips: a collection page with no children shows, instead, the collections its products also belong to.
+
+## Scope cut (Mikael, 2026-10-17: "this is already confusing")
+
+**Unit 1 keeps:** A1 (tree + eye), A3 (editor with "Ligger under"), a search-box-only picker on the product (P2 simplified: no tree on the product page, for any shop size), P3 (bulk "Lägg i samling"), S1–S2–S3 (automatic menu, breadcrumb, child chips, phone), M1 (Meny page with one collections block), Z0–Z3 (the same components with less data).
+
+**Parked, in `renders/parked/`:** V1 suggestions + "senast använda", V2 bulk sorting with suggestions, N3 cross-axis filter chips, A2 drag-to-nest (the editor's "Ligger under" does the job).
+
+The seller's model in three sentences: a samling can contain products and other samlingar; the Samlingar page shows that as a tree, and the tree is the menu; on a product you type a samling's name and tick it.
