@@ -229,6 +229,83 @@ describe("one Prodigi order per order (D4)", () => {
     });
   });
 
+  it("Codex P1: a sibling accepted with a reference set BY HAND (no done row) is neither adopted nor carried", async () => {
+    const order = await prodigiOrder([{ sku: KEY_TEE }, { sku: KEY_HOOD }]);
+    const [first, second] = order.dispatchIds as [string, string];
+    // A human placed line 2 by hand and recorded a reference on the LINE.
+    await env.DB.prepare(
+      "UPDATE order_items SET dispatch_state = 'accepted', printer_job_ref = 'hand-placed-2' WHERE order_id = ? AND item_index = 1",
+    )
+      .bind(order.orderId)
+      .run();
+    // Its row was resolved by hand without a submission (failed → done).
+    const claimedBy = newClaimToken();
+    await claimById(env.DB, { claimedBy, now: Date.now(), outboxId: second });
+    await fail(env.DB, { claimedBy, outboxId: second }, { backoffMs: 0, error: "x", now: Date.now(), terminal: true });
+    await env.DB.prepare("UPDATE outbox_events SET status = 'done', result_ref = 'hand-placed-2' WHERE outbox_id = ?")
+      .bind(second)
+      .run();
+    const prodigi = prodigiServer();
+
+    expect(await run(prodigiEnv(prodigi.fetcher).env, first)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(prodigi.calls).toBe(1);
+    expect(prodigi.bodies[0]!.items.map((item) => item.merchantReference)).toEqual(["1"]);
+    expect(await outboxRow(first)).toMatchObject({ result_ref: "ord_1186010", status: "done" });
+    expect(await lineRow(order.orderId, 1)).toMatchObject({ dispatch_state: "accepted", printer_job_ref: "ord_1186010" });
+    expect(await lineRow(order.orderId, 2)).toMatchObject({ dispatch_state: "accepted", printer_job_ref: "hand-placed-2" });
+  });
+
+  it("Codex P2: A's answer lost, then B's REFUSAL is held unknown (A may hold B's line), never failed", async () => {
+    const order = await prodigiOrder(TWO_LINES);
+    const [first, second] = order.dispatchIds as [string, string];
+    let call = 0;
+    const fetcher = async (): Promise<Response> => {
+      call += 1;
+      if (call === 1) {
+        throw new Error("connection reset");
+      }
+      return Response.json({ failures: { "items[1].sku": [] }, outcome: "ValidationFailed" }, { status: 400 });
+    };
+    const target = prodigiEnv(fetcher).env;
+
+    expect(await run(target, first)).toMatchObject({ outcome: { kind: "unknown" } });
+    expect(await outboxRow(second)).toMatchObject({ unknown_since: null });
+    expect(await run(target, second)).toMatchObject({ outcome: { kind: "unknown" } });
+    expect(await outboxRow(second)).toMatchObject({
+      last_error: "unknown_rejected_after_unknown_items_1_.sku",
+      status: "unknown",
+    });
+    expect((await lineRow(order.orderId, 2)).dispatch_state).toBe("unknown");
+    expect((await alertsFor(second)).map((alert) => alert.kind)).not.toContain("dispatch_failed");
+  });
+
+  it("Codex P2: with no lost answer anywhere in the order, a refusal fails as before", async () => {
+    const order = await prodigiOrder(TWO_LINES);
+    const [first] = order.dispatchIds as [string, string];
+    const fetcher = async () =>
+      Response.json({ failures: { "items[0].sku": [] }, outcome: "ValidationFailed" }, { status: 400 });
+    await run(prodigiEnv(fetcher).env, first);
+    expect(await outboxRow(first)).toMatchObject({ last_error: "rejected_items_0_.sku", status: "failed" });
+  });
+
+  it("Codex P3: an invalid SKU key fails ITS line; the good line waits, then goes alone", async () => {
+    const order = await prodigiOrder([{ sku: KEY_TEE }, { sku: "GLOBAL-HOOD-GIL-18500" }]);
+    const [first, second] = order.dispatchIds as [string, string];
+    const prodigi = prodigiServer();
+    const target = prodigiEnv(prodigi.fetcher).env;
+
+    expect(await run(target, first)).toMatchObject({ outcome: { kind: "retry" } });
+    expect(await outboxRow(first)).toMatchObject({ last_error: "sibling_sku_invalid", status: "pending" });
+    expect(await run(target, second)).toEqual({ kind: "ran", outcome: { kind: "failed" } });
+    expect(await outboxRow(second)).toMatchObject({ last_error: "sku_invalid", status: "failed" });
+    expect((await alertsFor(second)).map((alert) => alert.kind)).toEqual(["dispatch_failed"]);
+    expect(prodigi.calls).toBe(0);
+
+    expect(await run(target, first, () => Date.now() + 2 * MIN)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(prodigi.calls).toBe(1);
+    expect(prodigi.bodies[0]!.items.map((item) => item.merchantReference)).toEqual(["1"]);
+  });
+
   it("a sibling's bad data never fails this row: it waits, the sibling's own row fails, then the good line goes alone", async () => {
     const order = await prodigiOrder([{ sku: KEY_TEE }, { printFiles: [{ slot: "sleeve" }], sku: KEY_HOOD }]);
     const [first, second] = order.dispatchIds as [string, string];
@@ -253,7 +330,8 @@ describe("one Prodigi order per order (D4)", () => {
     const prodigi = prodigiServer();
     await run(prodigiEnv(prodigi.fetcher).env, order.dispatchIds[0]!);
     expect(prodigi.calls).toBe(0);
-    expect(await outboxRow(order.dispatchIds[0]!)).toMatchObject({ last_error: "rejected_sku_invalid", status: "failed" });
+    // Codex round 1, P3: judged in preparation, on the line itself.
+    expect(await outboxRow(order.dispatchIds[0]!)).toMatchObject({ last_error: "sku_invalid", status: "failed" });
     expect((await alertsFor(order.dispatchIds[0]!)).map((alert) => alert.kind)).toEqual(["dispatch_failed"]);
   });
 
@@ -286,20 +364,33 @@ describe("never two calls at once (D4.3)", () => {
     expect(await outboxRow(second)).toMatchObject({ status: "claimed" });
   });
 
-  it("the guard also refuses once a line of the order is accepted with a reference", async () => {
+  it("the guard also refuses once another row of the order holds the printer order (done, after a submission)", async () => {
     const order = await prodigiOrder(TWO_LINES);
-    const [first] = order.dispatchIds as [string, string];
-    const claimedBy = newClaimToken();
+    const [first, second] = order.dispatchIds as [string, string];
     const now = Date.now();
+    const guard = orderSubmitGuard(TENANT, order.orderId, first);
+    const claimedBy = newClaimToken();
     await claimById(env.DB, { claimedBy, now, outboxId: first });
+
+    // Codex round 1, P1: a reference typed on a LINE by hand does not block.
     await env.DB.prepare(
-      "UPDATE order_items SET dispatch_state = 'accepted', printer_job_ref = 'ord_77' WHERE order_id = ? AND item_index = 1",
+      "UPDATE order_items SET dispatch_state = 'accepted', printer_job_ref = 'hand-77' WHERE order_id = ? AND item_index = 1",
     )
       .bind(order.orderId)
       .run();
-    expect(
-      await markSubmitting(env.DB, { claimedBy, outboxId: first }, { guard: orderSubmitGuard(TENANT, order.orderId, first), now }),
-    ).toBeNull();
+    const free = await env.DB.prepare(`SELECT 1 AS ok WHERE ${guard.sql}`).bind(...guard.binds).first();
+    expect(free).not.toBeNull();
+
+    // The sibling row submitted the order and is done with its reference: blocked.
+    const siblingClaim = newClaimToken();
+    await claimById(env.DB, { claimedBy: siblingClaim, now, outboxId: second });
+    await markSubmitting(env.DB, { claimedBy: siblingClaim, outboxId: second }, { now });
+    await env.DB.prepare(
+      "UPDATE outbox_events SET status = 'done', resolved_at = 1, result_ref = 'ord_77', claimed_by = NULL, claim_expires_at = NULL WHERE outbox_id = ?",
+    )
+      .bind(second)
+      .run();
+    expect(await markSubmitting(env.DB, { claimedBy, outboxId: first }, { guard, now })).toBeNull();
   });
 
   it("through the dispatcher: a sibling at the printer makes this row wait, without a call; then it adopts", async () => {

@@ -52,6 +52,7 @@ import {
   PRINT_CANVAS_PENDING,
   printCanvasEnabled,
 } from "./print-canvas";
+import { splitProdigiSkuKey } from "./prodigi-wire";
 import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-wire";
 
 /**
@@ -296,7 +297,7 @@ async function loadDispatchLine(
 // ── which printer (CP11, D1) ────────────────────────────────────────────────
 
 type PrinterRoute =
-  | { client: PrinterClient; kind: "client" }
+  | { client: PrinterClient; kind: "client"; provider: string }
   | { error: string; kind: "terminal" }
   | { kind: "none" };
 
@@ -335,7 +336,7 @@ async function resolveDispatchPrinter(
     return { error: "printer_mismatch", kind: "terminal" };
   }
   const client = row.type === "api" ? resolveProviderClient(env, row.provider) : null;
-  return client === null ? { kind: "none" } : { client, kind: "client" };
+  return client === null ? { kind: "none" } : { client, kind: "client", provider: row.provider };
 }
 
 /**
@@ -1020,7 +1021,7 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
   const client = route.client;
 
   if (client.unit === "order") {
-    return runOrderUnit(ctx, tenantId, payload, lineRef, client);
+    return runOrderUnit(ctx, tenantId, payload, lineRef, client, route.provider);
   }
 
   // ── line unit: one row, one line, one job (unchanged since CP6-PS2) ──────
@@ -1061,6 +1062,8 @@ interface OrderLine {
   outboxId: string;
   printerJobRef: string | null;
   productionJson: string | null;
+  /** The row's result_ref: the printer's reference once the row is done. */
+  resultRef: string | null;
   rowStatus: OutboxStatus;
   submittedAt: number | null;
 }
@@ -1077,7 +1080,7 @@ async function readOrderLines(
 ): Promise<OrderLine[] | null> {
   const rows = await db
     .prepare(
-      `SELECT e.outbox_id, e.status, e.cancel_requested, e.submitted_at,
+      `SELECT e.outbox_id, e.status, e.cancel_requested, e.submitted_at, e.result_ref,
               json_extract(e.payload_json, '$.lineNo') AS line_no,
               oi.order_item_id, oi.production_json, oi.dispatch_state, oi.printer_job_ref
        FROM outbox_events AS e
@@ -1097,6 +1100,7 @@ async function readOrderLines(
       outbox_id: string;
       printer_job_ref: string | null;
       production_json: string | null;
+      result_ref: string | null;
       status: OutboxStatus;
       submitted_at: number | null;
     }>();
@@ -1116,6 +1120,7 @@ async function readOrderLines(
       outboxId: entry.outbox_id,
       printerJobRef: entry.printer_job_ref,
       productionJson: entry.production_json,
+      resultRef: entry.result_ref,
       rowStatus: entry.status,
       submittedAt: entry.submitted_at,
     });
@@ -1148,32 +1153,80 @@ function isDispatchableSibling(line: OrderLine): boolean {
  * The claimed → submitting guard of an order-unit row (D4.3), uncorrelated
  * (explicit binds), so it reads the same inside the transition's UPDATE and
  * inside the EXISTS its companion statements carry: no OTHER dispatch row of
- * the order is submitting, and no line of the order is accepted with a
- * printer reference yet (a sibling that won the race between this row's read
+ * the order is submitting, and no other dispatch row of the order holds the
+ * printer order already (isOrderWideReference: `done` with a result_ref
+ * after a submission — a sibling that won the race between this row's read
  * and its move: this row then adopts on its next run instead of calling).
+ * Codex round 1, P1: it once blocked on a LINE accepted with a reference,
+ * which a human can record on one line by hand (resolution.ts); such a line
+ * proves nothing about the order and would have blocked its other lines for
+ * good.
  */
 export function orderSubmitGuard(tenantId: string, orderId: string, outboxId: string): SqlGuard {
   return {
-    binds: [tenantId, orderId, outboxId, tenantId, orderId],
+    binds: [tenantId, orderId, outboxId, tenantId, orderId, outboxId],
     sql: `NOT EXISTS (
             SELECT 1 FROM outbox_events AS sib
             WHERE sib.event_type = 'dispatch' AND sib.tenant_id = ? AND sib.aggregate_id = ?
               AND sib.outbox_id <> ? AND sib.status = 'submitting'
           )
           AND NOT EXISTS (
-            SELECT 1 FROM order_items AS acc
-            WHERE acc.tenant_id = ? AND acc.order_id = ?
-              AND acc.dispatch_state = 'accepted' AND acc.printer_job_ref IS NOT NULL
+            SELECT 1 FROM outbox_events AS held
+            WHERE held.event_type = 'dispatch' AND held.tenant_id = ? AND held.aggregate_id = ?
+              AND held.outbox_id <> ? AND held.status = 'done'
+              AND held.result_ref IS NOT NULL AND held.submitted_at IS NOT NULL
           )`,
   };
 }
 
 /**
+ * Codex round 1, P1: a reference proves the PRINTER ORDER exists only when an
+ * order-wide submission recorded it — a dispatch row of this order that went
+ * to the printer (`submitted_at`) and is `done` with that `result_ref` (an
+ * acceptance, Prodigi's AlreadyExists, or a human resolving that very
+ * submission). A reference a human typed on one LINE (resolution.ts on a row
+ * that never submitted) is not adopted: it may be a job placed by hand for
+ * that line alone.
+ */
+function isOrderWideReference(line: OrderLine): line is OrderLine & { resultRef: string } {
+  return line.rowStatus === "done" && line.resultRef !== null && line.submittedAt !== null;
+}
+
+/**
+ * Codex round 1, P2 — fail closed across siblings. Another row of the order
+ * may have reached Prodigi under the SAME idempotency key without our knowing
+ * the answer (it is unknown, or was, or submitted and is not done with a
+ * reference). A refusal now could then be about an order that already holds
+ * this row's line, so it is read as an answer after a lost one
+ * (afterLostAnswer): unknown, for a human, never "the printer did not
+ * receive it". Read after the call, so a sibling that moved meanwhile counts.
+ */
+async function orderAnswerUncertain(
+  db: D1Database,
+  tenantId: string,
+  orderId: string,
+  outboxId: string,
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS uncertain FROM outbox_events
+       WHERE event_type = 'dispatch' AND tenant_id = ? AND aggregate_id = ? AND outbox_id <> ?
+         AND (unknown_since IS NOT NULL OR status = 'unknown'
+              OR (submitted_at IS NOT NULL AND NOT (status = 'done' AND result_ref IS NOT NULL)))
+       LIMIT 1`,
+    )
+    .bind(tenantId, orderId, outboxId)
+    .first<{ uncertain: number }>();
+  return row !== null;
+}
+
+/**
  * The order-unit run (D4). Its own line's rules are the line unit's; what
  * differs is that the job carries every dispatchable line of the order:
- *   1. any line of the order already ACCEPTED with a printer reference ⇒ this
- *      row ADOPTS it: its line accepted with that reference, the row done as a
- *      duplicate — no HTTP call (D4.2);
+ *   1. another dispatch row of the order already holds the printer order
+ *      (isOrderWideReference: `done` with a result_ref after a submission) ⇒
+ *      this row ADOPTS it: its line accepted with that reference, the row done
+ *      as a duplicate — no HTTP call (D4.2);
  *   2. another row of the order SUBMITTING ⇒ retry after the usual backoff,
  *      never a parallel call (D4.3; closed in SQL by orderSubmitGuard);
  *   3. build every carried line; a sibling's problem makes this row wait
@@ -1190,6 +1243,7 @@ async function runOrderUnit(
   payload: DispatchPayload,
   lineRef: LineRef,
   client: PrinterClient,
+  provider: string,
 ): Promise<OutboxRunOutcome> {
   const { env, row } = ctx;
   const lines = await readOrderLines(env.DB, tenantId, payload.orderId);
@@ -1201,9 +1255,9 @@ async function runOrderUnit(
     return failTerminal(ctx, "order_line_not_found", lineRef);
   }
 
-  const adopted = lines.find((entry) => entry.dispatchState === "accepted" && entry.printerJobRef !== null);
-  if (adopted !== undefined && adopted.printerJobRef !== null) {
-    return recordSubmitResult(ctx, lineRef, { printerJobId: adopted.printerJobRef, status: "duplicate" }, null);
+  const adopted = lines.find((entry) => entry !== own && isOrderWideReference(entry));
+  if (adopted !== undefined && isOrderWideReference(adopted)) {
+    return recordSubmitResult(ctx, lineRef, { printerJobId: adopted.resultRef, status: "duplicate" }, null);
   }
   if (lines.some((entry) => entry.outboxId !== row.outbox_id && entry.rowStatus === "submitting")) {
     return retryLater(ctx, ORDER_SUBMITTING, lineRef);
@@ -1215,6 +1269,14 @@ async function runOrderUnit(
     const built = buildDispatchJob(tenantId, entry.lineNo, entry.productionJson);
     if (!built.ok) {
       return failPreparation(ctx, own.lineNo, lineRef, { error: built.error, kind: "terminal", lineNo: entry.lineNo });
+    }
+    // Codex round 1, P3: a Prodigi line whose SKU key does not split into
+    // product, colour and size is THAT line's fault — terminal for its own
+    // row, a wait (`sibling_sku_invalid`) for the others — not a refusal of
+    // the whole job that would fail whichever row assembled it. The client's
+    // own `sku_invalid` stays as the last resort.
+    if (provider === "prodigi" && splitProdigiSkuKey(built.value.sku) === null) {
+      return failPreparation(ctx, own.lineNo, lineRef, { error: "sku_invalid", kind: "terminal", lineNo: entry.lineNo });
     }
     targets.push({ job: built.value, lineNo: entry.lineNo });
   }
@@ -1441,7 +1503,13 @@ async function recordSubmitResult(
 ): Promise<OutboxRunOutcome> {
   const { claim, env, row } = ctx;
   const now = ctx.clock();
-  const result = afterLostAnswer(row, submitted);
+  // Codex round 1, P2: for an order-unit row a lost answer of ANY row of the
+  // order is a lost answer under this row's idempotency key too.
+  const uncertain =
+    row.unknown_since !== null ||
+    (order !== null && submitted.status === "rejected" &&
+      (await orderAnswerUncertain(env.DB, line.tenantId, row.aggregate_id, row.outbox_id)));
+  const result = afterLostAnswer({ unknown_since: uncertain ? (row.unknown_since ?? now) : null }, submitted);
 
   if (result.status === "accepted" || result.status === "duplicate") {
     // CP11: a duplicate may name the printer's job (Prodigi's AlreadyExists, or

@@ -199,3 +199,24 @@ Re-run after the fix:
 - `npx vitest run test/prodigi-client.test.ts test/dispatch-order-unit.test.ts test/dispatch.test.ts` → `Test Files  3 passed (3)`, `Tests  137 passed (137)`.
 
 `app.ts` and the two compatibility aliases were not touched; the coordinator is removing them.
+
+## Codex round 1 (on e6650207)
+
+All three fixes are in `src/dispatch/dispatch-effect.ts`. The Prodigi files (`prodigi-wire.ts`, `prodigi-client.ts`) and `app.ts` are unchanged; `splitProdigiSkuKey` is imported from `prodigi-wire.ts` as it was.
+
+- **P1 — adoption.** A row now adopts a reference only when an order-wide submission recorded it (`isOrderWideReference`): another dispatch row of the order that is `done`, has a `result_ref`, and went to the printer (`submitted_at` set). A reference a human typed on one LINE (`resolution.ts`, on a row that never submitted) is neither adopted nor carried. The remaining lines then submit their own Prodigi order. `orderSubmitGuard`'s second condition now uses the same test on the dispatch rows instead of on the lines, so a hand-resolved line can no longer block the rest of the order forever. The `submitted_at` requirement is one step stricter than the review asked: it keeps out a FAILED row that a human resolved as done with a hand reference.
+- **P2 — lost answer across siblings.** When an order-unit row is refused, `orderAnswerUncertain` checks the order after the call. If any other dispatch row of the order has `unknown_since` set, is `unknown`, or submitted without ending `done` with a reference, the refusal goes through `afterLostAnswer`. The row is then held `unknown` for a human, never `failed` ("never received"). With no lost answer anywhere in the order, a refusal fails exactly as before.
+- **P3 — an invalid SKU key.** For a `prodigi` route (the route now carries `provider`), each carried line's key is checked with `splitProdigiSkuKey` during preparation. A bad key fails through `failPreparation`: terminal `sku_invalid` for its own row, `sibling_sku_invalid` (a wait) for the others. The client's own `sku_invalid` stays as the last resort.
+
+Tests in `test/dispatch-order-unit.test.ts`:
+- **P1:** a line resolved by hand with a reference is neither adopted nor carried, and line 1 submits its own order.
+- **P1:** the guard is free with a hand reference on a line, and blocked once a submitted sibling row is done with `ord_77` (this replaces the previous line-based guard test).
+- **P2:** A's answer is lost and B's 400 is then held `unknown` (`unknown_rejected_after_unknown_items_1_.sku`), with no `dispatch_failed`.
+- **P2:** with no lost answer, a 400 still fails (`rejected_items_0_.sku`).
+- **P3:** valid line 1 with invalid line 2: row 1 waits `sibling_sku_invalid`, row 2 fails `sku_invalid`, then row 1 submits line 1 alone.
+- The earlier single-line `sku_invalid` case now expects `last_error: "sku_invalid"` (judged in preparation) instead of `rejected_sku_invalid`.
+
+Gate:
+- `npx tsc --noEmit` → clean.
+- `npx vitest run test/dispatch-order-unit.test.ts test/dispatch.test.ts test/prodigi-client.test.ts` → `Test Files  3 passed (3)`, `Tests  141 passed (141)`.
+- Whole `npx vitest run` → `Test Files  140 passed (140)`, `Tests  5083 passed (5083)`.

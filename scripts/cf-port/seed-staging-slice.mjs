@@ -11,6 +11,7 @@
  *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] [CHOPSHOP_SLICE_ADMIN_PASSWORD=…] \
  *   node scripts/cf-port/seed-staging-slice.mjs [--tenant slice-YYYYMMDD]
  *        [--purchase] [--refund <orderId>:<amountMinor>] [--connect-proof]
+ *        [--printer fake-printer|prodigi]
  *
  * Steps (each idempotent; every id is printed):
  *   0. refuse unless the API origin is cloudflare/pinned.staging.json origins.api, /health says
@@ -24,7 +25,17 @@
  *      account is created by the Worker (or is already there), Stripe's status is written by
  *      the refresh route, and while Stripe has not enabled charges an onboarding link is
  *      printed. Finish the onboarding in a browser and re-run;
- *   6. printers (the fake printer, capabilities from docs/SnapWearDocs/snapwear-catalog.json),
+ *   6. printers (default `--printer fake-printer`: the fake printer, capabilities from
+ *      docs/SnapWearDocs/snapwear-catalog.json. `--printer prodigi` (CP11): the slice is seeded on
+ *      a Prodigi row "prodigi" — model 64000, Gildan tee, SKUs GLOBAL-TEE-GIL-64000.black.m / .l from
+ *      docs/cf-port/prodigi-catalog.json, shipping 135 SEK, tiers 60 kr blank + 40 kr per print —
+ *      so one --purchase makes an order the dispatcher sends to Prodigi's SANDBOX. The printer PUT is
+ *      replace-all, so the body carries every platform api/manual printer the environment policy
+ *      still allows, rebuilt from GET /v1/platform/printers/{id} (the script stops if a view cannot
+ *      be rebuilt without loss), plus the prodigi row; a printer the policy no longer allows on
+ *      staging (the inactive `snapwear` row) is left out and named. An existing prodigi row that
+ *      already holds the slice's SKUs is kept as it is. After --purchase the order id and where to
+ *      look (GET /v1/platform/print-jobs, the Prodigi sandbox dashboard) are printed),
  *      the DTG profile, artwork (.bench/render-bench-typical.png if present, else a generated
  *      3600 × 3600 PNG — the real render container needs ≥ 300 DPI at 300 mm), wait for
  *      `ready`, product, mapping, quote, publish, platform approval, the public PDP;
@@ -55,13 +66,25 @@ import { deflateSync } from "node:zlib";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const PINNED = JSON.parse(readFileSync(path.join(ROOT, "cloudflare/pinned.staging.json"), "utf8"));
+const PRODIGI_CATALOG_PATH = path.join(ROOT, "docs/cf-port/prodigi-catalog.json");
 const CATALOG_PATH = path.join(ROOT, "docs/SnapWearDocs/snapwear-catalog.json");
 const BENCH_PNG = path.join(ROOT, ".bench/render-bench-typical.png");
 
-const PRINTER_ID = "fake-printer";
-/** A crewneck (SnapWear model 18000), White S / M — the SKUs the worker suites use. */
-const SLICE_MODEL = "18000";
-const SLICE_SKUS = ["2700003", "2700004"];
+/** --printer, read early because the slice constants below depend on it (parseArgs validates it). */
+const PRINTER_KIND = (() => {
+  const at = process.argv.indexOf("--printer");
+  return at === -1 ? "fake-printer" : (process.argv[at + 1] ?? "");
+})();
+const PRODIGI = PRINTER_KIND === "prodigi";
+const PRINTER_ID = PRODIGI ? "prodigi" : "fake-printer";
+/**
+ * Fake printer: a crewneck (SnapWear model 18000), White S / M — the SKUs the worker suites use.
+ * Prodigi: Gildan 64000 tee, Black M / L (keys `<prodigiSku>.<colour>.<size>` in prodigi-catalog.json).
+ */
+const SLICE_MODEL = PRODIGI ? "64000" : "18000";
+const SLICE_SKUS = PRODIGI
+  ? ["GLOBAL-TEE-GIL-64000.black.m", "GLOBAL-TEE-GIL-64000.black.l"]
+  : ["2700003", "2700004"];
 const PROFILE = {
   acceptedFormats: [{ ext: "png" }, { ext: "jpg" }],
   active: true,
@@ -116,6 +139,11 @@ function parseArgs(argv) {
       out.purchase = true;
     } else if (arg === "--connect-proof") {
       out.connectProof = true;
+    } else if (arg === "--printer") {
+      const value = argv[++index] ?? die("--printer needs fake-printer or prodigi");
+      if (value !== "fake-printer" && value !== "prodigi") {
+        die("--printer needs fake-printer or prodigi");
+      }
     } else if (arg === "--tenant") {
       out.tenant = argv[++index] ?? die("--tenant needs a value");
     } else if (arg === "--refund") {
@@ -306,7 +334,110 @@ function generatedPng(size = 3_600) {
 
 // ── the printer document, from the SnapWear catalogue ──────────────────────
 
+function prodigiDocument() {
+  const catalog = JSON.parse(readFileSync(PRODIGI_CATALOG_PATH, "utf8"));
+  const model = catalog.models?.[SLICE_MODEL];
+  if (model === undefined || model.front == null || model.back == null) {
+    die(`model ${SLICE_MODEL} has no front/back frames in ${PRODIGI_CATALOG_PATH}`);
+  }
+  const frame = (area) => ({ h: area.h, w: area.w, ...(Number.isInteger(area.offsetTopMm) ? { offsetTopMm: area.offsetTopMm } : {}) });
+  const skus = {};
+  for (const sku of SLICE_SKUS) {
+    const entry = catalog.skus?.[sku];
+    if (entry === undefined || String(entry.model) !== SLICE_MODEL) {
+      die(`SKU ${sku} is not a model-${SLICE_MODEL} SKU in ${PRODIGI_CATALOG_PATH}`);
+    }
+    skus[sku] = { label: `${entry.colour} / ${entry.size}`, model: SLICE_MODEL };
+  }
+  return {
+    capabilities: {
+      models: {
+        [SLICE_MODEL]: {
+          garment: model.garment ?? null,
+          name: model.name,
+          printAreasMm: { back: frame(model.back), front: frame(model.front) },
+        },
+      },
+      skus,
+    },
+    currency: "SEK",
+    name: "Prodigi (sandbox)",
+    printerId: PRINTER_ID,
+    provider: "prodigi",
+    // Staging placeholders: shipping ≈ EUR 11.85 (PL Standard) in SEK; tiers as the fake printer's.
+    shippingCostMinor: 13_500,
+    status: "active",
+    tiers: SLICE_SKUS.map((sku) => ({
+      blankCostMinor: 6_000,
+      printCostsMinor: { back: 4_000, front: 4_000 },
+      sku,
+    })),
+    type: "api",
+  };
+}
+
+/** The policy of src/pod/printers.ts printersAllowedIn for STAGING, per row. */
+function allowedOnStaging(printer) {
+  if (printer.type === "manual") {
+    return printer.provider === "manual" && printer.printerId !== "fake-printer" && printer.printerId !== "snapwear";
+  }
+  return printer.provider === "fake" || printer.provider === "prodigi";
+}
+
+/** Every platform-owned api/manual printer, as a PrinterInput, or die if a view cannot be rebuilt. */
+async function readPlatformPrinterInputs() {
+  const ids = [];
+  let cursor = null;
+  for (;;) {
+    const page = expectStatus(
+      await api("GET", `/v1/platform/printers?limit=50${cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`}`, { session: true }),
+      [200],
+      "list platform printers",
+    );
+    for (const printer of page.json.printers ?? []) {
+      if (printer.tenantId === null) {
+        ids.push(printer.printerId);
+      }
+    }
+    cursor = page.json.nextCursor ?? null;
+    if (cursor === null) {
+      break;
+    }
+  }
+  const inputs = [];
+  const dropped = [];
+  for (const id of ids) {
+    const view = expectStatus(await api("GET", `/v1/platform/printers/${id}`, { session: true }), [200], `get printer ${id}`).json.printer;
+    const costsOk = (view.tiers ?? []).every(
+      (tier) => tier.printCostsMinor !== null && typeof tier.printCostsMinor === "object" && Number.isInteger(tier.blankCostMinor),
+    );
+    if (view.capabilitiesValid !== true || !costsOk || (view.type !== "api" && view.type !== "manual")) {
+      die(`printer ${id} cannot be rebuilt into a PrinterInput without loss (capabilitiesValid ${view.capabilitiesValid}); not guessing`);
+    }
+    const input = {
+      capabilities: view.capabilities,
+      currency: view.currency,
+      name: view.name,
+      printerId: view.printerId,
+      provider: view.provider,
+      shippingCostMinor: view.shippingCostMinor,
+      status: view.status,
+      tiers: view.tiers.map((tier) => ({ blankCostMinor: tier.blankCostMinor, printCostsMinor: tier.printCostsMinor, sku: tier.sku })),
+      type: view.type,
+    };
+    if (allowedOnStaging(input)) {
+      inputs.push(input);
+    } else {
+      dropped.push(input);
+    }
+  }
+  return { dropped, inputs };
+}
+
 function printerDocument() {
+  if (PRODIGI) {
+    return prodigiDocument();
+  }
   const catalog = JSON.parse(readFileSync(CATALOG_PATH, "utf8"));
   const model = catalog.models?.[SLICE_MODEL];
   if (model === undefined || model.front === null || model.back === null) {
@@ -607,7 +738,8 @@ async function ensurePrintShop() {
     "list printers",
   );
   const others = (current.json.printers ?? []).filter((printer) => printer.printerId !== PRINTER_ID);
-  if (others.length > 0 && process.env.SLICE_ALLOW_PRINTER_REPLACE !== "1") {
+  // With --printer prodigi the other printers are carried into the PUT, not deactivated.
+  if (!PRODIGI && others.length > 0 && process.env.SLICE_ALLOW_PRINTER_REPLACE !== "1") {
     die(
       `PUT /v1/platform/printers is replace-all and would deactivate ${others.map((p) => p.printerId).join(", ")}; ` +
         "set SLICE_ALLOW_PRINTER_REPLACE=1 to proceed",
@@ -620,7 +752,11 @@ async function ensurePrintShop() {
   // SKUs and more is left exactly as it is.
   const existing = await api("GET", `/v1/platform/printers/${PRINTER_ID}`, { session: true });
   const existingSkus = existing.status === 200 ? Object.keys(existing.json?.printer?.capabilities?.skus ?? {}) : [];
-  if (existingSkus.length > SLICE_SKUS.length && process.env.SLICE_ALLOW_PRINTER_REPLACE !== "1") {
+  const prodigiHoldsSlice =
+    PRODIGI && existing.json?.printer?.status === "active" && SLICE_SKUS.every((sku) => existingSkus.includes(sku));
+  if (prodigiHoldsSlice) {
+    info("printer", `${PRINTER_ID} (kept as it is: ${existingSkus.length} SKUs, the slice's among them)`);
+  } else if (existingSkus.length > SLICE_SKUS.length && process.env.SLICE_ALLOW_PRINTER_REPLACE !== "1") {
     const missing = SLICE_SKUS.filter((sku) => !existingSkus.includes(sku));
     if (missing.length > 0 || existing.json?.printer?.status !== "active") {
       die(
@@ -631,12 +767,25 @@ async function ensurePrintShop() {
     }
     info("printer", `${PRINTER_ID} (kept as it is: ${existingSkus.length} SKUs, the slice's among them)`);
   } else {
+    let body = [document];
+    if (PRODIGI) {
+      const { dropped, inputs } = await readPlatformPrinterInputs();
+      for (const gone of dropped) {
+        info("printer dropped", `${gone.printerId} (${gone.provider}, ${gone.status}): not allowed on staging, left out of the PUT`);
+        if (gone.status === "active" && process.env.SLICE_ALLOW_PRINTER_REPLACE !== "1") {
+          die(`${gone.printerId} is ACTIVE and not allowed on staging; dropping it would suspend its mappings: set SLICE_ALLOW_PRINTER_REPLACE=1 to proceed`);
+        }
+      }
+      body = [...inputs.filter((printer) => printer.printerId !== PRINTER_ID), document];
+      info("printers carried", body.map((printer) => printer.printerId).join(", "));
+    }
     const printers = expectStatus(
-      await api("PUT", "/v1/platform/printers", { json: { printers: [document] }, session: true }),
+      await api("PUT", "/v1/platform/printers", { json: { printers: body }, session: true }),
       [200],
       "PUT printers",
     );
-    info("printer", `${PRINTER_ID} (${printers.json.printers[0]?.skuCount} SKUs, suspended mappings ${printers.json.suspendedMappings})`);
+    const written = printers.json.printers.find((printer) => printer.printerId === PRINTER_ID);
+    info("printer", `${PRINTER_ID} (${written?.skuCount} SKUs, suspended mappings ${printers.json.suspendedMappings})`);
   }
 
   const profiles = expectStatus(
@@ -1059,6 +1208,12 @@ info("artwork", artworkId);
 info("product", productId);
 if (orderId !== null) {
   info("order", orderId);
+  if (PRODIGI) {
+    console.log(
+      "\n  Prodigi: the dispatcher sends this order to Prodigi's SANDBOX. Look at GET /v1/platform/print-jobs " +
+        `(the dispatch rows for order ${orderId}) and the Prodigi sandbox dashboard.`,
+    );
+  }
 }
 console.log(
   "\n  Next: node scripts/cf-port/reconcile-staging.mjs --tenant " +
