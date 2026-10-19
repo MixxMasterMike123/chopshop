@@ -1,5 +1,14 @@
 import { handleFakePrinterRoute } from "../routes/fake-printer";
+import type { PrinterProvider } from "../pod/printers";
 import { FAKE_PRINTER_JOBS_PATH, isFakePrinterEnabled } from "./fake-printer";
+import { createProdigiClient, prodigiSubmitConfig } from "./prodigi-client";
+import {
+  bareHttpsOrigin,
+  PRINTER_API_TOKEN_PATTERN,
+  PRINTER_SUBMIT_TIMEOUT_MS,
+  type PrinterFetch,
+  seamFetch,
+} from "./printer-transport";
 import type { PrintLocation, SnapwearJobBody } from "./snapwear-wire";
 import {
   SNAPWEAR_DUPLICATE_JOB_MESSAGE,
@@ -11,15 +20,19 @@ import {
 } from "./snapwear-wire";
 import type { ShipTo } from "../commerce/recipient";
 
+export type { PrinterFetch } from "./printer-transport";
+
 /**
- * The printer seam the CP2 dispatch consumer will call (PLAN §2.3).
+ * The printer seam the CP2 dispatch consumer calls (PLAN §2.3).
  *
  * `submit` answers with what the PRINTER decided, as a closed union:
  *
  *   accepted   the printer took the job; `printerJobId` is its reference
  *   duplicate  the printer already has this job id — a previous submission
  *              whose response was lost WAS accepted (SnapWear: duplicate
- *              `job_id` → 400). The dispatcher records it as accepted.
+ *              `job_id` → 400; Prodigi: `AlreadyExists`, which also names
+ *              its order, then carried as `printerJobId`). The dispatcher
+ *              records it as accepted.
  *   rejected   the printer refused this job (SnapWear 422, or another 4xx).
  *              Resubmitting cannot help; a human must look.
  *   unknown    the outcome was not determined: network failure, timeout,
@@ -34,11 +47,11 @@ import type { ShipTo } from "../commerce/recipient";
  * is part of the type rather than a thrown error a caller could forget.
  */
 
-export interface PrinterJob {
+/** One order line of a job: what to print, on what, how many. */
+export interface PrinterJobLine {
   artworks: Array<{ location: PrintLocation; url: string }>;
-  items: Array<{ quantity: number; sku: string }>;
-  /** Stable: printerJobId(orderId, lineNo). The printer's dedupe key. */
-  jobId: string;
+  /** item_index + 1 (the outbox payload's lineNo). */
+  lineNo: number;
   /**
    * Always empty today (the dispatcher sends none). PROVISIONAL: SnapWear's
    * `mockups[]` is assumed optional. What would fill it: the line's product
@@ -47,6 +60,25 @@ export interface PrinterJob {
    * checkout and turned into addresses here — the snapshot carries none yet.
    */
   mockupUrls: string[];
+  quantity: number;
+  sku: string;
+}
+
+/**
+ * One submission (CP11, D5: reshaped once for both units of work).
+ *
+ *   line-unit printers (SnapWear, the fake): exactly ONE line; `jobId` =
+ *     printerJobId(orderId, lineNo), the printer's dedupe key. A job with more
+ *     lines is refused `multi_line_job` before any HTTP call, never truncated.
+ *   order-unit printers (Prodigi): every dispatchable line of the order;
+ *     `jobId` = orderId, the printer's idempotency key (shipping is charged
+ *     per printer order, so one order of ours is one order of theirs).
+ */
+export interface PrinterJob {
+  /** Stable for the order (order unit) or the line (line unit). */
+  jobId: string;
+  lines: PrinterJobLine[];
+  orderId: string;
   /**
    * Where the parcel goes (D98): the recipient of a SHIPPED order; null or
    * absent for a collected order and for an order made before 0045.
@@ -56,13 +88,27 @@ export interface PrinterJob {
 
 export type PrinterSubmitResult =
   | { printerJobId: string; status: "accepted" }
-  | { status: "duplicate" }
+  /** `printerJobId` when the printer's answer names the existing job (Prodigi). */
+  | { printerJobId?: string; status: "duplicate" }
   | { code: string; status: "rejected" }
   | { reason: string; status: "unknown" };
 
+/**
+ * What one submission covers (CP11, D4): ONE order line (SnapWear, the fake:
+ * one dispatch row ↔ one printer job), or the whole ORDER (Prodigi: one
+ * printer order carries every dispatchable line of ours; the dispatcher's
+ * rows stay one per line and the first to submit speaks for its siblings —
+ * dispatch-effect.ts runOrderUnit).
+ */
+export type PrinterUnit = "line" | "order";
+
 export interface PrinterClient {
   submit(job: PrinterJob): Promise<PrinterSubmitResult>;
+  unit: PrinterUnit;
 }
+
+/** The refusal of a job a line-unit printer cannot take as one job (D5). */
+export const MULTI_LINE_JOB: PrinterSubmitResult = { code: "multi_line_job", status: "rejected" };
 
 /**
  * THE ONE PLACE the job body is built (the fake and SnapWear receive the same
@@ -72,16 +118,22 @@ export interface PrinterClient {
  *     parallel, front before back;
  *   - C5: SnapWear's `design` field and its neck-label key are optional and
  *     are NOT sent (no keys beyond the ones below);
- *   - `mockups[]` is optional (sent empty, see PrinterJob.mockupUrls);
+ *   - `mockups[]` is optional (sent empty, see PrinterJobLine.mockupUrls);
  *   - `shipping_address` only when the order ships (snapwear-wire.ts).
+ * CP11 (D5): null unless the job has EXACTLY one line — the caller answers
+ * MULTI_LINE_JOB; a second line is never dropped or merged.
  */
-export function toSnapwearJobBody(job: PrinterJob): SnapwearJobBody {
+export function toSnapwearJobBody(job: PrinterJob): SnapwearJobBody | null {
+  const [line] = job.lines;
+  if (job.lines.length !== 1 || line === undefined) {
+    return null;
+  }
   const body: SnapwearJobBody = {
-    artworks: job.artworks.map((artwork) => ({ url: artwork.url })),
-    items: job.items.map((item) => ({ quantity: item.quantity, sku: item.sku })),
+    artworks: line.artworks.map((artwork) => ({ url: artwork.url })),
+    items: [{ quantity: line.quantity, sku: line.sku }],
     job_id: job.jobId,
-    layouts: job.artworks.map((artwork) => ({ location: artwork.location })),
-    mockups: job.mockupUrls.map((url) => ({ url })),
+    layouts: line.artworks.map((artwork) => ({ location: artwork.location })),
+    mockups: line.mockupUrls.map((url) => ({ url })),
   };
   if (job.shipTo !== undefined && job.shipTo !== null) {
     body.shipping_address = snapwearShippingAddress(job.shipTo);
@@ -148,10 +200,6 @@ export const FAKE_PRINTER_FETCH_OVERRIDE: unique symbol = Symbol(
   "meteorshop.test.fakePrinterFetch",
 );
 
-export type PrinterFetch = (request: Request) => Promise<Response>;
-
-const SUBMIT_TIMEOUT_MS = 30_000;
-
 /**
  * The DEFAULT transport hands the request straight to the fake printer's own
  * route handler in this isolate — still a full Request/Response round trip
@@ -183,11 +231,15 @@ export function createFakePrinterClient(env: Env): PrinterClient {
 
   return {
     async submit(job: PrinterJob): Promise<PrinterSubmitResult> {
+      const body = toSnapwearJobBody(job);
+      if (body === null) {
+        return MULTI_LINE_JOB;
+      }
       let response: Response;
       try {
         response = await send(
           new Request(url, {
-            body: JSON.stringify(toSnapwearJobBody(job)),
+            body: JSON.stringify(body),
             headers: {
               authorization: `Bearer ${token}`,
               "content-type": "application/json",
@@ -196,7 +248,7 @@ export function createFakePrinterClient(env: Env): PrinterClient {
             // Never follow a redirect with the bearer attached. ("error" is not
             // supported by workerd; a 3xx comes back and is classified.)
             redirect: "manual",
-            signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
+            signal: AbortSignal.timeout(PRINTER_SUBMIT_TIMEOUT_MS),
           }),
         );
       } catch {
@@ -205,6 +257,7 @@ export function createFakePrinterClient(env: Env): PrinterClient {
 
       return classifyPrinterResponse(response);
     },
+    unit: "line",
   };
 }
 
@@ -227,76 +280,30 @@ export interface SnapwearSubmitConfig {
 }
 
 /**
- * A bare https origin and nothing else: no credentials, port, path, query or
- * fragment (`https://host` or `https://host/`). Anything else is refused, never
- * repaired, so the token can only ever travel to the host the operator named.
- */
-function snapwearOrigin(value: unknown): string | null {
-  if (typeof value !== "string" || value.length === 0 || value.length > 200) {
-    return null;
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return null;
-  }
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.port !== "" ||
-    url.pathname !== "/" ||
-    url.search !== "" ||
-    url.hash !== "" ||
-    (value !== url.origin && value !== `${url.origin}/`)
-  ) {
-    return null;
-  }
-  return url.origin;
-}
-
-/**
- * Printable ASCII without spaces, 16–512 characters: a value a header can
- * carry unchanged, and long enough that a placeholder ("x", "changeme") is
- * not mistaken for a credential. SnapWear's own format is not known.
- */
-const SNAPWEAR_TOKEN_PATTERN = /^[\x21-\x7e]{16,512}$/;
-
-/**
  * THE GATE. The real client exists only when ALL of these hold, each on its
  * own (test/snapwear-client.test.ts removes them one by one):
- *   1. DISPATCH_TARGET is "snapwear";
- *   2. APP_ENV is "production" — staging can never build it, whatever else
+ *   1. APP_ENV is "production" — staging can never build it, whatever else
  *      it is given;
- *   3. SNAPWEAR_SUBMIT_ENABLED is exactly "true" — the explicit switch, unset
+ *   2. SNAPWEAR_SUBMIT_ENABLED is exactly "true" — the explicit switch, unset
  *      until SnapWear confirms the open answers (LAUNCH_TODO A6, C4–C6);
- *   4. SNAPWEAR_API_BASE_URL is a bare https origin;
- *   5. SNAPWEAR_API_TOKEN (a secret) is present and well-formed.
- * Otherwise null: resolvePrinterClient answers null and the dispatcher HOLDS
+ *   3. SNAPWEAR_API_BASE_URL is a bare https origin;
+ *   4. SNAPWEAR_API_TOKEN (a secret) is present and well-formed.
+ * (CP11, D2: the former first condition, DISPATCH_TARGET = "snapwear", went
+ * with the var: the printer row's provider now says that the order is
+ * SnapWear's, and this gate says whether SnapWear may be called here.)
+ * Otherwise null: resolveProviderClient answers null and the dispatcher HOLDS
  * the job (dispatch-effect.ts parkForPrinter) — never a stub, never a guess.
  */
 export function snapwearSubmitConfig(env: Env): SnapwearSubmitConfig | null {
-  if (
-    env.DISPATCH_TARGET !== "snapwear" ||
-    env.APP_ENV !== "production" ||
-    env.SNAPWEAR_SUBMIT_ENABLED !== SNAPWEAR_SUBMIT_ENABLED_VALUE
-  ) {
+  if (env.APP_ENV !== "production" || env.SNAPWEAR_SUBMIT_ENABLED !== SNAPWEAR_SUBMIT_ENABLED_VALUE) {
     return null;
   }
-  const origin = snapwearOrigin(env.SNAPWEAR_API_BASE_URL);
+  const origin = bareHttpsOrigin(env.SNAPWEAR_API_BASE_URL);
   const token = env.SNAPWEAR_API_TOKEN;
-  if (origin === null || typeof token !== "string" || !SNAPWEAR_TOKEN_PATTERN.test(token)) {
+  if (origin === null || typeof token !== "string" || !PRINTER_API_TOKEN_PATTERN.test(token)) {
     return null;
   }
-  return { origin, token };
-}
-
-function resolveSnapwearFetch(env: Env): PrinterFetch {
-  const override = (env as unknown as Record<PropertyKey, unknown>)[SNAPWEAR_FETCH_OVERRIDE];
-  return typeof override === "function"
-    ? (override as PrinterFetch)
-    : (request) => fetch(request);
+  return { origin: origin.origin, token };
 }
 
 /**
@@ -309,11 +316,15 @@ function resolveSnapwearFetch(env: Env): PrinterFetch {
  * (the dispatcher writes the reason into last_error and alert texts).
  */
 export function createSnapwearClient(env: Env, config: SnapwearSubmitConfig): PrinterClient {
-  const send = resolveSnapwearFetch(env);
+  const send = seamFetch(env, SNAPWEAR_FETCH_OVERRIDE);
   const url = `${config.origin}${SNAPWEAR_ORDER_ADD_PATH}`;
 
   return {
     async submit(job: PrinterJob): Promise<PrinterSubmitResult> {
+      const body = toSnapwearJobBody(job);
+      if (body === null) {
+        return MULTI_LINE_JOB;
+      }
       if ((job.shipTo === undefined || job.shipTo === null) && !SNAPWEAR_SUBMIT_WITHOUT_SHIP_TO) {
         // A collected order (or one without a recipient): where SnapWear
         // would send its parcel is not agreed (snapwear-wire.ts). Never sent.
@@ -324,7 +335,7 @@ export function createSnapwearClient(env: Env, config: SnapwearSubmitConfig): Pr
       try {
         response = await send(
           new Request(url, {
-            body: JSON.stringify(toSnapwearJobBody(job)),
+            body: JSON.stringify(body),
             headers: {
               accept: "application/json",
               "content-type": "application/json",
@@ -334,7 +345,7 @@ export function createSnapwearClient(env: Env, config: SnapwearSubmitConfig): Pr
             // Never follow a redirect with the token attached: a 3xx comes
             // back and is classified `unknown` (our configuration).
             redirect: "manual",
-            signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
+            signal: AbortSignal.timeout(PRINTER_SUBMIT_TIMEOUT_MS),
           }),
         );
       } catch {
@@ -343,24 +354,57 @@ export function createSnapwearClient(env: Env, config: SnapwearSubmitConfig): Pr
 
       return classifyPrinterResponse(response);
     },
+    unit: "line",
   };
 }
 
+// ── the provider registry (CP11, D1/D2) ─────────────────────────────────────
+
 /**
- * The client for this environment's DISPATCH_TARGET, or null when none can be
- * built (unset or unknown target, the fake outside staging / without its
- * token, SnapWear without every condition of snapwearSubmitConfig) — the
- * dispatcher then holds its work rather than guessing.
+ * The client of a printer row's PROVIDER (migration 0057), or null when none
+ * can be built here — each provider behind its own fail-closed gate:
+ *   fake      APP_ENV "staging" AND FAKE_PRINTER_TOKEN ≥ 32 characters
+ *             (isFakePrinterEnabled, the fake route's own condition);
+ *   snapwear  snapwearSubmitConfig (production only, its switch, origin, token);
+ *   prodigi   prodigiSubmitConfig (its switch, origin, token, and the
+ *             environment pairing: sandbox host + `test_` key on staging,
+ *             live host + live key in production);
+ *   manual    never (a manual printer is sent jobs by hand);
+ *   anything else (an unknown string) never.
+ * Null ⇒ the dispatcher HOLDS the job (dispatch-effect.ts parkForPrinter,
+ * `printer_not_configured`) rather than guessing. It replaced the switch on
+ * the environment's DISPATCH_TARGET: the order's printer now decides.
  */
-export function resolvePrinterClient(env: Env): PrinterClient | null {
-  switch (env.DISPATCH_TARGET) {
-    case "fake-printer":
+export function resolveProviderClient(env: Env, provider: string): PrinterClient | null {
+  switch (provider) {
+    case "fake":
       return isFakePrinterEnabled(env) ? createFakePrinterClient(env) : null;
     case "snapwear": {
       const config = snapwearSubmitConfig(env);
       return config === null ? null : createSnapwearClient(env, config);
     }
+    case "prodigi": {
+      const config = prodigiSubmitConfig(env);
+      return config === null ? null : createProdigiClient(env, config);
+    }
     default:
       return null;
   }
+}
+
+/**
+ * The providers whose client exists in this environment right now, for the
+ * sweeper's release of printer-held jobs (src/outbox/sweeper.ts): a held job
+ * becomes due only when ITS printer's provider resolves, never because some
+ * other provider does (a release that cannot be served re-parks the row and
+ * spends an attempt).
+ */
+export function configuredProviders(env: Env): PrinterProvider[] {
+  const providers: PrinterProvider[] = [];
+  for (const provider of ["fake", "snapwear", "prodigi"] as const) {
+    if (resolveProviderClient(env, provider) !== null) {
+      providers.push(provider);
+    }
+  }
+  return providers;
 }

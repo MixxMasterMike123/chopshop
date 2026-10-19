@@ -227,7 +227,10 @@ describe("dispatch: one order line → one printer job", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 describe("dispatch: what is refused before any printer call", () => {
   const CASES: Array<[string, Parameters<typeof seedOrder>[1], string]> = [
-    ["an order routed to another printer", { printer: "snapwear" }, "printer_mismatch"],
+    // CP11 (D1): a printer this environment does not hold (no row), and a
+    // printer whose provider is no longer the one frozen at checkout.
+    ["an order routed to a printer that does not exist here", { printer: "gone-printer" }, "printer_mismatch"],
+    ["an order frozen for another provider", { snapshotProvider: "prodigi" }, "printer_mismatch"],
     ["an order without a production snapshot", { printer: null }, "production_snapshot_missing"],
     ["a slot SnapWear cannot print", { lines: [{ printFiles: [{ slot: "sleeve" }] }] }, "print_slot_unsupported"],
     [
@@ -282,7 +285,8 @@ describe("dispatch: what is refused before any printer call", () => {
     const order = await seedOrder(TENANT_A, { printer: "snapwear" });
     const dispatchId = order.dispatchIds[0]!;
 
-    const result = await dispatch(quietEnv({ DISPATCH_TARGET: "snapwear" }).env, dispatchId);
+    // CP11: its printer row's provider is SnapWear's, whose client staging never builds.
+    const result = await dispatch(quietEnv().env, dispatchId);
 
     expect(result).toMatchObject({ kind: "ran", outcome: { kind: "retry" } });
     expect(await outboxRow(dispatchId)).toMatchObject({
@@ -299,7 +303,7 @@ describe("dispatch: what is refused before any printer call", () => {
     const order = await seedOrder(TENANT_A);
     const dispatchId = order.dispatchIds[0]!;
 
-    const result = await dispatch(quietEnv({ DISPATCH_TARGET: undefined }).env, dispatchId);
+    const result = await dispatch(quietEnv({ FAKE_PRINTER_TOKEN: undefined }).env, dispatchId);
 
     expect(result).toMatchObject({ kind: "ran", outcome: { kind: "retry" } });
     expect(await outboxRow(dispatchId)).toMatchObject({
@@ -757,7 +761,7 @@ describe("platform: dispatches needing a human", () => {
   it("lists unknown and failed dispatches, cursor-paged", async () => {
     const first = await unknownDispatch();
     const second = await unknownDispatch();
-    const failedOrder = await seedOrder(TENANT_B, { printer: "snapwear" });
+    const failedOrder = await seedOrder(TENANT_B, { printer: "gone-printer" });
     await dispatch(quietEnv().env, failedOrder.dispatchIds[0]!);
 
     const page1 = await (await list("?state=unknown&limit=1")).json<{
@@ -797,7 +801,7 @@ describe("platform: dispatches needing a human", () => {
   });
 
   it("resolves a failed dispatch as accepted after all, or acknowledges it", async () => {
-    const order = await seedOrder(TENANT_A, { printer: "snapwear" });
+    const order = await seedOrder(TENANT_A, { printer: "gone-printer" });
     const dispatchId = order.dispatchIds[0]!;
     await dispatch(quietEnv().env, dispatchId);
     expect((await outboxRow(dispatchId)).status).toBe("failed");
@@ -932,7 +936,7 @@ describe("the line follows an exhausted row (Codex P2)", () => {
       "printer_client_error",
       null,
     ],
-    ["no usable printer (before any call)", { DISPATCH_TARGET: undefined }, "printer_not_configured", null],
+    ["no usable printer (before any call)", { FAKE_PRINTER_TOKEN: undefined }, "printer_not_configured", null],
     ["storage not configured (before any call)", { PRIVATE_BUCKET: undefined }, "storage_not_configured", null],
     ["a storage error (before any call)", { PRIVATE_BUCKET: failingBucket }, "storage_error", null],
     [
@@ -1010,7 +1014,7 @@ describe("the line follows an exhausted row (Codex P2)", () => {
     expect((await lineRow(unknownOrder.orderId)).dispatch_state).toBe("failed");
 
     // A failed row whose line still shows where the last attempt left it.
-    const failedOrder = await seedOrder(TENANT_A, { printer: "snapwear" });
+    const failedOrder = await seedOrder(TENANT_A, { printer: "gone-printer" });
     const failedId = failedOrder.dispatchIds[0]!;
     await dispatch(quietEnv().env, failedId);
     await env.DB.prepare("UPDATE order_items SET dispatch_state = 'pending' WHERE order_id = ?")
@@ -1022,7 +1026,7 @@ describe("the line follows an exhausted row (Codex P2)", () => {
   });
 
   it("resolving as accepted sets the line accepted with the printer reference", async () => {
-    const order = await seedOrder(TENANT_A, { printer: "snapwear" });
+    const order = await seedOrder(TENANT_A, { printer: "gone-printer" });
     const dispatchId = order.dispatchIds[0]!;
     await dispatch(quietEnv().env, dispatchId);
 
@@ -1038,8 +1042,8 @@ describe("the line follows an exhausted row (Codex P2)", () => {
 
 describe("envWith is a copy", () => {
   it("never mutates the shared env", () => {
-    const copy = envWith({ DISPATCH_TARGET: "snapwear" });
-    expect(copy.DISPATCH_TARGET).toBe("snapwear");
-    expect(env.DISPATCH_TARGET).toBe("fake-printer");
+    const copy = envWith({ PRINT_CANVAS_ENABLED: "true" });
+    expect(copy.PRINT_CANVAS_ENABLED).toBe("true");
+    expect(env.PRINT_CANVAS_ENABLED).toBe("false");
   });
 });

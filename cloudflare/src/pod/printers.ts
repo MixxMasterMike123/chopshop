@@ -9,10 +9,15 @@ import { podPriceFloorMinor, quoteFromTier } from "./pod-quote";
  * isSlotPrintableInAreas) and the SnapWear seed (scripts/seed-snapwear-printer.cjs).
  * Firebase routed by GARMENT through settings/printRouting; here the mapping
  * names the printer and the printer's SKU directly, so "routing" is the
- * printer set itself: one platform printer per environment (`fake-printer` in
- * staging, `snapwear` in production — the env's DISPATCH_TARGET), replaced
- * wholesale by PUT /v1/platform/printers or edited one printer at a time by
- * PATCH /v1/platform/printers/:id (CP3).
+ * printer set itself, replaced wholesale by PUT /v1/platform/printers or
+ * edited one printer at a time by PATCH /v1/platform/printers/:id (CP3).
+ *
+ * CP11 (D1, D3): each `api` printer names its PROVIDER — the printer system
+ * its jobs are submitted to (`snapwear`, `prodigi`, the staging `fake`) — and
+ * the dispatcher builds that provider's client from the row
+ * (src/dispatch/printer-client.ts resolveProviderClient). Several api printers
+ * may exist in one environment; which providers an environment may hold is
+ * providerAllowedIn below.
  *
  * MONEY IS PLATFORM-ONLY (A13, "seller sees ONE number"). `printer_sku_tiers`
  * and `printers.shipping_cost_minor` are read by quotePodCost, the checkout
@@ -58,11 +63,59 @@ export interface PrinterTierInput {
   sku: string;
 }
 
+/**
+ * CP11 (D1): the printer system a printer row's jobs go to (migration 0057).
+ * `manual` is never submitted to: it is every `manual` printer's provider, and
+ * what an `api` row the 0057 backfill did not recognise became.
+ */
+export const PRINTER_PROVIDERS = ["snapwear", "prodigi", "fake", "manual"] as const;
+export type PrinterProvider = (typeof PRINTER_PROVIDERS)[number];
+
+/** The providers an `api` printer may be created with (never `manual`). */
+const API_PROVIDERS: readonly PrinterProvider[] = ["snapwear", "prodigi", "fake"];
+
+export function isPrinterProvider(value: unknown): value is PrinterProvider {
+  return typeof value === "string" && (PRINTER_PROVIDERS as readonly string[]).includes(value);
+}
+
+/** The two environments that may hold printers (APP_ENV). */
+export type PrinterEnvironment = "production" | "staging";
+
+/**
+ * The environment's name when it is one printers may live in, else null (the
+ * printer surface is then dark and checkout sells no POD line).
+ */
+export function printerEnvironmentOf(env: Pick<Env, "APP_ENV">): PrinterEnvironment | null {
+  return env.APP_ENV === "staging" || env.APP_ENV === "production" ? env.APP_ENV : null;
+}
+
+/**
+ * CP11 (D3): may a printer of `provider` exist in `environment`? The staging
+ * fake never leaves staging; SnapWear is production's alone (staging can never
+ * build its client either); Prodigi has a sandbox for staging and the live API
+ * for production; a manual printer is anywhere. The gate of each provider's
+ * client (src/dispatch/printer-client.ts) applies the same pairing at run
+ * time, so a row this policy admits is one whose client CAN exist here.
+ */
+export function providerAllowedIn(provider: PrinterProvider, environment: PrinterEnvironment): boolean {
+  switch (provider) {
+    case "fake":
+      return environment === "staging";
+    case "snapwear":
+      return environment === "production";
+    case "prodigi":
+    case "manual":
+      return true;
+  }
+}
+
 export interface PrinterInput {
   capabilities: PrinterCapabilities;
   currency: string;
   name: string;
   printerId: string;
+  /** CP11: required for an `api` printer, always `manual` for a manual one. */
+  provider: PrinterProvider;
   shippingCostMinor: number;
   status: "active" | "inactive";
   tiers: PrinterTierInput[];
@@ -74,6 +127,7 @@ export interface Printer {
   currency: string;
   name: string;
   printerId: string;
+  provider: PrinterProvider;
   shippingCostMinor: number;
   status: "active" | "inactive";
   tenantId: string | null;
@@ -85,6 +139,8 @@ export interface PrinterRow {
   currency: string;
   id: string;
   name: string;
+  /** 0057; a row read without the column (an older SELECT) is `manual`. */
+  provider?: string;
   shipping_cost_minor: number;
   status: "active" | "inactive";
   tenant_id: string | null;
@@ -299,11 +355,25 @@ const PRINTER_KEYS = [
   "currency",
   "name",
   "printerId",
+  "provider",
   "shippingCostMinor",
   "status",
   "tiers",
   "type",
 ] as const;
+
+/**
+ * CP11: an `api` printer names its provider (snapwear | prodigi | fake); a
+ * `manual` one is `manual`, whether it says so or not. A contradiction (a
+ * manual printer naming an api provider, an api printer naming none or
+ * `manual`) is refused, never repaired.
+ */
+function parseProvider(type: "api" | "manual", value: unknown): PrinterProvider | null {
+  if (type === "manual") {
+    return value === undefined || value === "manual" ? "manual" : null;
+  }
+  return isPrinterProvider(value) && API_PROVIDERS.includes(value) ? value : null;
+}
 
 function parsePrinter(value: unknown): PrinterInput | null {
   if (!isPlainObject(value) || !hasOnlyKeys(value, PRINTER_KEYS)) {
@@ -321,6 +391,10 @@ function parsePrinter(value: unknown): PrinterInput | null {
   ) {
     return null;
   }
+  const provider = parseProvider(type, value.provider);
+  if (provider === null) {
+    return null;
+  }
   const capabilities = parsePrinterCapabilities(value.capabilities);
   if (capabilities === null) {
     return null;
@@ -334,6 +408,7 @@ function parsePrinter(value: unknown): PrinterInput | null {
     currency,
     name,
     printerId,
+    provider,
     shippingCostMinor,
     status,
     tiers,
@@ -364,41 +439,39 @@ export function parseReplacePrintersInput(body: unknown): PrinterInput[] | null 
 }
 
 /**
- * The environment's dispatch target when it is one this platform can dispatch
- * to, else null (the printer surface is then dark). The staging fake printer is
- * a target ONLY in staging — the same condition its route uses.
- */
-export function dispatchTargetOf(env: Env): "fake-printer" | "snapwear" | null {
-  if (env.DISPATCH_TARGET === "snapwear") {
-    return "snapwear";
-  }
-  if (env.DISPATCH_TARGET === "fake-printer" && env.APP_ENV === "staging") {
-    return "fake-printer";
-  }
-  return null;
-}
-
-/**
- * Environment policy on a parsed printer set (PLAN §2.6: one printer per env).
- * An `api` printer is one the dispatcher submits to, so its id MUST be this
- * environment's DISPATCH_TARGET — production can never be seeded with the
- * fake printer, staging never with SnapWear. Both speak SnapWear's catalogue
- * (the fake printer 422s any other SKU), so every SKU must be a SnapWear SKU.
+ * Environment policy on a parsed printer set, PER ROW (CP11, D3 — it replaced
+ * "one api printer per environment, named after DISPATCH_TARGET"):
+ *   - an `api` printer's provider must be one this environment may hold
+ *     (providerAllowedIn: the fake only in staging, SnapWear only in
+ *     production, Prodigi in both), and never `manual`;
+ *   - a SnapWear or fake printer lists only SnapWear SKUs (the fake printer
+ *     422s any other, as SnapWear does); a Prodigi printer's SKUs are whatever
+ *     its catalogue says;
+ *   - a `manual` printer has the `manual` provider and never takes the id of
+ *     one of the two printers the platform has always seeded (`fake-printer`,
+ *     `snapwear`), so an order frozen against those ids cannot meet a manual
+ *     row of the same name.
  * The replace-all PUT, the PATCH and the catalogue apply all check the state
  * they are about to write against THIS function.
  */
 export function printersAllowedIn(
   printers: readonly PrinterInput[],
-  target: "fake-printer" | "snapwear",
+  environment: PrinterEnvironment,
 ): boolean {
   return printers.every((printer) => {
     if (printer.type === "manual") {
-      return printer.printerId !== "fake-printer" && printer.printerId !== "snapwear";
+      return (
+        printer.provider === "manual" &&
+        printer.printerId !== "fake-printer" &&
+        printer.printerId !== "snapwear"
+      );
     }
-    return (
-      printer.printerId === target &&
-      Object.keys(printer.capabilities.skus).every((sku) => SNAPWEAR_SKUS.has(sku))
-    );
+    if (!API_PROVIDERS.includes(printer.provider) || !providerAllowedIn(printer.provider, environment)) {
+      return false;
+    }
+    return printer.provider === "prodigi"
+      ? true
+      : Object.keys(printer.capabilities.skus).every((sku) => SNAPWEAR_SKUS.has(sku));
   });
 }
 
@@ -421,6 +494,7 @@ export function toPrinter(row: PrinterRow): Printer | null {
         currency: row.currency,
         name: row.name,
         printerId: row.id,
+        provider: isPrinterProvider(row.provider) ? row.provider : "manual",
         shippingCostMinor: row.shipping_cost_minor,
         status: row.status,
         tenantId: row.tenant_id,
@@ -428,7 +502,7 @@ export function toPrinter(row: PrinterRow): Printer | null {
       };
 }
 
-const PRINTER_SELECT = `SELECT id, tenant_id, type, name, status, currency,
+const PRINTER_SELECT = `SELECT id, tenant_id, type, provider, name, status, currency,
      shipping_cost_minor, capabilities_json
    FROM printers`;
 
@@ -676,6 +750,7 @@ export interface ReplacePrintersResult {
     name: string;
     pricedSkuCount: number;
     printerId: string;
+    provider: PrinterProvider;
     skuCount: number;
     status: "active" | "inactive";
     type: "api" | "manual";
@@ -752,11 +827,12 @@ export async function replacePrinters(
       db
         .prepare(
           `INSERT INTO printers (
-             id, tenant_id, type, name, status, currency, shipping_cost_minor,
+             id, tenant_id, type, provider, name, status, currency, shipping_cost_minor,
              capabilities_json, created_at, updated_at
-           ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              type = excluded.type,
+             provider = excluded.provider,
              name = excluded.name,
              status = excluded.status,
              currency = excluded.currency,
@@ -769,6 +845,7 @@ export async function replacePrinters(
         .bind(
           printer.printerId,
           printer.type,
+          printer.provider,
           printer.name,
           printer.status,
           printer.currency,
@@ -845,6 +922,7 @@ export async function replacePrinters(
       name: printer.name,
       pricedSkuCount: printer.tiers.length,
       printerId: printer.printerId,
+      provider: printer.provider,
       skuCount: Object.keys(printer.capabilities.skus).length,
       status: printer.status,
       type: printer.type,
@@ -879,6 +957,8 @@ export interface PlatformPrinterView {
   isDefault: boolean;
   name: string;
   printerId: string;
+  /** CP11: platform-only, like everything here (never in a tenant view). */
+  provider: PrinterProvider;
   revision: number;
   shippingCostMinor: number;
   status: "active" | "inactive";
@@ -907,7 +987,7 @@ interface PlatformTierRow {
   updated_at: string;
 }
 
-const PLATFORM_PRINTER_SELECT = `SELECT p.id, p.tenant_id, p.type, p.name, p.status, p.currency,
+const PLATFORM_PRINTER_SELECT = `SELECT p.id, p.tenant_id, p.type, p.provider, p.name, p.status, p.currency,
        p.shipping_cost_minor, p.capabilities_json, p.revision, p.created_at, p.updated_at,
        c.content_sha256 AS catalog_sha256, c.imported_at AS catalog_imported_at,
        length(CAST(c.catalog_json AS BLOB)) AS catalog_size_bytes,
@@ -949,6 +1029,7 @@ function platformPrinterView(
     isDefault: row.is_default === 1,
     name: row.name,
     printerId: row.id,
+    provider: isPrinterProvider(row.provider) ? row.provider : "manual",
     revision: row.revision,
     shippingCostMinor: row.shipping_cost_minor,
     status: row.status,
@@ -1036,7 +1117,8 @@ export interface PrinterEditOptions {
   dryRun: boolean;
   /** Refuse (409 revision_mismatch) unless the printer is still at this revision. */
   expectedRevision?: number;
-  target: "fake-printer" | "snapwear";
+  /** CP11: the environment whose provider policy the next state must meet. */
+  environment: PrinterEnvironment;
 }
 
 export interface KeyDiff {
@@ -1133,9 +1215,10 @@ function parseSkuList(value: unknown): string[] | null {
 /**
  * `PATCH /v1/platform/printers/:id` body. Every key optional, at least one
  * edit: `{ name?, status?, shippingCostMinor?, capabilities?, tiers?:
- * { upsert?: [tier], remove?: [sku] }, expectedRevision? }`. Currency and
- * type are not editable here (a currency change would re-price every live
- * product; the type decides dispatch).
+ * { upsert?: [tier], remove?: [sku] }, expectedRevision? }`. Currency, type
+ * and provider are not editable here (a currency change would re-price every
+ * live product; the type and the provider decide dispatch — CP11: a provider
+ * changes only through the replace-all PUT, a deliberate whole-document act).
  */
 export function parsePrinterPatchInput(body: unknown): PrinterPatchInput | null {
   if (!isPlainObject(body) || !hasOnlyKeys(body, PATCH_KEYS)) {
@@ -1506,7 +1589,7 @@ export async function editPrinter(
   const [printerResult, tierResult, mappingResult, ...floorResults] = await db.batch([
     db
       .prepare(
-        `SELECT id, tenant_id, type, name, status, currency, shipping_cost_minor,
+        `SELECT id, tenant_id, type, provider, name, status, currency, shipping_cost_minor,
                 capabilities_json, revision
          FROM printers WHERE id = ?`,
       )
@@ -1610,18 +1693,21 @@ export async function editPrinter(
     currency: row.currency,
     name: edit.name ?? row.name,
     printerId: row.id,
+    // CP11: the row's provider stands (PATCH and the catalogue apply never
+    // change it); the policy below judges the next document under it.
+    provider: isPrinterProvider(row.provider) ? row.provider : "manual",
     shippingCostMinor: edit.shippingCostMinor ?? row.shipping_cost_minor,
     status: edit.status ?? row.status,
     tiers: [...nextTiers.values()].sort((a, b) => (a.sku < b.sku ? -1 : a.sku > b.sku ? 1 : 0)),
     type: row.type,
   };
-  if (!printersAllowedIn([next], options.target)) {
+  if (!printersAllowedIn([next], options.environment)) {
     return {
       code: "printer_not_allowed",
       problems: [
         next.type === "api"
-          ? `an api printer must be this environment's dispatch target (${options.target}) and list only SnapWear SKUs`
-          : "a manual printer may not use a dispatch target's id",
+          ? `an api printer's provider (${next.provider}) must be one this environment (${options.environment}) may hold, and a SnapWear or fake printer lists only SnapWear SKUs`
+          : "a manual printer may not use a seeded api printer's id",
       ],
       status: "invalid",
     };

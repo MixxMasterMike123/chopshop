@@ -14,7 +14,13 @@ import {
   quotePodCost,
   withholdMinorFor,
 } from "../src/pod/pod-quote";
-import { dispatchTargetOf, parseReplacePrintersInput, replacePrinters } from "../src/pod/printers";
+import {
+  parseReplacePrintersInput,
+  printerEnvironmentOf,
+  printersAllowedIn,
+  providerAllowedIn,
+  replacePrinters,
+} from "../src/pod/printers";
 import { handlePlatformPrintersRoute } from "../src/routes/pod-platform";
 import {
   adminOf,
@@ -131,12 +137,49 @@ describe("PUT /v1/platform/printers", () => {
       sessionRequest(`${PLATFORM_HOST}/v1/platform/printers`, "PUT", { body, cookie }),
     );
 
-  it("is dark unless the environment has a seedable dispatch target", async () => {
-    expect(dispatchTargetOf(env)).toBe("fake-printer");
-    expect(dispatchTargetOf(envWith({ DISPATCH_TARGET: "fake-printer", APP_ENV: "production" }))).toBeNull();
-    expect(dispatchTargetOf(envWith({ DISPATCH_TARGET: undefined }))).toBeNull();
-    const dark = await put({ printers: [testPrinter()] }, platformSession.cookie, envWith({ DISPATCH_TARGET: undefined }));
+  it("is dark unless APP_ENV names a printer environment (CP11: no DISPATCH_TARGET)", async () => {
+    expect(printerEnvironmentOf(env)).toBe("staging");
+    expect(printerEnvironmentOf(envWith({ APP_ENV: "production" }))).toBe("production");
+    expect(printerEnvironmentOf(envWith({ APP_ENV: "development" }))).toBeNull();
+    expect(printerEnvironmentOf(envWith({ APP_ENV: "Staging" }))).toBeNull();
+    const dark = await put({ printers: [testPrinter()] }, platformSession.cookie, envWith({ APP_ENV: "development" }));
     expect(dark.status).toBe(404);
+  });
+
+  it("CP11 (D3): judges each api printer by its provider, per environment", () => {
+    expect(providerAllowedIn("fake", "staging")).toBe(true);
+    expect(providerAllowedIn("fake", "production")).toBe(false);
+    expect(providerAllowedIn("snapwear", "staging")).toBe(false);
+    expect(providerAllowedIn("snapwear", "production")).toBe(true);
+    expect(providerAllowedIn("prodigi", "staging")).toBe(true);
+    expect(providerAllowedIn("prodigi", "production")).toBe(true);
+    const foreign = {
+      capabilities: { models: { m: { garment: "tee", printAreasMm: { front: { h: 10, w: 10 } } } }, skus: { [NOT_SNAPWEAR]: { model: "m" } } },
+      tiers: [],
+    };
+    // Several api printers in one environment (D3), each of its own provider.
+    const prodigi = testPrinter({ ...foreign, printerId: "prodigi", provider: "prodigi" });
+    expect(printersAllowedIn([testPrinter(), prodigi], "staging")).toBe(true);
+    expect(printersAllowedIn([prodigi], "production")).toBe(true);
+    // A Prodigi printer's SKUs are its catalogue's; SnapWear's and the fake's are SnapWear's.
+    expect(printersAllowedIn([testPrinter(foreign)], "staging")).toBe(false);
+    expect(printersAllowedIn([testPrinter({ printerId: "snapwear", provider: "snapwear" })], "production")).toBe(true);
+    expect(printersAllowedIn([testPrinter()], "production")).toBe(false);
+    // An api printer is never `manual`; a manual one never anything else.
+    expect(printersAllowedIn([testPrinter({ provider: "manual" })], "staging")).toBe(false);
+    expect(printersAllowedIn([testPrinter({ printerId: "shop", provider: "fake", type: "manual" })], "staging")).toBe(false);
+    expect(printersAllowedIn([testPrinter({ printerId: "shop", type: "manual" })], "staging")).toBe(true);
+  });
+
+  it("CP11: the document names an api printer's provider; a manual printer's is manual", () => {
+    const { provider: _omitted, ...withoutProvider } = testPrinter();
+    expect(parseReplacePrintersInput({ printers: [withoutProvider] })).toBeNull();
+    expect(parseReplacePrintersInput({ printers: [testPrinter({ provider: "manual" })] })).toBeNull();
+    expect(parseReplacePrintersInput({ printers: [{ ...testPrinter(), provider: "Prodigi" }] })).toBeNull();
+    expect(parseReplacePrintersInput({ printers: [testPrinter({ printerId: "shop", provider: "prodigi", type: "manual" })] })).toBeNull();
+    const { provider: _manual, ...manualWithout } = testPrinter({ printerId: "shop", type: "manual" });
+    expect(parseReplacePrintersInput({ printers: [manualWithout] })?.[0]?.provider).toBe("manual");
+    expect(parseReplacePrintersInput({ printers: [testPrinter({ provider: "prodigi" })] })?.[0]?.provider).toBe("prodigi");
   });
 
   it("hides the surface from a tenant admin", async () => {
@@ -146,7 +189,7 @@ describe("PUT /v1/platform/printers", () => {
 
   it("refuses SnapWear in staging, the fake printer's id for a manual printer, and foreign SKUs", async () => {
     for (const printers of [
-      [testPrinter({ printerId: "snapwear" })],
+      [testPrinter({ printerId: "snapwear", provider: "snapwear" })],
       [testPrinter({ printerId: "fake-printer", type: "manual" })],
       [
         testPrinter({
@@ -183,6 +226,7 @@ describe("PUT /v1/platform/printers", () => {
           name: "Fake printer (staging)",
           pricedSkuCount: 3,
           printerId: "fake-printer",
+          provider: "fake",
           skuCount: 3,
           status: "active",
           type: "api",

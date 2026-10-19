@@ -7,9 +7,10 @@ import {
   classifyPrinterResponse,
   createFakePrinterClient,
   FAKE_PRINTER_FETCH_OVERRIDE,
-  resolvePrinterClient,
+  resolveProviderClient,
   toSnapwearJobBody,
   type PrinterJob,
+  type PrinterJobLine,
 } from "../src/dispatch/printer-client";
 import { SNAPWEAR_SKUS } from "../src/dispatch/snapwear-skus";
 import {
@@ -152,13 +153,25 @@ async function jobCount(): Promise<number> {
   return row?.n ?? 0;
 }
 
-function printerJob(orderId: string, overrides: Partial<PrinterJob> = {}): PrinterJob {
+/** A line-unit job (CP11, D5: one line, job id `{orderId}-{lineNo}`). */
+function printerJob(
+  orderId: string,
+  overrides: Partial<PrinterJobLine> & { jobId?: string } = {},
+): PrinterJob {
+  const { jobId, ...line } = overrides;
   return {
-    artworks: [{ location: "front", url: "https://files.test.invalid/print/line-1.png" }],
-    items: [{ quantity: 1, sku: SKU }],
-    jobId: printerJobId(orderId, 1),
-    mockupUrls: ["https://files.test.invalid/mockup/line-1.webp"],
-    ...overrides,
+    jobId: jobId ?? printerJobId(orderId, 1),
+    lines: [
+      {
+        artworks: [{ location: "front", url: "https://files.test.invalid/print/line-1.png" }],
+        lineNo: 1,
+        mockupUrls: ["https://files.test.invalid/mockup/line-1.webp"],
+        quantity: 1,
+        sku: SKU,
+        ...line,
+      },
+    ],
+    orderId,
   };
 }
 
@@ -172,12 +185,11 @@ beforeEach(async () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-describe("the route is dark unless staging + fake-printer + token", () => {
+describe("the route is dark unless staging + token (CP11 D2: no DISPATCH_TARGET)", () => {
   const DARK: Array<[string, Record<string, unknown>]> = [
     ["in production", { APP_ENV: "production" }],
-    ["on staging pointed at SnapWear", { DISPATCH_TARGET: "snapwear" }],
-    ["on staging with no dispatch target", { DISPATCH_TARGET: undefined }],
-    ["with a mis-cased target", { DISPATCH_TARGET: "Fake-Printer" }],
+    ["with a mis-cased environment", { APP_ENV: "Staging" }],
+    ["with no environment", { APP_ENV: undefined }],
     ["without the token", { FAKE_PRINTER_TOKEN: undefined }],
     ["with a 31-character token", { FAKE_PRINTER_TOKEN: "t".repeat(31) }],
   ];
@@ -383,25 +395,53 @@ describe("listing what was received", () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe("the printer client", () => {
-  it("resolves by DISPATCH_TARGET, and never to the fake outside staging", async () => {
-    expect(resolvePrinterClient(env)).not.toBeNull();
-    expect(resolvePrinterClient(envWith({ APP_ENV: "production" }))).toBeNull();
-    expect(resolvePrinterClient(envWith({ FAKE_PRINTER_TOKEN: undefined }))).toBeNull();
-    expect(resolvePrinterClient(envWith({ DISPATCH_TARGET: undefined }))).toBeNull();
-    expect(resolvePrinterClient(envWith({ DISPATCH_TARGET: "SnapWear" }))).toBeNull();
+  it("resolves by the printer's PROVIDER (CP11 D1/D2), and never to the fake outside staging", async () => {
+    expect(resolveProviderClient(env, "fake")?.unit).toBe("line");
+    // The old DISPATCH_TARGET is read by nothing: a stale value changes nothing.
+    expect(resolveProviderClient(envWith({ DISPATCH_TARGET: "snapwear" }), "fake")).not.toBeNull();
+    expect(resolveProviderClient(envWith({ DISPATCH_TARGET: undefined }), "fake")).not.toBeNull();
+    expect(resolveProviderClient(envWith({ APP_ENV: "production" }), "fake")).toBeNull();
+    expect(resolveProviderClient(envWith({ FAKE_PRINTER_TOKEN: undefined }), "fake")).toBeNull();
+    // The other providers and the manual printer: no client on this env.
+    expect(resolveProviderClient(env, "manual")).toBeNull();
+    expect(resolveProviderClient(env, "Fake")).toBeNull();
+    expect(resolveProviderClient(env, "fake-printer")).toBeNull();
+    expect(resolveProviderClient(env, "snapwear")).toBeNull();
+    expect(resolveProviderClient(env, "prodigi")).toBeNull();
     // SnapWear without its switch, address and token is no client at all
     // (the full gate: test/snapwear-client.test.ts).
-    expect(
-      resolvePrinterClient(envWith({ APP_ENV: "production", DISPATCH_TARGET: "snapwear" })),
-    ).toBeNull();
+    expect(resolveProviderClient(envWith({ APP_ENV: "production" }), "snapwear")).toBeNull();
     expect(() => createFakePrinterClient(envWith({ APP_ENV: "production" }))).toThrow(
       /not enabled/,
     );
   });
 
+  it("refuses a job of more than one line before any call (D5: multi_line_job)", async () => {
+    const orderId = await seedOrder();
+    const calls: Request[] = [];
+    const targetEnv = envWith({
+      [FAKE_PRINTER_FETCH_OVERRIDE]: async (request: Request) => {
+        calls.push(request);
+        return new Response(null, { status: 500 });
+      },
+    });
+    const one = printerJob(orderId);
+    const two: PrinterJob = { ...one, lines: [...one.lines, { ...one.lines[0]!, lineNo: 2 }] };
+    expect(await createFakePrinterClient(targetEnv).submit(two)).toStrictEqual({
+      code: "multi_line_job",
+      status: "rejected",
+    });
+    expect(await createFakePrinterClient(targetEnv).submit({ ...one, lines: [] })).toStrictEqual({
+      code: "multi_line_job",
+      status: "rejected",
+    });
+    expect(toSnapwearJobBody(two)).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
   it("submits in-process by default: accepted, with the fake's id as the printer reference", async () => {
     const orderId = await seedOrder();
-    const client = resolvePrinterClient(env);
+    const client = resolveProviderClient(env, "fake");
     const result = await client?.submit(printerJob(orderId));
 
     expect(result?.status).toBe("accepted");
@@ -435,8 +475,8 @@ describe("the printer client", () => {
     expect(
       await client.submit(
         printerJob(orderId, {
-          items: [{ quantity: 1, sku: "0000000" }],
           jobId: printerJobId(orderId, 2),
+          sku: "0000000",
         }),
       ),
     ).toStrictEqual({ code: "validation_failed", status: "rejected" });

@@ -115,13 +115,16 @@ export function transformSnapwearPrinter({ catalogDoc, env, nowMillis, printerDo
   report.garmentsOffered = [...garmentsWithModels].sort();
 
   const capabilitiesJson = JSON.stringify(capabilities);
-  const printersColumns = ['id', 'tenant_id', 'type', 'name', 'status', 'currency', 'shipping_cost_minor', 'capabilities_json', 'created_at', 'updated_at'];
+  const printersColumns = ['id', 'tenant_id', 'type', 'provider', 'name', 'status', 'currency', 'shipping_cost_minor', 'capabilities_json', 'created_at', 'updated_at'];
   const printersRow = {
     capabilities_json: capabilitiesJson,
     created_at: formatTime('printers', 'created_at', nowMillis),
     currency: 'SEK',
     id: SNAPWEAR_PRINTER_ID,
     name: typeof pdata.name === 'string' ? pdata.name : 'SnapWear',
+    // CP11 (migration 0057): an api printer names its provider; without it the row would be
+    // `manual` and the dispatcher would hold every SnapWear job, never sending it.
+    provider: 'snapwear',
     shipping_cost_minor: typeof pdata.shippingSek === 'number' ? Math.round(pdata.shippingSek * 100) : 0,
     status: env === 'staging' ? 'inactive' : 'active',
     tenant_id: null,

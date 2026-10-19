@@ -177,7 +177,7 @@ describe("GET/PUT /v1/platform/printers/default", () => {
     const result = await editPrinter(env.DB, PLATFORM, "pd-later", { status: "inactive" }, Date.now(), {
       action: "pod.printers.edit",
       dryRun: false,
-      target: "fake-printer",
+      environment: "staging",
     });
     expect(result.status).toBe("ok");
     await expect((await call("platform", PATH, "GET")).json()).resolves.toMatchObject({

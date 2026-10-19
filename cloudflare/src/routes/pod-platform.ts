@@ -30,9 +30,8 @@ import {
   readCatalog,
   storeCatalog,
 } from "../pod/printer-catalog";
-import type { EditPrinterResult } from "../pod/printers";
+import type { EditPrinterResult, PrinterEnvironment } from "../pod/printers";
 import {
-  dispatchTargetOf,
   editPrinter,
   getPlatformPrinter,
   isPrinterId,
@@ -41,6 +40,7 @@ import {
   parseReplacePrintersInput,
   PLATFORM_PRINTER_PAGE_DEFAULT,
   PLATFORM_PRINTER_PAGE_MAX,
+  printerEnvironmentOf,
   printersAllowedIn,
   replacePrinters,
 } from "../pod/printers";
@@ -72,18 +72,19 @@ const SCREENING_STATUSES: readonly ScreeningStatus[] = [
 
 /**
  * Replace-all, like PUT /v1/platform/pod/profiles: the printer set is a
- * document (SnapWear's catalogue + the platform's price list). DARK (404) unless
- * this environment has a dispatch target it can seed — `fake-printer` only in
- * staging, `snapwear` in production — and an `api` printer must BE that target
- * (src/pod/printers.ts printersAllowedIn). A routing edit that removes a
- * capability or a price suspends the affected mappings in the same batch.
+ * document (the suppliers' catalogues + the platform's price list). DARK (404)
+ * unless APP_ENV names an environment printers may live in (CP11:
+ * printerEnvironmentOf), and every `api` printer's provider must be one this
+ * environment may hold (src/pod/printers.ts printersAllowedIn, per row). A
+ * routing edit that removes a capability or a price suspends the affected
+ * mappings in the same batch.
  */
 export async function handlePlatformPrintersRoute(
   env: Env,
   request: Request,
 ): Promise<Response> {
-  const target = dispatchTargetOf(env);
-  if (target === null) {
+  const environment = printerEnvironmentOf(env);
+  if (environment === null) {
     return routeNotFoundResponse();
   }
   const principal = await authorizePlatformRequest(env, request);
@@ -92,7 +93,7 @@ export async function handlePlatformPrintersRoute(
   }
 
   const printers = parseReplacePrintersInput(await readJsonBody(request));
-  if (printers === null || !printersAllowedIn(printers, target)) {
+  if (printers === null || !printersAllowedIn(printers, environment)) {
     return invalidRequestResponse();
   }
 
@@ -166,7 +167,7 @@ export async function handlePlatformScreeningRoute(
 //
 // PLATFORM SESSIONS ONLY — these answers carry every price the platform holds.
 // The guard order, identical on every route here:
-//   1. dark unless the environment has a dispatch target (the replace-all
+//   1. dark unless APP_ENV names a printer environment (the replace-all
 //      PUT's rule: the printer surface is one surface),
 //   2. a request that names a shop (X-Shop-Id) is refused: that is how a
 //      tenant-admin request — including a platform user ACTING AS a shop —
@@ -190,9 +191,9 @@ async function guardPlatformPrinters(
   env: Env,
   request: Request,
   methods: readonly string[],
-): Promise<{ principal: PlatformPrincipal; target: "fake-printer" | "snapwear" } | null> {
-  const target = dispatchTargetOf(env);
-  if (target === null || request.headers.has(SHOP_ID_HEADER)) {
+): Promise<{ environment: PrinterEnvironment; principal: PlatformPrincipal } | null> {
+  const environment = printerEnvironmentOf(env);
+  if (environment === null || request.headers.has(SHOP_ID_HEADER)) {
     return null;
   }
   const principal = await authorizePlatformRequest(env, request);
@@ -202,7 +203,7 @@ async function guardPlatformPrinters(
   if (request.method !== "GET" && !isSameOriginRequest(request)) {
     return null;
   }
-  return { principal, target };
+  return { environment, principal };
 }
 
 function printerIdFromSegment(rawSegment: string): string | null {
@@ -323,8 +324,8 @@ export async function handlePlatformPrinterRoute(
   const result = await editPrinter(env.DB, guard.principal, printerId, input.edit, Date.now(), {
     action: "pod.printers.edit",
     dryRun: flag.dryRun,
+    environment: guard.environment,
     ...(input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
-    target: guard.target,
   });
   if (result.status !== "ok") {
     return editFailureResponse(result);
@@ -447,7 +448,7 @@ export async function handlePlatformPrinterCatalogApplyRoute(
   if (input === null) {
     return invalidRequestResponse();
   }
-  const result = await applyCatalog(env.DB, guard.principal, printerId, input, Date.now(), guard.target);
+  const result = await applyCatalog(env.DB, guard.principal, printerId, input, Date.now(), guard.environment);
   if (result.status !== "ok") {
     return editFailureResponse(result);
   }

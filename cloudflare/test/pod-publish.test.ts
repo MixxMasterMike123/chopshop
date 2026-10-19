@@ -337,7 +337,7 @@ describe("checkout freezes the production snapshot", () => {
         { productId: "snap-tee", quantity: 2 },
       ]),
       Date.now(),
-      { dispatchTarget: "fake-printer" },
+      { printerEnvironment: "staging" },
     );
     expect(result.status).toBe("ok");
     if (result.status !== "ok") {
@@ -346,6 +346,8 @@ describe("checkout freezes the production snapshot", () => {
     // (60 + 40 + 40 + 40) × 2 = 360 kr ex; + 49 kr printer shipping once.
     expect(await snapshotOf(result.checkout.checkoutId)).toEqual({
       printer: "fake-printer",
+      // CP11: the routed printer row's provider, frozen beside it.
+      provider: "fake",
       lines: [
         {
           lineNo: 2,
@@ -385,27 +387,27 @@ describe("checkout freezes the production snapshot", () => {
       TENANT_CONTEXT,
       checkoutInput([{ productId: "plain-mug", quantity: 1 }]),
       Date.now(),
-      { dispatchTarget: "fake-printer" },
+      { printerEnvironment: "staging" },
     );
     expect(result.status).toBe("ok");
     expect(result.status === "ok" ? await snapshotOf(result.checkout.checkoutId) : "x").toBeNull();
   });
 
-  it("refuses a cart whose printer is not this environment's dispatch target — or when it has none", async () => {
+  it("refuses a cart whose printer's provider this environment may not hold — or when it names no printer environment", async () => {
     await expect(
       createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "snap-tee", quantity: 1 }]), Date.now(), {
-        dispatchTarget: "snapwear",
+        printerEnvironment: "production",
       }),
     ).resolves.toEqual({ status: "invalid_items" });
     await expect(
       createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "snap-tee", quantity: 1 }]), Date.now(), {
-        dispatchTarget: null,
+        printerEnvironment: null,
       }),
     ).resolves.toEqual({ status: "invalid_items" });
     // A cart without POD lines does not care.
     await expect(
       createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "plain-mug", quantity: 1 }]), Date.now(), {
-        dispatchTarget: null,
+        printerEnvironment: null,
       }),
     ).resolves.toMatchObject({ status: "ok" });
   });
@@ -941,7 +943,7 @@ describe("the price floor holds while a mapping is suspended, and when a mapping
     expect(await getPublicProductByRef(env, env.DB, TENANT_CONTEXT, "fb")).toBeNull();
     await expect(
       createCheckout(env.DB, TENANT_CONTEXT, checkoutInput([{ productId: "fb", quantity: 10 }]), Date.now(), {
-        dispatchTarget: "fake-printer",
+        printerEnvironment: "staging",
       }),
     ).resolves.toEqual({ status: "invalid_items" });
 
@@ -955,7 +957,7 @@ describe("the price floor holds while a mapping is suspended, and when a mapping
       TENANT_CONTEXT,
       checkoutInput([{ productId: "fb", quantity: 10 }]),
       Date.now(),
-      { dispatchTarget: "fake-printer" },
+      { printerEnvironment: "staging" },
     );
     expect(sold.status).toBe("ok");
     const snapshot = (sold.status === "ok" ? await snapshotOf(sold.checkout.checkoutId) : null) as {

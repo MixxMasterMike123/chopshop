@@ -279,7 +279,7 @@ describe("the storefront does not offer a product on a stand-in frame while the 
     const list = await listed(ON);
     expect(list).not.toContain("mixed");
     expect(list).toContain("tee");
-    const options = (refuseStandInFrames: boolean) => ({ dispatchTarget: "fake-printer" as const, refuseStandInFrames });
+    const options = (refuseStandInFrames: boolean) => ({ printerEnvironment: "staging" as const, refuseStandInFrames });
     // The base unit prints the tee model (real frames), yet its product is not public now.
     const base = checkoutInput([{ productId: "mixed", quantity: 1 }]);
     expect((await createCheckout(env.DB, CONTEXT, base, Date.now(), options(true))).status).toBe("invalid_items");

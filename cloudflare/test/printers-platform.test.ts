@@ -88,7 +88,7 @@ async function resetPrinter(): Promise<void> {
   expect(await replacePrinters(env.DB, PLATFORM, [hiddenPrinter()], Date.now())).not.toBeNull();
 }
 
-const EDIT: PrinterEditOptions = { action: "pod.printers.edit", dryRun: false, target: "fake-printer" };
+const EDIT: PrinterEditOptions = { action: "pod.printers.edit", dryRun: false, environment: "staging" };
 
 async function mapped(productId: string, sku: string, slots: Array<"back" | "front" | "pocket">): Promise<string> {
   await seedProduct(TENANT_A, { productId });
@@ -694,15 +694,15 @@ describe("the environment policy for `api` printers holds on PATCH", () => {
   it("an api printer that is not this environment's dispatch target cannot be edited (D59's inactive import)", async () => {
     const iso = new Date(SEED_NOW).toISOString();
     await env.DB.prepare(
-      `INSERT INTO printers (id, tenant_id, type, name, status, currency, shipping_cost_minor, capabilities_json, created_at, updated_at)
-       VALUES ('snapwear', NULL, 'api', 'SnapWear', 'inactive', 'SEK', 0, ?, ?, ?)`,
+      `INSERT INTO printers (id, tenant_id, type, provider, name, status, currency, shipping_cost_minor, capabilities_json, created_at, updated_at)
+       VALUES ('snapwear', NULL, 'api', 'snapwear', 'SnapWear', 'inactive', 'SEK', 0, ?, ?, ?)`,
     ).bind(JSON.stringify(testCapabilities()), iso, iso).run();
     const response = await patch(env, "snapwear", { name: "SnapWear (edited)" });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "printer_not_allowed" } });
 
-    // Production-shaped env (target snapwear): the staging fake printer is the refused one.
-    const production = await patch(envWith({ DISPATCH_TARGET: "snapwear" }), "fake-printer", { name: "x" });
+    // A production env: the staging fake printer (provider `fake`) is the refused one.
+    const production = await patch(envWith({ APP_ENV: "production" }), "fake-printer", { name: "x" });
     expect(production.status).toBe(400);
   });
 
@@ -718,8 +718,8 @@ describe("the environment policy for `api` printers holds on PATCH", () => {
     expect(response.status).toBe(200);
   });
 
-  it("the whole surface is dark without a dispatch target", async () => {
-    const dark = envWith({ DISPATCH_TARGET: undefined });
+  it("the whole surface is dark outside a printer environment (APP_ENV)", async () => {
+    const dark = envWith({ APP_ENV: "development" });
     const list = await handlePlatformPrinterListRoute(
       dark,
       sessionRequest(`${HOST}/v1/platform/printers`, "GET", { cookie: platform.cookie }),
@@ -776,6 +776,7 @@ describe("the CP2 replace-all PUT keeps working through the router", () => {
           name: "Replaced",
           pricedSkuCount: 3,
           printerId: "fake-printer",
+          provider: "fake",
           skuCount: 3,
           status: "active",
           type: "api",

@@ -52,7 +52,7 @@ function input(overrides: Partial<CreateCheckoutInput> & Pick<CreateCheckoutInpu
 }
 
 async function checkout(value: CreateCheckoutInput, context: TenantContext = CONTEXT, db: D1Database = env.DB) {
-  const result = await createCheckout(db, context, value, Date.now(), { dispatchTarget: "fake-printer" });
+  const result = await createCheckout(db, context, value, Date.now(), { printerEnvironment: "staging" });
   if (result.status !== "ok") {
     throw new Error(`checkout: ${result.status}`);
   }

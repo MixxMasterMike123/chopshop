@@ -15,6 +15,7 @@ import {
   publicEligibilityPredicate,
 } from "../catalog/eligibility";
 import { resolveProductionLines } from "../pod/pod-mappings";
+import type { PrinterEnvironment, PrinterProvider } from "../pod/printers";
 import type { FrozenRecipient, RecipientInput } from "./recipient";
 import {
   checkoutRecipientStatement,
@@ -998,24 +999,21 @@ function storedLine(row: CheckoutItemRow): CheckoutLine {
   };
 }
 
-/**
- * The printers the production snapshot may name (the shared CP2 contract):
- * the staging fake printer or SnapWear. Each environment can only hold its own
- * (PUT /v1/platform/printers pins an `api` printer's id to DISPATCH_TARGET).
- */
-const SNAPSHOT_PRINTERS: readonly string[] = ["fake-printer", "snapwear"];
-
 export interface CheckoutOptions {
   /**
-   * The environment's dispatch target (src/pod/printers.ts dispatchTargetOf):
-   *   a printer id  every POD line must route to exactly that printer;
-   *   null          this environment cannot dispatch at all → a POD cart is
-   *                 refused (nothing is sold that no printer will receive);
-   *   undefined     the caller did not say (the route predates the option):
-   *                 the freeze still requires one of SNAPSHOT_PRINTERS, which
-   *                 only the environment's own seed can have created.
+   * CP11 (D3, it replaced the environment's single dispatch target): the
+   * environment whose provider policy every POD line's printer must meet
+   * (src/pod/printers.ts printerEnvironmentOf, providerAllowedIn):
+   *   "staging" | "production"  each line routes to an ACTIVE `api` printer of
+   *                 a provider this environment may hold (the fake only on
+   *                 staging, SnapWear only in production, Prodigi in both);
+   *   null          no printer environment → a POD cart is refused (nothing is
+   *                 sold that no printer will receive);
+   *   undefined     the caller did not say: any active `api` printer of an api
+   *                 provider (never `manual`), as before CP11 only the seeded
+   *                 api printers could be named.
    */
-  dispatchTarget?: "fake-printer" | "snapwear" | null;
+  printerEnvironment?: PrinterEnvironment | null;
   /**
    * CP6-PS3: true while the print canvas is on (the route passes
    * src/dispatch/print-canvas.ts printCanvasEnabled). A POD line whose
@@ -1034,10 +1032,17 @@ export interface CheckoutOptions {
  * The frozen production snapshot (the CP2 shared contract; column
  * checkouts.production_snapshot_json, migrations/0023):
  *
- *   { printer, lines: [{ lineNo, sku, quantity, printFiles: [{ slot, r2Key,
- *     sha256, widthMm, heightMm, frameMm, frameProvisional, sourcePx? }],
+ *   { printer, provider, lines: [{ lineNo, sku, quantity, printFiles: [{ slot,
+ *     r2Key, sha256, widthMm, heightMm, frameMm, frameProvisional, sourcePx? }],
  *     productionCostMinor, withholdMinor }],
  *     totals: { productionCostMinor, withholdMinor } }
+ *
+ * CP11: `provider` (the routed printer row's, migration 0057) is frozen beside
+ * `printer`. The dispatcher resolves the client from the printer's ROW (D1)
+ * and refuses the job (printer_mismatch) when the row's provider is no longer
+ * the frozen one: a printer re-pointed at another system after the sale never
+ * receives an order priced and validated for the first. A snapshot frozen
+ * before CP11 has no `provider` and is judged by the row alone.
  *
  * CP6-PS2 added `frameMm` ({ w, h, offsetTopMm? }, the printer's frame for the
  * slot), `frameProvisional` and `sourcePx` ({ w, h }, the artwork's pixels) to
@@ -1069,18 +1074,19 @@ async function freezeProductionSnapshot(
   lines: readonly ResolvedLine[],
   currency: string,
   totalMinor: number,
-  dispatchTarget: string | null | undefined,
+  printerEnvironment: PrinterEnvironment | null | undefined,
   refuseStandInFrames: boolean,
 ): Promise<{ json: string | null } | null> {
   const podLines = lines.filter((line) => line.isPod);
   if (podLines.length === 0) {
     return { json: null };
   }
-  if (dispatchTarget === null) {
+  if (printerEnvironment === null) {
     return null;
   }
 
   let printer: string | null = null;
+  let provider: PrinterProvider | null = null;
   let shipping: number | null = null;
   let productionCostMinor = 0;
   const snapshotLines = [];
@@ -1095,14 +1101,15 @@ async function freezeProductionSnapshot(
       quantity: line.quantity,
       variantId: line.variantId,
     })),
-    dispatchTarget ?? null,
+    // CP11 (D3): the per-row provider policy (resolveProductionLines refuses
+    // a line whose printer is not an active api printer allowed here).
+    printerEnvironment ?? "any",
     refuseStandInFrames,
   );
   for (const [index, line] of podLines.entries()) {
     const production = productions[index] ?? null;
     if (
       production === null ||
-      !SNAPSHOT_PRINTERS.includes(production.printerId) ||
       // A4: one order → one printer (one parcel, one submission target).
       (printer !== null && printer !== production.printerId) ||
       // One snapshot, so the lines agree by construction; kept as a guard.
@@ -1112,6 +1119,7 @@ async function freezeProductionSnapshot(
       return null;
     }
     printer = production.printerId;
+    provider = production.provider;
     shipping = production.shippingCostMinor;
     productionCostMinor += production.productionCostMinor;
     snapshotLines.push({
@@ -1136,7 +1144,7 @@ async function freezeProductionSnapshot(
     });
   }
 
-  if (printer === null || shipping === null) {
+  if (printer === null || provider === null || shipping === null) {
     return null;
   }
   const totalCostMinor = productionCostMinor + shipping;
@@ -1148,7 +1156,7 @@ async function freezeProductionSnapshot(
     return null;
   }
 
-  return { json: JSON.stringify({ printer, lines: snapshotLines, totals }) };
+  return { json: JSON.stringify({ printer, provider, lines: snapshotLines, totals }) };
 }
 
 /**
@@ -1354,7 +1362,7 @@ async function attemptCheckout(
     lines,
     currency,
     carriage.subtotalMinor + carriage.shippingMinor,
-    options.dispatchTarget,
+    options.printerEnvironment,
     options.refuseStandInFrames === true,
   );
   if (snapshot === null) {

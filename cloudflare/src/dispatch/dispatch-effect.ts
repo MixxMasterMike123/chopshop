@@ -11,6 +11,7 @@ import {
   outcomeOf,
   type OutboxRow,
   type OutboxRunOutcome,
+  type OutboxStatus,
   readOutboxRow,
   type SqlGuard,
   supersede,
@@ -22,9 +23,11 @@ import {
   resolveR2Presigner,
 } from "../pod/render-farm-client";
 import {
+  type PrinterClient,
   type PrinterJob,
+  type PrinterJobLine,
   type PrinterSubmitResult,
-  resolvePrinterClient,
+  resolveProviderClient,
 } from "./printer-client";
 import {
   DISPATCH_HOLD_UNTIL_MS,
@@ -37,6 +40,7 @@ import {
   ensureCanvasJobStatements,
   type EnsureCanvasSlot,
   lineCanvasPendingSql,
+  orderCanvasPendingSql,
   readLineCanvases,
 } from "../pod/print-canvas-jobs";
 import {
@@ -51,15 +55,32 @@ import {
 import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-wire";
 
 /**
- * The `dispatch` outbox effect: one order line → one printer job (PLAN §2.3).
+ * The `dispatch` outbox effect: one order line's row → the printer (PLAN §2.3).
  *
- * The row is inserted by CP2-A's webhook in the order batch:
+ * The row is inserted by CP2-A's webhook in the order batch, ONE PER LINE:
  *   { event_type: 'dispatch', aggregate_id: orderId,
  *     dedupe_key: 'dispatch:{orderId}:{lineNo}',
  *     payload: { orderId, lineNo, jobId: '{orderId}-{lineNo}' } }
  * The job is built ONLY from the order's frozen production data
  * (`order_items.production_json`, the snapshot's line; `orders.
  * production_snapshot_json` for the printer) — never from the catalogue.
+ *
+ * ── WHICH PRINTER (CP11, D1) ────────────────────────────────────────────────
+ * The snapshot names the printer the order was routed to; that printer's ROW
+ * names its provider (migration 0057), and the provider's client exists only
+ * when its gate passes here (printer-client.ts resolveProviderClient). A
+ * snapshot with no printer, a printer row that is gone or another tenant's,
+ * or a row whose provider is no longer the one frozen at checkout, is
+ * terminal `printer_mismatch` (resubmitting cannot fix it). It replaced the
+ * comparison of the snapshot's printer with the environment's DISPATCH_TARGET.
+ *
+ * ── WHAT ONE SUBMISSION COVERS (CP11, D4) ───────────────────────────────────
+ *   line unit (SnapWear, the fake): the row's own line, job id
+ *     `{orderId}-{lineNo}` — exactly as before CP11.
+ *   order unit (Prodigi): EVERY dispatchable line of the order in one printer
+ *     order, job id `{orderId}` (runOrderUnit). The rows stay one per line;
+ *     whichever runs first speaks for its siblings, and the others ADOPT the
+ *     printer's reference without a call.
  *
  * ── ONE RUN ─────────────────────────────────────────────────────────────────
  *  1. cancellation re-check after claiming (§2.3): requested and the call never
@@ -72,10 +93,16 @@ import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-
  *     artwork's print PNG, or with PRINT_CANVAS_ENABLED the line's print
  *     canvas — CP6-PS2; a canvas not yet made PARKS the row until it is),
  *     check each print file exists with its recorded sha256, presign it.
+ *     (Order unit: for every line it covers. A SIBLING line's problem is the
+ *     sibling row's to fail; this row only waits: retryLater, never terminal.)
  *  3. claimed → submitting, atomically refused if a cancellation landed
- *     meanwhile (the re-check "before the HTTP call").
- *  4. submit with the STABLE job id `{orderId}-{lineNo}`:
+ *     meanwhile (the re-check "before the HTTP call"). Order unit: also
+ *     refused while another row of the order is submitting or a line of the
+ *     order is already accepted with a reference (the race of two rows of one
+ *     order is closed in that same statement).
+ *  4. submit with the STABLE job id (`{orderId}-{lineNo}`, or `{orderId}`):
  *       accepted   → done (result_ref = printer id), line `accepted`
+ *                    (order unit: every line the job carried, same batch)
  *       duplicate  → done: the printer already had it (a lost response)
  *       rejected   → failed + alert; or superseded if a cancellation arrived;
  *                    or unknown when an earlier attempt's answer was lost
@@ -85,12 +112,12 @@ import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-
  *     A cancellation that arrived while the call was out turns accepted /
  *     duplicate into a `printer_cancellation` outbox row in the same batch.
  *
- * An environment with NO printer client parks the row (parkForPrinter): no
- * attempt is spent while it waits, the sweeper releases it once a client
- * exists, and reconciliation's dispatch_stranded_30m alert names it after 30
- * minutes. A row whose earlier answer was lost is held as `unknown` instead
- * (holdUnknownForPrinter): a human can still resolve it, and the 30-minute
- * unknown alert still names it.
+ * An environment with NO client for the order's printer parks the row
+ * (parkForPrinter): no attempt is spent while it waits, the sweeper releases
+ * it once that provider's client exists, and reconciliation's
+ * dispatch_stranded_30m alert names it after 30 minutes. A row whose earlier
+ * answer was lost is held as `unknown` instead (holdUnknownForPrinter): a human
+ * can still resolve it, and the 30-minute unknown alert still names it.
  *
  * Every line-state write, alert and follow-up row is committed in the batch of
  * the outbox transition it belongs to, under that transition's fence.
@@ -101,24 +128,34 @@ import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-
  * URL (LAUNCH_TODO A6); whether at import or at print time is open (C4), and a
  * print-time fetch can be days after the order. R2's maximum, 7 days, so a
  * queued job is never unprintable because its link died. OPEN QUESTION (C4):
- * shorten once SnapWear confirms they store the file at import.
+ * shorten once SnapWear confirms they store the file at import. (Prodigi
+ * downloads the assets at order time, verified 2026-10-19.)
  */
 export const DISPATCH_PRINT_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /**
  * `next_attempt_at` of a dispatch row PARKED because this environment has no
- * printer client (resolvePrinterClient → null: no DISPATCH_TARGET, the fake
- * outside staging, SnapWear before its switch). Year 9999, like the payment
- * hold, but a DIFFERENT instant on purpose: releaseDispatchHolds releases
- * rows at DISPATCH_HOLD_UNTIL_MS whose ORDER is no longer payment-held, and
- * must not wake rows that wait for a printer. Only the sweeper's
- * releasePrinterHolds (src/outbox/sweeper.ts) releases these, and only once
- * a client resolves.
+ * client for the order's printer (resolveProviderClient → null: the provider's
+ * gate fails, or the printer is `manual`). Year 9999, like the payment hold,
+ * but a DIFFERENT instant on purpose: releaseDispatchHolds releases rows at
+ * DISPATCH_HOLD_UNTIL_MS whose ORDER is no longer payment-held, and must not
+ * wake rows that wait for a printer. Only the sweeper's releasePrinterHolds
+ * (src/outbox/sweeper.ts) releases these, and only once the provider of the
+ * row's printer resolves.
  */
 export const PRINTER_HOLD_UNTIL_MS = DISPATCH_HOLD_UNTIL_MS - 1_000;
 
 /** The `last_error` a printer-parked row carries. */
 export const PRINTER_NOT_CONFIGURED = "printer_not_configured";
+
+/** Order unit: another row of the order is at the printer right now (D4.3). */
+export const ORDER_SUBMITTING = "order_submitting";
+
+/** Order unit: a sibling line is not ready; its own row settles it (D4.1). */
+export const SIBLING_PREFIX = "sibling_";
+
+/** Order unit: an order larger than this is not assembled into one job. */
+export const MAX_ORDER_LINES = 200;
 
 const LOCATIONS: readonly PrintLocation[] = ["front", "back"];
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -134,6 +171,12 @@ interface DispatchLine {
   orderItemId: string;
   productionJson: string | null;
   snapshotJson: string | null;
+}
+
+/** An order line as statements address it. */
+interface LineRef {
+  orderItemId: string;
+  tenantId: string;
 }
 
 interface PrintFile {
@@ -250,28 +293,64 @@ async function loadDispatchLine(
       };
 }
 
+// ── which printer (CP11, D1) ────────────────────────────────────────────────
+
+type PrinterRoute =
+  | { client: PrinterClient; kind: "client" }
+  | { error: string; kind: "terminal" }
+  | { kind: "none" };
+
 /**
- * The printer job from the frozen line. Fails closed on anything the printer
- * could not take or that would point outside this tenant's server-owned keys.
+ * The client for the printer the order was routed to, from the printer's ROW
+ * (D1). Terminal when the order cannot name a printer this environment holds
+ * for it (resubmitting cannot fix that); `none` when the printer exists but no
+ * client may be built for it here (its provider's gate, or a manual printer):
+ * the caller parks the row, as it always has when no client existed.
  */
-export function buildDispatchJob(
+async function resolveDispatchPrinter(
   env: Env,
   tenantId: string,
-  payload: DispatchPayload,
-  line: DispatchLine,
-): Build<BuiltJob> {
-  const snapshot = parseJson(line.snapshotJson);
+  snapshotJson: string | null,
+): Promise<PrinterRoute> {
+  const snapshot = parseJson(snapshotJson);
   if (!isRecord(snapshot)) {
-    return { error: "production_snapshot_missing", ok: false };
+    return { error: "production_snapshot_missing", kind: "terminal" };
   }
-  // The order was routed to ONE printer when it was paid; this environment
-  // dispatches to exactly one. A mismatch is never guessed across.
-  if (snapshot.printer !== env.DISPATCH_TARGET) {
-    return { error: "printer_mismatch", ok: false };
+  if (typeof snapshot.printer !== "string" || snapshot.printer.length === 0 || snapshot.printer.length > 64) {
+    return { error: "printer_mismatch", kind: "terminal" };
   }
+  const row = await env.DB.prepare(
+    `SELECT type, provider, tenant_id FROM printers WHERE id = ? LIMIT 1`,
+  )
+    .bind(snapshot.printer)
+    .first<{ provider: string; tenant_id: string | null; type: string }>();
+  if (
+    row === null ||
+    (row.tenant_id !== null && row.tenant_id !== tenantId) ||
+    // CP11: a printer re-pointed at another system after the sale never
+    // receives an order frozen (priced, validated) for the first. A snapshot
+    // made before CP11 carries no provider and is judged by the row alone.
+    (snapshot.provider !== undefined && snapshot.provider !== row.provider)
+  ) {
+    return { error: "printer_mismatch", kind: "terminal" };
+  }
+  const client = row.type === "api" ? resolveProviderClient(env, row.provider) : null;
+  return client === null ? { kind: "none" } : { client, kind: "client" };
+}
 
-  const production = parseJson(line.productionJson);
-  if (!isRecord(production) || production.lineNo !== payload.lineNo) {
+/**
+ * The printer job of ONE frozen line. Fails closed on anything the printer
+ * could not take or that would point outside this tenant's server-owned keys.
+ * (CP11: the printer check moved to resolveDispatchPrinter, which reads the
+ * printer's row; this judges the line alone, for whichever row builds it.)
+ */
+export function buildDispatchJob(
+  tenantId: string,
+  lineNo: number,
+  productionJson: string | null,
+): Build<BuiltJob> {
+  const production = parseJson(productionJson);
+  if (!isRecord(production) || production.lineNo !== lineNo) {
     return { error: "production_line_missing", ok: false };
   }
   const { quantity, sku } = production;
@@ -298,7 +377,8 @@ export function buildDispatchJob(
     }
     const { r2Key, sha256, slot } = entry;
     if (!LOCATIONS.includes(slot as PrintLocation)) {
-      // SnapWear prints front and back only (layouts[].location).
+      // Both printers print front and back only (SnapWear layouts[].location,
+      // Prodigi assets[].printArea; sleeves are not offered at launch).
       return { error: "print_slot_unsupported", ok: false };
     }
     if (
@@ -321,132 +401,196 @@ export function buildDispatchJob(
   return { ok: true, value: { printFiles: files, quantity, sku } };
 }
 
+// ── the print files of the lines a job carries ──────────────────────────────
+
+/** One line the job will carry, built from its frozen data. */
+interface PrintTarget {
+  job: BuiltJob;
+  lineNo: number;
+}
+
+/** A line with its chosen, checked files. */
+interface ReadyLine extends PrintTarget {
+  files: PrintFile[];
+}
+
+/**
+ * Which canvases hold the row: its own line's (line unit, as before CP11), or
+ * any line's of the order (order unit: the job carries every line, so a
+ * sibling's pending canvas holds it exactly as its own would — D4.1).
+ */
+type CanvasScope = { kind: "line"; lineNo: number } | { kind: "order" };
+
+/**
+ * A failure names the line it came from (null: not one line's), so the order
+ * unit can tell its own line's problem (terminal for this row, as before) from
+ * a sibling's (the sibling's row fails it; this row waits).
+ */
+type PrepareFailure = { error: string; kind: "retry" | "terminal"; lineNo: number | null };
+
 type PrintFilesResult =
-  | { files: PrintFile[]; kind: "ready" }
-  | { error: string; kind: "retry" | "terminal" }
+  | { kind: "ready"; lines: ReadyLine[] }
+  | ({ kind: "failure" } & { failure: PrepareFailure })
   | { kind: "parked"; outcome: OutboxRunOutcome };
 
 /**
  * THE PS2 SEAM (LAUNCH_TODO A5): the file the printer receives for each print
- * slot of ONE line (src/dispatch/print-canvas.ts decidePrintFiles):
+ * slot of each line (src/dispatch/print-canvas.ts decidePrintFiles):
  *   - the line's completed print canvases, when every slot has one (whatever
  *     the switch: a re-dispatch after a lost answer gets the same file), each
  *     checked to have been made from the very print master the line froze;
  *   - the artwork's stored print PNG exactly as the snapshot froze it, when
- *     the switch is off or the row was already submitted without canvases
+ *     the switch is off or the job was already submitted without canvases
  *     (the file sent for one job id never changes);
  *   - terminal `print_canvas_failed` when a canvas of the line failed for good;
  *   - otherwise the canvases are ENSURED and the row PARKED (ensureAndPark).
- * The caller then checks every file in the private bucket against its recorded
- * sha256 and presigns it, as before.
+ * Then every file is checked in the private bucket against its recorded
+ * sha256 (checkPrintFiles), as before.
+ *
+ * `submitted`: the job was submitted before (line unit: this row; order unit:
+ * any row of the order, since they share the one printer order).
  */
 async function printFilesForPrinter(
   ctx: EffectContext,
   tenantId: string,
-  payload: DispatchPayload,
-  line: { orderItemId: string; tenantId: string },
-  job: BuiltJob,
+  orderId: string,
+  targets: readonly PrintTarget[],
+  ownLine: LineRef,
+  scope: CanvasScope,
+  submitted: boolean,
 ): Promise<PrintFilesResult> {
   for (let pass = 0; pass < 2; pass += 1) {
-    const canvases = await readLineCanvases(ctx.env.DB, tenantId, payload.orderId, payload.lineNo);
-    const decision = decidePrintFiles({
-      canvases,
-      slots: job.printFiles.map((file) => file.location),
-      submitted: ctx.row.submitted_at !== null,
-      switchOn: printCanvasEnabled(ctx.env),
-    });
-    switch (decision.kind) {
-      case "artwork":
-        return { files: job.printFiles.map(({ location, r2Key, sha256 }) => ({ location, r2Key, sha256 })), kind: "ready" };
-      case "terminal":
-        return { error: decision.error, kind: "terminal" };
-      case "canvas": {
-        const madeFromFrozen = job.printFiles.every((file) =>
-          canvases.some(
-            (canvas) =>
-              canvas.slot === file.location && canvas.inputKey === file.r2Key && canvas.inputSha256 === file.sha256,
-          ),
-        );
-        return madeFromFrozen
-          ? { files: decision.files, kind: "ready" }
-          : { error: "print_canvas_input_mismatch", kind: "terminal" };
-      }
-      case "ensure": {
-        const ensured = await ensureAndPark(ctx, tenantId, payload, line, job);
-        if (ensured !== "settled") {
-          return ensured;
+    const ready: Array<PrintTarget & { files: PrintFile[] }> = [];
+    const toEnsure: PrintTarget[] = [];
+    for (const target of targets) {
+      const canvases = await readLineCanvases(ctx.env.DB, tenantId, orderId, target.lineNo);
+      const decision = decidePrintFiles({
+        canvases,
+        slots: target.job.printFiles.map((file) => file.location),
+        submitted,
+        switchOn: printCanvasEnabled(ctx.env),
+      });
+      switch (decision.kind) {
+        case "artwork":
+          ready.push({
+            ...target,
+            files: target.job.printFiles.map(({ location, r2Key, sha256 }) => ({ location, r2Key, sha256 })),
+          });
+          break;
+        case "terminal":
+          return { failure: { error: decision.error, kind: "terminal", lineNo: target.lineNo }, kind: "failure" };
+        case "canvas": {
+          const madeFromFrozen = target.job.printFiles.every((file) =>
+            canvases.some(
+              (canvas) =>
+                canvas.slot === file.location && canvas.inputKey === file.r2Key && canvas.inputSha256 === file.sha256,
+            ),
+          );
+          if (!madeFromFrozen) {
+            return {
+              failure: { error: "print_canvas_input_mismatch", kind: "terminal", lineNo: target.lineNo },
+              kind: "failure",
+            };
+          }
+          ready.push({ ...target, files: decision.files });
+          break;
         }
-        // Every canvas settled between the read and the park: decide again.
+        case "ensure":
+          toEnsure.push(target);
+          break;
       }
     }
+
+    if (toEnsure.length === 0) {
+      const checked: ReadyLine[] = [];
+      for (const line of ready) {
+        const storage = await checkPrintFiles(ctx.env, line.files);
+        if (storage.kind !== "ok") {
+          return { failure: { error: storage.error, kind: storage.kind, lineNo: line.lineNo }, kind: "failure" };
+        }
+        checked.push(line);
+      }
+      return { kind: "ready", lines: checked };
+    }
+
+    const ensured = await ensureAndPark(ctx, tenantId, orderId, toEnsure, ownLine, scope);
+    if (ensured !== "settled") {
+      return ensured;
+    }
+    // Every canvas settled between the read and the park: decide again.
   }
-  return { error: PRINT_CANVAS_PENDING, kind: "retry" };
+  return { failure: { error: PRINT_CANVAS_PENDING, kind: "retry", lineNo: null }, kind: "failure" };
 }
 
 /**
- * Ensure the line's canvas jobs and park the row while they render, in ONE
+ * Ensure the lines' canvas jobs and park the row while they render, in ONE
  * batch. The artwork files are checked first exactly as the artwork path
  * checks them (a missing or wrong master is terminal there too), which also
  * gives each job its input size; each slot's geometry is computed and frozen
  * (canvasSpec refuses a line it cannot make honestly: terminal).
  *
  * The park (the same shape as parkForPrinter) applies under the claim's fence,
- * only while an attempt remains, and ONLY while one of the line's canvases is
- * still queued or leased. A job's settling batch releases the parked row
- * (print-canvas-jobs.ts); because both statements read the same rows under
- * D1's single writer, a row is never parked after its last canvas settled.
- * No attempt is spent while it waits; reconciliation's dispatch_stranded_30m
- * names it after 30 minutes.
+ * only while an attempt remains, and ONLY while one of the canvases of its
+ * SCOPE is still queued or leased (the line's; CP11, order unit: the order's).
+ * A job's settling batch releases the parked row (print-canvas-jobs.ts: the
+ * line's row when the line has nothing pending, and every parked row of the
+ * order when the order has nothing pending); because both statements read the
+ * same rows under D1's single writer, a row is never parked after the last
+ * canvas of its scope settled. No attempt is spent while it waits;
+ * reconciliation's dispatch_stranded_30m names it after 30 minutes.
  *
  * "settled": nothing pending was left to wait for (decide again).
  */
 async function ensureAndPark(
   ctx: EffectContext,
   tenantId: string,
-  payload: DispatchPayload,
-  line: { orderItemId: string; tenantId: string },
-  job: BuiltJob,
+  orderId: string,
+  targets: readonly PrintTarget[],
+  ownLine: LineRef,
+  scope: CanvasScope,
 ): Promise<PrintFilesResult | "settled"> {
   const { claim, env, row } = ctx;
-  const storage = await checkPrintFiles(env, job.printFiles);
-  if (storage.kind !== "ok") {
-    return { error: storage.error, kind: storage.kind };
-  }
-
-  const slots: EnsureCanvasSlot[] = [];
-  for (const [index, file] of job.printFiles.entries()) {
-    const spec = canvasSpec(file);
-    if (!spec.ok) {
-      return { error: spec.error, kind: "terminal" };
-    }
-    const inputBytes = storage.sizes[index] ?? 0;
-    if (inputBytes < 1 || inputBytes > CANVAS_MAX_INPUT_BYTES) {
-      return { error: "print_canvas_input_too_large", kind: "terminal" };
-    }
-    slots.push({ inputBytes, inputKey: file.r2Key, inputSha256: file.sha256, location: file.location, spec: spec.spec });
-  }
-
   const now = ctx.clock();
-  const ensured = ensureCanvasJobStatements(env.DB, {
-    lineNo: payload.lineNo,
-    now,
-    orderId: payload.orderId,
-    slots,
-    tenantId,
-  });
+  const statements: D1PreparedStatement[] = [];
+  const jobIds: string[] = [];
+  for (const target of targets) {
+    const storage = await checkPrintFiles(env, target.job.printFiles);
+    if (storage.kind !== "ok") {
+      return { failure: { error: storage.error, kind: storage.kind, lineNo: target.lineNo }, kind: "failure" };
+    }
+    const slots: EnsureCanvasSlot[] = [];
+    for (const [index, file] of target.job.printFiles.entries()) {
+      const spec = canvasSpec(file);
+      if (!spec.ok) {
+        return { failure: { error: spec.error, kind: "terminal", lineNo: target.lineNo }, kind: "failure" };
+      }
+      const inputBytes = storage.sizes[index] ?? 0;
+      if (inputBytes < 1 || inputBytes > CANVAS_MAX_INPUT_BYTES) {
+        return {
+          failure: { error: "print_canvas_input_too_large", kind: "terminal", lineNo: target.lineNo },
+          kind: "failure",
+        };
+      }
+      slots.push({ inputBytes, inputKey: file.r2Key, inputSha256: file.sha256, location: file.location, spec: spec.spec });
+    }
+    const ensured = ensureCanvasJobStatements(env.DB, { lineNo: target.lineNo, now, orderId, slots, tenantId });
+    statements.push(...ensured.statements);
+    jobIds.push(...ensured.jobIds);
+  }
+
   const fence = fenceGuard(claim, now);
-  const pending = lineCanvasPendingSql();
-  const pendingBinds = [tenantId, payload.orderId, payload.lineNo];
+  const pending = scope.kind === "line" ? lineCanvasPendingSql() : orderCanvasPendingSql();
+  const pendingBinds = scope.kind === "line" ? [tenantId, orderId, scope.lineNo] : [tenantId, orderId];
   const parkable = `${fence.sql} AND status = 'claimed' AND attempts < max_attempts AND ${pending}`;
   const results = await env.DB.batch([
-    ...ensured.statements,
+    ...statements,
     env.DB.prepare(
       `UPDATE order_items
        SET dispatch_state = CASE WHEN dispatch_state = 'submitting' THEN 'pending'
                                  ELSE dispatch_state END
        WHERE order_item_id = ? AND tenant_id = ?
          AND EXISTS (SELECT 1 FROM outbox_events WHERE ${parkable})`,
-    ).bind(line.orderItemId, line.tenantId, ...fence.binds, ...pendingBinds),
+    ).bind(ownLine.orderItemId, ownLine.tenantId, ...fence.binds, ...pendingBinds),
     env.DB.prepare(
       `UPDATE outbox_events
        SET status = 'pending',
@@ -461,7 +605,7 @@ async function ensureAndPark(
 
   if ((results[results.length - 1]?.results.length ?? 0) === 1) {
     // One nudge wakes the singleton container, which drains every queued job.
-    const firstId = ensured.jobIds[0];
+    const firstId = jobIds[0];
     if (firstId !== undefined) {
       await nudgeRenderJob(env, firstId);
     }
@@ -474,11 +618,13 @@ async function ensureAndPark(
   if (current === null || current.status !== "claimed" || current.claimed_by !== claim.claimedBy) {
     return { kind: "parked", outcome: { kind: "lost_claim" } };
   }
-  const canvases = await readLineCanvases(env.DB, tenantId, payload.orderId, payload.lineNo);
-  if (canvases.some((canvas) => canvas.state === "queued" || canvas.state === "leased")) {
-    // The last attempt: it cannot be parked (it could never be claimed again).
-    // retryLater fails it with its alert, the unchanged CP2 rule.
-    return { error: PRINT_CANVAS_PENDING, kind: "retry" };
+  for (const target of targets) {
+    const canvases = await readLineCanvases(env.DB, tenantId, orderId, target.lineNo);
+    if (canvases.some((canvas) => canvas.state === "queued" || canvas.state === "leased")) {
+      // The last attempt: it cannot be parked (it could never be claimed again).
+      // retryLater fails it with its alert, the unchanged CP2 rule.
+      return { failure: { error: PRINT_CANVAS_PENDING, kind: "retry", lineNo: null }, kind: "failure" };
+    }
   }
   return "settled";
 }
@@ -524,7 +670,7 @@ async function checkPrintFiles(env: Env, files: readonly PrintFile[]): Promise<S
 
 function lineStateStatement(
   db: D1Database,
-  line: { orderItemId: string; tenantId: string },
+  line: LineRef,
   guard: SqlGuard,
   set: { binds: unknown[]; sql: string },
 ): D1PreparedStatement {
@@ -603,7 +749,7 @@ function dispatchAlert(
 async function failTerminal(
   ctx: EffectContext,
   error: string,
-  line: { orderItemId: string; tenantId: string } | null,
+  line: LineRef | null,
 ): Promise<OutboxRunOutcome> {
   const { claim, env, row } = ctx;
   const now = ctx.clock();
@@ -641,7 +787,7 @@ async function failTerminal(
 async function retryLater(
   ctx: EffectContext,
   error: string,
-  line: { orderItemId: string; tenantId: string },
+  line: LineRef,
 ): Promise<OutboxRunOutcome> {
   const now = ctx.clock();
   const result = await fail(ctx.env.DB, ctx.claim, {
@@ -674,17 +820,40 @@ async function retryLater(
 }
 
 /**
- * This environment has no printer client: PARK the claimed row instead of
- * retrying it (the CP2 retry spent an attempt per wake-up and, after ten,
- * failed the job for good — a whole production window without the SnapWear
- * switch would have failed every paid POD order). The row goes back to
- * `pending` with its claim released and `next_attempt_at` =
+ * Map a failure while preparing the job's lines. The row's OWN line keeps the
+ * pre-CP11 meaning (terminal → failed + alert; retry → retry). A SIBLING
+ * line's problem (order unit only) is never terminal for this row: the
+ * sibling's own row judges its line by the same rules and fails it with its
+ * alert, after which this row leaves it out (a failed line is not
+ * dispatchable) — so this row retries, and one bad line never fails the
+ * good ones of its order.
+ */
+function failPreparation(
+  ctx: EffectContext,
+  ownLineNo: number,
+  line: LineRef,
+  failure: PrepareFailure,
+): Promise<OutboxRunOutcome> {
+  if (failure.lineNo !== null && failure.lineNo !== ownLineNo) {
+    return retryLater(ctx, `${SIBLING_PREFIX}${failure.error}`, line);
+  }
+  return failure.kind === "terminal"
+    ? failTerminal(ctx, failure.error, line)
+    : retryLater(ctx, failure.error, line);
+}
+
+/**
+ * This environment has no client for the order's printer: PARK the claimed
+ * row instead of retrying it (the CP2 retry spent an attempt per wake-up and,
+ * after ten, failed the job for good — a whole production window without the
+ * SnapWear switch would have failed every paid POD order). The row goes back
+ * to `pending` with its claim released and `next_attempt_at` =
  * PRINTER_HOLD_UNTIL_MS: nothing claims it again, so no further attempt is
- * spent however long it waits. The sweeper releases it when a client resolves
- * (src/outbox/sweeper.ts); the reconciliation cron's dispatch_stranded_30m
- * alert names it while it waits longer than 30 minutes. The line stays
- * where it was (back from a previous attempt's 'submitting' to 'pending', as
- * retryLater does); the seller sees "queued".
+ * spent however long it waits. The sweeper releases it when its printer's
+ * provider resolves (src/outbox/sweeper.ts); the reconciliation cron's
+ * dispatch_stranded_30m alert names it while it waits longer than 30 minutes.
+ * The line stays where it was (back from a previous attempt's 'submitting' to
+ * 'pending', as retryLater does); the seller sees "queued".
  *
  * Atomic under the claim's fence, and only while an attempt remains (a row
  * parked on its last attempt could never be claimed again): otherwise null,
@@ -693,7 +862,7 @@ async function retryLater(
  */
 async function parkForPrinter(
   ctx: EffectContext,
-  line: { orderItemId: string; tenantId: string },
+  line: LineRef,
 ): Promise<OutboxRunOutcome | null> {
   const { claim, env } = ctx;
   const now = ctx.clock();
@@ -738,9 +907,9 @@ async function parkForPrinter(
  *   - alerted: the sweeper's dispatch_unknown_30m names unknown rows by
  *     `unknown_since`, whatever their next attempt;
  *   - no attempt spent while it waits: an `unknown` row is claimed only when
- *     due, and the sweeper's releasePrinterHolds makes it due again once a
- *     client resolves. It is then re-submitted with the SAME job id: a
- *     duplicate answer settles it, and an unreadable refusal keeps it
+ *     due, and the sweeper's releasePrinterHolds makes it due again once its
+ *     printer's provider resolves. It is then re-submitted with the SAME job
+ *     id: a duplicate answer settles it, and an unreadable refusal keeps it
  *     `unknown` (afterLostAnswer).
  * On the row's last attempt it stays `unknown` as well. Before, the retry
  * ended `failed`, which claims the printer never got the job.
@@ -748,7 +917,7 @@ async function parkForPrinter(
  */
 async function holdUnknownForPrinter(
   ctx: EffectContext,
-  line: { orderItemId: string; tenantId: string },
+  line: LineRef,
 ): Promise<OutboxRunOutcome> {
   const now = ctx.clock();
   const held = await markUnknown(ctx.env.DB, ctx.claim, {
@@ -769,7 +938,7 @@ async function holdUnknownForPrinter(
 async function honourCancellation(
   ctx: EffectContext,
   row: OutboxRow,
-  line: { orderItemId: string; tenantId: string } | null,
+  line: LineRef | null,
 ): Promise<OutboxRunOutcome> {
   const { claim, env } = ctx;
   const now = ctx.clock();
@@ -811,7 +980,7 @@ async function honourCancellation(
 }
 
 export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOutcome> {
-  const { claim, env, row } = ctx;
+  const { env, row } = ctx;
   const tenantId = row.tenant_id;
   const payload = parseDispatchPayload(row);
   if (tenantId === null || payload === null) {
@@ -829,11 +998,16 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     return failTerminal(ctx, "order_line_not_found", null);
   }
 
-  // An environment without a usable printer HOLDS its work (parked, no
-  // attempt spent; released by the sweeper, alerted by reconciliation)
-  // rather than judging the order by it.
-  const client = resolvePrinterClient(env);
-  if (client === null) {
+  // CP11 (D1): the order's printer row decides the client. A printer the order
+  // cannot name here is terminal (as printer_mismatch always was).
+  const route = await resolveDispatchPrinter(env, tenantId, line.snapshotJson);
+  if (route.kind === "terminal") {
+    return failTerminal(ctx, route.error, lineRef);
+  }
+  // An environment without a usable client for that printer HOLDS its work
+  // (parked, no attempt spent; released by the sweeper once the provider
+  // resolves, alerted by reconciliation) rather than judging the order by it.
+  if (route.kind === "none") {
     // A job whose answer was lost may already be at the printer: it stays
     // `unknown` (resolvable, alerted) rather than becoming an ordinary wait.
     if (row.unknown_since !== null) {
@@ -843,28 +1017,263 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
       (await parkForPrinter(ctx, lineRef)) ?? retryLater(ctx, PRINTER_NOT_CONFIGURED, lineRef)
     );
   }
+  const client = route.client;
 
-  const built = buildDispatchJob(env, tenantId, payload, line);
+  if (client.unit === "order") {
+    return runOrderUnit(ctx, tenantId, payload, lineRef, client);
+  }
+
+  // ── line unit: one row, one line, one job (unchanged since CP6-PS2) ──────
+  const built = buildDispatchJob(tenantId, payload.lineNo, line.productionJson);
   if (!built.ok) {
     return failTerminal(ctx, built.error, lineRef);
   }
+  const prepared = await printFilesForPrinter(
+    ctx,
+    tenantId,
+    payload.orderId,
+    [{ job: built.value, lineNo: payload.lineNo }],
+    lineRef,
+    { kind: "line", lineNo: payload.lineNo },
+    row.submitted_at !== null,
+  );
+  if (prepared.kind === "parked") {
+    return prepared.outcome;
+  }
+  if (prepared.kind === "failure") {
+    return failPreparation(ctx, payload.lineNo, lineRef, prepared.failure);
+  }
+  return submitPrepared(ctx, tenantId, payload, lineRef, client, {
+    jobId: payload.jobId,
+    lines: prepared.lines,
+    order: null,
+  });
+}
 
-  const chosen = await printFilesForPrinter(ctx, tenantId, payload, lineRef, built.value);
-  if (chosen.kind === "parked") {
-    return chosen.outcome;
+// ── order unit (CP11, D4) ───────────────────────────────────────────────────
+
+/** A dispatch row of the order with the line it carries. */
+interface OrderLine {
+  cancelRequested: boolean;
+  dispatchState: string | null;
+  lineNo: number;
+  orderItemId: string;
+  outboxId: string;
+  printerJobRef: string | null;
+  productionJson: string | null;
+  rowStatus: OutboxStatus;
+  submittedAt: number | null;
+}
+
+/**
+ * Every dispatch row of the order with its line, in line order (bounded).
+ * Only POD lines have dispatch rows, and an order has one printer (A4), so
+ * these are exactly the lines one printer order can carry.
+ */
+async function readOrderLines(
+  db: D1Database,
+  tenantId: string,
+  orderId: string,
+): Promise<OrderLine[] | null> {
+  const rows = await db
+    .prepare(
+      `SELECT e.outbox_id, e.status, e.cancel_requested, e.submitted_at,
+              json_extract(e.payload_json, '$.lineNo') AS line_no,
+              oi.order_item_id, oi.production_json, oi.dispatch_state, oi.printer_job_ref
+       FROM outbox_events AS e
+       JOIN order_items AS oi
+         ON oi.order_id = e.aggregate_id AND oi.tenant_id = e.tenant_id
+        AND oi.item_index = json_extract(e.payload_json, '$.lineNo') - 1
+       WHERE e.event_type = 'dispatch' AND e.tenant_id = ? AND e.aggregate_id = ?
+       ORDER BY line_no, e.outbox_id
+       LIMIT ${MAX_ORDER_LINES + 1}`,
+    )
+    .bind(tenantId, orderId)
+    .all<{
+      cancel_requested: number;
+      dispatch_state: string | null;
+      line_no: unknown;
+      order_item_id: string;
+      outbox_id: string;
+      printer_job_ref: string | null;
+      production_json: string | null;
+      status: OutboxStatus;
+      submitted_at: number | null;
+    }>();
+  if (rows.results.length > MAX_ORDER_LINES) {
+    return null;
   }
-  if (chosen.kind !== "ready") {
-    return chosen.kind === "terminal"
-      ? failTerminal(ctx, chosen.error, lineRef)
-      : retryLater(ctx, chosen.error, lineRef);
+  const lines: OrderLine[] = [];
+  for (const entry of rows.results) {
+    if (!isPositiveInt(entry.line_no)) {
+      return null;
+    }
+    lines.push({
+      cancelRequested: entry.cancel_requested === 1,
+      dispatchState: entry.dispatch_state,
+      lineNo: entry.line_no,
+      orderItemId: entry.order_item_id,
+      outboxId: entry.outbox_id,
+      printerJobRef: entry.printer_job_ref,
+      productionJson: entry.production_json,
+      rowStatus: entry.status,
+      submittedAt: entry.submitted_at,
+    });
   }
-  const printFiles = chosen.files;
-  const storage = await checkPrintFiles(env, printFiles);
-  if (storage.kind !== "ok") {
-    return storage.kind === "terminal"
-      ? failTerminal(ctx, storage.error, lineRef)
-      : retryLater(ctx, storage.error, lineRef);
+  return lines;
+}
+
+/**
+ * A SIBLING line the printer order carries (D4.1): its line not yet at any
+ * printer — `dispatch_state` NULL or 'pending' — or 'unknown' (a lost answer
+ * under the same idempotency key is the same Prodigi order); and its row
+ * neither superseded, failed nor flagged for cancellation. Never carried:
+ * 'accepted' of any kind (with a reference the row adopts instead; WITHOUT
+ * one it is a line a human resolved as placed by hand, resolution.ts, and
+ * sending it again would print it twice), 'failed' (its own row's, alerted,
+ * a human's), 'cancelled', and 'submitting' (its row is at the printer: this
+ * row already waits for it). The row's own line is always carried (it is
+ * claimed, not cancelled, and its state is its own to move).
+ */
+function isDispatchableSibling(line: OrderLine): boolean {
+  return (
+    (line.dispatchState === null || line.dispatchState === "pending" || line.dispatchState === "unknown") &&
+    line.rowStatus !== "superseded" &&
+    line.rowStatus !== "failed" &&
+    !line.cancelRequested
+  );
+}
+
+/**
+ * The claimed → submitting guard of an order-unit row (D4.3), uncorrelated
+ * (explicit binds), so it reads the same inside the transition's UPDATE and
+ * inside the EXISTS its companion statements carry: no OTHER dispatch row of
+ * the order is submitting, and no line of the order is accepted with a
+ * printer reference yet (a sibling that won the race between this row's read
+ * and its move: this row then adopts on its next run instead of calling).
+ */
+export function orderSubmitGuard(tenantId: string, orderId: string, outboxId: string): SqlGuard {
+  return {
+    binds: [tenantId, orderId, outboxId, tenantId, orderId],
+    sql: `NOT EXISTS (
+            SELECT 1 FROM outbox_events AS sib
+            WHERE sib.event_type = 'dispatch' AND sib.tenant_id = ? AND sib.aggregate_id = ?
+              AND sib.outbox_id <> ? AND sib.status = 'submitting'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM order_items AS acc
+            WHERE acc.tenant_id = ? AND acc.order_id = ?
+              AND acc.dispatch_state = 'accepted' AND acc.printer_job_ref IS NOT NULL
+          )`,
+  };
+}
+
+/**
+ * The order-unit run (D4). Its own line's rules are the line unit's; what
+ * differs is that the job carries every dispatchable line of the order:
+ *   1. any line of the order already ACCEPTED with a printer reference ⇒ this
+ *      row ADOPTS it: its line accepted with that reference, the row done as a
+ *      duplicate — no HTTP call (D4.2);
+ *   2. another row of the order SUBMITTING ⇒ retry after the usual backoff,
+ *      never a parallel call (D4.3; closed in SQL by orderSubmitGuard);
+ *   3. build every carried line; a sibling's problem makes this row wait
+ *      (failPreparation), its own is judged as always; a pending canvas of ANY
+ *      carried line parks the row (CanvasScope "order");
+ *   4. one job, `jobId` = orderId, the lines in line order; on `accepted` (or
+ *      a duplicate naming the printer's order) EVERY carried line is marked
+ *      accepted with the same reference in the row's own transition batch,
+ *      and the other rows of the order are woken to adopt it (D4.4/D4.5).
+ */
+async function runOrderUnit(
+  ctx: EffectContext,
+  tenantId: string,
+  payload: DispatchPayload,
+  lineRef: LineRef,
+  client: PrinterClient,
+): Promise<OutboxRunOutcome> {
+  const { env, row } = ctx;
+  const lines = await readOrderLines(env.DB, tenantId, payload.orderId);
+  if (lines === null) {
+    return failTerminal(ctx, "order_lines_over_cap", lineRef);
   }
+  const own = lines.find((entry) => entry.outboxId === row.outbox_id);
+  if (own === undefined || own.lineNo !== payload.lineNo) {
+    return failTerminal(ctx, "order_line_not_found", lineRef);
+  }
+
+  const adopted = lines.find((entry) => entry.dispatchState === "accepted" && entry.printerJobRef !== null);
+  if (adopted !== undefined && adopted.printerJobRef !== null) {
+    return recordSubmitResult(ctx, lineRef, { printerJobId: adopted.printerJobRef, status: "duplicate" }, null);
+  }
+  if (lines.some((entry) => entry.outboxId !== row.outbox_id && entry.rowStatus === "submitting")) {
+    return retryLater(ctx, ORDER_SUBMITTING, lineRef);
+  }
+
+  const carried = lines.filter((entry) => entry === own || isDispatchableSibling(entry));
+  const targets: PrintTarget[] = [];
+  for (const entry of carried) {
+    const built = buildDispatchJob(tenantId, entry.lineNo, entry.productionJson);
+    if (!built.ok) {
+      return failPreparation(ctx, own.lineNo, lineRef, { error: built.error, kind: "terminal", lineNo: entry.lineNo });
+    }
+    targets.push({ job: built.value, lineNo: entry.lineNo });
+  }
+
+  const prepared = await printFilesForPrinter(
+    ctx,
+    tenantId,
+    payload.orderId,
+    targets,
+    lineRef,
+    { kind: "order" },
+    // The printer order is one for all rows: if ANY row submitted it, its
+    // files are the ones already sent (decidePrintFiles' rule 2).
+    lines.some((entry) => entry.submittedAt !== null),
+  );
+  if (prepared.kind === "parked") {
+    return prepared.outcome;
+  }
+  if (prepared.kind === "failure") {
+    return failPreparation(ctx, own.lineNo, lineRef, prepared.failure);
+  }
+
+  const siblings = carried.filter((entry) => entry !== own);
+  return submitPrepared(ctx, tenantId, payload, lineRef, client, {
+    jobId: payload.orderId,
+    lines: prepared.lines,
+    order: {
+      siblingItemIds: siblings.map((entry) => entry.orderItemId),
+      siblingOutboxIds: lines.filter((entry) => entry !== own).map((entry) => entry.outboxId),
+    },
+  });
+}
+
+// ── submitting ──────────────────────────────────────────────────────────────
+
+/**
+ * Order unit: what the accepting batch also touches — the OTHER lines the job
+ * carried (marked accepted with the same reference) and the other dispatch
+ * rows of the order (woken to adopt it).
+ */
+interface OrderSubmission {
+  siblingItemIds: string[];
+  siblingOutboxIds: string[];
+}
+
+/**
+ * The common tail of both units, unchanged in order since CP2: the parcel
+ * address, the presigned files, the payment hold, claimed → submitting (with
+ * the order guard for an order-unit row), the call, the record.
+ */
+async function submitPrepared(
+  ctx: EffectContext,
+  tenantId: string,
+  payload: DispatchPayload,
+  lineRef: LineRef,
+  client: PrinterClient,
+  prepared: { jobId: string; lines: ReadyLine[]; order: OrderSubmission | null },
+): Promise<OutboxRunOutcome> {
+  const { claim, env, row } = ctx;
 
   // D98: a shipped order's job carries where the parcel goes, read from the
   // order's frozen recipient (never from the checkout or the shop's settings).
@@ -873,18 +1282,22 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
   let job: PrinterJob;
   try {
     const presigner = resolveR2Presigner(env);
-    job = {
-      artworks: await Promise.all(
-        printFiles.map(async (file) => ({
-          location: file.location,
-          url: await presigner.presignGet(file.r2Key, DISPATCH_PRINT_URL_TTL_SECONDS),
-        })),
-      ),
-      items: [{ quantity: built.value.quantity, sku: built.value.sku }],
-      jobId: payload.jobId,
-      mockupUrls: [],
-      shipTo,
-    };
+    const jobLines: PrinterJobLine[] = [];
+    for (const line of prepared.lines) {
+      jobLines.push({
+        artworks: await Promise.all(
+          line.files.map(async (file) => ({
+            location: file.location,
+            url: await presigner.presignGet(file.r2Key, DISPATCH_PRINT_URL_TTL_SECONDS),
+          })),
+        ),
+        lineNo: line.lineNo,
+        mockupUrls: [],
+        quantity: line.job.quantity,
+        sku: line.job.sku,
+      });
+    }
+    job = { jobId: prepared.jobId, lines: jobLines, orderId: payload.orderId, shipTo };
   } catch {
     return retryLater(ctx, "presign_failed", lineRef);
   }
@@ -897,6 +1310,7 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
   }
 
   const submitting = await markSubmitting(env.DB, claim, {
+    ...(prepared.order === null ? {} : { guard: orderSubmitGuard(tenantId, payload.orderId, row.outbox_id) }),
     now: ctx.clock(),
     withTransition: (guard) => [
       lineStateStatement(env.DB, lineRef, guard, {
@@ -906,16 +1320,17 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     ],
   });
   if (submitting === null) {
-    // Either a cancellation landed after the claim (still ours: honour it), or
-    // the claim is gone.
+    // A cancellation landed after the claim (still ours: honour it); or, for
+    // an order-unit row, a sibling is at the printer or already accepted
+    // (still ours: wait, then adopt); or the claim is gone.
     const current = await readOutboxRow(env.DB, row.outbox_id);
-    if (
-      current !== null &&
-      current.status === "claimed" &&
-      current.claimed_by === claim.claimedBy &&
-      current.cancel_requested === 1
-    ) {
-      return honourCancellation(ctx, current, lineRef);
+    if (current !== null && current.status === "claimed" && current.claimed_by === claim.claimedBy) {
+      if (current.cancel_requested === 1) {
+        return honourCancellation(ctx, current, lineRef);
+      }
+      if (prepared.order !== null) {
+        return retryLater(ctx, ORDER_SUBMITTING, lineRef);
+      }
     }
     return { kind: "lost_claim" };
   }
@@ -930,7 +1345,7 @@ export async function runDispatchEffect(ctx: EffectContext): Promise<OutboxRunOu
     return retryLater(ctx, "printer_client_error", lineRef);
   }
 
-  return recordSubmitResult(ctx, lineRef, result);
+  return recordSubmitResult(ctx, lineRef, result, prepared.order);
 }
 
 /**
@@ -951,17 +1366,88 @@ export function afterLostAnswer(
     : result;
 }
 
+/**
+ * Order unit, in the accepting batch (D4.4): the OTHER lines the job carried
+ * become accepted with the printer's reference — unless one meanwhile became
+ * cancelled or failed (a cancellation's line is the printer_cancellation's
+ * business; a failed one a human's) or already holds another reference (0022
+ * never lets a reference change).
+ */
+function siblingLinesAcceptedStatement(
+  db: D1Database,
+  input: { itemIds: string[]; nowMs: number; orderId: string; printerRef: string; tenantId: string },
+  guard: SqlGuard,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE order_items
+       SET dispatch_state = 'accepted',
+           printer_job_ref = COALESCE(printer_job_ref, ?),
+           dispatched_at = COALESCE(dispatched_at, ?)
+       WHERE tenant_id = ? AND order_id = ?
+         AND order_item_id IN (SELECT value FROM json_each(?))
+         AND dispatch_state IS NOT 'cancelled' AND dispatch_state IS NOT 'failed'
+         AND (printer_job_ref IS NULL OR printer_job_ref = ?)
+         AND ${guard.sql}`,
+    )
+    .bind(
+      input.printerRef,
+      iso(input.nowMs),
+      input.tenantId,
+      input.orderId,
+      JSON.stringify(input.itemIds),
+      input.printerRef,
+      ...guard.binds,
+    );
+}
+
+/**
+ * Order unit, in the accepting batch: the other rows of the order that wait
+ * (a backoff, a canvas park, a printer park, a lost answer's re-submit)
+ * become due now, so each adopts the reference on its next run instead of
+ * waiting out its hold. Never a payment-held row (that hold is the money
+ * path's to release) and never a row flagged for cancellation.
+ */
+function wakeSiblingsStatement(
+  db: D1Database,
+  input: { nowMs: number; orderId: string; outboxId: string; tenantId: string },
+  guard: SqlGuard,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE outbox_events
+       SET next_attempt_at = ?, updated_at = MAX(updated_at, ?)
+       WHERE event_type = 'dispatch' AND tenant_id = ? AND aggregate_id = ? AND outbox_id <> ?
+         AND status IN ('pending', 'unknown') AND cancel_requested = 0
+         AND next_attempt_at > ? AND next_attempt_at <> ${DISPATCH_HOLD_UNTIL_MS}
+         AND ${guard.sql}`,
+    )
+    .bind(
+      input.nowMs,
+      input.nowMs,
+      input.tenantId,
+      input.orderId,
+      input.outboxId,
+      input.nowMs,
+      ...guard.binds,
+    );
+}
+
 async function recordSubmitResult(
   ctx: EffectContext,
-  line: { orderItemId: string; tenantId: string },
+  line: LineRef,
   submitted: PrinterSubmitResult,
+  order: OrderSubmission | null,
 ): Promise<OutboxRunOutcome> {
   const { claim, env, row } = ctx;
   const now = ctx.clock();
   const result = afterLostAnswer(row, submitted);
 
   if (result.status === "accepted" || result.status === "duplicate") {
-    const printerRef = result.status === "accepted" ? result.printerJobId : null;
+    // CP11: a duplicate may name the printer's job (Prodigi's AlreadyExists, or
+    // an adoption): then it is recorded exactly as an acceptance would be.
+    const printerRef = result.printerJobId ?? null;
+    const tenantId = line.tenantId;
     const done = await complete(env.DB, claim, {
       now,
       resultRef: printerRef,
@@ -972,6 +1458,20 @@ async function recordSubmitResult(
                 printer_job_ref = COALESCE(printer_job_ref, ?),
                 dispatched_at = COALESCE(dispatched_at, ?)`,
         }),
+        ...(order === null || printerRef === null
+          ? []
+          : [
+              siblingLinesAcceptedStatement(
+                env.DB,
+                { itemIds: order.siblingItemIds, nowMs: now, orderId: row.aggregate_id, printerRef, tenantId },
+                guard,
+              ),
+              wakeSiblingsStatement(
+                env.DB,
+                { nowMs: now, orderId: row.aggregate_id, outboxId: row.outbox_id, tenantId },
+                guard,
+              ),
+            ]),
         // A cancellation that arrived while the call was out (§2.3 path 2).
         printerCancellationInsert(env.DB, {
           nowMs: now,
@@ -985,6 +1485,10 @@ async function recordSubmitResult(
     });
     if (done !== null && done.cancel_requested === 1) {
       await nudgeOutbox(env, [printerCancellationId(row.outbox_id)]);
+    }
+    if (done !== null && order !== null && printerRef !== null) {
+      // A nudge of a row that is not due (or not ours to claim) is a no-op.
+      await nudgeOutbox(env, order.siblingOutboxIds);
     }
     return outcomeOf(done, now);
   }
@@ -1037,6 +1541,13 @@ async function recordSubmitResult(
  * the fake), so the effect is a human-action alert, raised exactly once, and
  * the row is done when the alert exists. A printer with a cancellation API
  * would call it here instead.
+ *
+ * CP11 (D4.6): Prodigi HAS one (`POST /v4.0/orders/{id}/actions/cancel`), but
+ * it answers `ActionNotAvailable` once the order is in production (within
+ * minutes), so it is NOT called: the alert stands for Prodigi too, naming the
+ * printer reference `ord_…`. One Prodigi order carries every line, so a
+ * cancelled multi-line order raises one alert per accepted line, each naming
+ * the same `ord_…`; the human cancels it once.
  */
 export async function runPrinterCancellationEffect(
   ctx: EffectContext,

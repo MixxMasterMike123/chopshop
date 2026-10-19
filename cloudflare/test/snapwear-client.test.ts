@@ -14,7 +14,8 @@ import {
   createSnapwearClient,
   FAKE_PRINTER_FETCH_OVERRIDE,
   type PrinterJob,
-  resolvePrinterClient,
+  type PrinterJobLine,
+  resolveProviderClient,
   SNAPWEAR_FETCH_OVERRIDE,
   snapwearSubmitConfig,
   toSnapwearJobBody,
@@ -49,7 +50,9 @@ import { FakeMoneyStripe, moneyEnv, openAlerts } from "./money-fixtures";
  * CP6-PS1 part 1 — the real SnapWear submit client (LAUNCH_TODO A6), built on
  * written assumptions and OFF unless explicitly switched on.
  *
- *   - the gate: five independent conditions, each removed on its own;
+ *   - the gate: four independent conditions, each removed on its own (CP11:
+ *     the fifth, DISPATCH_TARGET = "snapwear", went with the var — the
+ *     printer row's provider names SnapWear now);
  *   - the wire: path, header, body, no redirect, no secret anywhere it could
  *     leak;
  *   - one test per assumption still waiting on SnapWear (the report's "To
@@ -71,7 +74,6 @@ const MIN = 60 * 1_000;
 /** Every SnapWear condition met, in production. */
 const PRODUCTION_SNAPWEAR: Record<PropertyKey, unknown> = {
   APP_ENV: "production",
-  DISPATCH_TARGET: "snapwear",
   SNAPWEAR_API_BASE_URL: ORIGIN,
   SNAPWEAR_API_TOKEN: TOKEN,
   SNAPWEAR_SUBMIT_ENABLED: "true",
@@ -136,15 +138,26 @@ const SHIP_TO = {
   postalCode: "264 33",
 };
 
-function job(overrides: Partial<PrinterJob> = {}): PrinterJob {
+/** A line-unit job (CP11, D5): one line, job id `{orderId}-1`. */
+function job(
+  overrides: Partial<PrinterJobLine> & { shipTo?: PrinterJob["shipTo"] } = {},
+): PrinterJob {
   const orderId = crypto.randomUUID();
+  const { shipTo, ...line } = overrides;
   return {
-    artworks: [{ location: "front", url: "https://r2.test.invalid/pod/print/front.png?X-Amz-Signature=abc" }],
-    items: [{ quantity: 1, sku: SKU }],
     jobId: printerJobId(orderId, 1),
-    mockupUrls: [],
-    shipTo: SHIP_TO,
-    ...overrides,
+    lines: [
+      {
+        artworks: [{ location: "front", url: "https://r2.test.invalid/pod/print/front.png?X-Amz-Signature=abc" }],
+        lineNo: 1,
+        mockupUrls: [],
+        quantity: 1,
+        sku: SKU,
+        ...line,
+      },
+    ],
+    orderId,
+    shipTo: "shipTo" in overrides ? shipTo : SHIP_TO,
   };
 }
 
@@ -177,10 +190,12 @@ afterEach(() => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe("the gate: the client exists only when every condition holds", () => {
-  it("is built with all five, and posts to the named origin", async () => {
+  it("is built with all four, and posts to the named origin", async () => {
     const snapwear = fakeSnapwear([accepted()]);
-    const client = resolvePrinterClient(productionEnv(snapwear.fetcher));
-    expect(client).not.toBeNull();
+    const client = resolveProviderClient(productionEnv(snapwear.fetcher), "snapwear");
+    expect(client?.unit).toBe("line");
+    // A stale DISPATCH_TARGET is read by nothing (CP11, D1).
+    expect(resolveProviderClient(productionEnv(snapwear.fetcher, { DISPATCH_TARGET: "fake-printer" }), "snapwear")).not.toBeNull();
 
     expect(await client?.submit(job())).toStrictEqual({ printerJobId: "SW-1001", status: "accepted" });
     expect(snapwear.calls.map((call) => call.url)).toEqual([`${ORIGIN}${SNAPWEAR_ORDER_ADD_PATH}`]);
@@ -196,9 +211,6 @@ describe("the gate: the client exists only when every condition holds", () => {
     ["staging", { APP_ENV: "staging" }],
     ["no APP_ENV", { APP_ENV: undefined }],
     ["APP_ENV mis-cased", { APP_ENV: "Production" }],
-    ["the fake printer as target", { DISPATCH_TARGET: "fake-printer" }],
-    ["no DISPATCH_TARGET", { DISPATCH_TARGET: undefined }],
-    ["DISPATCH_TARGET mis-cased", { DISPATCH_TARGET: "SnapWear" }],
     ["no switch", { SNAPWEAR_SUBMIT_ENABLED: undefined }],
     ["switch false", { SNAPWEAR_SUBMIT_ENABLED: "false" }],
     ["switch TRUE", { SNAPWEAR_SUBMIT_ENABLED: "TRUE" }],
@@ -225,23 +237,22 @@ describe("the gate: the client exists only when every condition holds", () => {
       const snapwear = fakeSnapwear([accepted()]);
       const target = productionEnv(snapwear.fetcher, overrides);
       expect(snapwearSubmitConfig(target)).toBeNull();
-      // No client at all (the fake exists only on staging pointed at it).
-      expect(resolvePrinterClient(target)).toBeNull();
+      // No SnapWear client: the order of a `snapwear` printer is held.
+      expect(resolveProviderClient(target, "snapwear")).toBeNull();
     });
   }
 
   it("staging NEVER builds it, even given every SnapWear value", async () => {
     const snapwear = fakeSnapwear([accepted()]);
-    // Staging pointed at SnapWear: no client at all.
-    expect(resolvePrinterClient(productionEnv(snapwear.fetcher, { APP_ENV: "staging" }))).toBeNull();
+    // A SnapWear printer on staging: no client at all.
+    expect(resolveProviderClient(productionEnv(snapwear.fetcher, { APP_ENV: "staging" }), "snapwear")).toBeNull();
 
-    // Staging pointed at the fake, with every SnapWear value set as well: the
-    // fake answers, SnapWear is never called.
+    // Staging with every SnapWear value set as well: the fake answers for a
+    // fake printer, SnapWear is never called.
     const fakeCalls: string[] = [];
     const staging = envWith({
       ...PRODUCTION_SNAPWEAR,
       APP_ENV: "staging",
-      DISPATCH_TARGET: "fake-printer",
       [FAKE_PRINTER_FETCH_OVERRIDE]: async (request: Request) => {
         fakeCalls.push(new URL(request.url).pathname);
         return Response.json({ id: "fake-1", status: "accepted" }, { status: 201 });
@@ -249,7 +260,8 @@ describe("the gate: the client exists only when every condition holds", () => {
       [SNAPWEAR_FETCH_OVERRIDE]: snapwear.fetcher,
     });
     expect(snapwearSubmitConfig(staging)).toBeNull();
-    const client = resolvePrinterClient(staging);
+    expect(resolveProviderClient(staging, "snapwear")).toBeNull();
+    const client = resolveProviderClient(staging, "fake");
     expect(await client?.submit(job())).toStrictEqual({ printerJobId: "fake-1", status: "accepted" });
     expect(fakeCalls).toEqual([FAKE_PRINTER_JOBS_PATH]);
     expect(snapwear.calls).toHaveLength(0);
@@ -310,7 +322,7 @@ describe("the wire", () => {
       { reason: "http_500", status: "unknown" },
     ]);
     const text = JSON.stringify(results) + logged.join("\n");
-    for (const secret of [TOKEN, "snapwear.test.invalid", sent.artworks[0]!.url]) {
+    for (const secret of [TOKEN, "snapwear.test.invalid", sent.lines[0]!.artworks[0]!.url]) {
       expect(text).not.toContain(secret);
     }
   });
@@ -344,7 +356,7 @@ describe("to confirm with SnapWear: one test per assumption", () => {
   });
 
   it("C5: neither `design` nor a neck-label key is sent; the body has exactly the known keys", () => {
-    expect(Object.keys(toSnapwearJobBody(job())).sort()).toEqual([
+    expect(Object.keys(toSnapwearJobBody(job()) ?? {}).sort()).toEqual([
       "artworks",
       "items",
       "job_id",
@@ -352,7 +364,7 @@ describe("to confirm with SnapWear: one test per assumption", () => {
       "mockups",
       "shipping_address",
     ]);
-    expect(Object.keys(toSnapwearJobBody(job({ shipTo: null }))).sort()).toEqual([
+    expect(Object.keys(toSnapwearJobBody(job({ shipTo: null })) ?? {}).sort()).toEqual([
       "artworks",
       "items",
       "job_id",
@@ -390,9 +402,12 @@ describe("to confirm with SnapWear: one test per assumption", () => {
           { location: "front", url: "https://r2.test.invalid/front.png" },
           { location: "back", url: "https://r2.test.invalid/back.png" },
         ],
-        items: [{ quantity: 3, sku: SKU }],
+        quantity: 3,
       }),
     );
+    if (body === null) {
+      throw new Error("a one-line job always has a body");
+    }
     expect(body.items).toStrictEqual([{ quantity: 3, sku: SKU }]);
     expect(body.artworks).toStrictEqual([
       { url: "https://r2.test.invalid/front.png" },
@@ -589,9 +604,9 @@ describe("holding: no client is a hold, never a failure", () => {
     await processOutboxRowById(productionEnv(null, { SNAPWEAR_SUBMIT_ENABLED: undefined }), dispatchId);
 
     const stripe = new FakeMoneyStripe();
-    await runReconciliation(moneyEnv(stripe, { DISPATCH_TARGET: undefined } as Partial<Env>), now + 10 * MIN);
+    await runReconciliation(moneyEnv(stripe, { SNAPWEAR_SUBMIT_ENABLED: undefined } as Partial<Env>), now + 10 * MIN);
     expect(await openAlerts("dispatch_stranded_30m", dispatchId)).toHaveLength(0);
-    await runReconciliation(moneyEnv(stripe, { DISPATCH_TARGET: undefined } as Partial<Env>), now + 31 * MIN);
+    await runReconciliation(moneyEnv(stripe, { SNAPWEAR_SUBMIT_ENABLED: undefined } as Partial<Env>), now + 31 * MIN);
     expect(await openAlerts("dispatch_stranded_30m", dispatchId)).toHaveLength(1);
   });
 

@@ -155,8 +155,8 @@ beforeEach(async () => {
 describe("checkout and a stand-in frame (CP6-PS3)", () => {
   it("switch off or unset: a cart on a stand-in frame is accepted, money and snapshot byte-identical", async () => {
     await setStandIn(true);
-    const unset = await checkoutOnce({ dispatchTarget: "fake-printer" });
-    const off = await checkoutOnce({ dispatchTarget: "fake-printer", refuseStandInFrames: false });
+    const unset = await checkoutOnce({ printerEnvironment: "staging" });
+    const off = await checkoutOnce({ printerEnvironment: "staging", refuseStandInFrames: false });
 
     expect(standInFlags(unset.snapshotJson)).toEqual([true, true]);
     expect(off.money).toBe(unset.money);
@@ -175,7 +175,7 @@ describe("checkout and a stand-in frame (CP6-PS3)", () => {
     const before = await written();
 
     const result = await createCheckout(env.DB, CONTEXT, input(), Date.now(), {
-      dispatchTarget: "fake-printer",
+      printerEnvironment: "staging",
       refuseStandInFrames: true,
     });
 
@@ -184,7 +184,7 @@ describe("checkout and a stand-in frame (CP6-PS3)", () => {
     // The plain line alone is still sold: only the stand-in line is refused.
     expect(
       (await createCheckout(env.DB, CONTEXT, input([{ productId: "plain-mug", quantity: 1 }]), Date.now(), {
-        dispatchTarget: "fake-printer",
+        printerEnvironment: "staging",
         refuseStandInFrames: true,
       })).status,
     ).toBe("ok");
@@ -192,8 +192,8 @@ describe("checkout and a stand-in frame (CP6-PS3)", () => {
 
   it("switch on: a cart on real frames is accepted, byte-identical to the switch off", async () => {
     await setStandIn(false);
-    const off = await checkoutOnce({ dispatchTarget: "fake-printer" });
-    const on = await checkoutOnce({ dispatchTarget: "fake-printer", refuseStandInFrames: true });
+    const off = await checkoutOnce({ printerEnvironment: "staging" });
+    const on = await checkoutOnce({ printerEnvironment: "staging", refuseStandInFrames: true });
 
     expect(standInFlags(on.snapshotJson)).toEqual([false, false]);
     expect(on.money).toBe(off.money);
@@ -225,7 +225,7 @@ describe("checkout and a stand-in frame (CP6-PS3)", () => {
       env.DB,
       TENANT,
       { productId: "stand-in-tee", quantity: 1, variantId: null },
-      "fake-printer",
+      "staging",
     );
     expect(line?.printFiles.map((file) => file.frameProvisional)).toEqual([true, true]);
   });

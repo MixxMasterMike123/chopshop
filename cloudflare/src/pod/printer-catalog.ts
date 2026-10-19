@@ -3,6 +3,7 @@ import type {
   EditPrinterResult,
   PrintArea,
   PrinterCapabilities,
+  PrinterEnvironment,
   PrinterModel,
   PrinterTierInput,
   PrintSlot,
@@ -42,6 +43,11 @@ import {
  * editPrinter, the same code path as PATCH, so the environment policy and the
  * suspension of mappings the new document can no longer honour hold exactly as
  * for any other edit. `apply: true` writes; anything else is a dry run.
+ *
+ * CP11: the printer's PROVIDER is the row's and stays it (editPrinter reads it
+ * and never writes it); the environment policy (printersAllowedIn) judges the
+ * applied document under that provider, so a Prodigi printer may take its own
+ * SKUs and a SnapWear or fake printer only SnapWear's.
  */
 
 /**
@@ -837,7 +843,7 @@ export async function applyCatalog(
   printerId: string,
   input: CatalogApplyInput,
   now: number,
-  target: "fake-printer" | "snapwear",
+  environment: PrinterEnvironment,
 ): Promise<ApplyCatalogResult> {
   const row = await db
     .prepare(
@@ -888,8 +894,8 @@ export async function applyCatalog(
       action: "pod.printers.catalog.apply",
       catalogSha256: row.content_sha256,
       dryRun: !input.apply,
+      environment,
       ...(input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
-      target,
     },
   );
   return result.status === "ok" ? { ...result, catalogSha256: row.content_sha256 } : result;

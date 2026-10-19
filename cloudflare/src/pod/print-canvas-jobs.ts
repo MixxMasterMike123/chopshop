@@ -54,6 +54,17 @@ import {
  * pending: D1 serialises writers, so the park's EXISTS and the release's NOT
  * EXISTS cannot both miss and leave a row parked for nothing.
  *
+ * CP11 (an order-unit printer, D4): a Prodigi dispatch row submits EVERY line
+ * of its order, so it parks while a canvas of ANY line of the order is
+ * pending (orderCanvasPendingSql), and a sibling line's settling must be able
+ * to wake it. Every settling batch therefore also releases the order's parked
+ * rows once NOTHING of the order is pending (releaseOrderStatement), and the
+ * sweeper's backstop judges by the order, not the line. For a line-unit
+ * printer (SnapWear, the fake) this only ever releases a row whose own line
+ * has nothing pending either — a row the line release already woke or would
+ * wake — so it is never premature for them; and the order-wide backstop is
+ * never earlier than the line-wide one was.
+ *
  * Nothing here is visible to a tenant or the public: the only callers are the
  * bearer-authenticated /v1/render surface and the dispatcher.
  */
@@ -229,6 +240,44 @@ export function lineCanvasPendingSql(): string {
 }
 
 /**
+ * SQL: one canvas of ANY line of the order is still to be made (CP11: the
+ * park of an order-unit dispatch row). Binds (tenant_id, order_id).
+ */
+export function orderCanvasPendingSql(): string {
+  return `EXISTS (
+    SELECT 1 FROM print_canvas_jobs AS pending
+    WHERE pending.tenant_id = ? AND pending.order_id = ?
+      AND pending.state IN ('queued', 'leased')
+  )`;
+}
+
+/**
+ * CP11: make EVERY canvas-parked dispatch row of the order due once nothing of
+ * the order is pending, inside the batch that settles a job, under the same
+ * `when`. The order-unit park (orderCanvasPendingSql) is released here; D1
+ * serialises writers, so the park's EXISTS and this NOT EXISTS cannot both
+ * miss.
+ */
+function releaseOrderStatement(
+  db: D1Database,
+  line: { orderId: string; tenantId: string },
+  nowMs: number,
+  when: { binds: unknown[]; sql: string },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE outbox_events
+       SET next_attempt_at = ?, updated_at = MAX(updated_at, ?)
+       WHERE event_type = 'dispatch' AND tenant_id = ? AND aggregate_id = ?
+         AND status = 'pending' AND next_attempt_at = ${CANVAS_HOLD_UNTIL_MS}
+         AND NOT ${orderCanvasPendingSql()}
+         AND ${when.sql}
+       RETURNING outbox_id`,
+    )
+    .bind(nowMs, nowMs, line.tenantId, line.orderId, line.tenantId, line.orderId, ...when.binds);
+}
+
+/**
  * Make the line's canvas-parked dispatch row due, inside the batch that settles
  * a job. `when` is the condition (SQL + binds) under which the release applies
  * — the settling statement's own success, so a fenced-out batch releases
@@ -288,9 +337,12 @@ function settledByThisAttempt(
 // ── the sweeper's side ──────────────────────────────────────────────────────
 
 /**
- * Backstop: any canvas-parked dispatch row whose line has no pending canvas
+ * Backstop: any canvas-parked dispatch row whose ORDER has no pending canvas
  * left becomes due (the release in the settling batch makes this a no-op in
- * practice). Bounded per sweep.
+ * practice). Bounded per sweep. CP11: judged by the order rather than the
+ * line, so an order-unit row parked on a SIBLING line's canvas is not woken
+ * early (each early wake is a claim, and a claim spends an attempt); for a
+ * line-unit row this is never earlier than the line rule was.
  */
 export async function releaseSettledCanvasHolds(db: D1Database, now: number, limit: number): Promise<string[]> {
   const result = await db
@@ -304,7 +356,7 @@ export async function releaseSettledCanvasHolds(db: D1Database, now: number, lim
            AND NOT EXISTS (
              SELECT 1 FROM print_canvas_jobs AS j
              WHERE j.tenant_id = e.tenant_id
-               AND 'dispatch:' || j.order_id || ':' || j.line_no = e.dedupe_key
+               AND j.order_id = e.aggregate_id
                AND j.state IN ('queued', 'leased')
            )
          ORDER BY e.created_at, e.outbox_id
@@ -495,12 +547,13 @@ async function failTerminal(
       requireAllSettled: false,
       when: settledByThisAttempt(job, claim, tokenHash, "failed"),
     }),
+    releaseOrderStatement(db, lineOf(job), nowMs, settledByThisAttempt(job, claim, tokenHash, "failed")),
   ]);
   if ((results[0]?.meta.changes ?? 0) === 0) {
     return "stale";
   }
   await sweepAttempt(env, job.output_prefix, claim.attempt);
-  await nudgeOutbox(env, releasedIds(results[1]));
+  await nudgeOutbox(env, [...new Set([...releasedIds(results[1]), ...releasedIds(results[2])])]);
   return "failed";
 }
 
@@ -735,6 +788,7 @@ export async function completeCanvasJob(
       requireAllSettled: true,
       when: settledByThisAttempt(job, claim, tokenHash, "completed"),
     }),
+    releaseOrderStatement(db, lineOf(job), nowMs, settledByThisAttempt(job, claim, tokenHash, "completed")),
   ]);
   if ((results[0]?.meta.changes ?? 0) === 0) {
     const current = await loadJob(db, job.id);
@@ -743,6 +797,6 @@ export async function completeCanvasJob(
       : { status: "stale" };
   }
   await sweepAttempt(env, job.output_prefix, claim.attempt);
-  await nudgeOutbox(env, releasedIds(results[1]));
+  await nudgeOutbox(env, [...new Set([...releasedIds(results[1]), ...releasedIds(results[2])])]);
   return { status: "completed" };
 }

@@ -335,6 +335,8 @@ function printerDocument() {
     currency: "SEK",
     name: "Fake printer (staging)",
     printerId: PRINTER_ID,
+    // CP11 (migration 0057): an api printer names its provider; the staging fake's is `fake`.
+    provider: "fake",
     // Staging placeholders (Firebase printshop prices: blank 60 kr, 40 kr per large print).
     shippingCostMinor: 4_900,
     status: "active",

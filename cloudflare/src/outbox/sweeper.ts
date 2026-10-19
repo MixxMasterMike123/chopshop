@@ -1,5 +1,5 @@
 import { PRINTER_HOLD_UNTIL_MS } from "../dispatch/dispatch-effect";
-import { resolvePrinterClient } from "../dispatch/printer-client";
+import { configuredProviders } from "../dispatch/printer-client";
 import { nudgeRenderJob } from "../pod/render-jobs";
 import { releaseSettledCanvasHolds, staleCanvasJobId } from "../pod/print-canvas-jobs";
 import { processNextOutboxRow } from "./effects";
@@ -34,7 +34,11 @@ import { iso, OUTBOX_EFFECT_TYPES } from "./outbox";
  *      nothing left pending becomes due here, before the drain.
  *   0. (first, CP6-PS1) PRINTER HOLDS. Dispatch rows held because the
  *      environment had no printer client become due as soon as a client
- *      resolves, and step 2 sends them. That covers `pending` rows
+ *      resolves, and step 2 sends them. CP11: a client per PROVIDER — a held
+ *      row is released only when the provider of ITS order's printer
+ *      (snapshot → printers.provider, migration 0057) resolves, never because
+ *      another provider does (a release nothing can serve re-parks the row,
+ *      and each claim spends an attempt). That covers `pending` rows
  *      (dispatch-effect.ts parkForPrinter) and `unknown` rows whose answer
  *      was lost (holdUnknownForPrinter). No attempt is spent while they wait.
  *      The reconciliation cron's `dispatch_stranded_30m` alert
@@ -60,26 +64,38 @@ export interface OutboxSweepSummary {
 }
 
 /**
- * A client now resolves: every held dispatch becomes due at once. That means
- * `pending` (dispatch-effect.ts parkForPrinter) and `unknown` with a lost
- * answer (holdUnknownForPrinter, re-submitted with the same job id). The
- * drain below takes the first, the nudge the rest. Bounded per sweep; the
- * next sweep takes more.
+ * A client now resolves: every held dispatch OF THAT CLIENT'S PROVIDER becomes
+ * due at once. That means `pending` (dispatch-effect.ts parkForPrinter) and
+ * `unknown` with a lost answer (holdUnknownForPrinter, re-submitted with the
+ * same job id). The drain below takes the first, the nudge the rest. Bounded
+ * per sweep; the next sweep takes more. A held row whose printer row is gone
+ * or `manual` is never released here; reconciliation's dispatch_stranded_30m
+ * names it.
  */
-async function releasePrinterHolds(db: D1Database, now: number): Promise<number> {
+async function releasePrinterHolds(
+  db: D1Database,
+  now: number,
+  providers: readonly string[],
+): Promise<number> {
+  if (providers.length === 0) {
+    return 0;
+  }
   const result = await db
     .prepare(
       `UPDATE outbox_events
        SET next_attempt_at = ?, updated_at = MAX(updated_at, ?)
        WHERE outbox_id IN (
-         SELECT outbox_id FROM outbox_events
-         WHERE event_type = 'dispatch' AND status IN ('pending', 'unknown')
-           AND next_attempt_at = ${PRINTER_HOLD_UNTIL_MS}
-         ORDER BY created_at, outbox_id
+         SELECT e.outbox_id FROM outbox_events AS e
+         JOIN orders AS o ON o.order_id = e.aggregate_id AND o.tenant_id = e.tenant_id
+         JOIN printers AS p ON p.id = json_extract(o.production_snapshot_json, '$.printer')
+         WHERE e.event_type = 'dispatch' AND e.status IN ('pending', 'unknown')
+           AND e.next_attempt_at = ${PRINTER_HOLD_UNTIL_MS}
+           AND p.provider IN (SELECT value FROM json_each(?))
+         ORDER BY e.created_at, e.outbox_id
          LIMIT ${SWEEP_NUDGE_LIMIT}
        )`,
     )
-    .bind(now, now)
+    .bind(now, now, JSON.stringify(providers))
     .run();
   return result.meta.changes;
 }
@@ -214,8 +230,7 @@ export async function runOutboxSweep(env: Env, now: number): Promise<OutboxSweep
   const settled = await settleExhaustedClaims(env.DB, clock());
 
   // Before the drain, so a released job goes out in this very sweep.
-  const printerReleased =
-    resolvePrinterClient(env) === null ? 0 : await releasePrinterHolds(env.DB, clock());
+  const printerReleased = await releasePrinterHolds(env.DB, clock(), configuredProviders(env));
   const canvasReleased = (await releaseSettledCanvasHolds(env.DB, clock(), SWEEP_NUDGE_LIMIT)).length;
 
   let processed = 0;

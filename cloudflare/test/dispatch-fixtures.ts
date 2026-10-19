@@ -89,6 +89,15 @@ export interface SeedOrderOptions {
   discountMinor?: number;
   lines?: LineSpec[];
   printer?: string | null;
+  /**
+   * CP11 (migration 0057): the provider of the printer row this seeds for the
+   * snapshot's printer (when none exists yet). Default: `fake` for
+   * `fake-printer`, `snapwear` for `snapwear`; any other id seeds NO row
+   * unless this is given (a printer this environment does not hold).
+   */
+  printerProvider?: string;
+  /** CP11: the provider frozen in the snapshot (absent = a pre-CP11 snapshot). */
+  snapshotProvider?: string;
   /** Skip the outbox rows (to insert them by hand). */
   withOutbox?: boolean;
 }
@@ -167,11 +176,38 @@ export async function seedOrder(
       ? JSON.stringify({
           lines: items.filter((item) => item.production !== null).map((item) => item.production),
           printer: options.printer ?? "fake-printer",
+          ...(options.snapshotProvider === undefined ? {} : { provider: options.snapshotProvider }),
           totals: { productionCostMinor: 9_000, withholdMinor: 9_000 },
         })
       : null;
 
+  // CP11 (D1): the dispatcher reads the snapshot printer's ROW for its
+  // provider, so the printer the order names exists, as checkout guarantees.
+  const printerId = options.printer ?? "fake-printer";
+  const printerProvider =
+    options.printerProvider ??
+    (printerId === "fake-printer" ? "fake" : printerId === "snapwear" ? "snapwear" : null);
+  const printerRows: D1PreparedStatement[] =
+    snapshot === null || printerProvider === null
+      ? []
+      : [
+          env.DB.prepare(
+            `INSERT INTO printers (id, tenant_id, type, provider, name, status, currency,
+               shipping_cost_minor, capabilities_json, created_at, updated_at)
+             VALUES (?, NULL, ?, ?, ?, 'active', 'SEK', 0, '{"models":{},"skus":{}}', ?, ?)
+             ON CONFLICT(id) DO NOTHING`,
+          ).bind(
+            printerId,
+            printerProvider === "manual" ? "manual" : "api",
+            printerProvider,
+            `Printer ${printerId}`,
+            new Date(now).toISOString(),
+            new Date(now).toISOString(),
+          ),
+        ];
+
   const statements: D1PreparedStatement[] = [
+    ...printerRows,
     env.DB.prepare(
       `INSERT INTO products (product_id, tenant_id, status, sku, name, b2c_price_minor,
          currency, created_at, updated_at)

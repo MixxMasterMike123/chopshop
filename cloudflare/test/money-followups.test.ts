@@ -218,6 +218,18 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 
 /** A POD order whose print file exists in R2, so the fake printer can take it. */
 async function printablePaidOrder(): Promise<PaidOrder> {
+  // CP11 (D1): the dispatcher reads the snapshot printer's row for its
+  // provider; checkout only freezes a printer that exists, so this one does.
+  const iso = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO printers (id, tenant_id, type, provider, name, status, currency, shipping_cost_minor,
+       capabilities_json, created_at, updated_at)
+     VALUES ('fake-printer', NULL, 'api', 'fake', 'Fake printer (staging)', 'active', 'SEK', 0,
+       '{"models":{},"skus":{}}', ?, ?)
+     ON CONFLICT(id) DO NOTHING`,
+  )
+    .bind(iso, iso)
+    .run();
   const bytes = new TextEncoder().encode(`print-${next("bytes")}`);
   const r2Key = `pod/${TENANT}/print/${next("file")}.png`;
   await env.PRIVATE_BUCKET.put(r2Key, bytes, { sha256: await crypto.subtle.digest("SHA-256", bytes) });

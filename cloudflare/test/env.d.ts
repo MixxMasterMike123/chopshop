@@ -48,10 +48,16 @@ declare global {
       R2_SECRET_ACCESS_KEY: string;
       RENDER_FARM_TOKEN: string;
       RENDER_FARM_URL: string;
-      // CP1-C: staging dispatches to the fake printer; the suites pin the
-      // staging shape and override it to prove the route dark elsewhere.
-      DISPATCH_TARGET: string;
+      // CP1-C: the staging fake printer's bearer; the suites pin the staging
+      // shape and override it to prove the route dark elsewhere. (CP11: the
+      // DISPATCH_TARGET var vitest.config.ts still binds is read by nothing.)
       FAKE_PRINTER_TOKEN: string;
+      // CP11: unset in the test config (the Prodigi client is dark); the
+      // Prodigi suites set all three per test, with a `test_` sandbox-shaped
+      // key that is not a real one, and inject a fetch through the seam.
+      PRODIGI_API_BASE_URL?: string;
+      PRODIGI_API_TOKEN?: string;
+      PRODIGI_SUBMIT_ENABLED?: string;
       STRIPE_SECRET_KEY: string;
       STRIPE_WEBHOOK_SECRET: string;
       TEST_MIGRATIONS: D1Migration[];

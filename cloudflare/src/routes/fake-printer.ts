@@ -28,11 +28,11 @@ import {
  *                                    422 { status: "error", message: "Validation Failed", errors }
  *   GET   ?orderId=<uuid>            200 { jobs: [...] } — what was received
  *
- * THE ROUTE DOES NOT EXIST unless APP_ENV = "staging" AND DISPATCH_TARGET =
- * "fake-printer" AND FAKE_PRINTER_TOKEN is set (isFakePrinterEnabled): anything
- * else — production, a staging pointed at SnapWear, a missing token, a wrong
- * bearer — is the same opaque 404 an unknown path gets, decided before any D1
- * access. That is also why there is no rate limiter here: an unauthenticated
+ * THE ROUTE DOES NOT EXIST unless APP_ENV = "staging" AND FAKE_PRINTER_TOKEN
+ * is set (isFakePrinterEnabled; CP11 D2 dropped the former DISPATCH_TARGET =
+ * "fake-printer" condition with the var): anything else — production, a
+ * missing or short token, a wrong bearer — is the same opaque 404 an unknown
+ * path gets, decided before any D1 access. That is also why there is no rate limiter here: an unauthenticated
  * caller reaches nothing but a hash compare.
  *
  * Validation runs AFTER the duplicate check, the way an idempotent API should

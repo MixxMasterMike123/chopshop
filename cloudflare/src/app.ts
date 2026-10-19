@@ -102,7 +102,7 @@ import {
   authorizeTenantAdminRequest,
 } from "./auth/request-authorization";
 import { handleAuthRoute } from "./auth/auth-routes";
-import { dispatchTargetOf } from "./pod/printers";
+import { printerEnvironmentOf } from "./pod/printers";
 import { printCanvasEnabled } from "./dispatch/print-canvas";
 import { isFeatureEnabled } from "./platform/tenant-config";
 import { handlePublicStorefrontRequest } from "./storefront/public-routes";
@@ -507,7 +507,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0056_checkout_reminders.sql";
+const REQUIRED_MIGRATION = "0057_printer_provider.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -1276,7 +1276,8 @@ async function handleCheckoutRoute(
   }
 
   const result = await createCheckout(env.DB, tenant, input, now, {
-    dispatchTarget: dispatchTargetOf(env),
+    // CP11 (D3): the environment whose provider policy every POD line's printer must meet.
+    printerEnvironment: printerEnvironmentOf(env),
     // CP6-PS3: with the print canvas on, a stand-in frame is refused here,
     // before payment, rather than failing at dispatch after it.
     refuseStandInFrames: printCanvasEnabled(env),

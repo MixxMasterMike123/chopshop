@@ -26,14 +26,17 @@ export const MAX_FAKE_PRINTER_PAYLOAD_LENGTH = 65_536;
 const LIST_LIMIT = 100;
 
 /**
- * The fake exists ONLY on staging, and only when staging is pointed at it.
- * Production pins `DISPATCH_TARGET = "snapwear"`, so this is false there by two
- * independent conditions; a missing or short token darkens it too.
+ * The fake exists ONLY on staging, and only with its token (CP11, D2: the
+ * route and the `fake` provider's client share this one condition). Production
+ * is never "staging", and production has no FAKE_PRINTER_TOKEN either, so it
+ * is false there by two independent conditions; a missing or short token
+ * darkens it on staging too. (Before CP11 a third condition required
+ * DISPATCH_TARGET = "fake-printer"; that var is retired: which orders reach
+ * the fake is now their printer row's provider, migration 0057.)
  */
 export function isFakePrinterEnabled(env: Env): boolean {
   return (
     env.APP_ENV === "staging" &&
-    env.DISPATCH_TARGET === "fake-printer" &&
     typeof env.FAKE_PRINTER_TOKEN === "string" &&
     env.FAKE_PRINTER_TOKEN.length >= MINIMUM_FAKE_PRINTER_TOKEN_LENGTH
   );

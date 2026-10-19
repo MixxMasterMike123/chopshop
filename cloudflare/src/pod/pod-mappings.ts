@@ -9,8 +9,15 @@ import {
 } from "../catalog/screening";
 import type { PodQuote, TierFacts } from "./pod-quote";
 import { podPriceFloorMinor, quoteFromTier, quotePodCost } from "./pod-quote";
-import type { PrintArea, PrintSlot, Printer, PrinterRow } from "./printers";
-import { isStandInSku, loadUsablePrinter, PRINT_SLOTS, slotFrame, toPrinter } from "./printers";
+import type { PrintArea, PrintSlot, Printer, PrinterEnvironment, PrinterProvider, PrinterRow } from "./printers";
+import {
+  isStandInSku,
+  loadUsablePrinter,
+  PRINT_SLOTS,
+  providerAllowedIn,
+  slotFrame,
+  toPrinter,
+} from "./printers";
 
 /**
  * POD mappings — "product P prints artwork A on slots S of printer X's SKU K".
@@ -1262,6 +1269,8 @@ export interface ProductionLine {
   currency: string;
   printFiles: PrintFile[];
   printerId: string;
+  /** CP11: the routed printer's provider, read in the same snapshot. */
+  provider: PrinterProvider;
   productionCostMinor: number;
   /** The printer's flat per-order parcel (ex VAT), read in the same snapshot. */
   shippingCostMinor: number;
@@ -1288,8 +1297,10 @@ function isPositivePx(value: number | null): value is number {
  * (the checkout is refused):
  *
  *   - an active mapping set for the line's scope, one printer + one SKU;
- *   - the printer active and usable by this tenant (and, when the caller names
- *     the environment's dispatch target, that printer);
+ *   - the printer active and usable by this tenant, an `api` printer (one the
+ *     dispatcher submits to), and — CP11, D3 — of a provider this environment
+ *     may hold (providerAllowedIn; `policy` "any" when the caller did not name
+ *     its environment: any api provider, never `manual`);
  *   - the SKU still in its capabilities and every slot still framed and still
  *     large enough for the print it was sized for (A3/A4);
  *   - every artwork 'ready' with a print master under this tenant's own
@@ -1392,7 +1403,7 @@ function productionReadStatements(
       .bind(...scopeBinds),
     db
       .prepare(
-        `SELECT id, tenant_id, type, name, status, currency, shipping_cost_minor,
+        `SELECT id, tenant_id, type, provider, name, status, currency, shipping_cost_minor,
                 capabilities_json
          FROM printers
          WHERE id IN (
@@ -1405,10 +1416,17 @@ function productionReadStatements(
   ];
 }
 
+/**
+ * CP11 (D3): which printers a production line may be routed to — the
+ * environment's provider policy, or "any" api provider when the caller did not
+ * name its environment (a caller that predates the option).
+ */
+export type ProductionPolicy = PrinterEnvironment | "any";
+
 function decideProductionLine(
   tenantId: string,
   item: ProductionItem,
-  dispatchTarget: string | null,
+  policy: ProductionPolicy,
   refuseStandInFrames: boolean,
   results: ReadonlyArray<D1Result<unknown> | undefined>,
 ): ProductionLine | null {
@@ -1437,15 +1455,19 @@ function decideProductionLine(
   if (routing === null) {
     return null;
   }
-  if (dispatchTarget !== null && routing.printerId !== dispatchTarget) {
-    return null;
-  }
 
   const printerRow = printerRows.find((row) => row.id === routing.printerId);
   const printer = printerRow === undefined ? null : toPrinter(printerRow);
   if (
     printer === null ||
     printer.status !== "active" ||
+    // CP11 (D3, it replaced "the printer IS the environment's dispatch
+    // target"): an api printer whose provider may exist here. A manual
+    // printer, or an api row left `manual` by 0057's backfill, receives no
+    // job from the dispatcher, so nothing is sold that no printer receives.
+    printer.type !== "api" ||
+    printer.provider === "manual" ||
+    (policy !== "any" && !providerAllowedIn(printer.provider, policy)) ||
     (printer.tenantId !== null && printer.tenantId !== tenantId) ||
     printer.capabilities.skus[routing.sku] === undefined
   ) {
@@ -1510,6 +1532,7 @@ function decideProductionLine(
     currency: quote.breakdown.currency,
     printFiles,
     printerId: routing.printerId,
+    provider: printer.provider,
     productionCostMinor: quote.productionCostMinor,
     shippingCostMinor: printer.shippingCostMinor,
     sku: routing.sku,
@@ -1528,7 +1551,7 @@ export async function resolveProductionLines(
   db: D1Database,
   tenantId: string,
   items: readonly ProductionItem[],
-  dispatchTarget: string | null,
+  policy: ProductionPolicy,
   refuseStandInFrames: boolean,
 ): Promise<Array<ProductionLine | null>> {
   if (items.length === 0) {
@@ -1541,7 +1564,7 @@ export async function resolveProductionLines(
     decideProductionLine(
       tenantId,
       item,
-      dispatchTarget,
+      policy,
       refuseStandInFrames,
       results.slice(index * STATEMENTS_PER_LINE, (index + 1) * STATEMENTS_PER_LINE),
     ),
@@ -1556,9 +1579,9 @@ export async function resolveProductionLine(
   db: D1Database,
   tenantId: string,
   item: ProductionItem,
-  dispatchTarget: string | null,
+  policy: ProductionPolicy,
 ): Promise<ProductionLine | null> {
-  const [line] = await resolveProductionLines(db, tenantId, [item], dispatchTarget, false);
+  const [line] = await resolveProductionLines(db, tenantId, [item], policy, false);
   return line ?? null;
 }
 

@@ -55,7 +55,7 @@ interface Frozen {
 
 async function checkoutOnce(): Promise<Frozen> {
   const result = await createCheckout(env.DB, CONTEXT, input(), Date.now(), {
-    dispatchTarget: "fake-printer",
+    printerEnvironment: "staging",
   });
   expect(result.status).toBe("ok");
   const checkoutId = result.status === "ok" ? result.checkout.checkoutId : "";

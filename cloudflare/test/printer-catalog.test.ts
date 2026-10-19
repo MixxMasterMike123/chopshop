@@ -587,7 +587,7 @@ describe("POST …/catalog/apply — the seed, as a route", () => {
       "fake-printer",
       input,
       Date.now(),
-      "fake-printer",
+      "staging",
     );
     expect(result).toEqual({ code: "concurrent_edit", status: "conflict" });
     expect(await storedPrinter()).toEqual(before);
@@ -596,11 +596,12 @@ describe("POST …/catalog/apply — the seed, as a route", () => {
   });
 
   it("honours the environment policy for `api` printers", async () => {
-    // D59: an imported, inactive SnapWear row on staging, with its catalogue.
+    // D59: an imported, inactive SnapWear row on staging, with its catalogue
+    // (CP11: its provider is SnapWear's, which staging may not hold).
     const iso = new Date(SEED_NOW).toISOString();
     await env.DB.prepare(
-      `INSERT INTO printers (id, tenant_id, type, name, status, currency, shipping_cost_minor, capabilities_json, created_at, updated_at)
-       VALUES ('snapwear', NULL, 'api', 'SnapWear', 'inactive', 'SEK', 0, '{"models":{},"skus":{}}', ?, ?)`,
+      `INSERT INTO printers (id, tenant_id, type, provider, name, status, currency, shipping_cost_minor, capabilities_json, created_at, updated_at)
+       VALUES ('snapwear', NULL, 'api', 'snapwear', 'SnapWear', 'inactive', 'SEK', 0, '{"models":{},"skus":{}}', ?, ?)`,
     ).bind(iso, iso).run();
     expect((await call("platform", "/v1/platform/printers/snapwear/catalog", "PUT", { catalog: catalogFile })).status).toBe(200);
     const response = await call("platform", "/v1/platform/printers/snapwear/catalog/apply", "POST", { ...SLICE_APPLY, apply: true });
@@ -609,10 +610,10 @@ describe("POST …/catalog/apply — the seed, as a route", () => {
     // A dry run is refused the same way: the policy is part of the result.
     expect((await call("platform", "/v1/platform/printers/snapwear/catalog/apply", "POST", SLICE_APPLY)).status).toBe(400);
 
-    // A production-shaped env (target snapwear) refuses the staging fake printer.
+    // A production env refuses the staging fake printer (its provider, `fake`).
     const before = await snapshot();
     const production = await handlePlatformPrinterCatalogApplyRoute(
-      { ...env, DISPATCH_TARGET: "snapwear" } as unknown as Env,
+      { ...env, APP_ENV: "production" } as unknown as Env,
       sessionRequest(`${HOST}${APPLY_PATH}`, "POST", { body: { ...SLICE_APPLY, apply: true }, cookie: platform.cookie }),
       "fake-printer",
     );

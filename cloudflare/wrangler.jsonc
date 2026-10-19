@@ -90,8 +90,15 @@
         // env.staging.vars; the preflight requires the three to be equal.
         "PUBLIC_OBJECT_BASE_URL": "https://pub-0e06052f19524b76bbefd4b411baa272.r2.dev",
         // Printer dispatch target — must equal pinned.<env>.json → dispatchTarget (the preflight
-        // checks it). "fake-printer" exists only in staging; production is always "snapwear".
+        // checks it). CP11 (migration 0057): the code no longer reads it — each printer row's
+        // `provider` decides the client; the var stays only for the preflight's pinned check.
         "DISPATCH_TARGET": "fake-printer",
+        // CP11 (D2/D7): the Prodigi client on staging — the SANDBOX origin (the client appends
+        // /v4.0/orders) and the explicit switch; the secret PRODIGI_API_TOKEN is a `test_` sandbox
+        // key, which prodigiSubmitConfig requires here (a live key never builds the client on
+        // staging). Production gets none of the three until the go-live decision.
+        "PRODIGI_SUBMIT_ENABLED": "true",
+        "PRODIGI_API_BASE_URL": "https://api.sandbox.prodigi.com",
         // Recipient of the 15-minute alert digest (D40). A var, not a secret: an address. Absent ⇒ no digest.
         "PLATFORM_ALERT_EMAIL": "micke.ohlen@gmail.com",
         // CP6-PS2: the print canvas per line (src/dispatch/print-canvas.ts). Exactly "true" ⇒ each

@@ -274,15 +274,19 @@ async function transition(
  * claimed → submitting: the external call is about to be made. Refused when a
  * cancellation was requested meanwhile — the re-check "before the HTTP call"
  * of §2.3 is this statement's `cancel_requested = 0`, atomic with the move.
+ * `guard` (CP11) is one more condition of the move, in the same statement:
+ * the dispatcher's order-unit rows pass "no other dispatch row of this order
+ * is submitting", so two rows of one order never call the printer at once.
  */
 export function markSubmitting(
   db: D1Database,
   claim: OutboxClaim,
-  input: { now: number; withTransition?: WithTransition },
+  input: { guard?: SqlGuard; now: number; withTransition?: WithTransition },
 ): Promise<OutboxRow | null> {
+  const base = andGuard(fenceGuard(claim, input.now), "status = 'claimed' AND cancel_requested = 0");
   return transition(
     db,
-    andGuard(fenceGuard(claim, input.now), "status = 'claimed' AND cancel_requested = 0"),
+    input.guard === undefined ? base : andGuard(base, input.guard.sql, input.guard.binds),
     {
       binds: [input.now, input.now],
       sql: `status = 'submitting',

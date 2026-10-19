@@ -156,22 +156,25 @@ interface Env {
   // (src/pod/render-farm-client.ts) rather than being guessed at.
   R2_JURISDICTION: "eu" | undefined;
 
-  // ── PRINTER DISPATCH (PLAN §2.3, §2.6) ─────────────────────────────────────
-  // Which printer this environment dispatches to: "snapwear" (production pins
-  // it; the preflight refuses anything else there) or "fake-printer" (staging).
-  // Unset or any other value ⇒ resolvePrinterClient returns null and dispatch
-  // holds its work (src/dispatch/printer-client.ts).
-  DISPATCH_TARGET: string | undefined;
+  // ── PRINTER DISPATCH (PLAN §2.3, §2.6; CP11 D1) ────────────────────────────
+  // Since CP11 the printer an order was routed to decides where its jobs go:
+  // its row's `provider` (migration 0057: snapwear | prodigi | fake | manual)
+  // names the client, and each provider's client exists only when its own
+  // gate below passes (src/dispatch/printer-client.ts resolveProviderClient).
+  // A failing gate HOLDS the job (dispatch-effect.ts parkForPrinter). The old
+  // DISPATCH_TARGET var is no longer read by the code (wrangler.jsonc and the
+  // pinned files still carry it for the preflight until the reviewer removes
+  // it), so it is deliberately not typed here.
 
   // ── THE REAL SNAPWEAR SUBMIT (CP6-PS1, LAUNCH_TODO A6) ─────────────────────
   // OFF unless every condition of snapwearSubmitConfig holds
-  // (src/dispatch/printer-client.ts): DISPATCH_TARGET="snapwear" AND
-  // APP_ENV="production" AND the switch below is exactly "true" AND a bare
-  // https origin AND a token. Staging never builds the client, whatever it is
-  // given. No environment sets any of the three until SnapWear has answered
-  // C4–C6; until then production HOLDS its print jobs (dispatch-effect.ts
-  // parkForPrinter); reconciliation's dispatch_stranded_30m alert names each
-  // held job after 30 minutes.
+  // (src/dispatch/printer-client.ts): APP_ENV="production" AND the switch
+  // below is exactly "true" AND a bare https origin AND a token. Staging never
+  // builds the client, whatever it is given. No environment sets any of the
+  // three until SnapWear has answered C4–C6; until then production HOLDS the
+  // jobs of a `snapwear` printer (dispatch-effect.ts parkForPrinter);
+  // reconciliation's dispatch_stranded_30m alert names each held job after 30
+  // minutes.
 
   // Plain var, production only: the explicit switch. Anything but "true" ⇒ off.
   SNAPWEAR_SUBMIT_ENABLED?: string;
@@ -182,6 +185,28 @@ interface Env {
 
   // Worker SECRET, production only: sent as `x-api-token`. Never logged.
   SNAPWEAR_API_TOKEN?: string;
+
+  // ── THE PRODIGI SUBMIT (CP11, D2/D6/D7) ───────────────────────────────────
+  // OFF unless every condition of prodigiSubmitConfig holds
+  // (src/dispatch/prodigi-client.ts): the switch below is exactly "true" AND
+  // a bare https origin AND a well-formed token AND the environment pairing —
+  // APP_ENV="staging" ⇒ the host is api.sandbox.prodigi.com and the token
+  // starts with "test_"; APP_ENV="production" ⇒ the host is api.prodigi.com
+  // and the token does NOT start with "test_". A live key never reaches
+  // staging's sandbox and a sandbox key never reaches production. Off ⇒ the
+  // jobs of a `prodigi` printer are HELD (dispatch-effect.ts parkForPrinter).
+
+  // Plain var: the explicit switch. Anything but "true" ⇒ off.
+  PRODIGI_SUBMIT_ENABLED?: string;
+
+  // Plain var: Prodigi's API origin, no path (the client appends
+  // /v4.0/orders): "https://api.sandbox.prodigi.com" on staging,
+  // "https://api.prodigi.com" in production.
+  PRODIGI_API_BASE_URL?: string;
+
+  // Worker SECRET: sent as `X-API-Key`. A `test_` sandbox key on staging, the
+  // live key in production. Never logged, never in a result or an alert.
+  PRODIGI_API_TOKEN?: string;
 
   // ── THE PRINT CANVAS (CP6-PS2, LAUNCH_TODO A5) ────────────────────────────
   // Plain var. Exactly "true" ⇒ each print slot of a line is sent to the
@@ -203,8 +228,8 @@ interface Env {
     | undefined;
 
   // Worker SECRET, staging only: the bearer the staging fake printer route
-  // (/v1/staging/fake-printer/jobs) requires, and the dispatcher presents. The
-  // route is a 404 unless APP_ENV="staging", DISPATCH_TARGET="fake-printer"
-  // and this is ≥ 32 characters.
+  // (/v1/staging/fake-printer/jobs) requires, and the dispatcher presents for
+  // a `fake` printer. The route (and the client) exist only when
+  // APP_ENV="staging" and this is ≥ 32 characters (CP11, D2).
   FAKE_PRINTER_TOKEN: string | undefined;
 }

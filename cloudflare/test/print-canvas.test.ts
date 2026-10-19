@@ -740,31 +740,32 @@ describe("dispatch with the print canvas", () => {
       snapwearCalls.push(request.url);
       return Response.json({ id: "SW-1", status: "accepted" }, { status: 201 });
     };
-    const staging = (target: string) =>
+    // CP11: the order's printer row (its provider) decides, not the env.
+    const staging = () =>
       quietEnv({
         ...ON,
         APP_ENV: "staging",
-        DISPATCH_TARGET: target,
         SNAPWEAR_API_BASE_URL: "https://api.snapwear.test.invalid",
         SNAPWEAR_API_TOKEN: "test-only-snapwear-api-token-0123456789",
         SNAPWEAR_SUBMIT_ENABLED: "true",
         [SNAPWEAR_FETCH_OVERRIDE]: snapwear,
       }).env;
 
-    // Pointed at the fake: the canvas goes to the fake, never to SnapWear.
+    // A fake printer's order: the canvas goes to the fake, never to SnapWear.
     const order = await seedCanvasOrder();
     const dispatchId = order.dispatchIds[0] as string;
-    await dispatch(staging("fake-printer"), dispatchId);
+    await dispatch(staging(), dispatchId);
     await renderAll();
-    expect(await dispatch(staging("fake-printer"), dispatchId)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(await dispatch(staging(), dispatchId)).toEqual({ kind: "ran", outcome: { kind: "done" } });
     expect((await printedKeys(order.orderId))[0]?.[0]?.endsWith("/1-front.png")).toBe(true);
 
-    // Pointed at SnapWear: no client, the row is held for the printer before any canvas.
+    // A SnapWear printer's order on staging: no client, the row is held for
+    // the printer before any canvas.
     const held = await seedOrder(TENANT, {
       lines: [{ printFiles: [{ canvas: CANVAS, slot: "front" }] }],
       printer: "snapwear",
     });
-    await dispatch(staging("snapwear"), held.dispatchIds[0] as string);
+    await dispatch(staging(), held.dispatchIds[0] as string);
     expect((await outboxRow(held.dispatchIds[0] as string)).next_attempt_at).toBe(PRINTER_HOLD_UNTIL_MS);
     expect(await canvasRows(held.orderId)).toEqual([]);
     expect(snapwearCalls).toEqual([]);

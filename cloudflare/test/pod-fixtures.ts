@@ -67,6 +67,9 @@ export function testPrinter(overrides: Partial<PrinterInput> = {}): PrinterInput
     currency: "SEK",
     name: "Fake printer (staging)",
     printerId: "fake-printer",
+    // CP11 (migration 0057): the staging fake's provider; a manual printer's
+    // is `manual` (the parse refuses any other pairing).
+    provider: overrides.type === "manual" ? "manual" : "fake",
     shippingCostMinor: 4_900,
     status: "active",
     tiers: [
