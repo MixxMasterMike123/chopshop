@@ -7,6 +7,7 @@
  * buyer's browser would. Every write to the shop goes through a route.
  *
  *   CHOPSHOP_API_URL=https://chopshop-api-stg.kent-ee2.workers.dev \
+ *   [CHOPSHOP_WEB_URL=…  (default: cloudflare/pinned.staging.json origins.web)] \
  *   CHOPSHOP_PLATFORM_EMAIL=… CHOPSHOP_PLATFORM_PASSWORD=… \
  *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] [CHOPSHOP_SLICE_ADMIN_PASSWORD=…] \
  *   node scripts/cf-port/seed-staging-slice.mjs [--tenant slice-YYYYMMDD]
@@ -53,6 +54,12 @@
  *  10. --connect-proof (docs/cf-port/CP3_F_REPORT.md, the v1 proof list): the dashboard login
  *      link as the shop's own admin and refused to the platform user acting-as, then the
  *      payout delay set to 7 days and back to the country's minimum.
+ *
+ * STOREFRONT ROUTES (since the 2026-10-14 audit, F16) are served only by the WEB Worker, as
+ * `<web origin>/_api/<tenant id>/v1/…` (cloudflare/web/src/routing.ts: the first segment is the
+ * shop; api-allowlist.ts lists the paths; forward.ts drops Cookie and X-Tenant-* and sends no body
+ * on a bodyless POST). So the tenant-exists check, the PDP, checkout, payment and the receipt poll
+ * go there, with Origin = the web origin and no session; platform/admin calls stay on the API.
  *
  * Credentials come ONLY from the environment variables above. Nothing is written to disk and no
  * secret, cookie or receipt token is printed. Never runs wrangler and needs no D1 statement.
@@ -181,6 +188,21 @@ const API = (() => {
   return url.origin;
 })();
 const API_HOST = new URL(API).host;
+const WEB = (() => {
+  let url;
+  try {
+    url = new URL(process.env.CHOPSHOP_WEB_URL?.trim() || PINNED.origins.web);
+  } catch {
+    die("CHOPSHOP_WEB_URL is not a URL");
+  }
+  if (url.protocol !== "https:") {
+    die("CHOPSHOP_WEB_URL must be https");
+  }
+  if (url.origin !== PINNED.origins.web) {
+    die(`CHOPSHOP_WEB_URL ${url.origin} is not the pinned STAGING web origin ${PINNED.origins.web}`);
+  }
+  return url.origin;
+})();
 const PLATFORM_EMAIL = requireEnv("CHOPSHOP_PLATFORM_EMAIL");
 const PLATFORM_PASSWORD = requireEnv("CHOPSHOP_PLATFORM_PASSWORD");
 const STRIPE_KEY = requireEnv("STRIPE_SECRET_KEY");
@@ -200,7 +222,9 @@ const SHOP_NAME = `Slice ${TENANT_ID.replace(/^slice-/, "")}`;
 let platformCookie = null;
 
 async function api(method, route, options = {}) {
-  const headers = { origin: API };
+  // options.web: a storefront route, served only by the web Worker as /_api/<shop>/v1/… (F16).
+  const base = options.web === true ? `${WEB}/_api/${TENANT_ID}` : API;
+  const headers = { origin: options.web === true ? WEB : API };
   if (options.session === true) {
     headers.cookie = platformCookie;
   }
@@ -217,7 +241,7 @@ async function api(method, route, options = {}) {
     // the upload route requires it (Worker-streamed, size-checked).
     body = options.bytes;
   }
-  const response = await fetch(`${API}${route}`, { body, headers, method, redirect: "manual" });
+  const response = await fetch(`${base}${route}`, { body, headers, method, redirect: "manual" });
   const text = await response.text();
   let json = null;
   try {
@@ -496,6 +520,7 @@ async function preflight() {
         `on migration ${REQUIRED_MIGRATION_PREFIX} or later (apply the migrations, then deploy)`,
     );
   }
+  info("web", `${WEB} (storefront routes: /_api/${TENANT_ID}/v1/…)`);
   info("api", `${API} (${health.json.service}, /ready ${migration})`);
   const account = await stripe("GET", "/v1/account");
   if (account.id !== PINNED.stripeAccountId) {
@@ -542,7 +567,7 @@ async function ensureTenant() {
     expectStatus(created, [201, 409], "create tenant");
   }
   // 409: the id or the host is taken. The host's storefront says which shop holds it.
-  const storefront = await api("GET", "/v1/storefront");
+  const storefront = await api("GET", "/v1/storefront", { web: true });
   if (storefront.status === 200 && storefront.json?.storefront?.name === SHOP_NAME) {
     info("tenant", `${TENANT_ID} exists (reused)`);
     return;
@@ -983,7 +1008,7 @@ async function ensureProduct(artworkId) {
     info("screening", `${approved.json.screening.status} (platform decision)`);
   }
 
-  const pdp = await api("GET", `/v1/products/${productId}`);
+  const pdp = await api("GET", `/v1/products/${productId}`, { web: true });
   info("PDP", pdp.status === 200 ? `200, ETag ${pdp.headers.get("etag")}` : `HTTP ${pdp.status}`);
   if (pdp.status !== 200) {
     die("the published product is not on the storefront");
@@ -1109,6 +1134,7 @@ async function purchase(productId, account) {
   }
   const checkout = expectStatus(
     await api("POST", "/v1/checkout", {
+      web: true,
       json: {
         // The buyer ticked the purchase terms (required); marketing stays unticked.
         consent: { terms: true },
@@ -1135,7 +1161,7 @@ async function purchase(productId, account) {
   const checkoutId = checkout.json.checkout.checkoutId;
   info("checkout", `${checkoutId} (${checkout.json.checkout.totalMinor} öre)`);
 
-  const payment = await api("POST", `/v1/checkout/${checkoutId}/payment`);
+  const payment = await api("POST", `/v1/checkout/${checkoutId}/payment`, { web: true });
   if (payment.status === 404) {
     die("payment route 404: the shop is closed for payment (legal readiness, or charges not enabled on its account)");
   }
@@ -1151,7 +1177,7 @@ async function purchase(productId, account) {
 
   const deadline = Date.now() + 90_000;
   for (;;) {
-    const receipt = await api("POST", `/v1/checkout/${checkoutId}/receipt`);
+    const receipt = await api("POST", `/v1/checkout/${checkoutId}/receipt`, { web: true });
     if (receipt.json?.receipt?.status === "ready") {
       info("order", `${receipt.json.receipt.orderId} (webhook → order in one batch)`);
       return receipt.json.receipt.orderId;
