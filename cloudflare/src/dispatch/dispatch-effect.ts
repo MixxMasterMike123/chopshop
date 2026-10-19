@@ -1195,8 +1195,10 @@ function isOrderWideReference(line: OrderLine): line is OrderLine & { resultRef:
 /**
  * Codex round 1, P2 — fail closed across siblings. Another row of the order
  * may have reached Prodigi under the SAME idempotency key without our knowing
- * the answer (it is unknown, or was, or submitted and is not done with a
- * reference). A refusal now could then be about an order that already holds
+ * the answer: it is unknown, or was (`unknown_since`), or it submitted and is
+ * still in flight (claimed/submitting). Codex round 2: a CONFIRMED refusal
+ * (`failed` with no lost-answer history) and a `done` row are knowledge, not
+ * uncertainty, so a second definitive refusal still fails with its alert. A refusal now could then be about an order that already holds
  * this row's line, so it is read as an answer after a lost one
  * (afterLostAnswer): unknown, for a human, never "the printer did not
  * receive it". Read after the call, so a sibling that moved meanwhile counts.
@@ -1212,7 +1214,7 @@ async function orderAnswerUncertain(
       `SELECT 1 AS uncertain FROM outbox_events
        WHERE event_type = 'dispatch' AND tenant_id = ? AND aggregate_id = ? AND outbox_id <> ?
          AND (unknown_since IS NOT NULL OR status = 'unknown'
-              OR (submitted_at IS NOT NULL AND NOT (status = 'done' AND result_ref IS NOT NULL)))
+              OR (submitted_at IS NOT NULL AND status IN ('claimed', 'submitting')))
        LIMIT 1`,
     )
     .bind(tenantId, orderId, outboxId)

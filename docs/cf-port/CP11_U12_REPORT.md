@@ -220,3 +220,18 @@ Gate:
 - `npx tsc --noEmit` → clean.
 - `npx vitest run test/dispatch-order-unit.test.ts test/dispatch.test.ts test/prodigi-client.test.ts` → `Test Files  3 passed (3)`, `Tests  141 passed (141)`.
 - Whole `npx vitest run` → `Test Files  140 passed (140)`, `Tests  5083 passed (5083)`.
+
+## Codex round 2 (on d6440a06)
+
+**P2 — a confirmed refusal is not uncertainty.** `orderAnswerUncertain` counted a sibling that was `failed` with `submitted_at` set as a lost answer. A sibling rejected definitively by the printer therefore made a second definitive rejection be held `unknown` instead of failing with its alert. The predicate is now:
+
+`unknown_since IS NOT NULL OR status = 'unknown' OR (submitted_at IS NOT NULL AND status IN ('claimed', 'submitting'))`
+
+A `failed` row with no lost-answer history and a `done` row are knowledge, never uncertainty. The round-1 case (A's answer lost, then B refused → B held `unknown`) still holds.
+
+New test in `test/dispatch-order-unit.test.ts`: "both sibling submissions explicitly REJECTED → both rows failed with their alerts, nothing held unknown". Both rows end `failed`, `rejected_recipient.name`, `unknown_since` NULL, both lines `failed`, and each row has exactly one `dispatch_failed` alert.
+
+Gate:
+- `npx tsc --noEmit` → clean.
+- The three dispatch files → `Test Files  3 passed (3)`, `Tests  142 passed (142)`.
+- Whole `npx vitest run` → `Test Files  141 passed (141)`, `Tests  5115 passed (5115)` (U3's work in the same tree included).

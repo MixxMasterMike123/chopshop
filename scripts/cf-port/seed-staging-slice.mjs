@@ -884,14 +884,19 @@ async function ensureArtwork() {
 
 async function ensureProduct(artworkId) {
   step("product, mapping, quote, publish, approval");
-  const sku = `SLICE-TEE-${TENANT_ID.replace(/^slice-/, "").toUpperCase()}`;
+  // A second printer on one tenant gets its OWN product (sku/name suffixed), never the other's.
+  const sku = `SLICE-TEE-${TENANT_ID.replace(/^slice-/, "").toUpperCase()}${PRODIGI ? "-PRODIGI" : ""}`;
   const mappings = expectStatus(
     await api("GET", "/v1/admin/pod/mappings", { session: true, shop: true }),
     [200],
     "list mappings",
   );
   const existing = (mappings.json.mappings ?? []).find(
-    (mapping) => mapping.artworkId === artworkId && mapping.status === "active",
+    (mapping) =>
+      mapping.artworkId === artworkId &&
+      mapping.status === "active" &&
+      mapping.printerId === PRINTER_ID &&
+      SLICE_SKUS.includes(mapping.sku),
   );
   let productId = existing?.productId ?? process.env.SLICE_PRODUCT_ID ?? null;
 
@@ -902,7 +907,7 @@ async function ensureProduct(artworkId) {
         allowShipping: true,
         currency: "SEK",
         description: "CP2 vertical slice — tryckt på beställning (staging).",
-        name: `Slice-tröja ${TENANT_ID.replace(/^slice-/, "")}`,
+        name: `Slice-tröja ${TENANT_ID.replace(/^slice-/, "")}${PRODIGI ? " (Prodigi)" : ""}`,
         priceMinor: PRICE_MINOR,
         sku,
       },

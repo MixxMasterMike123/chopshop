@@ -288,6 +288,22 @@ describe("one Prodigi order per order (D4)", () => {
     expect(await outboxRow(first)).toMatchObject({ last_error: "rejected_items_0_.sku", status: "failed" });
   });
 
+  it("Codex round 2: both sibling submissions explicitly REJECTED → both rows failed with their alerts, nothing held unknown", async () => {
+    const order = await prodigiOrder(TWO_LINES);
+    const [first, second] = order.dispatchIds as [string, string];
+    const fetcher = async () =>
+      Response.json({ failures: { "recipient.name": [] }, outcome: "ValidationFailed" }, { status: 400 });
+    const target = prodigiEnv(fetcher).env;
+
+    expect(await run(target, first)).toEqual({ kind: "ran", outcome: { kind: "failed" } });
+    expect(await run(target, second)).toEqual({ kind: "ran", outcome: { kind: "failed" } });
+    for (const [id, lineNo] of [[first, 1], [second, 2]] as const) {
+      expect(await outboxRow(id)).toMatchObject({ last_error: "rejected_recipient.name", status: "failed", unknown_since: null });
+      expect((await lineRow(order.orderId, lineNo)).dispatch_state).toBe("failed");
+      expect((await alertsFor(id)).map((alert) => alert.kind)).toEqual(["dispatch_failed"]);
+    }
+  });
+
   it("Codex P3: an invalid SKU key fails ITS line; the good line waits, then goes alone", async () => {
     const order = await prodigiOrder([{ sku: KEY_TEE }, { sku: "GLOBAL-HOOD-GIL-18500" }]);
     const [first, second] = order.dispatchIds as [string, string];
