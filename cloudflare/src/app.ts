@@ -472,6 +472,9 @@ import {
   PLATFORM_PRINT_JOB_STATUS_ROUTE,
 } from "./routes/print-jobs-platform";
 // CP6-IMPORTS-P — end
+// CP11-IMPORTS-U3 — start
+import { handleProdigiWebhookRoute, PRODIGI_WEBHOOK_PATH } from "./dispatch/prodigi-intake";
+// CP11-IMPORTS-U3 — end
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -2670,6 +2673,18 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.all(STRIPE_WEBHOOK_PATH, (c) =>
     handleStripeWebhookRoute(c.env, c.req.raw),
   );
+
+  // CP11-ROUTES-U3 — start
+  // Prodigi's order callbacks (src/dispatch/prodigi-intake.ts). Like the Stripe
+  // webhook: platform-level (one callback URL for every shop's orders), an
+  // exact path, not storefront(...). POST only; every other method falls
+  // through to the opaque 404, and so does every request while the Prodigi
+  // gate is off.
+  app.all(
+    PRODIGI_WEBHOOK_PATH,
+    onMethods(["POST"], (c) => handleProdigiWebhookRoute(c.env, c.req.raw)),
+  );
+  // CP11-ROUTES-U3 — end
 
   app.all(
     CHECKOUT_PATH,

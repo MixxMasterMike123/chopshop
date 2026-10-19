@@ -18,7 +18,8 @@ import {
  * one Prodigi order carries every dispatchable line of one order of ours
  * (shipping is charged per Prodigi order). The dispatcher assembles that job
  * (dispatch-effect.ts runOrderUnit); this module only gates, sends and
- * classifies.
+ * classifies — and, for the webhook intake (unit U3, prodigi-intake.ts),
+ * reads an order back (readProdigiOrder) under the same gate and transport.
  *
  * Nothing here logs, and no result carries the address, the key or the body:
  * a transport failure is `unknown` "network", whatever its message said (the
@@ -154,4 +155,134 @@ export function createProdigiClient(env: Env, config: ProdigiSubmitConfig): Prin
     },
     unit: "order",
   };
+}
+
+// ── the order read-back (CP11 unit U3) ──────────────────────────────────────
+
+/**
+ * A Prodigi order id, as the intake accepts it from a callback and sends it
+ * back in the read's path: `ord_` and 1–64 ASCII letters/digits (U3 rule 2).
+ * The path segment is therefore never anything but those characters.
+ */
+export const PRODIGI_ORDER_REF_PATTERN = /^ord_[A-Za-z0-9]{1,64}$/;
+
+/**
+ * The most of a read-back answer we buffer. An order with a few items and
+ * shipments is a few kilobytes; the cap only bounds what a misbehaving
+ * upstream could make the Worker hold.
+ */
+export const PRODIGI_READ_MAX_BYTES = 1_048_576;
+
+/**
+ * What a read-back came to:
+ *   ok         — 200 with an `order` object whose `id` is the one asked for;
+ *   not_found  — 404 (or 400: Prodigi does not know the id under OUR key —
+ *                a forged callback, or an order of another account);
+ *   failed     — anything else: a network error or timeout, a redirect (never
+ *                followed), 401/403 (our key), 408/429/5xx, a 200 that is not
+ *                JSON, over the cap, or names another order. The caller asks
+ *                Prodigi to retry; nothing was learned.
+ * Never carries the key, the URL or the body of a failure.
+ */
+export type ProdigiOrderRead =
+  | { order: Record<string, unknown>; status: "ok" }
+  | { status: "failed" }
+  | { status: "not_found" };
+
+async function readJsonWithin(response: Response, maxBytes: number): Promise<unknown> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && Number(declared) > maxBytes) {
+    await response.body?.cancel();
+    return undefined;
+  }
+  if (response.body === null) {
+    return undefined;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `GET <origin>/v4.0/orders/{id}` with OUR key — the only source of truth the
+ * webhook intake (prodigi-intake.ts) acts on; a callback's own payload is
+ * never read for state. Same transport as the submission: the
+ * PRODIGI_FETCH_OVERRIDE seam, the gate's config (so the pairing of host and
+ * key holds for reads as well), no redirect followed, a 30-second timeout.
+ */
+export async function readProdigiOrder(
+  env: Env,
+  config: ProdigiSubmitConfig,
+  prodigiOrderId: string,
+): Promise<ProdigiOrderRead> {
+  if (!PRODIGI_ORDER_REF_PATTERN.test(prodigiOrderId)) {
+    return { status: "not_found" };
+  }
+  const send = seamFetch(env, PRODIGI_FETCH_OVERRIDE);
+  let response: Response;
+  try {
+    response = await send(
+      new Request(`${config.origin}${PRODIGI_ORDERS_PATH}/${prodigiOrderId}`, {
+        headers: {
+          accept: "application/json",
+          [PRODIGI_API_KEY_HEADER]: config.token,
+        },
+        method: "GET",
+        redirect: "manual",
+        signal: AbortSignal.timeout(PRINTER_SUBMIT_TIMEOUT_MS),
+      }),
+    );
+  } catch {
+    return { status: "failed" };
+  }
+  if (response.status === 404 || response.status === 400) {
+    await response.body?.cancel();
+    return { status: "not_found" };
+  }
+  if (response.status !== 200) {
+    await response.body?.cancel();
+    return { status: "failed" };
+  }
+  let answer: unknown;
+  try {
+    answer = await readJsonWithin(response, PRODIGI_READ_MAX_BYTES);
+  } catch {
+    return { status: "failed" };
+  }
+  const order =
+    typeof answer === "object" && answer !== null && !Array.isArray(answer)
+      ? (answer as Record<string, unknown>).order
+      : undefined;
+  if (
+    typeof order !== "object" ||
+    order === null ||
+    Array.isArray(order) ||
+    (order as Record<string, unknown>).id !== prodigiOrderId
+  ) {
+    return { status: "failed" };
+  }
+  return { order: order as Record<string, unknown>, status: "ok" };
 }
