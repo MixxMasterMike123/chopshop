@@ -78,6 +78,37 @@ export function deliveryOf(api) {
 }
 
 /**
+ * The delivery restriction a cart line keeps, from a product either in the
+ * page's shape (`delivery`, toPageProduct) or as the public read answers it
+ * (GET /v1/products/:id: `allowShipping` / `allowPickup` / `shipsTo`).
+ * CP11 U7 (Codex P2): the cart's reconcile refreshes a stored line with it,
+ * so a cart saved before a restriction existed learns it before checkout.
+ */
+export function cartDeliveryOf(product) {
+  const delivery = product?.delivery && typeof product.delivery === 'object'
+    ? {
+        shipping: product.delivery.shipping !== false,
+        pickup: product.delivery.pickup !== false,
+        ...(Array.isArray(product.delivery.shipsTo) ? { shipsTo: product.delivery.shipsTo } : {}),
+      }
+    : deliveryOf(product ?? {});
+  if (Array.isArray(delivery.shipsTo)) {
+    delivery.shipsTo = delivery.shipsTo.filter((code) => typeof code === 'string');
+  }
+  return delivery;
+}
+
+/** Whether two cart delivery restrictions say the same (shipsTo compared as a list). */
+export function sameDelivery(a, b) {
+  const listOf = (delivery) => (Array.isArray(delivery?.shipsTo) ? delivery.shipsTo.join(',') : null);
+  return (
+    (a?.shipping !== false) === (b?.shipping !== false) &&
+    (a?.pickup !== false) === (b?.pickup !== false) &&
+    listOf(a) === listOf(b)
+  );
+}
+
+/**
  * One product, from a summary (a list, a collection) or a detail (the product
  * page). `options.apiUrl` turns an API path into an address (the client's
  * `apiUrl`); it is needed only for the print previews of a POD product.

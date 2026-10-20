@@ -23,6 +23,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { STORE } from '../../config/store';
+import { cartDeliveryOf, sameDelivery } from '../adapters/products.js';
 import { previewDiscountCode } from '../../api/discountCodes.js';
 import {
   DISCOUNT_MESSAGES,
@@ -358,13 +359,9 @@ export const CartProvider = ({ children }) => {
       sku: variant?.sku || product.sku,
       weight: product.weight,
       shipping: product.shipping,
-      delivery: {
-        shipping: product.delivery?.shipping !== false,
-        pickup: product.delivery?.pickup !== false,
-        // CP11 U7: the countries a POD product's printer ships to (the API's
-        // `shipsTo`); absent = no restriction.
-        ...(Array.isArray(product.delivery?.shipsTo) ? { shipsTo: product.delivery.shipsTo } : {}),
-      },
+      // Shipping, pickup and (CP11 U7) the countries a POD product's printer
+      // ships to (the API's `shipsTo`; absent = no restriction).
+      delivery: cartDeliveryOf(product),
       isPersonalized: product.isPersonalized === true,
       quantity: qty,
     });
@@ -437,12 +434,17 @@ export const CartProvider = ({ children }) => {
         price: livePrice > 0 ? livePrice : item.price,
         label: row ? row.label || item.label : item.label,
         image: imageOf(product, row) || item.image,
+        // CP11 U7 (Codex P2): the live product's delivery restriction, so a
+        // cart saved before it existed (no shipsTo, pickup still allowed)
+        // never offers what checkout now refuses.
+        delivery: cartDeliveryOf(product),
       };
       if (
         next.price !== item.price ||
         next.label !== item.label ||
         next.image !== item.image ||
-        next.variantId !== item.variantId
+        next.variantId !== item.variantId ||
+        !sameDelivery(next.delivery, item.delivery)
       ) {
         mutated = true;
       }

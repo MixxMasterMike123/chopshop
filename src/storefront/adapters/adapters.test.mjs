@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { skuOfProductPath, toPageProduct, toPageProducts } from './products.js';
+import { cartDeliveryOf, sameDelivery, skuOfProductPath, toPageProduct, toPageProducts } from './products.js';
 import { toPageCollection } from './collections.js';
 import { toFooterPages, toPagePage } from './pages.js';
 import { toPageLegal, toPagePlatformTerms } from './legal.js';
@@ -444,5 +444,31 @@ describe('the storefront\'s addresses (replacement productUrls), shared host', (
   it('an address that names no shop links to the site\'s root', () => {
     globalThis.location = { pathname: '/admin/x' };
     assert.equal(getCountryAwareUrl('cart'), '/');
+  });
+});
+
+describe('the cart line\'s delivery restriction (CP11 U7, Codex P2: reconcile refreshes it)', () => {
+  it('reads the public read\'s flags and countries, or the page shape, the same way', () => {
+    assert.deepEqual(cartDeliveryOf({ allowPickup: false, allowShipping: true, shipsTo: ['SE'] }), {
+      shipping: true, pickup: false, shipsTo: ['SE'],
+    });
+    assert.deepEqual(cartDeliveryOf({ delivery: { shipping: true, pickup: false, shipsTo: ['SE'] } }), {
+      shipping: true, pickup: false, shipsTo: ['SE'],
+    });
+    assert.deepEqual(cartDeliveryOf({ allowShipping: true }), { shipping: true, pickup: true });
+    assert.deepEqual(cartDeliveryOf(toPageProduct({ ...DETAIL, shipsTo: ['SE'] })), {
+      shipping: true, pickup: false, shipsTo: ['SE'],
+    });
+  });
+
+  it('a line saved before the restriction (pickup allowed, no shipsTo) differs from the live product, so reconcile updates it', () => {
+    const saved = { shipping: true, pickup: true };
+    const live = cartDeliveryOf({ allowPickup: false, allowShipping: true, shipsTo: ['SE'] });
+    assert.equal(sameDelivery(saved, live), false);
+    assert.equal(sameDelivery({ shipping: true, pickup: false }, live), false);
+    assert.equal(sameDelivery(live, cartDeliveryOf({ allowPickup: false, allowShipping: true, shipsTo: ['SE'] })), true);
+    assert.equal(sameDelivery(saved, cartDeliveryOf({})), true);
+    // An older saved line without `delivery` at all reads as unrestricted.
+    assert.equal(sameDelivery(undefined, cartDeliveryOf({})), true);
   });
 });

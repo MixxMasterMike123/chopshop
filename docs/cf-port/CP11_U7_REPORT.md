@@ -102,3 +102,22 @@ None. No config, no secret, no migration. The reviewer should run `check-admin-b
 - The tenant printer view does not expose `requiredSlots`, so the studio cannot warn before publish.
 - The importer (`scripts/`) could emit the apparel `requiredSlots` and `shipsTo`. The defaults cover them in the meantime.
 - `applyCatalog` reads the current `shipsTo` outside `editPrinter`'s revision fence. A concurrent PATCH in that window could be lost (minor).
+
+## Codex round 1 (on ccf6babc): P2, a saved cart keeps its old delivery restriction
+
+**The problem.** A cart persisted before U7 has no `delivery.shipsTo` and may still allow pickup. `reconcileCart` (`src/storefront/providers/Cart.jsx`) refreshed only price, label, image and variant id, so a returning buyer was offered pickup or countries that checkout now refuses.
+
+**The fix.**
+- Two pure helpers in `src/storefront/adapters/products.js`:
+  - `cartDeliveryOf(product)` reads the restriction from either shape: the public read (`allowShipping` / `allowPickup` / `shipsTo`) or the page shape (`delivery`).
+  - `sameDelivery(a, b)` compares two restrictions.
+- `reconcileCart` now refreshes each surviving line's `delivery` from the fresh product. A change in delivery alone now counts as a change, so the cart is written and `cartAllowsPickup` / `cartShipsTo` recompute.
+- `addToCart` uses the same helper.
+- There is no reconcile notice for updated lines: only removed lines are toasted, as before.
+
+**Tests.**
+- `adapters.test.mjs` adds 2 tests: both shapes are read alike, and a pre-U7 line (pickup allowed, no `shipsTo`) differs from the live product.
+- `node --test src/storefront/adapters/*.test.mjs` → 103 pass, 0 fail.
+- `node cloudflare/web/check-storefront-build.mjs` was run with the main tree's `node_modules` symlinked in, and the link removed afterwards. Result: "storefront build: 11 files (7 text) checked, no Firebase code, every file servable."
+
+Only `src/storefront/**` was touched. `cloudflare/web/dist` is gitignored.
