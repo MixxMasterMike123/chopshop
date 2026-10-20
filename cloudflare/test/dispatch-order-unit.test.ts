@@ -438,39 +438,43 @@ describe("never two calls at once (D4.3)", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * The container's part for ONE queued canvas job (bytes stand in for pixels).
+ * `seen` (CP12) receives each lease's frozen spec.
+ */
+async function renderOne(target: Env, seen?: unknown[]): Promise<boolean> {
+  const lease = await acquireCanvasJob(target, env.DB, Date.now());
+  if (lease === null) {
+    return false;
+  }
+  seen?.push(lease.spec);
+  const bytes = new TextEncoder().encode(`canvas png of ${lease.jobId}`);
+  const key = `${lease.outputPrefix}canvas.png`;
+  await env.PRIVATE_BUCKET.put(key, bytes);
+  expect(
+    await completeCanvasJob(
+      target,
+      env.DB,
+      lease.jobId,
+      {
+        attempt: lease.attempt,
+        leaseToken: lease.leaseToken,
+        ok: true,
+        outputs: { canvasPng: { bytes: bytes.length, key, sha256: await sha256Hex(bytes) } },
+      },
+      Date.now(),
+    ),
+  ).toEqual({ status: "completed" });
+  return true;
+}
+
 describe("a sibling's canvas holds the row (D4.1, CP6-PS2's park on the order)", () => {
   const CANVAS = { frameMm: { h: 490, w: 390 }, frameProvisional: false, sourcePx: { h: 4_134, w: 2_953 } };
-
-  async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
-
-  /** The container's part for ONE queued canvas job (bytes stand in for pixels). */
-  async function renderOne(target: Env): Promise<boolean> {
-    const lease = await acquireCanvasJob(target, env.DB, Date.now());
-    if (lease === null) {
-      return false;
-    }
-    const bytes = new TextEncoder().encode(`canvas png of ${lease.jobId}`);
-    const key = `${lease.outputPrefix}canvas.png`;
-    await env.PRIVATE_BUCKET.put(key, bytes);
-    expect(
-      await completeCanvasJob(
-        target,
-        env.DB,
-        lease.jobId,
-        {
-          attempt: lease.attempt,
-          leaseToken: lease.leaseToken,
-          ok: true,
-          outputs: { canvasPng: { bytes: bytes.length, key, sha256: await sha256Hex(bytes) } },
-        },
-        Date.now(),
-      ),
-    ).toEqual({ status: "completed" });
-    return true;
-  }
 
   it("parks on ANY line's pending canvas; the backstop does not wake it early; the last canvas wakes it; one POST with the canvases", async () => {
     const order = await prodigiOrder([
@@ -518,6 +522,92 @@ describe("a sibling's canvas holds the row (D4.1, CP6-PS2's park on the order)",
     expect(urls.every((path) => path.endsWith("-front.png") && path.includes(`/print/orders/${order.orderId}/`))).toBe(true);
     expect(await run(quiet.env, second)).toEqual({ kind: "ran", outcome: { kind: "done" } });
     expect(prodigi.calls).toBe(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("CP12: a poster line (a flat model) through the order unit", () => {
+  const POSTER = "GLOBAL-BFP-12X16.white-frame.12x16";
+  const ATTRIBUTES = {
+    color: "white",
+    frame: "Budget",
+    glaze: "Acrylic / Perspex",
+    mount: "No mount / Mat",
+    paperType: "Silk",
+    substrateWeight: "150gsm",
+  };
+  const FLAT_CANVAS = {
+    flat: { background: "#ffffff", canvasPx: { h: 4_724, w: 3_543 }, fit: "contain" },
+    frameMm: { h: 400, offsetTopMm: 0, w: 300 },
+    frameProvisional: false,
+    sourcePx: { h: 3_600, w: 3_600 },
+  };
+
+  it("goes through its canvas even with the switch off, and reaches Prodigi as `default` with the fixed attributes only", async () => {
+    const order = await prodigiOrder([
+      {
+        printFiles: [{ canvas: FLAT_CANVAS, slot: "front" }],
+        printerItem: { attributes: ATTRIBUTES, kind: "flat", printArea: "default" },
+        sku: POSTER,
+      },
+      { printerItem: { attributes: { edge: "Zip" } }, sku: "GLOBAL-HOOD-GIL-18600.white.m" },
+    ]);
+    const [first, second] = order.dispatchIds as [string, string];
+    const prodigi = prodigiServer();
+    // The switch is OFF (the suite's default "false"): the tee-like line sends
+    // its artwork, the poster line still gets its canvas made first.
+    const quiet = prodigiEnv(prodigi.fetcher);
+
+    expect(await run(quiet.env, first)).toMatchObject({ outcome: { kind: "retry" } });
+    expect(await outboxRow(first)).toMatchObject({ next_attempt_at: CANVAS_HOLD_UNTIL_MS, status: "pending" });
+    const jobs = await env.DB.prepare("SELECT line_no, slot, state FROM print_canvas_jobs WHERE order_id = ? ORDER BY line_no")
+      .bind(order.orderId)
+      .all<{ line_no: number; slot: string; state: string }>();
+    expect(jobs.results).toEqual([{ line_no: 1, slot: "front", state: "queued" }]);
+    expect(prodigi.calls).toBe(0);
+
+    const specs: unknown[] = [];
+    expect(await renderOne(quiet.env, specs)).toBe(true);
+    expect(specs).toEqual([
+      {
+        background: "#ffffff",
+        canvasPx: { h: 4_724, w: 3_543 },
+        dpi: 300,
+        fit: "contain",
+        motifPx: { h: 3_543, w: 3_543 },
+        offsetPx: { left: 0, top: 590 },
+        sourceCropPx: { h: 3_600, left: 0, top: 0, w: 3_600 },
+        sourcePx: { h: 3_600, w: 3_600 },
+        version: 1,
+      },
+    ]);
+
+    expect(await run(quiet.env, first)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(prodigi.calls).toBe(1);
+    const [poster, hoodie] = prodigi.bodies[0]!.items as Array<Record<string, unknown>>;
+    expect(poster).toMatchObject({ attributes: ATTRIBUTES, sizing: "fitPrintArea", sku: "GLOBAL-BFP-12X16" });
+    const posterAssets = poster!.assets as Array<{ printArea: string; url: string }>;
+    expect(posterAssets.map((asset) => asset.printArea)).toEqual(["default"]);
+    expect(decodeURIComponent(new URL(posterAssets[0]!.url).pathname)).toContain(`/print/orders/${order.orderId}/1-front.png`);
+    expect(hoodie).toMatchObject({
+      attributes: { color: "white", edge: "Zip", size: "m" },
+      sku: "GLOBAL-HOOD-GIL-18600",
+    });
+    expect((hoodie!.assets as Array<{ printArea: string }>).map((asset) => asset.printArea)).toEqual(["front"]);
+    expect(await run(quiet.env, second)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(prodigi.calls).toBe(1);
+  });
+
+  it("a frozen flat file it cannot read fails ITS line (production_line_invalid), never printed as a garment canvas", async () => {
+    const order = await prodigiOrder([
+      { printFiles: [{ canvas: { ...FLAT_CANVAS, flat: { ...FLAT_CANVAS.flat, fit: "stretch" } }, slot: "front" }], sku: POSTER },
+    ]);
+    const [only] = order.dispatchIds as [string];
+    const prodigi = prodigiServer();
+    const quiet = prodigiEnv(prodigi.fetcher);
+    expect(await run(quiet.env, only)).toMatchObject({ outcome: { kind: "failed" } });
+    expect(await outboxRow(only)).toMatchObject({ last_error: "production_line_invalid", status: "failed" });
+    expect(prodigi.calls).toBe(0);
   });
 });
 

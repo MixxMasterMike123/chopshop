@@ -39,13 +39,60 @@ export type PrintSlot = (typeof PRINT_SLOTS)[number];
 export interface PrintArea {
   h: number;
   offsetTopMm?: number;
+  /**
+   * CP12 (flat prints): the printer's EXACT pixel area for this slot (Prodigi's
+   * `printAreas.default` of a poster: 3543 × 4724 for 12×16"). The print canvas
+   * of a flat line is this box exactly (src/dispatch/print-canvas.ts
+   * flatCanvasSpec). Required on a flat model's `front`; optional (and unused)
+   * on a garment's areas. Stored only when given.
+   */
+  px?: { h: number; w: number };
   w: number;
 }
 
+/**
+ * CP12: the product kinds. A `garment` model (the default, `kind` absent) is a
+ * motif placed on a body; a `flat` model (posters) is a motif that IS the
+ * product: exactly one slot, `front`, whose `px` is the sheet at print
+ * resolution, and no colour/size from the SKU key on the printer's wire.
+ */
+export const PRINTER_MODEL_KINDS = ["garment", "flat"] as const;
+export type PrinterModelKind = (typeof PRINTER_MODEL_KINDS)[number];
+
+/** A fixed supplier attribute set (Prodigi `attributes`), ≤ MAX_FIXED_ATTRIBUTES entries. */
+export type FixedAttributes = Record<string, string>;
+
+export interface PrinterSkuEntry {
+  /**
+   * CP12 (the 18600 `edge`): attributes the printer needs for THIS SKU beyond
+   * what its key and its model give (Prodigi: `edge: "Zip"` for the white zip
+   * hoodie, `"Drawstring"` for the other colours). Fixed, never a buyer's
+   * choice; platform-only (never in a tenant view). Stored only when given.
+   */
+  attributes?: FixedAttributes;
+  label?: string;
+  model: string;
+}
+
 export interface PrinterModel {
+  /**
+   * CP12: the supplier's fixed attributes for every order of this model
+   * (Prodigi: a poster's frame, colour, glaze, mount, paper). Merged into each
+   * item's attributes on the wire (prodigi-wire.ts prodigiItemAttributes).
+   * PLATFORM-ONLY: never in a tenant view. Stored only when given.
+   */
+  attributes?: FixedAttributes;
   garment: string | null;
+  /** CP12: `flat` for a flat print (see PRINTER_MODEL_KINDS); absent = garment. */
+  kind?: "flat";
   name?: string;
   printAreasMm: Partial<Record<PrintSlot, PrintArea>>;
+  /**
+   * CP12: the supplier's name of the print area our `front` slot prints into
+   * (Prodigi: `default` for a poster or the tote; absent = `front`). Other
+   * slots keep their own name. PLATFORM-ONLY. Stored only when given.
+   */
+  prodigiPrintArea?: string;
   /**
    * CP3: the frames are a stand-in until the printer confirms them (Firebase
    * `provisionalAreas`). Stored only when true.
@@ -69,7 +116,7 @@ export interface PrinterCapabilities {
    * Stored only when given.
    */
   shipsTo?: string[];
-  skus: Record<string, { label?: string; model: string }>;
+  skus: Record<string, PrinterSkuEntry>;
 }
 
 export interface PrinterTierInput {
@@ -253,6 +300,15 @@ const GARMENT_MAX_LENGTH = 40;
 const COUNTRY_CODE_PATTERN = /^[A-Z]{2}$/;
 /** More than every ISO 3166-1 country; a bound, not a policy. */
 export const MAX_SHIPS_TO = 250;
+/** CP12: a fixed attribute set's bounds (Prodigi's posters use 6). */
+export const MAX_FIXED_ATTRIBUTES = 12;
+const ATTRIBUTE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
+const ATTRIBUTE_VALUE_MAX_LENGTH = 64;
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+/** CP12: a supplier print-area name (Prodigi: front, back, default). */
+const PRINT_AREA_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+/** CP12: the largest exact pixel area a model may name (a bound, not a policy). */
+export const MAX_AREA_PX = 20_000;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -301,18 +357,71 @@ export function isLabel(value: unknown): value is string {
 }
 
 export function parsePrintArea(value: unknown): PrintArea | null {
-  if (!isPlainObject(value) || !hasOnlyKeys(value, ["h", "offsetTopMm", "w"])) {
+  if (!isPlainObject(value) || !hasOnlyKeys(value, ["h", "offsetTopMm", "px", "w"])) {
     return null;
   }
   if (!isBoundedInt(value.w, 1, MAX_AREA_MM) || !isBoundedInt(value.h, 1, MAX_AREA_MM)) {
     return null;
   }
-  if (value.offsetTopMm === undefined) {
-    return { h: value.h, w: value.w };
+  if (value.offsetTopMm !== undefined && !isBoundedInt(value.offsetTopMm, 0, MAX_AREA_MM)) {
+    return null;
   }
-  return isBoundedInt(value.offsetTopMm, 0, MAX_AREA_MM)
-    ? { h: value.h, offsetTopMm: value.offsetTopMm, w: value.w }
-    : null;
+  let px: { h: number; w: number } | undefined;
+  if (value.px !== undefined) {
+    const raw = value.px;
+    if (
+      !isPlainObject(raw) ||
+      !hasOnlyKeys(raw, ["h", "w"]) ||
+      !isBoundedInt(raw.w, 1, MAX_AREA_PX) ||
+      !isBoundedInt(raw.h, 1, MAX_AREA_PX)
+    ) {
+      return null;
+    }
+    px = { h: raw.h, w: raw.w };
+  }
+  return {
+    h: value.h,
+    ...(value.offsetTopMm === undefined ? {} : { offsetTopMm: value.offsetTopMm as number }),
+    ...(px === undefined ? {} : { px }),
+    w: value.w,
+  };
+}
+
+/**
+ * CP12: a fixed attribute set — 1–MAX_FIXED_ATTRIBUTES entries, each key an
+ * identifier of ≤ 32 characters and each value a string of 1–64 characters
+ * with no control character. undefined when absent, null when malformed.
+ */
+export function parseFixedAttributes(value: unknown): FixedAttributes | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0 || entries.length > MAX_FIXED_ATTRIBUTES) {
+    return null;
+  }
+  const out: FixedAttributes = {};
+  for (const [key, entry] of entries) {
+    if (
+      !ATTRIBUTE_KEY_PATTERN.test(key) ||
+      typeof entry !== "string" ||
+      entry.length < 1 ||
+      entry.length > ATTRIBUTE_VALUE_MAX_LENGTH ||
+      CONTROL_CHARACTER.test(entry)
+    ) {
+      return null;
+    }
+    out[key] = entry;
+  }
+  return out;
+}
+
+/** CP12: a supplier print-area name (PRINT_AREA_NAME_PATTERN). */
+export function isPrintAreaName(value: unknown): value is string {
+  return typeof value === "string" && PRINT_AREA_NAME_PATTERN.test(value);
 }
 
 function parseLabel(value: unknown): string | undefined | null {
@@ -390,8 +499,28 @@ export function parsePrinterCapabilities(value: unknown): PrinterCapabilities | 
     if (
       !MODEL_KEY_PATTERN.test(key) ||
       !isPlainObject(model) ||
-      !hasOnlyKeys(model, ["garment", "name", "printAreasMm", "provisional", "requiredSlots"])
+      !hasOnlyKeys(model, [
+        "attributes",
+        "garment",
+        "kind",
+        "name",
+        "printAreasMm",
+        "prodigiPrintArea",
+        "provisional",
+        "requiredSlots",
+      ])
     ) {
+      return null;
+    }
+    if (model.kind !== undefined && !(PRINTER_MODEL_KINDS as readonly unknown[]).includes(model.kind)) {
+      return null;
+    }
+    const flat = model.kind === "flat";
+    const attributes = parseFixedAttributes(model.attributes);
+    if (attributes === null) {
+      return null;
+    }
+    if (model.prodigiPrintArea !== undefined && !isPrintAreaName(model.prodigiPrintArea)) {
       return null;
     }
     const garment = model.garment;
@@ -417,26 +546,50 @@ export function parsePrinterCapabilities(value: unknown): PrinterCapabilities | 
     if (requiredSlots === null) {
       return null;
     }
+    // CP12: a flat model prints ONE slot, `front`, into the printer's exact
+    // pixel area — never a stand-in, and requiring nothing but its front.
+    if (
+      flat &&
+      (Object.keys(areas).length !== 1 ||
+        areas.front?.px === undefined ||
+        model.provisional === true ||
+        (requiredSlots !== undefined && (requiredSlots.length !== 1 || requiredSlots[0] !== "front")))
+    ) {
+      return null;
+    }
     parsedModels[key] = {
+      ...(attributes === undefined ? {} : { attributes }),
       garment: garment as string | null,
+      ...(flat ? { kind: "flat" as const } : {}),
       ...(name === undefined ? {} : { name }),
       printAreasMm: areas,
+      ...(model.prodigiPrintArea === undefined ? {} : { prodigiPrintArea: model.prodigiPrintArea as string }),
       ...(model.provisional === true ? { provisional: true as const } : {}),
       ...(requiredSlots === undefined ? {} : { requiredSlots }),
     };
   }
 
-  const parsedSkus: Record<string, { label?: string; model: string }> = {};
+  const parsedSkus: Record<string, PrinterSkuEntry> = {};
   for (const key of skuKeys) {
     const entry = skus[key];
-    if (!SKU_PATTERN.test(key) || !isPlainObject(entry) || !hasOnlyKeys(entry, ["label", "model"])) {
+    if (!SKU_PATTERN.test(key) || !isPlainObject(entry) || !hasOnlyKeys(entry, ["attributes", "label", "model"])) {
       return null;
     }
     const label = parseLabel(entry.label);
-    if (label === null || typeof entry.model !== "string" || parsedModels[entry.model] === undefined) {
+    const attributes = parseFixedAttributes(entry.attributes);
+    if (
+      label === null ||
+      attributes === null ||
+      typeof entry.model !== "string" ||
+      parsedModels[entry.model] === undefined
+    ) {
       return null;
     }
-    parsedSkus[key] = label === undefined ? { model: entry.model } : { label, model: entry.model };
+    parsedSkus[key] = {
+      ...(attributes === undefined ? {} : { attributes }),
+      ...(label === undefined ? {} : { label }),
+      model: entry.model,
+    };
   }
 
   return {
@@ -684,6 +837,10 @@ export function slotFrame(
   if (own !== undefined) {
     return own;
   }
+  // CP12: a flat print has its one slot and nothing derived from it.
+  if (model.kind === "flat") {
+    return null;
+  }
   if (slot === "pocket") {
     const front = model.printAreasMm.front;
     return front === undefined
@@ -707,6 +864,118 @@ export function isStandInSku(capabilities: PrinterCapabilities, sku: string): bo
   return capabilities.models[capabilities.skus[sku]?.model ?? ""]?.provisional === true;
 }
 
+/**
+ * CP12: how a flat print's motif fills its sheet — the studio's choice, frozen
+ * per slot on the mapping. `contain`: the whole motif, centred, on
+ * `background`; `cover`: the sheet filled, the motif cropped at the edges
+ * (centred). A mapping slot without one is a garment's (no placement stored).
+ */
+export const FLAT_FITS = ["contain", "cover"] as const;
+export type FlatFit = (typeof FLAT_FITS)[number];
+export const DEFAULT_FLAT_FIT: FlatFit = "contain";
+/** The sheet's colour where a contained motif (or its transparency) leaves it bare. */
+export const DEFAULT_FLAT_BACKGROUND = "#ffffff";
+const FLAT_BACKGROUND_PATTERN = /^#[0-9a-f]{6}$/;
+
+export function isFlatFit(value: unknown): value is FlatFit {
+  return typeof value === "string" && (FLAT_FITS as readonly string[]).includes(value);
+}
+
+/** `#rrggbb`, lower case (the stored form; callers lower-case input first). */
+export function isFlatBackground(value: unknown): value is string {
+  return typeof value === "string" && FLAT_BACKGROUND_PATTERN.test(value);
+}
+
+/**
+ * CP12, THE flat resolution rule (docs/POD_PRINT_SPEC.md §2 applied per sheet
+ * size; D5: 300 dpi, Prodigi's own figure, which IS the sheet's `px`): the
+ * print master is never enlarged. `contain` scales by min(pw/sw, ph/sh), so
+ * the master must reach the sheet on ONE axis (its own aspect then fits
+ * inside); `cover` scales by max(…), so it must reach BOTH. Used by the
+ * mapping write, the publish gate, checkout and the canvas (the last guard).
+ */
+export function flatReachesPx(
+  sourcePx: { h: number; w: number },
+  areaPx: { h: number; w: number },
+  fit: FlatFit,
+): boolean {
+  return fit === "cover"
+    ? sourcePx.w >= areaPx.w && sourcePx.h >= areaPx.h
+    : sourcePx.w >= areaPx.w || sourcePx.h >= areaPx.h;
+}
+
+/** CP12: the model `sku` points at, or undefined. */
+export function modelOfSku(capabilities: PrinterCapabilities, sku: string): PrinterModel | undefined {
+  const entry = capabilities.skus[sku];
+  return entry === undefined ? undefined : capabilities.models[entry.model];
+}
+
+/**
+ * CP12: what a flat SKU prints into — its model's `front` pixel area — or
+ * null when `sku` is not a flat model's (a garment, or unknown).
+ */
+export function flatAreaPx(capabilities: PrinterCapabilities, sku: string): { h: number; w: number } | null {
+  const model = modelOfSku(capabilities, sku);
+  return model?.kind === "flat" ? (model.printAreasMm.front?.px ?? null) : null;
+}
+
+/**
+ * CP12: the supplier-side facts of an order line that are not in its SKU key
+ * (frozen into the checkout snapshot per line, read by the printer's wire):
+ *   kind        `flat` for a flat model (no colour/size from the key)
+ *   printArea   the supplier's name for our `front` slot (absent = `front`)
+ *   attributes  the model's fixed attributes, overlaid with the SKU's own
+ * undefined when there is none of the three — a garment line without extras
+ * freezes exactly what it froze before CP12.
+ */
+export interface PrinterItemFacts {
+  attributes?: FixedAttributes;
+  kind?: "flat";
+  printArea?: string;
+}
+
+export function printerItemFacts(capabilities: PrinterCapabilities, sku: string): PrinterItemFacts | undefined {
+  const entry = capabilities.skus[sku];
+  const model = entry === undefined ? undefined : capabilities.models[entry.model];
+  if (entry === undefined || model === undefined) {
+    return undefined;
+  }
+  const attributes = { ...model.attributes, ...entry.attributes };
+  const facts: PrinterItemFacts = {
+    ...(Object.keys(attributes).length === 0 ? {} : { attributes }),
+    ...(model.kind === "flat" ? { kind: "flat" as const } : {}),
+    ...(model.prodigiPrintArea === undefined ? {} : { printArea: model.prodigiPrintArea }),
+  };
+  return Object.keys(facts).length === 0 ? undefined : facts;
+}
+
+/**
+ * CP12: a frozen PrinterItemFacts read back (the dispatcher reads the
+ * snapshot): undefined when absent, null when malformed (the line is refused,
+ * never sent with a guess). The same caps as the capability document.
+ */
+export function parsePrinterItemFacts(value: unknown): PrinterItemFacts | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isPlainObject(value) || !hasOnlyKeys(value, ["attributes", "kind", "printArea"])) {
+    return null;
+  }
+  const attributes = parseFixedAttributes(value.attributes);
+  if (
+    attributes === null ||
+    (value.kind !== undefined && value.kind !== "flat") ||
+    (value.printArea !== undefined && !isPrintAreaName(value.printArea))
+  ) {
+    return null;
+  }
+  return {
+    ...(attributes === undefined ? {} : { attributes }),
+    ...(value.kind === "flat" ? { kind: "flat" as const } : {}),
+    ...(value.printArea === undefined ? {} : { printArea: value.printArea as string }),
+  };
+}
+
 // ── the tenant view (A13: capability only, built by ALLOWLIST) ─────────────
 
 /**
@@ -725,9 +994,14 @@ export interface TenantPrinterView {
 }
 
 function pickArea(area: PrintArea): PrintArea {
-  return area.offsetTopMm === undefined
-    ? { h: area.h, w: area.w }
-    : { h: area.h, offsetTopMm: area.offsetTopMm, w: area.w };
+  return {
+    h: area.h,
+    ...(area.offsetTopMm === undefined ? {} : { offsetTopMm: area.offsetTopMm }),
+    // CP12: the exact pixel area (a flat model's sheet): what the studio sizes
+    // and qualifies a motif against. A dimension, never a price.
+    ...(area.px === undefined ? {} : { px: { h: area.px.h, w: area.px.w } }),
+    w: area.w,
+  };
 }
 
 /**
@@ -746,14 +1020,18 @@ function tenantPrinterView(printer: Printer): TenantPrinterView {
         areas[slot] = pickArea(area);
       }
     }
+    // CP12: `kind` (flat prints) is capability; the model's `attributes` and
+    // `prodigiPrintArea` are the supplier's wire and never leave the platform.
     models[key] = {
       garment: model.garment,
+      ...(model.kind === "flat" ? { kind: "flat" as const } : {}),
       ...(model.name === undefined ? {} : { name: model.name }),
       printAreasMm: areas,
       ...(model.provisional === true ? { provisional: true as const } : {}),
     };
   }
-  const skus: Record<string, { label?: string; model: string }> = {};
+  // A SKU's `attributes` (CP12) are not picked: label and model only.
+  const skus: Record<string, PrinterSkuEntry> = {};
   const offered = new Set<string>();
   for (const [key, entry] of Object.entries(printer.capabilities.skus)) {
     skus[key] = entry.label === undefined ? { model: entry.model } : { label: entry.label, model: entry.model };

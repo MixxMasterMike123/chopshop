@@ -1046,7 +1046,10 @@ export interface CheckoutOptions {
  *
  * CP6-PS2 added `frameMm` ({ w, h, offsetTopMm? }, the printer's frame for the
  * slot), `frameProvisional` and `sourcePx` ({ w, h }, the artwork's pixels) to
- * each print file. They are production facts for the print canvas
+ * each print file. CP12 adds, only where they apply, `flat` ({ canvasPx,
+ * fit, background }) to a flat print's file and `printerItem` ({ kind?,
+ * printArea?, attributes? }) to a line whose printer needs more than its SKU
+ * key (pod-mappings.ts ProductionLine.printerItem). They are production facts for the print canvas
  * (src/dispatch/print-canvas.ts) and touch no amount: every money field below
  * is computed exactly as before.
  *
@@ -1143,7 +1146,20 @@ async function freezeProductionSnapshot(
             : { w: file.frameMm.w, h: file.frameMm.h, offsetTopMm: file.frameMm.offsetTopMm },
         frameProvisional: file.frameProvisional,
         ...(file.sourcePx === undefined ? {} : { sourcePx: { w: file.sourcePx.w, h: file.sourcePx.h } }),
+        // CP12: a flat print's sheet pixels, fit and background (the canvas's input).
+        ...(file.flat === undefined
+          ? {}
+          : {
+              flat: {
+                background: file.flat.background,
+                canvasPx: { w: file.flat.canvasPx.w, h: file.flat.canvasPx.h },
+                fit: file.flat.fit,
+              },
+            }),
       })),
+      // CP12: the supplier facts beyond the key (a flat model, the front's
+      // print-area name, fixed attributes) — what the printer's wire sends.
+      ...(production.printerItem === undefined ? {} : { printerItem: production.printerItem }),
       productionCostMinor: production.productionCostMinor,
       withholdMinor: withholdMinorFor(production.productionCostMinor),
     });

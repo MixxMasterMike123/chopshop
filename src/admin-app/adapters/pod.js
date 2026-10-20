@@ -415,7 +415,10 @@ const MAPPING_REFUSALS = {
   printer_unavailable: 'Tryckeriet kan inte användas av butiken just nu. Välj ett annat tryckeri eller kontakta plattformen.',
   sku_unavailable: 'Artikeln går inte att beställa hos tryckeriet just nu. Välj en annan artikel.',
   slot_not_printable: 'Tryckeriet kan inte trycka på den placeringen för den här artikeln.',
-  resolution_too_low: 'Originalet har för låg upplösning för den placeringen på den här artikeln.',
+  // CP12: also a flat print whose original does not reach the sheet under its fit (cover needs both sides).
+  resolution_too_low: 'Originalet har för låg upplösning för den placeringen (eller arkstorleken) på den här artikeln.',
+  // CP12: a placement (fit/background) is only for flat prints.
+  placement_unsupported: 'Den här artikeln är ett plagg: motivets utfyllnad och bakgrund kan bara väljas för tryck (affischer). Spara kopplingen utan dem.',
   slot_taken: 'Placeringen har redan ett original för den här produkten (eller varianten). Ta bort den kopplingen först.',
   sku_mismatch: 'Produkten (eller varianten) är redan kopplad till en annan artikel eller ett annat tryckeri. Den trycks på ett enda plagg: ta bort de andra kopplingarna först.',
   variant_mismatch: 'Originalet är redan kopplat till samma artikel på en annan nivå av produkten (hela produkten eller en variant). Ta bort den kopplingen först.',

@@ -59,6 +59,11 @@ import { STORE } from '../../../config/store';
 // differently (STUDIO_FLAGS, STUDIO_TEXT). The studio itself imports no
 // Firebase; PublishPanel stays presentational.
 import { STUDIO_FLAGS, STUDIO_TEXT, lockedPlacement, publishDesign, updateProductFromDesign, useStudioEnv } from './studioData';
+// CP12 "Nytt tryck" (flat prints): its own five steps, loaded on demand, where
+// the build offers them (STUDIO_FLAGS.flatPrints) and a printer makes them.
+import LazyPart from './LazyPart';
+import StudioKindSwitch from './flat/StudioKindSwitch';
+const FlatStudio = React.lazy(() => import('./flat/FlatStudio'));
 
 // Validation is ADVISORY (podValidation's contract: "WARN/FAIL never blocks — it
 // guides the seller; the printer decides"). The studio therefore selects ANY
@@ -1648,4 +1653,52 @@ const DesignStudio = ({ artwork = [], loading = false, shopId = null, products =
   );
 };
 
-export default DesignStudio;
+// THE ENTRY (CP12): "Nytt plagg" (the studio above, unchanged) or "Nytt tryck"
+// (flat/FlatStudio.jsx). Both stay mounted once opened (hidden, not
+// unmounted), so a trip to the other kind loses no design. The switch shows
+// only where a printer offers a flat print; a build without them
+// (STUDIO_FLAGS.flatPrints false) renders the garment studio alone, as before.
+const StudioEntry = (props) => {
+  const [kind, setKind] = useState('garment');
+  const [flatOffered, setFlatOffered] = useState(false);
+  const [flatOpened, setFlatOpened] = useState(false);
+  const shopId = props.shopId ?? null;
+  useEffect(() => {
+    if (!STUDIO_FLAGS.flatPrints) return undefined;
+    let alive = true;
+    loadPrintRouting()
+      .then((routed) => { if (alive) setFlatOffered((routed?.flat ?? []).length > 0); })
+      .catch(() => { if (alive) setFlatOffered(false); }); // the garment studio says the read failed
+    return () => { alive = false; };
+  }, [shopId]);
+  if (!STUDIO_FLAGS.flatPrints) return <DesignStudio {...props} />;
+  const showFlat = flatOffered && kind === 'flat';
+  const choose = (next) => {
+    setKind(next);
+    if (next === 'flat') setFlatOpened(true);
+  };
+  return (
+    <div className="flex flex-col gap-4">
+      {flatOffered && <StudioKindSwitch kind={kind} onChange={choose} />}
+      <div className={showFlat ? 'hidden' : ''}>
+        <DesignStudio {...props} />
+      </div>
+      {flatOffered && flatOpened && (
+        <div className={showFlat ? '' : 'hidden'}>
+          <LazyPart fallback={<p className="text-[13px] text-admin-text-muted">Laddar…</p>}>
+            <FlatStudio
+              artwork={props.artwork}
+              loading={props.loading}
+              shopId={shopId}
+              products={props.products}
+              onChanged={props.onChanged}
+              onOpenArtworkLibrary={props.onOpenArtworkLibrary}
+            />
+          </LazyPart>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default StudioEntry;

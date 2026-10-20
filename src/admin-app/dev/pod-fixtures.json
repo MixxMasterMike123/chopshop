@@ -1,5 +1,5 @@
 {
- "_note": "INVENTED DATA ONLY (CP5 unit FM): print profiles, one invented printer with its articles and frames, and each shop's artwork and mappings for the dev API (pod-dev.mjs). `hiddenPrices` never leaves pod-dev.mjs: the routes answer only inkopMinor and priceFloorMinor, as the Worker does.",
+ "_note": "INVENTED DATA ONLY (CP5 unit FM): print profiles, one invented printer with its articles and frames, and each shop's artwork and mappings for the dev API (pod-dev.mjs). `hiddenPrices` never leaves pod-dev.mjs: the routes answer only inkopMinor and priceFloorMinor, as the Worker does. CP12 (F3): a second printer, dev-prints, makes framed posters (flat models: kind \"flat\", one front area in mm with its exact px), four sizes in one finish.",
  "profiles": [
   {
    "profileId": "apparel_dtg",
@@ -207,6 +207,116 @@
       "front": 4000,
       "back": 4000,
       "pocket": 2000
+     }
+    }
+   }
+  },
+  {
+   "printerId": "dev-prints",
+   "name": "Testtryckeriet affischer",
+   "status": "active",
+   "currency": "SEK",
+   "capabilities": {
+    "models": {
+     "poster-11x14": {
+      "garment": "poster",
+      "kind": "flat",
+      "name": "Ramad affisch 11x14",
+      "printAreasMm": {
+       "front": {
+        "w": 280,
+        "h": 355,
+        "px": {
+         "w": 3307,
+         "h": 4192
+        }
+       }
+      }
+     },
+     "poster-12x16": {
+      "garment": "poster",
+      "kind": "flat",
+      "name": "Ramad affisch 12x16",
+      "printAreasMm": {
+       "front": {
+        "w": 300,
+        "h": 400,
+        "px": {
+         "w": 3543,
+         "h": 4724
+        }
+       }
+      }
+     },
+     "poster-16x20": {
+      "garment": "poster",
+      "kind": "flat",
+      "name": "Ramad affisch 16x20",
+      "printAreasMm": {
+       "front": {
+        "w": 400,
+        "h": 500,
+        "px": {
+         "w": 4724,
+         "h": 5905
+        }
+       }
+      }
+     },
+     "poster-18x24": {
+      "garment": "poster",
+      "kind": "flat",
+      "name": "Ramad affisch 18x24",
+      "printAreasMm": {
+       "front": {
+        "w": 450,
+        "h": 600,
+        "px": {
+         "w": 5314,
+         "h": 7086
+        }
+       }
+      }
+     }
+    },
+    "skus": {
+     "DEV-BFP-11X14.white-frame.11x14": {
+      "model": "poster-11x14"
+     },
+     "DEV-BFP-12X16.white-frame.12x16": {
+      "model": "poster-12x16"
+     },
+     "DEV-BFP-16X20.white-frame.16x20": {
+      "model": "poster-16x20"
+     },
+     "DEV-BFP-18X24.white-frame.18x24": {
+      "model": "poster-18x24"
+     }
+    }
+   },
+   "hiddenPrices": {
+    "DEV-BFP-11X14.white-frame.11x14": {
+     "blank": 19000,
+     "slots": {
+      "front": 0
+     }
+    },
+    "DEV-BFP-12X16.white-frame.12x16": {
+     "blank": 21000,
+     "slots": {
+      "front": 0
+     }
+    },
+    "DEV-BFP-16X20.white-frame.16x20": {
+     "blank": 26500,
+     "slots": {
+      "front": 0
+     }
+    },
+    "DEV-BFP-18X24.white-frame.18x24": {
+     "blank": 31000,
+     "slots": {
+      "front": 0
      }
     }
    }

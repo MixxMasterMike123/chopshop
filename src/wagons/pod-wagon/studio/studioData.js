@@ -40,7 +40,14 @@ export const STUDIO_FLAGS = Object.freeze({
   lockWhileSaving: false,
   /** The 3D view. */
   studio3d: true,
+  /** CP12 "Nytt tryck" (flat prints): the Cloudflare admin's only. */
+  flatPrints: false,
 });
+
+/** CP12: a flat size's quote — none in this build (flatPrints is off). */
+export const quoteFlatSize = async () => {
+  throw new Error('Flat prints are not offered in this build');
+};
 
 // The texts this build keeps as they were (null = the studio's own copy).
 export const STUDIO_TEXT = Object.freeze({

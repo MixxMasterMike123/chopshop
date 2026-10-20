@@ -1,4 +1,6 @@
 import { DISPATCH_HOLD_UNTIL_MS } from "../commerce/dispatch-hold";
+import type { FlatFit } from "../pod/printers";
+import { flatReachesPx, isFlatBackground, isFlatFit } from "../pod/printers";
 import type { PrintLocation } from "./snapwear-wire";
 
 /**
@@ -28,6 +30,12 @@ import type { PrintLocation } from "./snapwear-wire";
  *   - The job body says nothing about placement (layouts[].location only,
  *     printer-client.ts toSnapwearJobBody): the printer applies ITS frame
  *     offset once, when it places the frame; our offset lives in the pixels.
+ *
+ * CP12 (flat prints, posters): a flat slot's canvas is NOT a garment frame. It
+ * is the printer's sheet at its exact pixels (frozen from the model's
+ * `front.px`), the motif placed by the mapping's frozen `fit` (contain /
+ * cover, centred) on its frozen opaque `background` (flatCanvasSpec). A flat
+ * line takes the canvas path whatever the switch (dispatch-effect.ts).
  */
 
 /**
@@ -97,8 +105,36 @@ export interface FrameMm {
   w: number;
 }
 
-/** One print slot of a line as the checkout froze it (CP2 + CP6-PS2 fields). */
+/** CP12: a flat slot's frozen canvas facts (pod-mappings.ts PrintFile.flat). */
+export interface FrozenFlat {
+  background: string;
+  canvasPx: { h: number; w: number };
+  fit: FlatFit;
+}
+
+/** CP12: a frozen `flat` read back, or null when it is not one (the line is then refused). */
+export function parseFrozenFlat(value: unknown): FrozenFlat | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const { background, canvasPx, fit } = value as Record<string, unknown>;
+  if (
+    !isFlatBackground(background) ||
+    !isFlatFit(fit) ||
+    typeof canvasPx !== "object" ||
+    canvasPx === null ||
+    !isPositiveInt((canvasPx as Record<string, unknown>).w) ||
+    !isPositiveInt((canvasPx as Record<string, unknown>).h)
+  ) {
+    return null;
+  }
+  const box = canvasPx as { h: number; w: number };
+  return { background, canvasPx: { h: box.h, w: box.w }, fit };
+}
+
+/** One print slot of a line as the checkout froze it (CP2 + CP6-PS2 fields, CP12 `flat`). */
 export interface FrozenCanvasSlot {
+  flat?: FrozenFlat;
   frameMm?: FrameMm;
   frameProvisional?: boolean;
   location: PrintLocation;
@@ -108,8 +144,8 @@ export interface FrozenCanvasSlot {
   widthMm: number;
 }
 
-/** What the container renders, frozen on the job row (spec_json). */
-export interface CanvasSpec {
+/** What the container renders for a garment slot, frozen on the job row (spec_json). */
+export interface GarmentCanvasSpec {
   background: "transparent";
   canvasPx: { h: number; w: number };
   dpi: number;
@@ -118,6 +154,28 @@ export interface CanvasSpec {
   sourcePx: { h: number; w: number };
   version: number;
 }
+
+/**
+ * CP12: what the container renders for a FLAT slot (a poster): the sheet's
+ * exact pixels on an opaque `background`. The source region `sourceCropPx`
+ * (the whole master under `contain`; the centred part of the sheet's aspect
+ * under `cover`) is resized to `motifPx` and placed at `offsetPx`; the rest
+ * of the sheet is `background`, and so is any transparency of the motif.
+ * Told apart from a garment spec by `fit`.
+ */
+export interface FlatCanvasSpec {
+  background: string;
+  canvasPx: { h: number; w: number };
+  dpi: number;
+  fit: FlatFit;
+  motifPx: { h: number; w: number };
+  offsetPx: { left: number; top: number };
+  sourceCropPx: { h: number; left: number; top: number; w: number };
+  sourcePx: { h: number; w: number };
+  version: number;
+}
+
+export type CanvasSpec = FlatCanvasSpec | GarmentCanvasSpec;
 
 export type CanvasSpecResult = { error: string; ok: false } | { ok: true; spec: CanvasSpec };
 
@@ -212,6 +270,9 @@ export function canvasSpec(
     transparent: SNAPWEAR_CANVAS_TRANSPARENT,
   },
 ): CanvasSpecResult {
+  if (slot.flat !== undefined) {
+    return flatCanvasSpec(slot, slot.flat);
+  }
   const { dpi } = assumptions;
   if (!assumptions.transparent) {
     return { error: "print_canvas_background_unsupported", ok: false };
@@ -270,6 +331,74 @@ export function canvasSpec(
       dpi,
       motifPx,
       offsetPx,
+      sourcePx: { h: source.h, w: source.w },
+      version: CANVAS_SPEC_VERSION,
+    },
+  };
+}
+
+/**
+ * CP12: the DPI written into a flat canvas's pHYs. The sheet's `px` IS 300 dpi
+ * of the sheet (Prodigi's posters: 12×16" = 3543 × 4724), and Prodigi places
+ * the file with `fitPrintArea` at its exact size, so this is a label.
+ */
+export const FLAT_CANVAS_DPI = 300;
+
+/**
+ * CP12: the geometry of a flat slot's canvas — the sheet's exact pixels, the
+ * motif centred under the frozen fit. Refusals, each terminal for the line:
+ *   print_canvas_frame_missing / _provisional  as for a garment (canvasFrame)
+ *   print_canvas_source_missing                no frozen artwork pixels
+ *   print_canvas_too_large                     more than CANVAS_MAX_PIXELS
+ *   print_canvas_resolution_too_low            the master would be enlarged
+ *                                              (flatReachesPx; checkout
+ *                                              refuses that line first)
+ */
+export function flatCanvasSpec(slot: FrozenCanvasSlot, flat: FrozenFlat): CanvasSpecResult {
+  const framed = canvasFrame(slot);
+  if (!framed.ok) {
+    return framed;
+  }
+  const source = slot.sourcePx;
+  if (source === undefined || !isPositiveInt(source.w) || !isPositiveInt(source.h)) {
+    return { error: "print_canvas_source_missing", ok: false };
+  }
+  const canvasPx = { h: flat.canvasPx.h, w: flat.canvasPx.w };
+  if (canvasPx.w * canvasPx.h > CANVAS_MAX_PIXELS) {
+    return { error: "print_canvas_too_large", ok: false };
+  }
+  if (!flatReachesPx(source, canvasPx, flat.fit)) {
+    return { error: "print_canvas_resolution_too_low", ok: false };
+  }
+
+  let motifPx: { h: number; w: number };
+  let sourceCropPx: { h: number; left: number; top: number; w: number };
+  if (flat.fit === "contain") {
+    const scale = Math.min(canvasPx.w / source.w, canvasPx.h / source.h);
+    motifPx = {
+      h: Math.max(1, Math.min(canvasPx.h, Math.round(source.h * scale))),
+      w: Math.max(1, Math.min(canvasPx.w, Math.round(source.w * scale))),
+    };
+    sourceCropPx = { h: source.h, left: 0, top: 0, w: source.w };
+  } else {
+    // The sheet's aspect cut from the master's centre, then scaled to the sheet.
+    const scale = Math.max(canvasPx.w / source.w, canvasPx.h / source.h);
+    const w = Math.max(1, Math.min(source.w, Math.round(canvasPx.w / scale)));
+    const h = Math.max(1, Math.min(source.h, Math.round(canvasPx.h / scale)));
+    motifPx = { h: canvasPx.h, w: canvasPx.w };
+    sourceCropPx = { h, left: Math.floor((source.w - w) / 2), top: Math.floor((source.h - h) / 2), w };
+  }
+
+  return {
+    ok: true,
+    spec: {
+      background: flat.background,
+      canvasPx,
+      dpi: FLAT_CANVAS_DPI,
+      fit: flat.fit,
+      motifPx,
+      offsetPx: motifPlacement(canvasPx, motifPx),
+      sourceCropPx,
       sourcePx: { h: source.h, w: source.w },
       version: CANVAS_SPEC_VERSION,
     },

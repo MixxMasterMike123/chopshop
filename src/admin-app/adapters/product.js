@@ -575,6 +575,8 @@ const REFUSALS = {
   pod_too_large: 'Produkten har för många aktiva varianter för att prisgolvet ska kunna kontrolleras. Avpublicera den och minska varianterna till högst 200.',
   // CP11 U7: a print mapping leaves out a side the printer requires (Prodigi: the front).
   pod_required_slot_missing: 'Plagget måste ha ett tryck på framsidan. Lägg till ett framtryck i produktens tryckkopplingar och publicera igen.',
+  // CP12: a flat print's original no longer reaches its sheet's pixels under the chosen fit.
+  pod_resolution_too_low: 'Originalet har för låg upplösning för en av affischens storlekar. Ta bort den storleken, välj ”Hela motivet” i stället för ”Fyll arket”, eller ladda upp originalet i högre upplösning.',
   taken_down: 'Produkten är avpublicerad av plattformen efter en anmälan och kan inte publiceras.',
   variant_limit: 'Produkten har så många varianter som tillåts (högst 200 aktiva).',
 };

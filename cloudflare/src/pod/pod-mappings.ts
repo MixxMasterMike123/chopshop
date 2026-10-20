@@ -9,11 +9,27 @@ import {
 } from "../catalog/screening";
 import type { PodQuote, TierFacts } from "./pod-quote";
 import { podPriceFloorMinor, quoteFromTier, quotePodCost } from "./pod-quote";
-import type { PrintArea, PrintSlot, Printer, PrinterEnvironment, PrinterProvider, PrinterRow } from "./printers";
+import type {
+  FlatFit,
+  PrintArea,
+  PrintSlot,
+  Printer,
+  PrinterEnvironment,
+  PrinterItemFacts,
+  PrinterProvider,
+  PrinterRow,
+} from "./printers";
 import {
+  DEFAULT_FLAT_BACKGROUND,
+  DEFAULT_FLAT_FIT,
+  flatAreaPx,
+  flatReachesPx,
+  isFlatBackground,
+  isFlatFit,
   isStandInSku,
   loadUsablePrinter,
   PRINT_SLOTS,
+  printerItemFacts,
   printerShipsTo,
   providerAllowedIn,
   providerTakesCollectedOrders,
@@ -44,9 +60,23 @@ import {
 export type MappingStatus = "active" | "inactive" | "suspended";
 
 export interface MappingSlot {
+  /**
+   * CP12 (flat prints only): the sheet colour around a contained motif or
+   * under its transparency, `#rrggbb`. Stored on every flat slot (default
+   * DEFAULT_FLAT_BACKGROUND); never on a garment's.
+   */
+  background?: string;
+  /** CP12 (flat prints only): `contain` | `cover`, stored on every flat slot (default contain). */
+  fit?: FlatFit;
   heightMm: number;
   slot: PrintSlot;
   widthMm: number;
+}
+
+/** CP12: the placement a mapping write may give one slot (flat prints only). */
+export interface SlotPlacement {
+  background?: string;
+  fit?: FlatFit;
 }
 
 export interface PodMapping {
@@ -65,6 +95,12 @@ export interface PodMapping {
 
 export interface CreateMappingInput {
   artworkId: string;
+  /**
+   * CP12: per-slot placement, from a `slots` entry written as an object
+   * (`{ slot, fit?, background? }`). Only a flat model takes one; a garment
+   * mapping that names one is refused `placement_unsupported`.
+   */
+  placements?: Partial<Record<PrintSlot, SlotPlacement>>;
   printerId: string;
   productId: string;
   sku: string;
@@ -84,6 +120,8 @@ export type RefusalCode =
   | "currency_mismatch"
   /** CP6-PS4: the SKU's model has only stand-in frames while the print canvas is on. */
   | "pod_frame_unconfirmed"
+  /** CP12: a placement (fit/background) on a slot of a garment model. */
+  | "placement_unsupported"
   | "price_below_floor"
   | "printer_unavailable"
   | "resolution_too_low"
@@ -171,7 +209,30 @@ export function parseCreateMappingInput(body: unknown): CreateMappingInput | nul
     return null;
   }
   const slots: PrintSlot[] = [];
-  for (const slot of body.slots) {
+  const placements: Partial<Record<PrintSlot, SlotPlacement>> = {};
+  for (const raw of body.slots) {
+    // CP12: an entry is a slot name, or `{ slot, fit?, background? }` (a flat
+    // print's placement; background `#rrggbb`, stored lower case).
+    let slot: unknown = raw;
+    if (isPlainObject(raw)) {
+      if (!Object.keys(raw).every((key) => key === "background" || key === "fit" || key === "slot")) {
+        return null;
+      }
+      const background = typeof raw.background === "string" ? raw.background.toLowerCase() : raw.background;
+      if (
+        (raw.fit !== undefined && !isFlatFit(raw.fit)) ||
+        (background !== undefined && !isFlatBackground(background))
+      ) {
+        return null;
+      }
+      slot = raw.slot;
+      if (raw.fit !== undefined || background !== undefined) {
+        placements[slot as PrintSlot] = {
+          ...(background === undefined ? {} : { background: background as string }),
+          ...(raw.fit === undefined ? {} : { fit: raw.fit as FlatFit }),
+        };
+      }
+    }
     // Duplicates are refused rather than collapsed: the caller described the
     // same print twice, which is a client bug, not a request to merge.
     if (!(PRINT_SLOTS as readonly unknown[]).includes(slot) || slots.includes(slot as PrintSlot)) {
@@ -179,7 +240,39 @@ export function parseCreateMappingInput(body: unknown): CreateMappingInput | nul
     }
     slots.push(slot as PrintSlot);
   }
-  return { artworkId, printerId, productId, sku, slots, variantId };
+  return {
+    artworkId,
+    ...(Object.keys(placements).length === 0 ? {} : { placements }),
+    printerId,
+    productId,
+    sku,
+    slots,
+    variantId,
+  };
+}
+
+/**
+ * CP12: a flat slot's printed size in millimetres — the sheet under `cover`,
+ * the contained motif's box (floored, at least 1 mm) under `contain` — from
+ * the master's pixels and the sheet's exact pixel area. What the storefront's
+ * print areas and the suspension check read; the canvas uses the pixels.
+ */
+export function flatSlotMm(
+  sourcePx: { h: number; w: number },
+  frame: PrintArea,
+  areaPx: { h: number; w: number },
+  fit: FlatFit,
+): { heightMm: number; widthMm: number } {
+  if (fit === "cover") {
+    return { heightMm: frame.h, widthMm: frame.w };
+  }
+  const scale = Math.min(areaPx.w / sourcePx.w, areaPx.h / sourcePx.h);
+  const motifW = Math.min(areaPx.w, Math.round(sourcePx.w * scale));
+  const motifH = Math.min(areaPx.h, Math.round(sourcePx.h * scale));
+  return {
+    heightMm: Math.max(1, Math.floor((motifH / areaPx.h) * frame.h)),
+    widthMm: Math.max(1, Math.floor((motifW / areaPx.w) * frame.w)),
+  };
 }
 
 /**
@@ -459,6 +552,8 @@ export type PodGateFailure =
   | "pod_mapping_suspended"
   /** CP11 U7 (audit F2): a mapping set leaves out a slot its printer requires (Prodigi: front). */
   | "pod_required_slot_missing"
+  /** CP12: a flat print's artwork does not reach its sheet's pixels under its fit (flatReachesPx). */
+  | "pod_resolution_too_low"
   | "pod_too_large"
   | "pod_unpriced"
   | "price_below_floor";
@@ -489,6 +584,8 @@ export function podRefusalMessage(code: string): string {
       return "The printer has not confirmed the print area for this garment yet, so it cannot be sold now. Choose another garment, or try again once the printer has confirmed it.";
     case "pod_required_slot_missing":
       return "This garment must have a print on the front. Add a front print to every print mapping of the product, then publish again.";
+    case "pod_resolution_too_low":
+      return "The motif's resolution is too low for one of the print sizes. Remove that size, or upload the motif in a higher resolution, then publish again.";
     case "price_below_floor":
       return "The price is below this product's price floor. Raise it to at least the floor shown with the product's print quote.";
     case "taken_down":
@@ -598,6 +695,9 @@ export async function evaluatePodGate(
   if (await missesRequiredSlot(db, scopes)) {
     return "pod_required_slot_missing";
   }
+  if (await flatBelowResolution(db, tenantId, [...scopes.values()].flat())) {
+    return "pod_resolution_too_low";
+  }
   if (options.refuseStandInFrames === true && (await routesToStandIn(db, mappings))) {
     return "pod_frame_unconfirmed";
   }
@@ -663,6 +763,46 @@ async function missesRequiredSlot(
     return requiredSlotsOf(printer.provider, printer.capabilities, routing.sku).some(
       (slot) => !routing.slots.some((mapped) => mapped.slot === slot),
     );
+  });
+}
+
+/**
+ * CP12 (D5): whether some ACTIVE mapping on a flat model has an artwork that
+ * does not reach the sheet's pixels under its fit — the printer's sheet may
+ * have changed since the mapping was written (a catalogue re-apply), which
+ * the suspension check (millimetres) does not see. An artwork without
+ * measured pixels counts as not reaching. Mappings on garments: not judged.
+ */
+async function flatBelowResolution(
+  db: D1Database,
+  tenantId: string,
+  mappings: readonly PodMapping[],
+): Promise<boolean> {
+  const active = mappings.filter((mapping) => mapping.status === "active");
+  const printers = await printersOf(db, active);
+  const flat = active.flatMap((mapping) => {
+    const printer = printers.get(mapping.printerId);
+    const sheet = printer === null || printer === undefined ? null : flatAreaPx(printer.capabilities, mapping.sku);
+    return sheet === null ? [] : [{ mapping, sheet }];
+  });
+  if (flat.length === 0) {
+    return false;
+  }
+  const rows = await db
+    .prepare(
+      `SELECT artwork_id, width_px, height_px FROM pod_artwork
+       WHERE tenant_id = ? AND artwork_id IN (SELECT value FROM json_each(?))`,
+    )
+    .bind(tenantId, JSON.stringify([...new Set(flat.map((entry) => entry.mapping.artworkId))]))
+    .all<{ artwork_id: string; height_px: number | null; width_px: number | null }>();
+  const pixels = new Map(rows.results.map((row) => [row.artwork_id, row]));
+  return flat.some(({ mapping, sheet }) => {
+    const artwork = pixels.get(mapping.artworkId);
+    if (artwork === undefined || !isPositivePx(artwork.width_px) || !isPositivePx(artwork.height_px)) {
+      return true;
+    }
+    const source = { h: artwork.height_px, w: artwork.width_px };
+    return mapping.slots.some((slot) => !flatReachesPx(source, sheet, slot.fit ?? DEFAULT_FLAT_FIT));
   });
 }
 
@@ -975,17 +1115,40 @@ async function createMappingOnce(
   // pixels come from the render pipeline (render-jobs.ts writes them with the
   // 'ready' verdict), and the DPI floor is the artwork's own profile's.
   const minDpi = artwork.profile_min_dpi ?? DEFAULT_MIN_DPI;
+  // CP12: a flat SKU (a poster) prints its one slot into the sheet's exact
+  // pixels; the master must reach them under the chosen fit (flatReachesPx).
+  const sheetPx = flatAreaPx(printer.capabilities, input.sku);
   const slots: MappingSlot[] = [];
   for (const slot of input.slots) {
     const frame = slotFrame(printer.capabilities, input.sku, slot);
     if (frame === null) {
       return { code: "slot_not_printable", status: "refused" };
     }
-    const size = sizeSlot(artwork.width_px, artwork.height_px, frame, minDpi);
-    if (size === null) {
+    const placement = input.placements?.[slot];
+    if (sheetPx === null) {
+      if (placement !== undefined) {
+        return { code: "placement_unsupported", status: "refused" };
+      }
+      const size = sizeSlot(artwork.width_px, artwork.height_px, frame, minDpi);
+      if (size === null) {
+        return { code: "resolution_too_low", status: "refused" };
+      }
+      slots.push({ heightMm: size.heightMm, slot, widthMm: size.widthMm });
+      continue;
+    }
+    const fit = placement?.fit ?? DEFAULT_FLAT_FIT;
+    const source = { h: artwork.height_px, w: artwork.width_px };
+    if (!flatReachesPx(source, sheetPx, fit)) {
       return { code: "resolution_too_low", status: "refused" };
     }
-    slots.push({ heightMm: size.heightMm, slot, widthMm: size.widthMm });
+    const size = flatSlotMm(source, frame, sheetPx, fit);
+    slots.push({
+      background: placement?.background ?? DEFAULT_FLAT_BACKGROUND,
+      fit,
+      heightMm: size.heightMm,
+      slot,
+      widthMm: size.widthMm,
+    });
   }
 
   // The tuple by its UNIQUE key (any status — an inactive row is re-activated),
@@ -1308,6 +1471,13 @@ export interface PrintFile {
    * artwork row without measured pixels, which no 'ready' artwork lacks today;
    * the canvas then refuses the line rather than checkout refusing the cart.
    */
+  /**
+   * CP12: a flat print's canvas facts — the sheet's exact pixels (the model's
+   * `front.px` at checkout) and the mapping's fit and background. Present
+   * exactly on a flat line's slot; the canvas of such a slot is the sheet
+   * (src/dispatch/print-canvas.ts flatCanvasSpec).
+   */
+  flat?: { background: string; canvasPx: { h: number; w: number }; fit: FlatFit };
   frameMm: PrintArea;
   frameProvisional: boolean;
   heightMm: number;
@@ -1321,6 +1491,12 @@ export interface PrintFile {
 export interface ProductionLine {
   currency: string;
   printFiles: PrintFile[];
+  /**
+   * CP12: the supplier-side facts of the line not in its SKU key (a flat
+   * model, the print-area name, fixed attributes: printerItemFacts), frozen
+   * so the printer's wire reads the order as sold. Absent when there are none.
+   */
+  printerItem?: PrinterItemFacts;
   printerId: string;
   /** CP11: the routed printer's provider, read in the same snapshot. */
   provider: PrinterProvider;
@@ -1570,6 +1746,7 @@ function decideProductionLine(
   if (refuseStandInFrames && frameProvisional) {
     return null;
   }
+  const sheetPx = flatAreaPx(printer.capabilities, routing.sku);
   const printFiles: PrintFile[] = [];
   for (const mapping of set) {
     const row = rows.get(mapping.mappingId);
@@ -1587,7 +1764,26 @@ function decideProductionLine(
       if (frame === null || frame.w < slot.widthMm || frame.h < slot.heightMm) {
         return null;
       }
+      // CP12: a flat slot is printed at the sheet's exact pixels; a master
+      // that no longer reaches them (the sheet changed) is not sold.
+      let flat: PrintFile["flat"];
+      if (sheetPx !== null) {
+        const fit = slot.fit ?? DEFAULT_FLAT_FIT;
+        if (
+          !isPositivePx(row.artwork_width_px) ||
+          !isPositivePx(row.artwork_height_px) ||
+          !flatReachesPx({ h: row.artwork_height_px, w: row.artwork_width_px }, sheetPx, fit)
+        ) {
+          return null;
+        }
+        flat = {
+          background: slot.background ?? DEFAULT_FLAT_BACKGROUND,
+          canvasPx: { h: sheetPx.h, w: sheetPx.w },
+          fit,
+        };
+      }
       printFiles.push({
+        ...(flat === undefined ? {} : { flat }),
         frameMm: frame,
         frameProvisional,
         heightMm: slot.heightMm,
@@ -1617,9 +1813,11 @@ function decideProductionLine(
     return null;
   }
 
+  const printerItem = printerItemFacts(printer.capabilities, routing.sku);
   return {
     currency: quote.breakdown.currency,
     printFiles,
+    ...(printerItem === undefined ? {} : { printerItem }),
     printerId: routing.printerId,
     provider: printer.provider,
     productionCostMinor: quote.productionCostMinor,

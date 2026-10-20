@@ -1,5 +1,5 @@
 import { handleFakePrinterRoute } from "../routes/fake-printer";
-import type { PrinterProvider } from "../pod/printers";
+import type { PrinterItemFacts, PrinterProvider } from "../pod/printers";
 import { FAKE_PRINTER_JOBS_PATH, isFakePrinterEnabled } from "./fake-printer";
 import { createProdigiClient, prodigiSubmitConfig } from "./prodigi-client";
 import {
@@ -60,6 +60,13 @@ export interface PrinterJobLine {
    * checkout and turned into addresses here — the snapshot carries none yet.
    */
   mockupUrls: string[];
+  /**
+   * CP12: the line's frozen supplier facts (src/pod/printers.ts
+   * PrinterItemFacts: a flat model, the front slot's print-area name, fixed
+   * attributes), read by the Prodigi wire. Absent for a line that has none
+   * (every SnapWear and fake line).
+   */
+  printerItem?: PrinterItemFacts;
   quantity: number;
   sku: string;
 }

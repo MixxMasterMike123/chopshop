@@ -218,7 +218,11 @@ const mappingView = (m) => ({
   printerId: m.printerId,
   productId: m.productId,
   sku: m.sku,
-  slots: m.slots.map((slot) => ({ slot, widthMm: m.sizes?.[slot]?.widthMm ?? 240, heightMm: m.sizes?.[slot]?.heightMm ?? 240 })),
+  slots: m.slots.map((slot) => ({
+    slot, widthMm: m.sizes?.[slot]?.widthMm ?? 240, heightMm: m.sizes?.[slot]?.heightMm ?? 240,
+    // CP12: a flat print's frozen placement, beside its slot (CP12_BRIEFS.md).
+    ...(m.fit ? { fit: m.fit } : {}), ...(m.background ? { background: m.background } : {}),
+  })),
   status: m.status,
   suspendedReason: m.status === 'suspended' ? (m.suspendedReason === 'unpriced' ? 'sku_unavailable' : m.suspendedReason) : null,
   updatedAt: m.updatedAt,
@@ -340,7 +344,7 @@ export const POD_ROUTES = [
         // Built field by field, as the Worker's tenantPrinterView: no price, no tier, no currency.
         capabilities: {
           models: Object.fromEntries(Object.entries(p.capabilities.models).map(([k, m]) => [k, {
-            garment: m.garment ?? null, ...(m.name ? { name: m.name } : {}), printAreasMm: structuredClone(m.printAreasMm), ...(m.provisional ? { provisional: true } : {}),
+            garment: m.garment ?? null, ...(m.kind ? { kind: m.kind } : {}), ...(m.name ? { name: m.name } : {}), printAreasMm: structuredClone(m.printAreasMm), ...(m.provisional ? { provisional: true } : {}),
           }])),
           skus: Object.fromEntries(Object.entries(p.capabilities.skus).map(([k, s]) => [k, s.label ? { label: s.label, model: s.model } : { model: s.model }])),
         },
@@ -363,6 +367,19 @@ export const POD_ROUTES = [
     settle(state, shop, pod);
     const keys = ['artworkId', 'printerId', 'productId', 'sku', 'slots', 'variantId'];
     if (!isObj(body) || !Object.keys(body).every((k) => keys.includes(k))) return invalid();
+    // CP12: a flat print names its slot as { slot, fit?, background? } (the Worker's parseCreateMappingInput).
+    let placement = null;
+    if (Array.isArray(body.slots)) {
+      for (const [i, entry] of body.slots.entries()) {
+        if (!isObj(entry)) continue;
+        if (!Object.keys(entry).every((k) => ['slot', 'fit', 'background'].includes(k))) return invalid();
+        if (entry.fit !== undefined && !['cover', 'contain'].includes(entry.fit)) return invalid();
+        const bg = typeof entry.background === 'string' ? entry.background.toLowerCase() : entry.background;
+        if (bg !== undefined && !/^#[0-9a-f]{6}$/.test(bg)) return invalid();
+        placement = { fit: entry.fit ?? 'contain', background: bg ?? '#ffffff' };
+        body.slots[i] = entry.slot;
+      }
+    }
     const { productId, artworkId, printerId, sku } = body;
     const variantId = body.variantId ?? null;
     if ([productId, artworkId, printerId].some((v) => typeof v !== 'string' || v.length < 1 || v.length > 128)) return invalid();
@@ -381,10 +398,24 @@ export const POD_ROUTES = [
     const printer = printerOf(printerId);
     if (!printer) return refused('printer_unavailable');
     if (!printer.capabilities.skus[sku]) return refused('sku_unavailable');
+    const model = printer.capabilities.models[printer.capabilities.skus[sku].model];
+    const flat = model?.kind === 'flat';
+    // A flat model prints one slot, front, with a fit; a garment takes no fit.
+    if (!flat && placement) return refused('placement_unsupported');
+    if (flat && (body.slots.length !== 1 || body.slots[0] !== 'front')) return invalid();
+    const fit = flat ? placement?.fit ?? 'contain' : null;
     const sizes = {};
     for (const slot of body.slots) {
       const frame = frameOf(printer, sku, slot);
       if (!frame) return refused('slot_not_printable');
+      if (flat) {
+        // The print is the sheet: the master is never enlarged (contain: one axis reaches; cover: both).
+        const px = frame.px;
+        const reaches = fit === 'cover' ? art.widthPx >= px.w && art.heightPx >= px.h : art.widthPx >= px.w || art.heightPx >= px.h;
+        if (!reaches) return refused('resolution_too_low');
+        sizes[slot] = { widthMm: frame.w, heightMm: frame.h };
+        continue;
+      }
       const size = sizeSlot(art.widthPx, art.heightPx, frame);
       if (!size) return refused('resolution_too_low');
       sizes[slot] = size;
@@ -412,6 +443,7 @@ export const POD_ROUTES = [
     const iso = new Date(clock()).toISOString();
     const mapping = tuple ?? { mappingId: newId('map'), productId, variantId, artworkId, printerId, sku, createdAt: iso };
     Object.assign(mapping, { slots: [...body.slots], sizes, status: 'active', suspendedReason: null, updatedAt: iso });
+    if (flat) Object.assign(mapping, { fit, background: placement?.background ?? '#ffffff' });
     pod.mappings.set(mapping.mappingId, mapping);
     record.product.isPod = true;
     syncCatalogueQuote(cat, pod, productId);

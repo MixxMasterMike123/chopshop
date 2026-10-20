@@ -1,6 +1,7 @@
 import type { PlatformPrincipal } from "../auth/live-authorization";
 import type {
   EditPrinterResult,
+  FixedAttributes,
   PrintArea,
   PrinterCapabilities,
   PrinterEnvironment,
@@ -14,11 +15,13 @@ import {
   isGarment,
   isLabel,
   isModelKey,
+  isPrintAreaName,
   isPrintSlot,
   isSkuKey,
   MAX_COST_MINOR,
   MAX_PRINTER_MODELS,
   MAX_PRINTER_SKUS,
+  parseFixedAttributes,
   parsePrintArea,
   parsePrinterCapabilities,
   parseRequiredSlots,
@@ -627,6 +630,59 @@ function catalogFrames(
   return areas;
 }
 
+/**
+ * CP12: the supplier print area of a catalogue model whose document names
+ * none, by its supplier SKU. The tote's importer (CP11 U4B) keys its one
+ * area under `front` while Prodigi calls it `default` and writes no
+ * `prodigiPrintArea`; this table carries that fact until the importer writes
+ * it (a model's own `prodigiPrintArea` always wins).
+ */
+export const CATALOG_PRINT_AREA_BY_SUPPLIER_SKU: Readonly<Record<string, string>> = {
+  "H-BAG-LTOTE": "default",
+};
+
+/**
+ * CP12: a flat catalogue model's exact pixel area for `front` (the importer's
+ * `printAreaPx.front`), or null when it has none the schema takes.
+ */
+function catalogFrontPx(model: Record<string, unknown>): { h: number; w: number } | null {
+  const all = model.printAreaPx;
+  const front = isPlainObject(all) ? all.front : undefined;
+  if (!isPlainObject(front)) {
+    return null;
+  }
+  const area = parsePrintArea({ h: 1, px: { h: front.h, w: front.w }, w: 1 });
+  return area?.px ?? null;
+}
+
+/**
+ * CP12 (the 18600 `edge`): a catalogue SKU's attributes that neither its key
+ * (`color`, `size`) nor its model's fixed set already give. undefined when
+ * none are left; "invalid" when they break the schema's caps.
+ */
+function catalogSkuAttributes(
+  entry: Record<string, unknown>,
+  modelAttributes: FixedAttributes | undefined,
+): FixedAttributes | undefined | "invalid" {
+  if (entry.attributes === undefined) {
+    return undefined;
+  }
+  if (!isPlainObject(entry.attributes)) {
+    return "invalid";
+  }
+  const own: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(entry.attributes)) {
+    if (key === "color" || key === "size" || modelAttributes?.[key] === value) {
+      continue;
+    }
+    own[key] = value;
+  }
+  if (Object.keys(own).length === 0) {
+    return undefined;
+  }
+  return parseFixedAttributes(own) ?? "invalid";
+}
+
 function skuLabel(entry: Record<string, unknown>): string | undefined | null {
   const parts = [entry.colour, entry.size].filter(
     (part): part is string => typeof part === "string" && part.length > 0,
@@ -651,6 +707,14 @@ function skuLabel(entry: Record<string, unknown>): string | undefined | null {
  * top-level `shipsTo` when it names one, else `currentShipsTo` — the
  * printer's current list, so applying a catalogue never silently widens or
  * narrows where the printer ships.
+ *
+ * CP12: a catalogue model's `kind: "flat"` (posters) is carried, with its one
+ * `front` frame given the sheet's exact pixels (`printAreaPx.front` → `px`);
+ * a model's fixed `attributes` and `prodigiPrintArea` (else
+ * CATALOG_PRINT_AREA_BY_SUPPLIER_SKU) are carried; a SKU keeps, as its own
+ * `attributes`, what its catalogue attributes add beyond `color`, `size` and
+ * its model's set (the 18600's `edge`). Each is parsed with the capability
+ * schema's caps; a breach is a problem, never a silent drop.
  */
 export function buildFromCatalog(
   catalog: unknown,
@@ -719,7 +783,17 @@ export function buildFromCatalog(
       problems.push(`skus: ${sku} has a colour/size label longer than 200 characters`);
       continue;
     }
-    skus[sku] = label === undefined ? { model } : { label, model };
+    const modelAttributes = parseFixedAttributes((catalogModels[model] as Record<string, unknown>).attributes);
+    const attributes = catalogSkuAttributes(entry, modelAttributes ?? undefined);
+    if (attributes === "invalid") {
+      problems.push(`skus: ${sku} has attributes the capability schema refuses (≤ 12, identifier keys, 1–64 character values)`);
+      continue;
+    }
+    skus[sku] = {
+      ...(attributes === undefined ? {} : { attributes }),
+      ...(label === undefined ? {} : { label }),
+      model,
+    };
     usedModels.add(model);
   }
 
@@ -761,15 +835,48 @@ export function buildFromCatalog(
         );
       }
     }
+    // CP12: a flat model (posters) — one `front` area with the printer's
+    // exact pixels — and the supplier's fixed attributes and area name.
+    const flat = source.kind === "flat";
+    if (source.kind !== undefined && source.kind !== "flat" && source.kind !== "garment") {
+      problems.push(`model ${model}: kind must be "garment" or "flat"`);
+      continue;
+    }
+    if (flat) {
+      const px = catalogFrontPx(source);
+      const front = areas.front;
+      if (override !== undefined || front === undefined || Object.keys(areas).length !== 1 || px === null) {
+        problems.push(
+          `model ${model}: a flat model needs exactly one catalogue frame, front, with its printAreaPx.front (no frames override)`,
+        );
+        continue;
+      }
+      areas = { front: { ...front, px } };
+    }
+    const attributes = parseFixedAttributes(source.attributes);
+    if (attributes === null) {
+      problems.push(`model ${model}: attributes must be 1–12 identifier keys with 1–64 character values`);
+      continue;
+    }
+    const printArea =
+      source.prodigiPrintArea ??
+      (typeof source.prodigiSku === "string" ? CATALOG_PRINT_AREA_BY_SUPPLIER_SKU[source.prodigiSku] : undefined);
+    if (printArea !== undefined && !isPrintAreaName(printArea)) {
+      problems.push(`model ${model}: prodigiPrintArea is not a print area name`);
+      continue;
+    }
     const requiredSlots = parseRequiredSlots(source.requiredSlots, areas);
     if (requiredSlots === null) {
       problems.push(`model ${model}: requiredSlots must be distinct print slots the model frames`);
       continue;
     }
     const entry: PrinterModel = {
+      ...(attributes === undefined ? {} : { attributes }),
       garment: isGarment(source.garment) ? source.garment : null,
+      ...(flat ? { kind: "flat" as const } : {}),
       ...(isLabel(source.name) ? { name: source.name } : {}),
       printAreasMm: areas,
+      ...(printArea === undefined ? {} : { prodigiPrintArea: printArea }),
       ...(provisional ? { provisional: true as const } : {}),
       ...(requiredSlots === undefined ? {} : { requiredSlots }),
     };

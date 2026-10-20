@@ -36,6 +36,7 @@ import {
 } from "../commerce/dispatch-hold";
 import { readDispatchShipTo } from "../commerce/recipient";
 import { nudgeRenderJob } from "../pod/render-jobs";
+import { type PrinterItemFacts, parsePrinterItemFacts } from "../pod/printers";
 import {
   ensureCanvasJobStatements,
   type EnsureCanvasSlot,
@@ -49,6 +50,8 @@ import {
   canvasSpec,
   decidePrintFiles,
   type FrameMm,
+  type FrozenFlat,
+  parseFrozenFlat,
   PRINT_CANVAS_PENDING,
   printCanvasEnabled,
 } from "./print-canvas";
@@ -194,6 +197,8 @@ interface PrintFile {
  * a slot that lacks them.
  */
 interface FrozenSlot extends PrintFile {
+  /** CP12: a flat print's canvas facts (parseFrozenFlat); a malformed one refuses the line. */
+  flat?: FrozenFlat;
   frameMm?: FrameMm;
   frameProvisional?: boolean;
   sourcePx?: { h: number; w: number };
@@ -202,6 +207,8 @@ interface FrozenSlot extends PrintFile {
 
 interface BuiltJob {
   printFiles: FrozenSlot[];
+  /** CP12: the line's frozen supplier facts (checkout's `printerItem`), when it has any. */
+  printerItem?: PrinterItemFacts;
   quantity: number;
   sku: string;
 }
@@ -371,6 +378,12 @@ export function buildDispatchJob(
     return { error: "production_line_invalid", ok: false };
   }
 
+  // CP12: what the printer's wire needs beyond the key; malformed = refused.
+  const printerItem = parsePrinterItemFacts(production.printerItem);
+  if (printerItem === null) {
+    return { error: "production_line_invalid", ok: false };
+  }
+
   const prefix = `pod/${tenantId}/`;
   const files: FrozenSlot[] = [];
   for (const entry of production.printFiles as unknown[]) {
@@ -396,11 +409,30 @@ export function buildDispatchJob(
     if (files.some((file) => file.location === slot)) {
       return { error: "production_line_invalid", ok: false };
     }
-    files.push({ location: slot as PrintLocation, r2Key, sha256, ...frozenCanvasFields(entry) });
+    // CP12: a flat slot's canvas facts are kept whole or the line is refused —
+    // dropping a malformed one would print the poster as a garment's canvas.
+    let flat: FrozenFlat | undefined;
+    if (entry.flat !== undefined) {
+      const parsed = parseFrozenFlat(entry.flat);
+      if (parsed === null) {
+        return { error: "production_line_invalid", ok: false };
+      }
+      flat = parsed;
+    }
+    files.push({
+      location: slot as PrintLocation,
+      r2Key,
+      sha256,
+      ...frozenCanvasFields(entry),
+      ...(flat === undefined ? {} : { flat }),
+    });
   }
 
   files.sort((a, b) => LOCATIONS.indexOf(a.location) - LOCATIONS.indexOf(b.location));
-  return { ok: true, value: { printFiles: files, quantity, sku } };
+  return {
+    ok: true,
+    value: { printFiles: files, ...(printerItem === undefined ? {} : { printerItem }), quantity, sku },
+  };
 }
 
 // ── the print files of the lines a job carries ──────────────────────────────
@@ -470,7 +502,11 @@ async function printFilesForPrinter(
         canvases,
         slots: target.job.printFiles.map((file) => file.location),
         submitted,
-        switchOn: printCanvasEnabled(ctx.env),
+        // CP12: a flat line (a poster) is ALWAYS printed from its canvas, the
+        // sheet at its exact pixels with the frozen fit and background: the
+        // bare master would leave both to the printer. The switch decides the
+        // garment lines only.
+        switchOn: printCanvasEnabled(ctx.env) || target.job.printFiles.some((file) => file.flat !== undefined),
       });
       switch (decision.kind) {
         case "artwork":
@@ -1365,6 +1401,7 @@ async function submitPrepared(
         ),
         lineNo: line.lineNo,
         mockupUrls: [],
+        ...(line.job.printerItem === undefined ? {} : { printerItem: line.job.printerItem }),
         quantity: line.job.quantity,
         sku: line.job.sku,
       });

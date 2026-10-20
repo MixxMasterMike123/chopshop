@@ -30,6 +30,7 @@
 
 import { PRINT_SLOTS } from './pod.js';
 import { podFigures } from './product.js';
+import { isFlatModel, mappingPlacement, samePlacement } from './studioFlat.js';
 
 export { PRINT_SLOTS, podFigures };
 
@@ -182,7 +183,8 @@ export function productionFromPrinters(printers) {
     const models = isObj(p.capabilities?.models) ? p.capabilities.models : {};
     const skus = isObj(p.capabilities?.skus) ? p.capabilities.skus : {};
     for (const [modelKey, model] of Object.entries(models)) {
-      if (!isObj(model) || !str(model.garment)) continue;
+      // A flat print (CP12) is not a garment: the studio's "Nytt tryck" offers it (adapters/studioFlat.js).
+      if (!isObj(model) || !str(model.garment) || isFlatModel(model)) continue;
       const articles = Object.entries(skus)
         .filter(([, entry]) => isObj(entry) && entry.model === modelKey)
         .map(([sku, entry]) => ({ sku, label: str(entry.label) }));
@@ -301,7 +303,9 @@ const sameSlots = (a, b) => a.length === b.length && a.every((s) => b.includes(s
  *   posts   the desired mappings not kept (a removed row with the same
  *           artwork, printer and article is re-activated by its POST)
  * Deletes run before posts: a slot is held by one mapping of a scope at a
- * time, and the scope prints on one article.
+ * time, and the scope prints on one article. A desired row with a
+ * `placement` (a flat print's { fit, background? }) keeps only a mapping
+ * frozen with the same placement.
  */
 export function planScopeMappings(existing, desired) {
   const live = list(existing).filter((m) => isObj(m) && (m.status === 'active' || m.status === 'suspended'));
@@ -310,7 +314,9 @@ export function planScopeMappings(existing, desired) {
   for (const m of live) {
     if (m.status !== 'active') continue;
     const i = desired.findIndex((d, j) => !satisfied.has(j)
-      && d.artworkId === m.artworkId && d.printerId === m.printerId && d.sku === m.sku && sameSlots(d.slots, slotIds(m)));
+      && d.artworkId === m.artworkId && d.printerId === m.printerId && d.sku === m.sku && sameSlots(d.slots, slotIds(m))
+      // A flat print's frozen placement (CP12) is part of what it prints; a garment's desired row names none.
+      && (d.placement === undefined || samePlacement(d.placement, mappingPlacement(m))));
     if (i >= 0) {
       satisfied.add(i);
       keep.push(m.mappingId);

@@ -371,8 +371,8 @@ export const ACQUIRE_BODY = { jobTypes: [JOB_TYPE, CANVAS_JOB_TYPE] } as const;
  */
 export const CANVAS_MAX_INPUT_BYTES = 512 * 1024 * 1024;
 
-/** The geometry the Worker computed and froze (src/dispatch/print-canvas.ts CanvasSpec). */
-export interface CanvasSpec {
+/** The geometry the Worker computed and froze for a garment slot (src/dispatch/print-canvas.ts GarmentCanvasSpec). */
+export interface GarmentCanvasSpec {
   background: "transparent";
   canvasPx: { h: number; w: number };
   dpi: number;
@@ -380,6 +380,29 @@ export interface CanvasSpec {
   offsetPx: { left: number; top: number };
   sourcePx: { h: number; w: number };
   version: number;
+}
+
+/**
+ * CP12: a FLAT slot (a poster; src/dispatch/print-canvas.ts FlatCanvasSpec):
+ * `sourceCropPx` of the master resized to `motifPx` at `offsetPx` on an opaque
+ * sheet of `background` (#rrggbb), which also fills the motif's transparency.
+ */
+export interface FlatCanvasSpec {
+  background: string;
+  canvasPx: { h: number; w: number };
+  dpi: number;
+  fit: "contain" | "cover";
+  motifPx: { h: number; w: number };
+  offsetPx: { left: number; top: number };
+  sourceCropPx: { h: number; left: number; top: number; w: number };
+  sourcePx: { h: number; w: number };
+  version: number;
+}
+
+export type CanvasSpec = FlatCanvasSpec | GarmentCanvasSpec;
+
+export function isFlatCanvasSpec(spec: CanvasSpec): spec is FlatCanvasSpec {
+  return "fit" in spec;
 }
 
 export interface CanvasLease extends LeaseClaim {
@@ -408,10 +431,19 @@ function isNonNegativeSafeInt(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** The spec, refused unless the motif lies wholly inside the canvas. */
+const FLAT_BACKGROUND_PATTERN = /^#[0-9a-f]{6}$/;
+
+/**
+ * The spec, refused unless the motif lies wholly inside the canvas (and, for a
+ * flat slot, its source crop wholly inside the master). A spec with `fit` is a
+ * flat slot's; one without is a garment's, exactly as before CP12.
+ */
 export function parseCanvasSpec(value: unknown): CanvasSpec | null {
   if (!isPlainObject(value)) {
     return null;
+  }
+  if (value.fit !== undefined) {
+    return parseFlatCanvasSpec(value);
   }
   const { background, canvasPx, dpi, motifPx, offsetPx, sourcePx, version } = value;
   if (
@@ -436,6 +468,50 @@ export function parseCanvasSpec(value: unknown): CanvasSpec | null {
     dpi,
     motifPx: { h: motifPx.h, w: motifPx.w },
     offsetPx: { left: offsetPx.left, top: offsetPx.top },
+    sourcePx: { h: sourcePx.h, w: sourcePx.w },
+    version,
+  };
+}
+
+function isCrop(value: unknown): value is { h: number; left: number; top: number; w: number } {
+  return (
+    isBox(value) &&
+    isNonNegativeSafeInt((value as Record<string, unknown>).left) &&
+    isNonNegativeSafeInt((value as Record<string, unknown>).top)
+  );
+}
+
+function parseFlatCanvasSpec(value: Record<string, unknown>): FlatCanvasSpec | null {
+  const { background, canvasPx, dpi, fit, motifPx, offsetPx, sourceCropPx, sourcePx, version } = value;
+  if (
+    typeof background !== "string" ||
+    !FLAT_BACKGROUND_PATTERN.test(background) ||
+    (fit !== "contain" && fit !== "cover") ||
+    !isBox(canvasPx) ||
+    !isBox(motifPx) ||
+    !isBox(sourcePx) ||
+    !isPositiveSafeInt(dpi) ||
+    !isPositiveSafeInt(version) ||
+    !isPlainObject(offsetPx) ||
+    !isNonNegativeSafeInt(offsetPx.left) ||
+    !isNonNegativeSafeInt(offsetPx.top) ||
+    !isCrop(sourceCropPx) ||
+    canvasPx.w * canvasPx.h > MAX_CANVAS_PIXELS ||
+    offsetPx.left + motifPx.w > canvasPx.w ||
+    offsetPx.top + motifPx.h > canvasPx.h ||
+    sourceCropPx.left + sourceCropPx.w > sourcePx.w ||
+    sourceCropPx.top + sourceCropPx.h > sourcePx.h
+  ) {
+    return null;
+  }
+  return {
+    background,
+    canvasPx: { h: canvasPx.h, w: canvasPx.w },
+    dpi,
+    fit,
+    motifPx: { h: motifPx.h, w: motifPx.w },
+    offsetPx: { left: offsetPx.left, top: offsetPx.top },
+    sourceCropPx: { h: sourceCropPx.h, left: sourceCropPx.left, top: sourceCropPx.top, w: sourceCropPx.w },
     sourcePx: { h: sourcePx.h, w: sourcePx.w },
     version,
   };

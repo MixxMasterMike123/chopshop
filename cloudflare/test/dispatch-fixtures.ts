@@ -50,6 +50,8 @@ export interface PrintFileSpec {
    * stand-in flag, artwork pixels). Absent ⇒ a line frozen before CP6-PS2.
    */
   canvas?: {
+    /** CP12: a flat print's canvas facts (sheet pixels, fit, background). */
+    flat?: unknown;
     frameMm?: { h: number; offsetTopMm?: number; w: number };
     frameProvisional?: boolean;
     sourcePx?: { h: number; w: number };
@@ -66,6 +68,8 @@ export interface PrintFileSpec {
 
 export interface LineSpec {
   name?: string;
+  /** CP12: the line's frozen supplier facts (checkout's `printerItem`). */
+  printerItem?: unknown;
   printFiles?: PrintFileSpec[];
   /** null ⇒ a non-POD line (no production_json, no dispatch row). */
   production?: "none" | "pod";
@@ -156,6 +160,7 @@ export async function seedOrder(
       }
       production = {
         lineNo,
+        ...(line.printerItem === undefined ? {} : { printerItem: line.printerItem }),
         printFiles,
         productionCostMinor: 9_000,
         quantity,

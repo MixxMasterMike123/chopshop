@@ -23,8 +23,8 @@
  */
 
 import type { ShipTo } from "../commerce/recipient";
+import type { PrinterItemFacts } from "../pod/printers";
 import type { PrinterJob, PrinterSubmitResult } from "./printer-client";
-import type { PrintLocation } from "./snapwear-wire";
 
 /** The order-creation path on PRODIGI_API_BASE_URL's origin. */
 export const PRODIGI_ORDERS_PATH = "/v4.0/orders";
@@ -53,8 +53,9 @@ export interface ProdigiRecipient {
 }
 
 export interface ProdigiItem {
-  assets: Array<{ printArea: PrintLocation; url: string }>;
-  attributes: { color: string; size: string };
+  /** `front` → the model's print-area name (CP12: `default` for a poster or the tote). */
+  assets: Array<{ printArea: string; url: string }>;
+  attributes: Record<string, string>;
   copies: number;
   merchantReference: string;
   sizing: "fitPrintArea";
@@ -82,6 +83,34 @@ export function splitProdigiSkuKey(key: string): { color: string; size: string; 
   const color = key.slice(first + 1, last).replace(/-/g, " ");
   const size = key.slice(last + 1);
   return sku === "" || color.trim() === "" || size === "" ? null : { color, size, sku };
+}
+
+/**
+ * CP12 (the tote, CP11 U4B): the size part of a key for a product Prodigi
+ * sells in no sizes. Its `size` attribute is left out of the item.
+ */
+export const PRODIGI_ONE_SIZE = "one-size";
+
+/**
+ * CP12: an item's attributes. The line's frozen fixed set (the model's, with
+ * the SKU's own on top: the 18600's `edge`) and, for a GARMENT only, the
+ * colour and size split from the key — a size of PRODIGI_ONE_SIZE is not
+ * sent. A FLAT model (a poster) sends its fixed set alone: its key's colour
+ * and size parts are our finish and sheet names, not Prodigi attributes.
+ */
+export function prodigiItemAttributes(
+  split: { color: string; size: string },
+  facts: PrinterItemFacts | undefined,
+): Record<string, string> {
+  const fixed = { ...facts?.attributes };
+  if (facts?.kind === "flat") {
+    return fixed;
+  }
+  return {
+    ...fixed,
+    color: split.color,
+    ...(split.size === PRODIGI_ONE_SIZE ? {} : { size: split.size }),
+  };
 }
 
 export interface ProdigiOrderBody {
@@ -123,8 +152,9 @@ export type ProdigiBodyRefusal = "front_missing" | "sku_invalid";
 /**
  * THE ONE PLACE the Prodigi body is built (D6). `job.lines` are the order's
  * dispatchable lines (dispatch-effect.ts runOrderUnit), each one item with
- * its front/back assets and its colour and size split from the line's SKU
- * key (splitProdigiSkuKey); the order's id is the idempotency key. The caller
+ * its front/back assets and its attributes (prodigiItemAttributes: CP12's
+ * frozen fixed set, plus a garment's colour and size split from the line's
+ * SKU key, splitProdigiSkuKey); the order's id is the idempotency key. The caller
  * has already refused a job without a parcel address (ship_to_missing).
  * A refusal instead of a body, and the caller refuses the job with it:
  *   sku_invalid    a line's SKU key does not split — no line is ever sent
@@ -147,9 +177,15 @@ export function toProdigiOrderBody(
     if (!line.artworks.some((artwork) => artwork.location === "front")) {
       return { refusal: "front_missing" };
     }
+    // CP12: our `front` slot prints into the model's named area (`default`
+    // for a poster or the tote); every other slot keeps its own name.
+    const frontArea = line.printerItem?.printArea ?? "front";
     items.push({
-      assets: line.artworks.map((artwork) => ({ printArea: artwork.location, url: artwork.url })),
-      attributes: { color: split.color, size: split.size },
+      assets: line.artworks.map((artwork) => ({
+        printArea: artwork.location === "front" ? frontArea : artwork.location,
+        url: artwork.url,
+      })),
+      attributes: prodigiItemAttributes(split, line.printerItem),
       copies: line.quantity,
       merchantReference: String(line.lineNo),
       sizing: "fitPrintArea",

@@ -23,10 +23,15 @@ import { isUnresolvedShopId } from '../../config/tenancy.js';
 import { listPrinters } from '../../api/admin/pod.js';
 import { readForShop } from '../providers/ordersForShop.js';
 import { productionFromPrinters } from '../adapters/studio.js';
+import { flatProductsFromPrinters } from '../adapters/studioFlat.js';
 
 const loads = new Map(); // shopId → Promise<{ routing, printersById, production }>
 
-/** loadPrintRouting() → Promise<{ routing, printersById, production: { options } }> for the tab's shop. */
+/**
+ * loadPrintRouting() → Promise<{ routing, printersById, production: { options }, flat }> for the
+ * tab's shop. `flat` (CP12): the flat-print families the studio's "Nytt tryck" offers
+ * (adapters/studioFlat.js); flat models never enter the garment routing.
+ */
 export const loadPrintRouting = async () => {
   const shopId = getRequestShopId();
   // The cache holds the shop's own request; only THIS caller is dropped when
@@ -34,7 +39,7 @@ export const loadPrintRouting = async () => {
   if (!loads.has(shopId) && !isUnresolvedShopId(shopId)) {
     const load = listPrinters({ shopId }).then((printers) => {
       const { routing, printersById, options } = productionFromPrinters(printers);
-      return { routing, printersById, production: { options } };
+      return { routing, printersById, production: { options }, flat: flatProductsFromPrinters(printers) };
     });
     loads.set(shopId, load);
     load.catch(() => {

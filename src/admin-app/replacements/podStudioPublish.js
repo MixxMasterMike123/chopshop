@@ -44,7 +44,7 @@
 // THE SELLER SEES ONE NUMBER: the only figures read are the server's quote
 // (inkopMinor, priceFloorMinor); nothing here prices.
 
-import { AdminApiError } from '../../api/admin/client.js';
+import { AdminApiError, adminRequest } from '../../api/admin/client.js';
 import {
   createProduct,
   createVariant,
@@ -55,7 +55,8 @@ import {
   updateProduct,
   updateVariant,
 } from '../../api/admin/products.js';
-import { createMapping, deleteMapping, listMappings } from '../../api/admin/pod.js';
+import { POD_PATH, createMapping, deleteMapping, listMappings } from '../../api/admin/pod.js';
+import { mappingSlotsBody } from '../adapters/studioFlat.js';
 import {
   desiredVariants,
   planVariantSync,
@@ -124,6 +125,20 @@ async function freshFloors(skus, { shopId, printerId, slots }) {
 }
 
 const floorKr = (minor) => krText(minor / 100);
+
+/**
+ * One mapping write. A flat print (CP12) names its slot as an object carrying
+ * the frozen placement (`{ slot, fit, background? }`: the Worker's
+ * parseCreateMappingInput, CP12_BRIEFS.md "the mapping already freezes
+ * placement per slot"); a garment's is createMapping's body, unchanged.
+ */
+async function postMapping({ productId, variantId, artworkId, printerId, sku, slots, placement }, { shopId }) {
+  if (!placement) return createMapping({ productId, variantId, artworkId, printerId, sku, slots }, { shopId });
+  const json = { productId, artworkId, printerId, sku, slots: mappingSlotsBody(slots, placement) };
+  if (variantId !== null && variantId !== undefined) json.variantId = variantId;
+  await adminRequest('POST', `${POD_PATH}/mappings`, { json, shopId });
+  return null;
+}
 
 /**
  * The product as the server holds it after a write whose answer was lost:
@@ -257,13 +272,15 @@ async function imageStep({ shopId, productId, rows, colours, mockups, heroKey, r
  *   mockups                the published colours' mockups [{ key, colorwayId, slot,
  *                          blob, type }], in the studio's order
  *   heroKey                the mockup the seller picked as the main image
+ *   placement              CP12: a flat print's { fit, background? } frozen in
+ *                          every mapping; null/absent for a garment
  * deps: { skuFromName, uniqueSku, deriveVariantsFromGroups }
  *
  * → { result: { name, sku, productId, published: true, note, screeningNotice, held, blocked } }
  *   | { error, field?: 'price', changed?: true }   (changed: something was written)
  */
 export async function publishNewDesign(input, deps) {
-  const { shopId, currency, name, price, colorways, slots, printerId, artworkFor, mockups = [], heroKey = null } = input;
+  const { shopId, currency, name, price, colorways, slots, printerId, artworkFor, mockups = [], heroKey = null, placement = null } = input;
   const { skuFromName, uniqueSku, deriveVariantsFromGroups } = deps;
 
   // 0. Checks that write nothing.
@@ -337,7 +354,9 @@ export async function publishNewDesign(input, deps) {
   const colorwayOfGroup = new Map(cleanGroups.map((g, i) => [g.label, colorways[i]]));
   const units = cleanVariants.map((row) => {
     const colorway = colorwayOfGroup.get(row.group);
-    const cell = colorway.cells.find((x) => (x.size ?? null) === (row.size ?? null));
+    // The rail upper-cases sizes (variantDerivation): a cell is found by its size as the rail holds it.
+    const railSize = (size) => (size == null ? null : String(size).trim().toUpperCase());
+    const cell = colorway.cells.find((x) => railSize(x.size) === railSize(row.size));
     return { row, colorway, sku: cell?.sku };
   });
   if (units.some((u) => !u.sku)) return { error: 'Varje variant behöver en artikel hos tryckeriet.' };
@@ -458,7 +477,7 @@ export async function publishNewDesign(input, deps) {
     const plans = units.map((u) => {
       const variantId = variantIdBySku.get(u.row.sku.toLowerCase());
       const wanted = mappingGroups(slots, (slot) => artworkFor(slot, u.colorway.id))
-        .map((g) => ({ ...g, printerId, sku: u.sku }));
+        .map((g) => ({ ...g, printerId, sku: u.sku, ...(placement ? { placement } : {}) }));
       return { variantId, plan: planScopeMappings(mappingsInScope(existing, variantId), wanted) };
     });
     stage.mappingsTotal = plans.reduce((n, p) => n + p.plan.keep.length + p.plan.posts.length, 0);
@@ -466,7 +485,7 @@ export async function publishNewDesign(input, deps) {
     for (const { variantId, plan } of plans) {
       for (const mappingId of plan.deletes) await deleteMapping(mappingId, { shopId });
       for (const m of plan.posts) {
-        await createMapping({ productId, variantId, artworkId: m.artworkId, printerId: m.printerId, sku: m.sku, slots: m.slots }, { shopId });
+        await postMapping({ productId, variantId, artworkId: m.artworkId, printerId: m.printerId, sku: m.sku, slots: m.slots, placement: m.placement }, { shopId });
         stage.mappingsDone += 1;
       }
     }

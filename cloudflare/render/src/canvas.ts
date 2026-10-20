@@ -25,7 +25,7 @@ import { createReadStream } from "node:fs";
 
 import sharp from "sharp";
 
-import type { CanvasSpec, Notice } from "./contract.ts";
+import { type CanvasSpec, type FlatCanvasSpec, isFlatCanvasSpec, type Notice } from "./contract.ts";
 import { DECODE_PIXEL_LIMIT } from "./pipeline.ts";
 
 export type CanvasResult = { ok: true } | { ok: false; reasons: Notice[] };
@@ -56,6 +56,10 @@ export async function renderCanvas(
     return refuse("dims_mismatch", "The print master's pixel size is not the one the line froze.");
   }
 
+  if (isFlatCanvasSpec(spec)) {
+    return renderFlatCanvas(input.path, spec, outPath);
+  }
+
   const left = spec.offsetPx.left;
   const top = spec.offsetPx.top;
   const right = spec.canvasPx.w - left - spec.motifPx.w;
@@ -75,6 +79,59 @@ export async function renderCanvas(
 
   const out = await sharp(outPath).metadata();
   if (out.width !== spec.canvasPx.w || out.height !== spec.canvasPx.h || out.channels !== 4) {
+    throw new Error("canvas_output_mismatch");
+  }
+  return { ok: true };
+}
+
+function hexColour(hex: string): { b: number; g: number; r: number } {
+  return {
+    b: Number.parseInt(hex.slice(5, 7), 16),
+    g: Number.parseInt(hex.slice(3, 5), 16),
+    r: Number.parseInt(hex.slice(1, 3), 16),
+  };
+}
+
+/**
+ * CP12, a flat slot (a poster): the frozen source crop of the master, resized
+ * to the motif box (lanczos3, exact box), on an opaque sheet of the frozen
+ * background — around the motif (contain) and under its transparency — at the
+ * sheet's exact pixels, 8-bit sRGB RGB, pHYs = the DPI. The geometry is the
+ * Worker's (flatCanvasSpec); this only executes it.
+ */
+async function renderFlatCanvas(path: string, spec: FlatCanvasSpec, outPath: string): Promise<CanvasResult> {
+  const left = spec.offsetPx.left;
+  const top = spec.offsetPx.top;
+  const right = spec.canvasPx.w - left - spec.motifPx.w;
+  const bottom = spec.canvasPx.h - top - spec.motifPx.h;
+  const crop = spec.sourceCropPx;
+  if (
+    left < 0 ||
+    top < 0 ||
+    right < 0 ||
+    bottom < 0 ||
+    crop.left + crop.w > spec.sourcePx.w ||
+    crop.top + crop.h > spec.sourcePx.h
+  ) {
+    return refuse("motif_exceeds_canvas", "The motif would not fit inside the canvas.");
+  }
+
+  const background = hexColour(spec.background);
+  let image = sharp(path, { limitInputPixels: DECODE_PIXEL_LIMIT });
+  if (crop.left !== 0 || crop.top !== 0 || crop.w !== spec.sourcePx.w || crop.h !== spec.sourcePx.h) {
+    image = image.extract({ height: crop.h, left: crop.left, top: crop.top, width: crop.w });
+  }
+  await image
+    .flatten({ background })
+    .resize(spec.motifPx.w, spec.motifPx.h, { fit: "fill", kernel: "lanczos3" })
+    .extend({ background: { ...background, alpha: 1 }, bottom, left, right, top })
+    .toColourspace("srgb")
+    .withMetadata({ density: spec.dpi })
+    .png()
+    .toFile(outPath);
+
+  const out = await sharp(outPath).metadata();
+  if (out.width !== spec.canvasPx.w || out.height !== spec.canvasPx.h || out.channels !== 3) {
     throw new Error("canvas_output_mismatch");
   }
   return { ok: true };

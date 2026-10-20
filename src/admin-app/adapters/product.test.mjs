@@ -385,6 +385,7 @@ describe('refusals in the page\'s words', () => {
     assert.match(refusalMessage({ status: 422, code: 'pod_unavailable' }, { step: 'publish' }), /tillverkas/);
     assert.match(refusalMessage({ status: 422, code: 'pod_frame_unconfirmed' }, { step: 'publish' }), /inte bekräftat tryckytan/);
     assert.match(refusalMessage({ status: 422, code: 'pod_required_slot_missing' }, { step: 'publish' }), /framsidan/);
+    assert.match(refusalMessage({ status: 422, code: 'pod_resolution_too_low' }, { step: 'publish' }), /för låg upplösning för en av affischens storlekar/);
   });
   it('the screening verdicts that need a word', () => {
     assert.match(screeningNoticeFor('pending'), /granskas/);

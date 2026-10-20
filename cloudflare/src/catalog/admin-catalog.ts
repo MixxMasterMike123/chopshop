@@ -46,6 +46,8 @@ export type { AdminProduct, ProductStatus } from "./admin-product-reads";
  *                        only stand-in frames while the print canvas is on
  *   pod_required_slot_missing (CP11 U7) a mapping set leaves out a slot its
  *                        printer requires (Prodigi: front)
+ *   pod_resolution_too_low (CP12) a flat print's artwork does not reach its
+ *                        sheet's pixels under its fit
  */
 export type AdminRefusalCode =
   | "currency_mismatch"
@@ -53,6 +55,7 @@ export type AdminRefusalCode =
   | "pod_mapping_missing"
   | "pod_mapping_suspended"
   | "pod_required_slot_missing"
+  | "pod_resolution_too_low"
   | "pod_too_large"
   | "pod_unpriced"
   | "price_below_floor"

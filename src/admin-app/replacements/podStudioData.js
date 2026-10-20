@@ -29,6 +29,7 @@ import { skuFromName, uniqueSku } from '../../utils/productUrls';
 import { deriveVariantsFromGroups } from '../../utils/variantDerivation';
 import { publishNewDesign, updateExistingFromDesign } from './podStudioPublish.js';
 import { serverPlacement } from '../adapters/studio.js';
+import { quoteDesign } from './podCostQuote.js';
 
 export const STUDIO_FLAGS = Object.freeze({
   /** The seller drags and resizes a print (and picks the pocket position). */
@@ -41,6 +42,8 @@ export const STUDIO_FLAGS = Object.freeze({
   lockWhileSaving: true,
   /** The 3D view (unit FN2: GET /v1/admin/pod/3d-models). */
   studio3d: true,
+  /** CP12: "Nytt tryck" — flat prints (posters) beside the garments, where a printer offers them. */
+  flatPrints: true,
 });
 
 export const STUDIO_TEXT = Object.freeze({
@@ -75,6 +78,12 @@ export function useStudioEnv() {
 }
 
 const DEPS = { skuFromName, uniqueSku, deriveVariantsFromGroups };
+
+/**
+ * CP12: the server's quote of one flat size (its one slot, front):
+ * → Promise<{ inkopMinor, priceFloorMinor, currency }>, rejecting as quoteDesign.
+ */
+export const quoteFlatSize = ({ printerId, sku }, options) => quoteDesign({ printerId, sku, slots: ['front'] }, options);
 
 /**
  * The published colours' finished mockups, in the studio's order, each with
@@ -118,6 +127,8 @@ export async function publishDesign(ctx, form) {
     artworkFor: (slot, colorwayId) => ctx.resolveArtwork(slot, colorwayId)?.id ?? null,
     mockups: publishedMockups(ctx, new Set(colorways.map((c) => c.id))),
     heroKey: ctx.heroKey ?? null,
+    // CP12: a flat print's frozen { fit, background? } (absent for a garment).
+    placement: ctx.flatPlacement ?? null,
   }, DEPS);
 }
 

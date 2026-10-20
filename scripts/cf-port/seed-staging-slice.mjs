@@ -12,7 +12,7 @@
  *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] [CHOPSHOP_SLICE_ADMIN_PASSWORD=…] \
  *   node scripts/cf-port/seed-staging-slice.mjs [--tenant slice-YYYYMMDD]
  *        [--purchase] [--refund <orderId>:<amountMinor>] [--connect-proof]
- *        [--printer fake-printer|prodigi]
+ *        [--printer fake-printer|prodigi|prodigi-prints]
  *
  * Steps (each idempotent; every id is printed):
  *   0. refuse unless the API origin is cloudflare/pinned.staging.json origins.api, /health says
@@ -36,7 +36,13 @@
  *      be rebuilt without loss), plus the prodigi row; a printer the policy no longer allows on
  *      staging (the inactive `snapwear` row) is left out and named. An existing prodigi row that
  *      already holds the slice's SKUs is kept as it is. After --purchase the order id and where to
- *      look (GET /v1/platform/print-jobs, the Prodigi sandbox dashboard) are printed),
+ *      look (GET /v1/platform/print-jobs, the Prodigi sandbox dashboard) are printed.
+ *      `--printer prodigi-prints` (CP12 F2): the same on a SECOND Prodigi row "prodigi-prints"
+ *      (D4: one printer row per family, its own shipping) — model BFP-12X16, a white-framed
+ *      12×16" poster (kind flat, its 3543 × 4724 px sheet, Prodigi's `default` area and fixed
+ *      attributes) from docs/cf-port/prodigi-prints-catalog.json, shipping 150 SEK, tier 220 kr
+ *      blank + 0 kr for its one print (placeholders); the product `SLICE-POSTER-…` is mapped to
+ *      GLOBAL-BFP-12X16.white-frame.12x16 with fit `contain` on white, and --purchase ships to SE),
  *      the DTG profile, artwork (.bench/render-bench-typical.png if present, else a generated
  *      3600 × 3600 PNG — the real render container needs ≥ 300 DPI at 300 mm), wait for
  *      `ready`, product, mapping, quote, publish, platform approval, the public PDP;
@@ -74,6 +80,7 @@ import { deflateSync } from "node:zlib";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const PINNED = JSON.parse(readFileSync(path.join(ROOT, "cloudflare/pinned.staging.json"), "utf8"));
 const PRODIGI_CATALOG_PATH = path.join(ROOT, "docs/cf-port/prodigi-catalog.json");
+const PRODIGI_PRINTS_CATALOG_PATH = path.join(ROOT, "docs/cf-port/prodigi-prints-catalog.json");
 const CATALOG_PATH = path.join(ROOT, "docs/SnapWearDocs/snapwear-catalog.json");
 const BENCH_PNG = path.join(ROOT, ".bench/render-bench-typical.png");
 
@@ -82,16 +89,24 @@ const PRINTER_KIND = (() => {
   const at = process.argv.indexOf("--printer");
   return at === -1 ? "fake-printer" : (process.argv[at + 1] ?? "");
 })();
-const PRODIGI = PRINTER_KIND === "prodigi";
-const PRINTER_ID = PRODIGI ? "prodigi" : "fake-printer";
+/** CP12 F2: the posters row, a second Prodigi printer (everything PRODIGI says holds for it too). */
+const PRINTS = PRINTER_KIND === "prodigi-prints";
+const PRODIGI = PRINTER_KIND === "prodigi" || PRINTS;
+const PRINTER_ID = PRINTS ? "prodigi-prints" : PRODIGI ? "prodigi" : "fake-printer";
 /**
  * Fake printer: a crewneck (SnapWear model 18000), White S / M — the SKUs the worker suites use.
  * Prodigi: Gildan 64000 tee, Black M / L (keys `<prodigiSku>.<colour>.<size>` in prodigi-catalog.json).
+ * Prodigi prints: the white-framed 12×16" poster (prodigi-prints-catalog.json; colour = the finish,
+ * size = the sheet).
  */
-const SLICE_MODEL = PRODIGI ? "64000" : "18000";
-const SLICE_SKUS = PRODIGI
-  ? ["GLOBAL-TEE-GIL-64000.black.m", "GLOBAL-TEE-GIL-64000.black.l"]
-  : ["2700003", "2700004"];
+const SLICE_MODEL = PRINTS ? "BFP-12X16" : PRODIGI ? "64000" : "18000";
+const SLICE_SKUS = PRINTS
+  ? ["GLOBAL-BFP-12X16.white-frame.12x16"]
+  : PRODIGI
+    ? ["GLOBAL-TEE-GIL-64000.black.m", "GLOBAL-TEE-GIL-64000.black.l"]
+    : ["2700003", "2700004"];
+/** CP12: the poster's placement, frozen on the mapping's slot (a garment mapping names none). */
+const SLICE_SLOTS = PRINTS ? [{ background: "#ffffff", fit: "contain", slot: "front" }] : ["front"];
 const PROFILE = {
   acceptedFormats: [{ ext: "png" }, { ext: "jpg" }],
   active: true,
@@ -147,9 +162,9 @@ function parseArgs(argv) {
     } else if (arg === "--connect-proof") {
       out.connectProof = true;
     } else if (arg === "--printer") {
-      const value = argv[++index] ?? die("--printer needs fake-printer or prodigi");
-      if (value !== "fake-printer" && value !== "prodigi") {
-        die("--printer needs fake-printer or prodigi");
+      const value = argv[++index] ?? die("--printer needs fake-printer, prodigi or prodigi-prints");
+      if (value !== "fake-printer" && value !== "prodigi" && value !== "prodigi-prints") {
+        die("--printer needs fake-printer, prodigi or prodigi-prints");
       }
     } else if (arg === "--tenant") {
       out.tenant = argv[++index] ?? die("--tenant needs a value");
@@ -358,7 +373,64 @@ function generatedPng(size = 3_600) {
 
 // ── the printer document, from the SnapWear catalogue ──────────────────────
 
+/**
+ * CP12 F2: the posters row from the flat catalogue — the same document the Worker's catalogue
+ * apply builds (printer-catalog.ts buildFromCatalog): kind flat, the one `front` area in mm with
+ * the sheet's exact `px`, Prodigi's `default` area name and the fixed attributes.
+ */
+function prodigiPrintsDocument() {
+  const catalog = JSON.parse(readFileSync(PRODIGI_PRINTS_CATALOG_PATH, "utf8"));
+  const model = catalog.models?.[SLICE_MODEL];
+  const px = model?.printAreaPx?.front;
+  if (model === undefined || model.kind !== "flat" || model.front == null || px == null) {
+    die(`model ${SLICE_MODEL} is not a flat model with a front area and printAreaPx in ${PRODIGI_PRINTS_CATALOG_PATH}`);
+  }
+  const skus = {};
+  for (const sku of SLICE_SKUS) {
+    const entry = catalog.skus?.[sku];
+    if (entry === undefined || String(entry.model) !== SLICE_MODEL) {
+      die(`SKU ${sku} is not a model-${SLICE_MODEL} SKU in ${PRODIGI_PRINTS_CATALOG_PATH}`);
+    }
+    skus[sku] = { label: `${entry.colour} / ${entry.size}`, model: SLICE_MODEL };
+  }
+  const front = {
+    h: model.front.h,
+    ...(Number.isInteger(model.front.offsetTopMm) ? { offsetTopMm: model.front.offsetTopMm } : {}),
+    px: { h: px.h, w: px.w },
+    w: model.front.w,
+  };
+  return {
+    capabilities: {
+      models: {
+        [SLICE_MODEL]: {
+          attributes: model.attributes,
+          garment: model.garment,
+          kind: "flat",
+          name: model.name,
+          printAreasMm: { front },
+          prodigiPrintArea: model.prodigiPrintArea ?? "default",
+          requiredSlots: ["front"],
+        },
+      },
+      skus,
+    },
+    currency: "SEK",
+    name: "Prodigi prints (sandbox)",
+    printerId: PRINTER_ID,
+    provider: "prodigi",
+    // Staging placeholders: shipping ≈ EUR 13.95 (prodigi_eu, the posters' first item) in SEK;
+    // the tier ≈ EUR 19 for the 12×16 with its one print included (extraPrintEurCents 0).
+    shippingCostMinor: 15_000,
+    status: "active",
+    tiers: SLICE_SKUS.map((sku) => ({ blankCostMinor: 22_000, printCostsMinor: { front: 0 }, sku })),
+    type: "api",
+  };
+}
+
 function prodigiDocument() {
+  if (PRINTS) {
+    return prodigiPrintsDocument();
+  }
   const catalog = JSON.parse(readFileSync(PRODIGI_CATALOG_PATH, "utf8"));
   const model = catalog.models?.[SLICE_MODEL];
   if (model === undefined || model.front == null || model.back == null) {
@@ -910,7 +982,9 @@ async function ensureArtwork() {
 async function ensureProduct(artworkId) {
   step("product, mapping, quote, publish, approval");
   // A second printer on one tenant gets its OWN product (sku/name suffixed), never the other's.
-  const sku = `SLICE-TEE-${TENANT_ID.replace(/^slice-/, "").toUpperCase()}${PRODIGI ? "-PRODIGI" : ""}`;
+  const sku = PRINTS
+    ? `SLICE-POSTER-${TENANT_ID.replace(/^slice-/, "").toUpperCase()}`
+    : `SLICE-TEE-${TENANT_ID.replace(/^slice-/, "").toUpperCase()}${PRODIGI ? "-PRODIGI" : ""}`;
   const mappings = expectStatus(
     await api("GET", "/v1/admin/pod/mappings", { session: true, shop: true }),
     [200],
@@ -932,7 +1006,9 @@ async function ensureProduct(artworkId) {
         allowShipping: true,
         currency: "SEK",
         description: "CP2 vertical slice — tryckt på beställning (staging).",
-        name: `Slice-tröja ${TENANT_ID.replace(/^slice-/, "")}${PRODIGI ? " (Prodigi)" : ""}`,
+        name: PRINTS
+          ? `Slice-affisch ${TENANT_ID.replace(/^slice-/, "")} (Prodigi)`
+          : `Slice-tröja ${TENANT_ID.replace(/^slice-/, "")}${PRODIGI ? " (Prodigi)" : ""}`,
         priceMinor: PRICE_MINOR,
         sku,
       },
@@ -962,14 +1038,19 @@ async function ensureProduct(artworkId) {
   if (existing === undefined) {
     const mapped = expectStatus(
       await api("POST", "/v1/admin/pod/mappings", {
-        json: { artworkId, printerId: PRINTER_ID, productId, sku: SLICE_SKUS[0], slots: ["front"] },
+        json: { artworkId, printerId: PRINTER_ID, productId, sku: SLICE_SKUS[0], slots: SLICE_SLOTS },
         session: true,
         shop: true,
       }),
       [200, 201],
       "create mapping",
     );
-    info("mapping", `${mapped.json.mapping.mappingId} (${SLICE_SKUS[0]}, front ${mapped.json.mapping.slots[0]?.widthMm}×${mapped.json.mapping.slots[0]?.heightMm} mm)`);
+    const slot = mapped.json.mapping.slots[0];
+    info(
+      "mapping",
+      `${mapped.json.mapping.mappingId} (${SLICE_SKUS[0]}, front ${slot?.widthMm}×${slot?.heightMm} mm` +
+        `${slot?.fit === undefined ? "" : `, ${slot.fit} on ${slot.background}`})`,
+    );
   } else {
     info("mapping", `${existing.mappingId} (reused)`);
   }

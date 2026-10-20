@@ -218,6 +218,37 @@ describe("CP6-PS2: the canvas lease", () => {
     expect(parseCanvasLease({ jobType: "pod.print_canvas" })).toEqual({ claim: null, ok: false });
   });
 
+  it("CP12: accepts a flat (poster) spec and refuses one it cannot execute honestly", () => {
+    const flat = {
+      background: "#ffffff",
+      canvasPx: { h: 4_724, w: 3_543 },
+      dpi: 300,
+      fit: "contain",
+      motifPx: { h: 3_543, w: 3_543 },
+      offsetPx: { left: 0, top: 590 },
+      sourceCropPx: { h: 3_600, left: 0, top: 0, w: 3_600 },
+      sourcePx: { h: 3_600, w: 3_600 },
+      version: 1,
+    };
+    const parsed = parseCanvasLease(canvasBody({ spec: flat }));
+    expect(parsed.ok && parsed.lease.spec).toEqual(flat);
+    const cover = { ...flat, fit: "cover", motifPx: { h: 4_724, w: 3_543 }, offsetPx: { left: 0, top: 0 }, sourceCropPx: { h: 3_600, left: 450, top: 0, w: 2_700 } };
+    expect(parseCanvasLease(canvasBody({ spec: cover })).ok).toBe(true);
+    for (const spec of [
+      { ...flat, background: "white" },
+      { ...flat, background: "#FFFFFF" },
+      { ...flat, background: "transparent" },
+      { ...flat, fit: "stretch" },
+      { ...flat, sourceCropPx: undefined },
+      { ...flat, sourceCropPx: { h: 3_600, left: 1, top: 0, w: 3_600 } },
+      { ...flat, sourceCropPx: { h: 3_600, left: -1, top: 0, w: 100 } },
+      { ...flat, offsetPx: { left: 1, top: 590 } },
+      { ...flat, canvasPx: { h: 9_000, w: 9_000 } },
+    ]) {
+      expect(parseCanvasLease(canvasBody({ spec })).ok, JSON.stringify(spec)).toBe(false);
+    }
+  });
+
   it("a canvas completion names the key derived from the lease; a refusal only its reasons", () => {
     const parsed = parseCanvasLease(canvasBody());
     if (!parsed.ok) throw new Error("fixture");

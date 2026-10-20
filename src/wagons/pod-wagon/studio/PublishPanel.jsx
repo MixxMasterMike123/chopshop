@@ -94,6 +94,10 @@ const fmtPct = (frac) => (Number.isFinite(frac) ? `${Math.round(frac * 100)} %` 
  *   production     — the Cloudflare admin only: the printer + model chosen in
  *                    the studio, with its articles ({ printerId, articles,
  *                    … }); null in the older build
+ *   sizeOptions    — the size columns to start from (CP12 "Nytt tryck": the
+ *                    ticked sheet sizes); null = DEFAULT_SIZES (garments)
+ *   allowExisting  — offer "Uppdatera befintlig produkt" (false for a flat
+ *                    print in CP12 phase 1: it is published as a new product)
  */
 const PublishPanel = ({
   mockups = [],
@@ -117,6 +121,8 @@ const PublishPanel = ({
   errorField = null,
   locked = false,
   production = null,
+  sizeOptions = null,
+  allowExisting = true,
 }) => {
   // Colourways that actually have ≥1 generated mockup (the only publishable set).
   const availableColorways = useMemo(() => {
@@ -141,7 +147,7 @@ const PublishPanel = ({
   const [targetProductId, setTargetProductId] = useState(initialTargetProductId || '');
   const [replaceImages, setReplaceImages] = useState(false); // never silently replace
   const [margin, setMargin] = useState('40');
-  const [sizes, setSizes] = useState(DEFAULT_SIZES);
+  const [sizes, setSizes] = useState(sizeOptions ?? DEFAULT_SIZES);
   const [newSize, setNewSize] = useState('');
   // Per-(colourway,size) opt-out: default all-on. { [cwId]: { [size]: bool } }.
   const [sizeOptOut, setSizeOptOut] = useState({});
@@ -349,6 +355,7 @@ const PublishPanel = ({
           {/* 2. Target: new product (default) or an existing one. Closes the
               content-first gap — a product created without images gets its
               studio mockups AND its print connection here. */}
+          {allowExisting && (
           <div>
             <label className={labelCls}>Mål</label>
             <div className="flex flex-wrap gap-x-4 gap-y-2">
@@ -425,6 +432,7 @@ const PublishPanel = ({
               </div>
             )}
           </div>
+          )}
 
           {/* 2b. Product name (new-product target only) */}
           {target === 'new' && (
