@@ -330,3 +330,20 @@ export function flatPublishShape(family, finishId, tickedSkus) {
     },
   };
 }
+
+// ── the design's revision (Codex round 1) ───────────────────────────────────
+
+/**
+ * A counter of the design's revisions: every change that makes a rendered
+ * preview stale bumps it; a render takes the revision it started at and its
+ * result is installed only while that is still current. → { bump(), current(),
+ * isCurrent(rev) }.
+ */
+export function createRevision() {
+  let rev = 0;
+  return {
+    bump: () => { rev += 1; return rev; },
+    current: () => rev,
+    isCurrent: (r) => r === rev,
+  };
+}

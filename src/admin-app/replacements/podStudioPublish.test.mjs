@@ -10,7 +10,7 @@ import { createState, route } from '../dev/dev-api.mjs';
 import { setPodClock } from '../dev/pod-dev.mjs';
 import { setRequestShopId } from '../../api/admin/client.js';
 import { deriveVariantsFromGroups } from '../../utils/variantDerivation.js';
-import { forgetPendingRun, pendingRun, publishNewDesign, updateExistingFromDesign } from './podStudioPublish.js';
+import { PUBLISH_BUSY_MSG, forgetPendingRun, pendingRun, publishNewDesign, updateExistingFromDesign } from './podStudioPublish.js';
 import { forgetStudioUploads } from './podStudioImages.js';
 import { clearPod3dModelsCache, loadPod3dModels } from './pod3dModels.js';
 import { clearPodMockupTemplatesCache, getPodMockupTemplatesMeta, loadPodMockupTemplates } from './podMockupTemplates.js';
@@ -448,6 +448,55 @@ describe('publishing a new design', () => {
     hold = null;
     assert.equal(await settled(run), false);
     assert.equal(writes().length, 0);
+  });
+});
+
+describe('two studios in one shop (CP12, Codex round 1)', () => {
+  // A poster: the dev printer of framed posters, one finish, one size.
+  const poster = (over = {}) => design({
+    name: 'Fjällaffisch',
+    colorways: [{ id: 'white-frame', label: 'Vit ram', price: '', cells: [{ size: '30 × 40', sku: 'DEV-BFP-12X16.white-frame.12x16' }] }],
+    slots: ['front'],
+    printerId: 'dev-prints',
+    artworkFor: () => 'art-rygg',
+    mockups: mockupsOf(['white-frame'], ['front']),
+    heroKey: 'white-frame:front',
+    placement: { fit: 'contain', background: '#ffffff' },
+    price: 599,
+    runKey: 'flat:a',
+    ...over,
+  });
+
+  it('a poster publish never continues the garment studio\'s draft (nor another poster design\'s)', async () => {
+    let posts = 0;
+    inject = (r) => (r.method === 'POST' && r.url.endsWith('/variants') && ++posts === 3 ? fail(500, 'internal') : undefined);
+    const garment = await publishNewDesign(design(), DEPS);
+    assert.equal(garment.changed, true);
+    const draft = pendingRun('test-shop-a');
+    assert.ok(draft);
+    inject = null;
+    const printed = await publishNewDesign(poster(), DEPS);
+    assert.ok(printed.result, printed.error);
+    assert.notEqual(printed.result.productId, draft.productId, 'a product of its own');
+    assert.equal(read(`/v1/admin/products/${draft.productId}`).product.name, 'Fjälltröja', 'the garment draft is untouched');
+    assert.deepEqual(pendingRun('test-shop-a'), draft, 'the garment studio still continues its draft');
+    assert.equal(pendingRun('test-shop-a', 'flat:a'), null);
+    assert.deepEqual(read(`/v1/admin/pod/mappings?productId=${printed.result.productId}`).mappings.map((m) => m.slots[0].fit), ['contain']);
+  });
+
+  it('a second save while one runs in the shop is refused (whichever studio), and nothing is written by it', async () => {
+    let release;
+    hold = new Promise((r) => { release = r; });
+    const first = publishNewDesign(design(), DEPS);
+    await new Promise((r) => setTimeout(r, 0));
+    const before = sent.length;
+    assert.deepEqual(await publishNewDesign(poster(), DEPS), { error: PUBLISH_BUSY_MSG });
+    assert.deepEqual(await updateExistingFromDesign({ shopId: 'test-shop-a', productId: 'x', slots: ['front'] }), { error: PUBLISH_BUSY_MSG });
+    assert.equal(sent.length, before, 'the refused saves sent nothing');
+    hold = null;
+    release();
+    assert.ok((await first).result);
+    assert.ok((await publishNewDesign(poster(), DEPS)).result, 'free again once the first is done');
   });
 });
 

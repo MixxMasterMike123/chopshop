@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 
 import {
   BLEED_MM,
+  createRevision,
   DEFAULT_BACKGROUND,
   SAFE_MM,
   finishLabel,
@@ -278,5 +279,18 @@ describe('flatPublishShape', () => {
   it('is null with nothing ticked or an unknown finish', () => {
     assert.equal(flatPublishShape(family, 'white-frame', []), null);
     assert.equal(flatPublishShape(family, 'gold', family.sizes.map((s) => s.sku)), null);
+  });
+});
+
+describe('createRevision (a render installs only while its design is current)', () => {
+  it('a render started before a change is stale after it', () => {
+    const rev = createRevision();
+    const started = rev.current();
+    assert.ok(rev.isCurrent(started));
+    rev.bump(); // the seller went back and changed the fit
+    assert.ok(!rev.isCurrent(started), 'the stale render is discarded');
+    const again = rev.current();
+    assert.ok(rev.isCurrent(again));
+    assert.equal(rev.bump(), again + 1);
   });
 });

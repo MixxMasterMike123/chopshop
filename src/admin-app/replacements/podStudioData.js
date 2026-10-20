@@ -129,6 +129,8 @@ export async function publishDesign(ctx, form) {
     heroKey: ctx.heroKey ?? null,
     // CP12: a flat print's frozen { fit, background? } (absent for a garment).
     placement: ctx.flatPlacement ?? null,
+    // CP12 (Codex round 1): the design whose failed draft this may continue (absent = the garment studio).
+    runKey: ctx.runKey ?? null,
   }, DEPS);
 }
 

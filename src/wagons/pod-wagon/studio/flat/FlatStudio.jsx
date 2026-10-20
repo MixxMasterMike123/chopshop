@@ -37,6 +37,7 @@ import { quoteRefusalMessage } from '../../../../admin-app/adapters/pod.js';
 import { inkopText, quoteSummary } from '../../../../admin-app/adapters/studio.js';
 import {
   BLEED_MM,
+  createRevision,
   DEFAULT_BACKGROUND,
   DEFAULT_FIT,
   FLAT_GARMENTS,
@@ -116,6 +117,14 @@ const FlatStudio = ({ artwork = [], loading = false, shopId = null, products = [
   const [publishErrorField, setPublishErrorField] = useState(null);
   const [publishResult, setPublishResult] = useState(null);
   const publishingRef = useRef(false);
+  // Codex round 1: the design's revision — a preview render installs only
+  // while the design it was drawn from is still the current one.
+  const revisionRef = useRef(null);
+  if (revisionRef.current === null) revisionRef.current = createRevision();
+  // This design's key for a failed publish's draft (podStudioPublish runKey):
+  // never the garment studio's, never another poster design's.
+  const runKeyRef = useRef(null);
+  if (runKeyRef.current === null) runKeyRef.current = `flat:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
   // ── the families (the tenant printer view, through the routing loader) ────
   useEffect(() => {
@@ -181,6 +190,7 @@ const FlatStudio = ({ artwork = [], loading = false, shopId = null, products = [
   const qualifyingCount = (a) => sizes.filter((s) => flatQualifies(a, s.px)?.ok).length;
 
   const resetDownstream = () => {
+    revisionRef.current.bump(); // a render in flight is now stale
     setPreviews((prev) => {
       Object.values(prev).forEach((p) => URL.revokeObjectURL(p.objectUrl));
       return {};
@@ -245,16 +255,23 @@ const FlatStudio = ({ artwork = [], loading = false, shopId = null, products = [
   // ── 4 · the framed previews (one per ticked size) ─────────────────────────
   const makePreviews = useCallback(async () => {
     if (!image || !art || tickedSizes.length === 0) return;
+    const rev = revisionRef.current.current();
     setPreviewing(true);
     setPreviewError(null);
+    const next = {};
     try {
-      const next = {};
       for (const s of tickedSizes) {
         const canvas = renderFramed({
           image, artW: art.sourceWidthPx, artH: art.sourceHeightPx, mm: s.mm, fit, background, frameHex: finish?.hex,
         });
         const blob = await canvasBlob(canvas);
         next[s.sku] = { objectUrl: URL.createObjectURL(blob), blob, type: blob.type };
+        if (!revisionRef.current.isCurrent(rev)) break;
+      }
+      if (!revisionRef.current.isCurrent(rev)) {
+        // The design changed while this drew: its pictures are of the old one.
+        Object.values(next).forEach((p) => URL.revokeObjectURL(p.objectUrl));
+        return;
       }
       setPreviews((prev) => {
         Object.values(prev).forEach((p) => URL.revokeObjectURL(p.objectUrl));
@@ -263,6 +280,8 @@ const FlatStudio = ({ artwork = [], loading = false, shopId = null, products = [
       setHeroSku((cur) => (cur && next[cur] ? cur : tickedSizes[tickedSizes.length - 1].sku));
     } catch (error) {
       console.warn('FlatStudio: preview failed', error?.message);
+      Object.values(next).forEach((p) => URL.revokeObjectURL(p.objectUrl));
+      if (!revisionRef.current.isCurrent(rev)) return;
       setPreviewError(error?.name === 'SecurityError'
         ? 'Motivets bild kunde inte läsas för förhandsvisningen. Ladda om sidan och försök igen.'
         : 'Förhandsvisningen kunde inte skapas. Försök igen.');
@@ -346,6 +365,7 @@ const FlatStudio = ({ artwork = [], loading = false, shopId = null, products = [
         resolveArtwork: () => art,
         production: shape.production,
         flatPlacement: flatPlacement(fit, background),
+        runKey: runKeyRef.current,
       }, form);
       if (outcome?.result) {
         setPublishResult(outcome.result);

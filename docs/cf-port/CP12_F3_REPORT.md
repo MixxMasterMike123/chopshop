@@ -78,3 +78,23 @@ A poster was published end to end on the dev API, and its mappings were stored w
   - Replacements and dev tests: 290 pass, 0 fail.
   - `check-admin-build`: clean.
   - The `node_modules` link is removed again.
+
+## Codex round 1
+
+**P1, a failed draft could be continued by the other studio.**
+- **Drafts per design.** `podStudioPublish.js` remembers a failed publish's draft per shop and design. The garment studio keeps one key per tab; "Nytt tryck" uses `flat:<id>`, made once per FlatStudio mount and passed through `podStudioData` as `ctx.runKey`. A poster publish therefore never continues the garment studio's draft, and the reverse holds too.
+- **One save per shop.** Both studios now refuse to start a save while another runs in the same shop, with `PUBLISH_BUSY_MSG`. This applies to `publishNewDesign` and `updateExistingFromDesign`.
+- **When the hold ends.** It is released when the save settles. It is also released as soon as the tab is seen on another shop, because a save whose shop the tab left never settles (`readForShop` drops its answers).
+- **Tests.** Two new cases in `podStudioPublish.test.mjs`: a garment draft stays untouched while a poster is published as its own product, and a second save while one runs is refused without sending any request.
+
+**P2, a stale preview could be published.**
+- `FlatStudio` now keeps a design revision (`createRevision` in `adapters/studioFlat.js`, with a test).
+- Every design change (fit, background, motif, sizes, finish) bumps the revision. A framed-preview render keeps the revision it started at and installs its images only if that revision is still current; otherwise it revokes them.
+- Step 4 then renders again from the current design.
+
+**Gates.**
+- Adapter, replacement and dev tests together: 734 pass, 0 fail.
+- `check-admin-build`: clean.
+- Older `vite build`: built.
+- Guards: PASS.
+- The `node_modules` link is removed.

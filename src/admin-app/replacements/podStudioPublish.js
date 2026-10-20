@@ -44,7 +44,7 @@
 // THE SELLER SEES ONE NUMBER: the only figures read are the server's quote
 // (inkopMinor, priceFloorMinor); nothing here prices.
 
-import { AdminApiError, adminRequest } from '../../api/admin/client.js';
+import { AdminApiError, adminRequest, getRequestShopId } from '../../api/admin/client.js';
 import {
   createProduct,
   createVariant,
@@ -84,19 +84,62 @@ export const QUOTE_FAILED_MSG = 'Inköpspriset kunde inte hämtas. Kontrollera a
 
 const SESSION_GONE = 'Sessionen har gått ut. Logga in igen.';
 
-// ── the draft a failed publish left, per shop (for the life of the tab) ─────
+// ── the draft a failed publish left, per shop AND design (for the life of the tab) ──
+// CP12 (Codex round 1): two studios share this module (the garment studio
+// and "Nytt tryck"), so a draft is remembered under the DESIGN that made it
+// (`runKey`: absent = the garment studio, one per tab; "flat:<id>" a
+// poster design). A publish never continues another design's draft.
 
-const pendingRuns = new Map(); // shopId → { productId, sku }
+const pendingRuns = new Map(); // `${shopId}\n${runKey}` → { productId, sku }
+const GARMENT_RUN = 'garment';
+const runSlot = (shopId, runKey) => `${shopId}\n${runKey ?? GARMENT_RUN}`;
 
-/** The draft the next publish in this shop continues, or null. */
-export function pendingRun(shopId) {
-  return pendingRuns.get(shopId) ?? null;
+/** The draft the next publish of this design (runKey; absent = the garment studio) continues, or null. */
+export function pendingRun(shopId, runKey) {
+  return pendingRuns.get(runSlot(shopId, runKey)) ?? null;
 }
 
-/** Forget the draft (tests; a new sign-in). The draft itself stays on the server. */
-export function forgetPendingRun(shopId) {
-  if (shopId === undefined) pendingRuns.clear();
-  else pendingRuns.delete(shopId);
+/** Forget the draft (tests; a new sign-in): all (and every save's hold), a shop's, or one design's. The draft itself stays on the server. */
+export function forgetPendingRun(shopId, runKey) {
+  if (shopId === undefined) {
+    pendingRuns.clear();
+    busyShops.clear();
+  }
+  else if (runKey !== undefined) pendingRuns.delete(runSlot(shopId, runKey));
+  else for (const key of [...pendingRuns.keys()]) if (key.startsWith(`${shopId}\n`)) pendingRuns.delete(key);
+}
+
+// ── one save at a time per shop (both studios) ──────────────────────────────
+
+const busyShops = new Map(); // shopId → the running save's token
+export const PUBLISH_BUSY_MSG = 'En annan produkt sparas just nu från studion. Vänta tills den är klar och försök igen.';
+const SHOP_WATCH_MS = 200;
+
+/**
+ * Run `work` unless a studio save already runs in this shop (→ { error }); the
+ * shop is free again when it settles. A save whose shop the tab LEFT never
+ * settles (its answers are dropped: readForShop), so the hold also ends the
+ * moment the tab is seen on another shop.
+ */
+async function oneAtATime(shopId, work) {
+  if (busyShops.has(shopId)) return { error: PUBLISH_BUSY_MSG };
+  const token = {};
+  busyShops.set(shopId, token);
+  const release = () => {
+    if (busyShops.get(shopId) === token) busyShops.delete(shopId);
+  };
+  const watch = setInterval(() => {
+    if (getRequestShopId() !== shopId) {
+      clearInterval(watch);
+      release();
+    }
+  }, SHOP_WATCH_MS);
+  try {
+    return await work();
+  } finally {
+    clearInterval(watch);
+    release();
+  }
 }
 
 // ── shared checks ───────────────────────────────────────────────────────────
@@ -274,13 +317,20 @@ async function imageStep({ shopId, productId, rows, colours, mockups, heroKey, r
  *   heroKey                the mockup the seller picked as the main image
  *   placement              CP12: a flat print's { fit, background? } frozen in
  *                          every mapping; null/absent for a garment
+ *   runKey                 CP12: the design whose failed draft this run may
+ *                          continue ("flat:<id>"); absent = the garment studio
  * deps: { skuFromName, uniqueSku, deriveVariantsFromGroups }
  *
  * → { result: { name, sku, productId, published: true, note, screeningNotice, held, blocked } }
  *   | { error, field?: 'price', changed?: true }   (changed: something was written)
  */
-export async function publishNewDesign(input, deps) {
-  const { shopId, currency, name, price, colorways, slots, printerId, artworkFor, mockups = [], heroKey = null, placement = null } = input;
+export function publishNewDesign(input, deps) {
+  return oneAtATime(input.shopId, () => publishNewDesignNow(input, deps));
+}
+
+async function publishNewDesignNow(input, deps) {
+  const { shopId, currency, name, price, colorways, slots, printerId, artworkFor, mockups = [], heroKey = null, placement = null, runKey = null } = input;
+  const run = runSlot(shopId, runKey);
   const { skuFromName, uniqueSku, deriveVariantsFromGroups } = deps;
 
   // 0. Checks that write nothing.
@@ -318,13 +368,13 @@ export async function publishNewDesign(input, deps) {
   }
 
   // 1. The SKU (the draft a failed run left keeps its own).
-  let resume = pendingRuns.get(shopId) ?? null;
+  let resume = pendingRuns.get(run) ?? null;
   let server = null;
   if (resume) {
     server = await getProduct(resume.productId, { shopId }).catch(() => undefined);
     if (server === undefined) return { error: 'Utkastet från förra försöket kunde inte läsas. Försök igen om en stund.' };
     if (server === null || server.product.status === 'archived') {
-      pendingRuns.delete(shopId);
+      pendingRuns.delete(run);
       resume = null;
       server = null;
     }
@@ -399,7 +449,7 @@ export async function publishNewDesign(input, deps) {
       // The answer was lost: the product may exist. Look for its SKU so the next try continues it.
       const found = await listAllProducts({ shopId }).then((all) => all.find((p) => p.sku === resolvedSku)).catch(() => null);
       if (found) {
-        pendingRuns.set(shopId, { productId: found.productId, sku: resolvedSku });
+        pendingRuns.set(run, { productId: found.productId, sku: resolvedSku });
         return {
           changed: true,
           error: `Anslutningen bröts, men produkten ”${name}” (SKU ${resolvedSku}) skapades som utkast. Tryck ”Skapa produkt” igen för att fortsätta med den.`,
@@ -409,7 +459,7 @@ export async function publishNewDesign(input, deps) {
     }
     return { error: refusalMessage(error, { step: 'product' }) ?? 'Produkten kunde inte skapas.' };
   }
-  pendingRuns.set(shopId, { productId, sku: resolvedSku });
+  pendingRuns.set(run, { productId, sku: resolvedSku });
 
   const stage = { variantsDone: 0, variantsTotal: desired.length, mappingsDone: 0, mappingsTotal: null };
   const draftError = (cause) => ({
@@ -530,7 +580,7 @@ export async function publishNewDesign(input, deps) {
     }
   }
 
-  pendingRuns.delete(shopId);
+  pendingRuns.delete(run);
   return {
     result: {
       name,
@@ -561,7 +611,11 @@ export async function publishNewDesign(input, deps) {
  *
  * → { result: { name, sku, updated: true, note } } | { error, changed?: true }
  */
-export async function updateExistingFromDesign(input) {
+export function updateExistingFromDesign(input) {
+  return oneAtATime(input.shopId, () => updateExistingNow(input));
+}
+
+async function updateExistingNow(input) {
   const {
     shopId, productId, slots, printerId, articles, colorways, overrideColorwayIds, artworkFor,
     mockups = [], heroKey = null, replaceImages = false,
