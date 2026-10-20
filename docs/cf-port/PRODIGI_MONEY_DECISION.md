@@ -15,13 +15,19 @@ Written 2026-10-19 (CP11, unit U6). Source numbers: `CP11_U4_REPORT.md`, `prodig
 
 ### 2.1 Shipping figure: withhold the PL figure per order (recommended)
 
+**DECIDED 2026-10-20 (Mikael): superseded by a LIVE quote at checkout — the quoted shipping (all shipments) + buffer is passed through to the buyer and withheld; the flat PL figure stays only as the fallback when the quote is unavailable. Brief: `CP11_BRIEFS.md` §U9 (D9, D12).**
+
 Set the Prodigi printer's `shippingCostMinor` to the PL first-item price, converted to SEK and buffered (section 2.3). One flat amount per order, withheld once, as for SnapWear. Reason: PL is the dearer lab, so a NL-routed order over-collects (about EUR 6.50) and that covers the cases below. The seller still sees one number only.
 
 ### 2.2 Accept the mixed-lab under-collection (recommended, but it is a loss you choose)
 
+**Moot once §U9 is built: the quote prices every shipment, so a split order collects both fees. Applies to the fallback path only.**
+
 An order whose items are made in both labs is charged both shipping fees: 11.85 + 5.35 = EUR 17.20 against the EUR 11.85 withheld, so we are short about EUR 5.35 (roughly 60 SEK). Every extra item also costs EUR 1.00 that the flat figure does not cover. The over-collection on NL-only orders offsets some of it; no figure is known for how often each happens. The alternative (withhold the sum for the worst case) over-charges every single-lab order and makes the seller's price look worse than it is. Suggestion: accept, then read the real charges on the first 20 live orders and adjust.
 
 ### 2.3 EUR to SEK rate and buffer: NOT YET CHOSEN
+
+**DECIDED 2026-10-20 (Mikael): buffer = max(EUR 0.50, 5 %) on unit cost and on shipping separately, in EUR before conversion; rate default 11.20; all three are platform settings (migration 0058) reviewed monthly. §U9 D10.**
 
 The importer deliberately does not fix them: `applyPricingEur` carries only `baseEurCents`; `eurSek` and `bufferBp` are given when the catalogue is applied. **What must be chosen:** (a) the rate, (b) the buffer in basis points, (c) when the rate is reviewed.
 
@@ -34,6 +40,8 @@ Example at those numbers (SEK, ex VAT, rounded): 64000 EUR 11.00 gives about 129
 The 25.00 is a few colours; most are 10-12. Pricing the whole model at the highest makes every BC3001 tee expensive. Options: a per-model override at apply time (suggestion: 12.00 and leave the few dearest colours out of the offer), or drop BC3001 at launch. Not decided here.
 
 ### 2.5 Non-EU labs (decide)
+
+**DECIDED 2026-10-20 (Mikael): a line whose quote names a non-EU lab is refused at checkout ("Produkten kan inte levereras just nu"); no customs pricing. §U9 D11.**
 
 213 SKUs may be made in the UK or Australia. Suggestion: leave them out of the offer at launch (no customs data, different shipping), or accept them knowing the flat shipping figure is wrong for them (lab uk9: EUR 21.78 first item; AU: EUR 21.46 + 7.46 per extra). The importer keeps them with `lab` named; filtering is not built.
 
