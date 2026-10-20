@@ -109,7 +109,7 @@ function offlineCatalog() {
         continue;
       }
       e.request.items.forEach((item, i) => {
-        if (q.items[String(i + 1)]) quotes[skuKey(item.sku, item.attributes.color, item.attributes.size)] = q.items[String(i + 1)];
+        if (q.items[String(i + 1)]) quotes[skuKey(item.sku, item.attributes.color, item.attributes.size ?? "one size")] = q.items[String(i + 1)];
       });
     }
   }
@@ -121,7 +121,7 @@ test("the built document: shape applyCatalog reads", { skip: !existsSync(join(SA
   assert.equal(Object.keys(document.models).length, MODELS.length);
   for (const [code, m] of Object.entries(document.models)) {
     assert.match(code, /^[A-Za-z0-9._-]{1,64}$/);
-    assert.ok(["tee", "hoodie", "sweatshirt"].includes(m.garment));
+    assert.ok(["tee", "hoodie", "sweatshirt", "tank", "tote"].includes(m.garment));
     assert.ok(m.front && m.front.offsetTopMm === 0 && m.front.w > 0 && m.front.h > 0, `${code} front`);
   }
   for (const [key, s] of Object.entries(document.skus)) {
@@ -132,7 +132,7 @@ test("the built document: shape applyCatalog reads", { skip: !existsSync(join(SA
     const parts = splitSkuKey(key);
     assert.equal(parts.sku, s.prodigiSku);
     assert.equal(parts.color, s.attributes.color.toLowerCase());
-    assert.equal(parts.size, slug(s.attributes.size));
+    assert.equal(parts.size, slug(s.attributes.size ?? "one size")); // the tote has no size attribute
   }
   assert.ok(JSON.stringify(document).length < 1_048_576, "inside CATALOG_MAX_BYTES");
 });
@@ -173,4 +173,48 @@ test("the committed docs/cf-port/prodigi-catalog.json agrees with the fixtures",
   const { document } = offlineCatalog();
   assert.deepEqual(committed.models, document.models);
   assert.deepEqual(committed.skus, document.skus);
+});
+
+// ── CP11-U4B: 18600 (required `edge`) and the tote (no size, print area "default") ──
+test("U4B models are registered with confirmed SKU strings", () => {
+  const by = Object.fromEntries(MODELS.map((m) => [m.model, m]));
+  assert.equal(by["64000L"].sku, "GLOBAL-TEE-GIL-64000L");
+  assert.equal(by["18600"].sku, "GLOBAL-HOOD-GIL-18600");
+  assert.equal(by["64200"].sku, "GLOBAL-TT-GIL-64200");
+  assert.equal(by["JH001F"].sku, "HOOD-AWD-JH001F");
+  assert.equal(by["STAU773"].sku, "H-BAG-LTOTE");
+  assert.equal(by["STAU773"].garment, "tote");
+});
+
+test("18600: edge is carried into the quote attributes (Zip for white, Drawstring otherwise)", () => {
+  const zip = load("product-GLOBAL-HOOD-GIL-18600.json").product;
+  const pairs = colourSizes(zip);
+  assert.ok(pairs.length > 0 && pairs.every((p) => p.edge === "Zip" || p.edge === "Drawstring"));
+  assert.ok(pairs.filter((p) => p.color === "white").every((p) => p.edge === "Zip"));
+  const jobs = quoteJobs({ model: "18600", sku: "GLOBAL-HOOD-GIL-18600" }, zip);
+  assert.ok(jobs.every((j) => j.request.items.every((i) => typeof i.attributes.edge === "string")));
+  // a product with a single edge value never sends one
+  const hood = load("product-GLOBAL-HOOD-GIL-18500.json").product;
+  assert.ok(colourSizes(hood).every((p) => p.edge === undefined));
+});
+
+test("tote: no size attribute, one size key, print area from slot default, quote asks for default", () => {
+  const tote = load("product-H-BAG-LTOTE.json").product;
+  const pairs = colourSizes(tote);
+  assert.equal(pairs.length, 13);
+  assert.ok(pairs.every((p) => p.sizeless && p.size === "one size"));
+  const jobs = quoteJobs({ model: "STAU773", sku: "H-BAG-LTOTE" }, tote);
+  assert.deepEqual(jobs[0].request.items[0].attributes, { color: jobs[0].color });
+  assert.equal(jobs[0].request.items[0].assets[0].printArea, "default");
+  const key = skuKey("H-BAG-LTOTE", "natural raw", "one size");
+  assert.equal(key, "H-BAG-LTOTE.natural-raw.one-size");
+  assert.match(key, SKU_GRAMMAR);
+});
+
+test("the committed catalogue carries the U4B models", () => {
+  const cat = JSON.parse(readFileSync(join(SAMPLES, "../prodigi-catalog.json"), "utf8"));
+  for (const m of ["64000L", "18600", "64200", "JH001F", "STAU773"]) assert.ok(cat.models[m], m);
+  assert.equal(cat.models.STAU773.front.w, 270);
+  assert.equal(cat.unquoted.length, 0);
+  assert.ok(Object.values(cat.skus).filter((s) => s.model === "STAU773").every((s) => !("size" in s.attributes)));
 });

@@ -51,6 +51,12 @@ export const MODELS = [
   { model: "JH001", sku: "GLOBAL-HOOD-AWD-JH001", garment: "hoodie" },
   { model: "JH030", sku: "GLOBAL-SWEAT-AWD-JH030", garment: "sweatshirt" },
   { model: "BC3001", sku: "GLOBAL-TEE-BC-3001", garment: "tee" },
+  // CP11-U4B (2026-10-20): Kent's list. Each string confirmed by GET /products/{sku} = 200 (docs/cf-port/CP11_U4B_REPORT.md).
+  { model: "64000L", sku: "GLOBAL-TEE-GIL-64000L", garment: "tee" },
+  { model: "18600", sku: "GLOBAL-HOOD-GIL-18600", garment: "hoodie" }, // zip hoodie: no zip value exists, hoodie is the closest
+  { model: "64200", sku: "GLOBAL-TT-GIL-64200", garment: "tank" },
+  { model: "JH001F", sku: "HOOD-AWD-JH001F", garment: "hoodie" },
+  { model: "STAU773", sku: "H-BAG-LTOTE", garment: "tote" },
 ];
 
 // ── pure functions (tested on saved fixtures) ──────────────────────────────
@@ -136,9 +142,16 @@ export function areaVariants(variants, slot) {
 /** colour x size pairs the destination can receive, sorted. */
 export function colourSizes(product, country = DESTINATION) {
   const pairs = new Map();
+  // `edge` is a required quote/order attribute where a product lists more than one value (18600: Zip for white, Drawstring for the rest)
+  const edges = new Set((product.variants ?? []).map((v) => v.attributes?.edge).filter((e) => typeof e === "string"));
   for (const v of variantsFor(product, country)) {
-    const { color, size } = v.attributes ?? {};
-    if (typeof color === "string" && typeof size === "string") pairs.set(`${color}\u0000${size}`, { color, size });
+    const { color, size, edge } = v.attributes ?? {};
+    if (typeof color === "string" && typeof size === "string") {
+      const extra = edges.size > 1 && typeof edge === "string" ? { edge } : {};
+      pairs.set(`${color}\u0000${size}`, { color, size, ...extra });
+    }
+    // a product without a size attribute (the tote): one pair per colour, size "one size", flagged so no size is ever sent to Prodigi
+    else if (typeof color === "string" && size === undefined) pairs.set(`${color}\u0000`, { color, size: "one size", sizeless: true });
   }
   return [...pairs.values()].sort((a, b) => a.color.localeCompare(b.color) || sizeOrder(a.size) - sizeOrder(b.size));
 }
@@ -190,7 +203,7 @@ export function buildCatalog({ products, quotes, quoteDate, shipping, generatedA
       continue;
     }
     const vs = variantsFor(product);
-    const front = modelFrame(vs, "front");
+    const front = modelFrame(vs, "front") ?? modelFrame(vs, "default");
     const back = modelFrame(vs, "back");
     const attrs = product.attributes ?? {};
     models[def.model] = {
@@ -205,7 +218,7 @@ export function buildCatalog({ products, quotes, quoteDate, shipping, generatedA
       framesMissing: front === null,
     };
     if (front === null) warnings.push(`model ${def.model}: no front print area for ${DESTINATION}`);
-    for (const { color, size } of colourSizes(product)) {
+    for (const { color, size, sizeless, edge } of colourSizes(product)) {
       const key = skuKey(def.sku, color, size);
       if (key.length > SKU_KEY_MAX) {
         warnings.push(`sku key too long (${key.length}): ${key}`);
@@ -226,7 +239,7 @@ export function buildCatalog({ products, quotes, quoteDate, shipping, generatedA
         colour: titleCase(color),
         size: normSize(size),
         prodigiSku: def.sku,
-        attributes: { color, size },
+        attributes: sizeless ? { color } : { color, size, ...(edge !== undefined ? { edge } : {}) },
         ...(q ? { unitCostMinor: q.unitMinor, lab: q.lab } : {}),
       };
     }
@@ -288,7 +301,8 @@ export function buildPricing({ document, shipping, quoteDate, extraItemMinor }) 
     note: "Fragment of POST .../catalog/apply `pricing`. eurSek and bufferBp are the platform's decision. baseEurCents is the HIGHEST unit cost quoted from an EU lab (pl1, nl2) for the model (applyCatalog prices a MODEL, not a SKU); extraPrintEurCents 0 because the back print is free.",
     extraPrintEurCents: 0,
     printSlots: ["front", "back"],
-    models: Object.fromEntries(Object.entries(perModel).map(([m, v]) => [m, { baseEurCents: v.maxMinor }])),
+    // a model whose every quote came from a non-EU lab (JH001F, STAU773: uk9) has no EU price and is left out, not priced at 0
+    models: Object.fromEntries(Object.entries(perModel).filter(([, v]) => v.quoted > 0).map(([m, v]) => [m, { baseEurCents: v.maxMinor }])),
   };
   return { pricingBasis, applyEur };
 }
@@ -365,9 +379,14 @@ export function pickProbes(log) {
 /** Quote jobs: one request per product x colour with every shippable size as an item. */
 export function quoteJobs(def, product) {
   const byColour = new Map();
-  for (const { color, size } of colourSizes(product)) {
+  const sizeless = new Set();
+  const hasFront = variantsFor(product).some((v) => areaPx(v, "front") !== null);
+  const extraOf = new Map();
+  for (const { color, size, sizeless: sl, edge } of colourSizes(product)) {
     if (!byColour.has(color)) byColour.set(color, []);
     byColour.get(color).push(size);
+    if (edge !== undefined) extraOf.set(`${color}\u0000${size}`, { edge });
+    if (sl) sizeless.add(color);
   }
   return [...byColour].map(([color, sizes]) => ({
     model: def.model,
@@ -376,7 +395,12 @@ export function quoteJobs(def, product) {
     request: {
       shippingMethod: "Standard",
       destinationCountryCode: DESTINATION,
-      items: sizes.map((size) => ({ sku: def.sku, copies: 1, attributes: { color, size }, assets: [{ printArea: "front" }] })),
+      items: sizes.map((size) => ({
+        sku: def.sku,
+        copies: 1,
+        attributes: sizeless.has(color) ? { color } : { color, size, ...(extraOf.get(`${color}\u0000${size}`) ?? {}) },
+        assets: [{ printArea: hasFront ? "front" : "default" }],
+      })),
     },
   }));
 }
@@ -477,7 +501,7 @@ async function main() {
       }
       e.request.items.forEach((item, i) => {
         const hit = q.items[String(i + 1)];
-        if (hit) quotes[skuKey(item.sku, item.attributes.color, item.attributes.size)] = hit;
+        if (hit) quotes[skuKey(item.sku, item.attributes.color, item.attributes.size ?? "one size")] = hit;
       });
     }
   }

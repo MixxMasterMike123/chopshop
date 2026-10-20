@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-10-19T19:59:29.011Z",
+  "generatedAt": "2026-10-20T16:35:46.891Z",
   "generator": "scripts/cf-port/prodigi-catalog.mjs",
   "source": {
     "api": "https://api.sandbox.prodigi.com/v4.0",
     "destination": "SE",
     "shippingMethod": "Standard",
-    "quoteDate": "2026-10-19"
+    "quoteDate": "2026-10-20"
   },
   "models": {
     "2000": {
@@ -121,6 +121,41 @@
       },
       "framesMissing": false
     },
+    "18600": {
+      "brand": "Gildan",
+      "name": "Unisex Zip Up Hoodie, Gildan 18600",
+      "garment": "hoodie",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "front": {
+        "h": 390,
+        "offsetTopMm": 0,
+        "w": 490
+      },
+      "back": {
+        "h": 390,
+        "offsetTopMm": 0,
+        "w": 490
+      },
+      "printAreaPx": {
+        "front": {
+          "w": 5787,
+          "h": 4606
+        },
+        "back": {
+          "w": 5787,
+          "h": 4606
+        }
+      },
+      "printAreaVariants": {
+        "front": {
+          "5787x4606": 41
+        },
+        "back": {
+          "5787x4606": 41
+        }
+      },
+      "framesMissing": false
+    },
     "64000": {
       "brand": "Gildan",
       "name": "Unisex Softstyle T-shirt, Gildan 64000",
@@ -156,6 +191,43 @@
           "4665x5844": 5,
           "2480x3507": 154,
           "4677x5881": 87
+        }
+      },
+      "framesMissing": false
+    },
+    "64200": {
+      "brand": "Gildan",
+      "name": "Unisex Tanktop, Gildan 64200",
+      "garment": "tank",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "front": {
+        "h": 297,
+        "offsetTopMm": 0,
+        "w": 210
+      },
+      "back": {
+        "h": 297,
+        "offsetTopMm": 0,
+        "w": 210
+      },
+      "printAreaPx": {
+        "front": {
+          "w": 2480,
+          "h": 3507
+        },
+        "back": {
+          "w": 2480,
+          "h": 3507
+        }
+      },
+      "printAreaVariants": {
+        "front": {
+          "2480x3507": 34,
+          "4680x5790": 30
+        },
+        "back": {
+          "2480x3507": 34,
+          "4680x5790": 30
         }
       },
       "framesMissing": false
@@ -344,6 +416,104 @@
           "2480x3507": 82,
           "4677x5881": 57
         }
+      },
+      "framesMissing": false
+    },
+    "64000L": {
+      "brand": "Gildan",
+      "name": "Women's SoftStyle Cotton T-shirt, Gildan 64000L",
+      "garment": "tee",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "front": {
+        "h": 297,
+        "offsetTopMm": 0,
+        "w": 210
+      },
+      "back": {
+        "h": 297,
+        "offsetTopMm": 0,
+        "w": 210
+      },
+      "printAreaPx": {
+        "front": {
+          "w": 2480,
+          "h": 3507
+        },
+        "back": {
+          "w": 2480,
+          "h": 3507
+        }
+      },
+      "printAreaVariants": {
+        "front": {
+          "4650x5844": 19,
+          "2480x3507": 68,
+          "4677x5881": 39
+        },
+        "back": {
+          "4650x5844": 19,
+          "2480x3507": 68,
+          "4677x5881": 39
+        }
+      },
+      "framesMissing": false
+    },
+    "JH001F": {
+      "brand": "AWDis",
+      "name": "Women's College Hoodie, AWDis JH001",
+      "garment": "hoodie",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "front": {
+        "h": 260,
+        "offsetTopMm": 0,
+        "w": 260
+      },
+      "back": {
+        "h": 260,
+        "offsetTopMm": 0,
+        "w": 260
+      },
+      "printAreaPx": {
+        "front": {
+          "w": 3070,
+          "h": 3070
+        },
+        "back": {
+          "w": 3070,
+          "h": 3070
+        }
+      },
+      "printAreaVariants": {
+        "front": {
+          "3070x3070": 107
+        },
+        "back": {
+          "3070x3070": 107
+        }
+      },
+      "framesMissing": false
+    },
+    "STAU773": {
+      "brand": "Stanley / Stella",
+      "name": "Light woven tote bag, 42x37cm with 65cm strap length",
+      "garment": "tote",
+      "prodigiSku": "H-BAG-LTOTE",
+      "front": {
+        "h": 270,
+        "offsetTopMm": 0,
+        "w": 270
+      },
+      "back": null,
+      "printAreaPx": {
+        "front": {
+          "w": 3188,
+          "h": 3188
+        },
+        "back": null
+      },
+      "printAreaVariants": {
+        "front": {},
+        "back": {}
       },
       "framesMissing": false
     }
@@ -17534,16 +17704,3476 @@
       },
       "unitCostMinor": 1200,
       "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.azalea.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "azalea",
+        "size": "s"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.azalea.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "azalea",
+        "size": "m"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.azalea.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "azalea",
+        "size": "l"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.azalea.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "azalea",
+        "size": "xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.azalea.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Azalea",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "azalea",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.black.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "black",
+        "size": "s"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.black.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "black",
+        "size": "m"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.black.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "black",
+        "size": "l"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.black.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "black",
+        "size": "xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.black.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Black",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "black",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.charcoal.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "charcoal",
+        "size": "s"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.charcoal.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "charcoal",
+        "size": "m"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.charcoal.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "charcoal",
+        "size": "l"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.charcoal.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "charcoal",
+        "size": "xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.charcoal.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Charcoal",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "charcoal",
+        "size": "2xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.daisy.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "daisy",
+        "size": "s"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.daisy.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "daisy",
+        "size": "m"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.daisy.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "daisy",
+        "size": "l"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.daisy.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "daisy",
+        "size": "xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.daisy.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Daisy",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "daisy",
+        "size": "2xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.dark-chocolate.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Dark Chocolate",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "dark chocolate",
+        "size": "s"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.dark-chocolate.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Dark Chocolate",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "dark chocolate",
+        "size": "l"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.dark-chocolate.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Dark Chocolate",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "dark chocolate",
+        "size": "xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.irish-green.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Irish Green",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "irish green",
+        "size": "s"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.irish-green.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Irish Green",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "irish green",
+        "size": "m"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.irish-green.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Irish Green",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "irish green",
+        "size": "l"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.irish-green.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Irish Green",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "irish green",
+        "size": "xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.irish-green.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Irish Green",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "irish green",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.light-blue.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Light Blue",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "light blue",
+        "size": "s"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.light-blue.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Light Blue",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "light blue",
+        "size": "m"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.light-blue.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Light Blue",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "light blue",
+        "size": "l"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.light-blue.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Light Blue",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "light blue",
+        "size": "xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.light-blue.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Light Blue",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "light blue",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.navy-blue.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Navy Blue",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "navy blue",
+        "size": "s"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.navy-blue.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Navy Blue",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "navy blue",
+        "size": "m"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.navy-blue.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Navy Blue",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "navy blue",
+        "size": "l"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.navy-blue.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Navy Blue",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "navy blue",
+        "size": "xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.navy-blue.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Navy Blue",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "navy blue",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.orange-heather.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Orange Heather",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "orange heather",
+        "size": "s"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.orange-heather.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Orange Heather",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "orange heather",
+        "size": "m"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.orange-heather.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Orange Heather",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "orange heather",
+        "size": "l"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.orange-heather.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Orange Heather",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "orange heather",
+        "size": "xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.orange-heather.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Orange Heather",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "orange heather",
+        "size": "2xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.purple.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "purple",
+        "size": "s"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.purple.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "purple",
+        "size": "m"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.purple.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "purple",
+        "size": "l"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.purple.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "purple",
+        "size": "xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.purple.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Purple",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "purple",
+        "size": "2xl"
+      },
+      "unitCostMinor": 800,
+      "lab": "pl1"
+    },
+    "GLOBAL-TEE-GIL-64000L.red.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "red",
+        "size": "s"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.red.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "red",
+        "size": "m"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.red.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "red",
+        "size": "l"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.red.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "red",
+        "size": "xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.red.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Red",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "red",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.royal-blue.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Royal Blue",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "royal blue",
+        "size": "s"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.royal-blue.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Royal Blue",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "royal blue",
+        "size": "m"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.royal-blue.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Royal Blue",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "royal blue",
+        "size": "l"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.royal-blue.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Royal Blue",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "royal blue",
+        "size": "xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.royal-blue.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Royal Blue",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "royal blue",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.sport-grey.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Sport Grey",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "sport grey",
+        "size": "s"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.sport-grey.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Sport Grey",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "sport grey",
+        "size": "m"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.sport-grey.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Sport Grey",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "sport grey",
+        "size": "l"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.sport-grey.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Sport Grey",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "sport grey",
+        "size": "xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.sport-grey.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "Sport Grey",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "sport grey",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1100,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.white.s": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "White",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "white",
+        "size": "s"
+      },
+      "unitCostMinor": 1000,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.white.m": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "White",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "white",
+        "size": "m"
+      },
+      "unitCostMinor": 1000,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.white.l": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "White",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "white",
+        "size": "l"
+      },
+      "unitCostMinor": 1000,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.white.xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "White",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "white",
+        "size": "xl"
+      },
+      "unitCostMinor": 1000,
+      "lab": "nl2"
+    },
+    "GLOBAL-TEE-GIL-64000L.white.2xl": {
+      "model": "64000L",
+      "garment": "tee",
+      "colour": "White",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TEE-GIL-64000L",
+      "attributes": {
+        "color": "white",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1000,
+      "lab": "nl2"
+    },
+    "GLOBAL-HOOD-GIL-18600.ash.s": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "S",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "ash",
+        "size": "s",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.ash.m": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "M",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "ash",
+        "size": "m",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.ash.l": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "L",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "ash",
+        "size": "l",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.ash.xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "ash",
+        "size": "xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.ash.2xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "ash",
+        "size": "2xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.black.s": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "S",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "black",
+        "size": "s",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.black.m": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "M",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "black",
+        "size": "m",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.black.l": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "L",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "black",
+        "size": "l",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.black.xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "black",
+        "size": "xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.black.2xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "black",
+        "size": "2xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.black.3xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "3XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "black",
+        "size": "3xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.dark-heather-grey.s": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Dark Heather Grey",
+      "size": "S",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "dark heather grey",
+        "size": "s",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.dark-heather-grey.m": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Dark Heather Grey",
+      "size": "M",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "dark heather grey",
+        "size": "m",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.dark-heather-grey.l": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Dark Heather Grey",
+      "size": "L",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "dark heather grey",
+        "size": "l",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.dark-heather-grey.xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Dark Heather Grey",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "dark heather grey",
+        "size": "xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.dark-heather-grey.2xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Dark Heather Grey",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "dark heather grey",
+        "size": "2xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.dark-heather-grey.3xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Dark Heather Grey",
+      "size": "3XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "dark heather grey",
+        "size": "3xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.french-navy.s": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "S",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "french navy",
+        "size": "s",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.french-navy.m": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "M",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "french navy",
+        "size": "m",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.french-navy.l": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "L",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "french navy",
+        "size": "l",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.french-navy.xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "french navy",
+        "size": "xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.french-navy.2xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "french navy",
+        "size": "2xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.french-navy.3xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "3XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "french navy",
+        "size": "3xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.royal-blue.s": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "S",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "royal blue",
+        "size": "s",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.royal-blue.m": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "M",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "royal blue",
+        "size": "m",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.royal-blue.l": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "L",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "royal blue",
+        "size": "l",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.royal-blue.xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "royal blue",
+        "size": "xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.royal-blue.2xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "royal blue",
+        "size": "2xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.royal-blue.3xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "3XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "royal blue",
+        "size": "3xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.sport-grey.s": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "S",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "sport grey",
+        "size": "s",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.sport-grey.m": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "M",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "sport grey",
+        "size": "m",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.sport-grey.l": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "L",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "sport grey",
+        "size": "l",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.sport-grey.xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "sport grey",
+        "size": "xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.sport-grey.2xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "sport grey",
+        "size": "2xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.sport-grey.3xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "Sport Grey",
+      "size": "3XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "sport grey",
+        "size": "3xl",
+        "edge": "Drawstring"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.white.s": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "S",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "white",
+        "size": "s",
+        "edge": "Zip"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.white.m": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "M",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "white",
+        "size": "m",
+        "edge": "Zip"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.white.l": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "L",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "white",
+        "size": "l",
+        "edge": "Zip"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.white.xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "white",
+        "size": "xl",
+        "edge": "Zip"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.white.2xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "white",
+        "size": "2xl",
+        "edge": "Zip"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-HOOD-GIL-18600.white.3xl": {
+      "model": "18600",
+      "garment": "hoodie",
+      "colour": "White",
+      "size": "3XL",
+      "prodigiSku": "GLOBAL-HOOD-GIL-18600",
+      "attributes": {
+        "color": "white",
+        "size": "3xl",
+        "edge": "Zip"
+      },
+      "unitCostMinor": 2500,
+      "lab": "pl1"
+    },
+    "GLOBAL-TT-GIL-64200.black.s": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Black",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "black",
+        "size": "s"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.black.m": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Black",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "black",
+        "size": "m"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.black.l": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Black",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "black",
+        "size": "l"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.black.xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Black",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "black",
+        "size": "xl"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.black.2xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Black",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "black",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.charcoal.s": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Charcoal",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "charcoal",
+        "size": "s"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.charcoal.m": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Charcoal",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "charcoal",
+        "size": "m"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.charcoal.l": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Charcoal",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "charcoal",
+        "size": "l"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.charcoal.xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Charcoal",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "charcoal",
+        "size": "xl"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.charcoal.2xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Charcoal",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "charcoal",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.heather-grey.s": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Heather Grey",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "heather grey",
+        "size": "s"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.heather-grey.m": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Heather Grey",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "heather grey",
+        "size": "m"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.heather-grey.l": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Heather Grey",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "heather grey",
+        "size": "l"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.heather-grey.xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Heather Grey",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "heather grey",
+        "size": "xl"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.heather-grey.2xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Heather Grey",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "heather grey",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.navy-blue.s": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Navy Blue",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "navy blue",
+        "size": "s"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.navy-blue.m": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Navy Blue",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "navy blue",
+        "size": "m"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.navy-blue.l": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Navy Blue",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "navy blue",
+        "size": "l"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.navy-blue.xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Navy Blue",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "navy blue",
+        "size": "xl"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.navy-blue.2xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Navy Blue",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "navy blue",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.red.s": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Red",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "red",
+        "size": "s"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.red.m": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Red",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "red",
+        "size": "m"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.red.l": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Red",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "red",
+        "size": "l"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.red.xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Red",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "red",
+        "size": "xl"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.red.2xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Red",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "red",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.royal-blue.s": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Royal Blue",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "royal blue",
+        "size": "s"
+      },
+      "unitCostMinor": 1200,
+      "lab": "pl1"
+    },
+    "GLOBAL-TT-GIL-64200.royal-blue.m": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Royal Blue",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "royal blue",
+        "size": "m"
+      },
+      "unitCostMinor": 1200,
+      "lab": "pl1"
+    },
+    "GLOBAL-TT-GIL-64200.royal-blue.l": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Royal Blue",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "royal blue",
+        "size": "l"
+      },
+      "unitCostMinor": 1200,
+      "lab": "pl1"
+    },
+    "GLOBAL-TT-GIL-64200.royal-blue.xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Royal Blue",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "royal blue",
+        "size": "xl"
+      },
+      "unitCostMinor": 1200,
+      "lab": "pl1"
+    },
+    "GLOBAL-TT-GIL-64200.royal-blue.2xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "Royal Blue",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "royal blue",
+        "size": "2xl"
+      },
+      "unitCostMinor": 1200,
+      "lab": "pl1"
+    },
+    "GLOBAL-TT-GIL-64200.white.s": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "White",
+      "size": "S",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "white",
+        "size": "s"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.white.m": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "White",
+      "size": "M",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "white",
+        "size": "m"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.white.l": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "White",
+      "size": "L",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "white",
+        "size": "l"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.white.xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "White",
+      "size": "XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "white",
+        "size": "xl"
+      },
+      "unitCostMinor": 1073,
+      "lab": "uk2"
+    },
+    "GLOBAL-TT-GIL-64200.white.2xl": {
+      "model": "64200",
+      "garment": "tank",
+      "colour": "White",
+      "size": "2XL",
+      "prodigiSku": "GLOBAL-TT-GIL-64200",
+      "attributes": {
+        "color": "white",
+        "size": "2xl"
+      },
+      "unitCostMinor": 954,
+      "lab": "uk2"
+    },
+    "HOOD-AWD-JH001F.airforce-blue.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Airforce Blue",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "airforce blue",
+        "size": "xs"
+      },
+      "unitCostMinor": 2136,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.airforce-blue.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Airforce Blue",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "airforce blue",
+        "size": "s"
+      },
+      "unitCostMinor": 2136,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.airforce-blue.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Airforce Blue",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "airforce blue",
+        "size": "m"
+      },
+      "unitCostMinor": 2136,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.airforce-blue.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Airforce Blue",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "airforce blue",
+        "size": "l"
+      },
+      "unitCostMinor": 2136,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.airforce-blue.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Airforce Blue",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "airforce blue",
+        "size": "xl"
+      },
+      "unitCostMinor": 2136,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.airforce-blue.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Airforce Blue",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "airforce blue",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2136,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.arctic-white.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Arctic White",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "arctic white",
+        "size": "xs"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.arctic-white.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Arctic White",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "arctic white",
+        "size": "s"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.arctic-white.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Arctic White",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "arctic white",
+        "size": "m"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.arctic-white.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Arctic White",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "arctic white",
+        "size": "l"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.arctic-white.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Arctic White",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "arctic white",
+        "size": "xl"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.arctic-white.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Arctic White",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "arctic white",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.ash.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "ash",
+        "size": "xs"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.ash.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "ash",
+        "size": "s"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.ash.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "ash",
+        "size": "m"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.ash.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "ash",
+        "size": "l"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.ash.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "ash",
+        "size": "xl"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.ash.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Ash",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "ash",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.black.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "black",
+        "size": "xs"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.black.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "black",
+        "size": "s"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.black.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "black",
+        "size": "m"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.black.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "black",
+        "size": "l"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.black.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "black",
+        "size": "xl"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.black.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Black",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "black",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2137,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.bottle-green.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Bottle Green",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "bottle green",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.bottle-green.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Bottle Green",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "bottle green",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.bottle-green.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Bottle Green",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "bottle green",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.bottle-green.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Bottle Green",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "bottle green",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.bottle-green.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Bottle Green",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "bottle green",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.bottle-green.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Bottle Green",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "bottle green",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.burgundy.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Burgundy",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "burgundy",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.burgundy.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Burgundy",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "burgundy",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.burgundy.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Burgundy",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "burgundy",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.burgundy.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Burgundy",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "burgundy",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.burgundy.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Burgundy",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "burgundy",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.burgundy.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Burgundy",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "burgundy",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.charcoal.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Charcoal",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "charcoal",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.charcoal.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Charcoal",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "charcoal",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.charcoal.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Charcoal",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "charcoal",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.charcoal.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Charcoal",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "charcoal",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.charcoal.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Charcoal",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "charcoal",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.fire-red.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Fire Red",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "fire red",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.fire-red.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Fire Red",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "fire red",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.fire-red.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Fire Red",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "fire red",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.fire-red.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Fire Red",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "fire red",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.fire-red.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Fire Red",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "fire red",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.fire-red.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Fire Red",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "fire red",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.french-navy.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "french navy",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.french-navy.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "french navy",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.french-navy.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "french navy",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.french-navy.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "french navy",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.french-navy.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "french navy",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.french-navy.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "French Navy",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "french navy",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.heather-grey.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "heather grey",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.heather-grey.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "heather grey",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.heather-grey.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "heather grey",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.heather-grey.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "heather grey",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.heather-grey.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "heather grey",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.heather-grey.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Heather Grey",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "heather grey",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.hot-pink.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Hot Pink",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "hot pink",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.hot-pink.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Hot Pink",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "hot pink",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.hot-pink.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Hot Pink",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "hot pink",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.hot-pink.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Hot Pink",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "hot pink",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.hot-pink.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Hot Pink",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "hot pink",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.hot-pink.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Hot Pink",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "hot pink",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.jade.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Jade",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "jade",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.jade.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Jade",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "jade",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.jade.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Jade",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "jade",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.jade.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Jade",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "jade",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.jade.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Jade",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "jade",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.jade.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Jade",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "jade",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.orange-crush.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Orange Crush",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "orange crush",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.orange-crush.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Orange Crush",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "orange crush",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.orange-crush.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Orange Crush",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "orange crush",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.orange-crush.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Orange Crush",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "orange crush",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.orange-crush.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Orange Crush",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "orange crush",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.orange-crush.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Orange Crush",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "orange crush",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.plum.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Plum",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "plum",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.plum.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Plum",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "plum",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.plum.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Plum",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "plum",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.plum.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Plum",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "plum",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.plum.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Plum",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "plum",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.plum.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Plum",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "plum",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.purple.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Purple",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "purple",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.purple.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Purple",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "purple",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.purple.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Purple",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "purple",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.purple.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Purple",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "purple",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.purple.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Purple",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "purple",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.purple.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Purple",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "purple",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.red-hot-chili.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Red Hot Chili",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "red hot chili",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.red-hot-chili.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Red Hot Chili",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "red hot chili",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.red-hot-chili.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Red Hot Chili",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "red hot chili",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.red-hot-chili.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Red Hot Chili",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "red hot chili",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.red-hot-chili.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Red Hot Chili",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "red hot chili",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.red-hot-chili.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Red Hot Chili",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "red hot chili",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.royal-blue.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "royal blue",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.royal-blue.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "royal blue",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.royal-blue.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "royal blue",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.royal-blue.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "royal blue",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.royal-blue.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "royal blue",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.royal-blue.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Royal Blue",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "royal blue",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.sun-yellow.xs": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Sun Yellow",
+      "size": "XS",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "sun yellow",
+        "size": "xs"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.sun-yellow.s": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Sun Yellow",
+      "size": "S",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "sun yellow",
+        "size": "s"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.sun-yellow.m": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Sun Yellow",
+      "size": "M",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "sun yellow",
+        "size": "m"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.sun-yellow.l": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Sun Yellow",
+      "size": "L",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "sun yellow",
+        "size": "l"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.sun-yellow.xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Sun Yellow",
+      "size": "XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "sun yellow",
+        "size": "xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "HOOD-AWD-JH001F.sun-yellow.2xl": {
+      "model": "JH001F",
+      "garment": "hoodie",
+      "colour": "Sun Yellow",
+      "size": "2XL",
+      "prodigiSku": "HOOD-AWD-JH001F",
+      "attributes": {
+        "color": "sun yellow",
+        "size": "2xl"
+      },
+      "unitCostMinor": 2146,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.anthracite.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Anthracite",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "anthracite"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.black.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Black",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "black"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.burgundy.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Burgundy",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "burgundy"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.caribbean-blue.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Caribbean Blue",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "caribbean blue"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.cotton-pink.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Cotton Pink",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "cotton pink"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.french-navy.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "French Navy",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "french navy"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.khaki.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Khaki",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "khaki"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.natural-raw.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Natural Raw",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "natural raw"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.red.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Red",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "red"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.royal-blue.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Royal Blue",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "royal blue"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.sky-blue.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Sky Blue",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "sky blue"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.spectra-yellow.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "Spectra Yellow",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "spectra yellow"
+      },
+      "unitCostMinor": 1192,
+      "lab": "uk9"
+    },
+    "H-BAG-LTOTE.white.one-size": {
+      "model": "STAU773",
+      "garment": "tote",
+      "colour": "White",
+      "size": "One Size",
+      "prodigiSku": "H-BAG-LTOTE",
+      "attributes": {
+        "color": "white"
+      },
+      "unitCostMinor": 1187,
+      "lab": "uk9"
     }
   },
   "unquoted": [],
   "warnings": [
-    "213 SKUs were quoted from a non-EU lab (au3, uk2, uk9): customs/duty and a different shipping charge apply; they are in the catalogue with their lab named"
+    "363 SKUs were quoted from a non-EU lab (au3, uk2, uk9): customs/duty and a different shipping charge apply; they are in the catalogue with their lab named"
   ],
   "pricingBasis": {
     "currency": "EUR",
     "unit": "minor (cents), ex VAT, one print incl., back print free",
-    "quoteDate": "2026-10-19",
+    "quoteDate": "2026-10-20",
     "destination": "SE",
     "shippingMethod": "Standard",
     "shippingCostMinor": 1185,
@@ -17569,9 +21199,9 @@
         "extraItemMinor": 0
       },
       "uk2": {
-        "firstMinor": 582,
-        "twoCopiesMinor": 700,
-        "extraItemMinor": 118
+        "firstMinor": 584,
+        "twoCopiesMinor": 703,
+        "extraItemMinor": 119
       }
     },
     "extraItemMinor": 100,
@@ -17624,6 +21254,18 @@
         },
         "quoted": 134
       },
+      "18600": {
+        "minMinor": 2500,
+        "maxMinor": 2500,
+        "labs": {
+          "pl1": {
+            "count": 41,
+            "minMinor": 2500,
+            "maxMinor": 2500
+          }
+        },
+        "quoted": 41
+      },
       "64000": {
         "minMinor": 800,
         "maxMinor": 1100,
@@ -17641,6 +21283,19 @@
         },
         "quoted": 154,
         "nonEuQuoted": 10
+      },
+      "64200": {
+        "minMinor": 1200,
+        "maxMinor": 1200,
+        "labs": {
+          "pl1": {
+            "count": 5,
+            "minMinor": 1200,
+            "maxMinor": 1200
+          }
+        },
+        "quoted": 5,
+        "nonEuQuoted": 30
       },
       "64V00": {
         "minMinor": 1000,
@@ -17721,6 +21376,37 @@
         },
         "quoted": 132,
         "nonEuQuoted": 10
+      },
+      "64000L": {
+        "minMinor": 800,
+        "maxMinor": 1100,
+        "labs": {
+          "nl2": {
+            "count": 45,
+            "minMinor": 1000,
+            "maxMinor": 1100
+          },
+          "pl1": {
+            "count": 23,
+            "minMinor": 800,
+            "maxMinor": 800
+          }
+        },
+        "quoted": 68
+      },
+      "JH001F": {
+        "minMinor": null,
+        "maxMinor": 0,
+        "labs": {},
+        "quoted": 0,
+        "nonEuQuoted": 107
+      },
+      "STAU773": {
+        "minMinor": null,
+        "maxMinor": 0,
+        "labs": {},
+        "quoted": 0,
+        "nonEuQuoted": 13
       }
     }
   }

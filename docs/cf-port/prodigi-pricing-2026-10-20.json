@@ -1,0 +1,290 @@
+{
+  "quoteDate": "2026-10-20",
+  "pricingBasis": {
+    "currency": "EUR",
+    "unit": "minor (cents), ex VAT, one print incl., back print free",
+    "quoteDate": "2026-10-20",
+    "destination": "SE",
+    "shippingMethod": "Standard",
+    "shippingCostMinor": 1185,
+    "shippingByLab": {
+      "nl2": {
+        "firstMinor": 535,
+        "twoCopiesMinor": 635,
+        "extraItemMinor": 100
+      },
+      "pl1": {
+        "firstMinor": 1185,
+        "twoCopiesMinor": 1285,
+        "extraItemMinor": 100
+      },
+      "au3": {
+        "firstMinor": 2146,
+        "twoCopiesMinor": 2892,
+        "extraItemMinor": 746
+      },
+      "uk9": {
+        "firstMinor": 2178,
+        "twoCopiesMinor": 2178,
+        "extraItemMinor": 0
+      },
+      "uk2": {
+        "firstMinor": 584,
+        "twoCopiesMinor": 703,
+        "extraItemMinor": 119
+      }
+    },
+    "extraItemMinor": 100,
+    "vat": "Swedish VAT is added on top by Prodigi and is reclaimable; amounts here exclude it.",
+    "statsCoverEuLabsOnly": [
+      "pl1",
+      "nl2"
+    ],
+    "perSkuIn": "catalog.skus[key].unitCostMinor / .lab",
+    "models": {
+      "2000": {
+        "minMinor": 1300,
+        "maxMinor": 1300,
+        "labs": {
+          "pl1": {
+            "count": 84,
+            "minMinor": 1300,
+            "maxMinor": 1300
+          }
+        },
+        "quoted": 84
+      },
+      "5000": {
+        "minMinor": 800,
+        "maxMinor": 1200,
+        "labs": {
+          "pl1": {
+            "count": 147,
+            "minMinor": 800,
+            "maxMinor": 800
+          },
+          "nl2": {
+            "count": 39,
+            "minMinor": 1000,
+            "maxMinor": 1200
+          }
+        },
+        "quoted": 186,
+        "nonEuQuoted": 29
+      },
+      "18500": {
+        "minMinor": 2000,
+        "maxMinor": 2000,
+        "labs": {
+          "pl1": {
+            "count": 134,
+            "minMinor": 2000,
+            "maxMinor": 2000
+          }
+        },
+        "quoted": 134
+      },
+      "18600": {
+        "minMinor": 2500,
+        "maxMinor": 2500,
+        "labs": {
+          "pl1": {
+            "count": 41,
+            "minMinor": 2500,
+            "maxMinor": 2500
+          }
+        },
+        "quoted": 41
+      },
+      "64000": {
+        "minMinor": 800,
+        "maxMinor": 1100,
+        "labs": {
+          "nl2": {
+            "count": 10,
+            "minMinor": 1068,
+            "maxMinor": 1100
+          },
+          "pl1": {
+            "count": 144,
+            "minMinor": 800,
+            "maxMinor": 800
+          }
+        },
+        "quoted": 154,
+        "nonEuQuoted": 10
+      },
+      "64200": {
+        "minMinor": 1200,
+        "maxMinor": 1200,
+        "labs": {
+          "pl1": {
+            "count": 5,
+            "minMinor": 1200,
+            "maxMinor": 1200
+          }
+        },
+        "quoted": 5,
+        "nonEuQuoted": 30
+      },
+      "64V00": {
+        "minMinor": 1000,
+        "maxMinor": 1100,
+        "labs": {
+          "nl2": {
+            "count": 54,
+            "minMinor": 1000,
+            "maxMinor": 1100
+          }
+        },
+        "quoted": 54,
+        "nonEuQuoted": 1
+      },
+      "STTU169": {
+        "minMinor": 1400,
+        "maxMinor": 1400,
+        "labs": {
+          "pl1": {
+            "count": 189,
+            "minMinor": 1400,
+            "maxMinor": 1400
+          }
+        },
+        "quoted": 189,
+        "nonEuQuoted": 76
+      },
+      "JH001": {
+        "minMinor": 2000,
+        "maxMinor": 2100,
+        "labs": {
+          "nl2": {
+            "count": 20,
+            "minMinor": 2100,
+            "maxMinor": 2100
+          },
+          "pl1": {
+            "count": 87,
+            "minMinor": 2000,
+            "maxMinor": 2000
+          }
+        },
+        "quoted": 107,
+        "nonEuQuoted": 63
+      },
+      "JH030": {
+        "minMinor": 1700,
+        "maxMinor": 2000,
+        "labs": {
+          "nl2": {
+            "count": 25,
+            "minMinor": 1700,
+            "maxMinor": 1700
+          },
+          "pl1": {
+            "count": 44,
+            "minMinor": 2000,
+            "maxMinor": 2000
+          }
+        },
+        "quoted": 69,
+        "nonEuQuoted": 24
+      },
+      "BC3001": {
+        "minMinor": 1000,
+        "maxMinor": 2500,
+        "labs": {
+          "nl2": {
+            "count": 107,
+            "minMinor": 1000,
+            "maxMinor": 2500
+          },
+          "pl1": {
+            "count": 25,
+            "minMinor": 1000,
+            "maxMinor": 1000
+          }
+        },
+        "quoted": 132,
+        "nonEuQuoted": 10
+      },
+      "64000L": {
+        "minMinor": 800,
+        "maxMinor": 1100,
+        "labs": {
+          "nl2": {
+            "count": 45,
+            "minMinor": 1000,
+            "maxMinor": 1100
+          },
+          "pl1": {
+            "count": 23,
+            "minMinor": 800,
+            "maxMinor": 800
+          }
+        },
+        "quoted": 68
+      },
+      "JH001F": {
+        "minMinor": null,
+        "maxMinor": 0,
+        "labs": {},
+        "quoted": 0,
+        "nonEuQuoted": 107
+      },
+      "STAU773": {
+        "minMinor": null,
+        "maxMinor": 0,
+        "labs": {},
+        "quoted": 0,
+        "nonEuQuoted": 13
+      }
+    }
+  },
+  "applyPricingEur": {
+    "basis": "eur",
+    "note": "Fragment of POST .../catalog/apply `pricing`. eurSek and bufferBp are the platform's decision. baseEurCents is the HIGHEST unit cost quoted from an EU lab (pl1, nl2) for the model (applyCatalog prices a MODEL, not a SKU); extraPrintEurCents 0 because the back print is free.",
+    "extraPrintEurCents": 0,
+    "printSlots": [
+      "front",
+      "back"
+    ],
+    "models": {
+      "2000": {
+        "baseEurCents": 1300
+      },
+      "5000": {
+        "baseEurCents": 1200
+      },
+      "18500": {
+        "baseEurCents": 2000
+      },
+      "18600": {
+        "baseEurCents": 2500
+      },
+      "64000": {
+        "baseEurCents": 1100
+      },
+      "64200": {
+        "baseEurCents": 1200
+      },
+      "64V00": {
+        "baseEurCents": 1100
+      },
+      "STTU169": {
+        "baseEurCents": 1400
+      },
+      "JH001": {
+        "baseEurCents": 2100
+      },
+      "JH030": {
+        "baseEurCents": 2000
+      },
+      "BC3001": {
+        "baseEurCents": 2500
+      },
+      "64000L": {
+        "baseEurCents": 1100
+      }
+    }
+  }
+}

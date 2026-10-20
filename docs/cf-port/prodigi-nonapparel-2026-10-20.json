@@ -1,0 +1,1536 @@
+{
+  "generatedAt": "2026-10-20T16:35:18.211Z",
+  "source": "https://api.sandbox.prodigi.com/v4.0",
+  "destination": "SE",
+  "shippingMethod": "Standard",
+  "note": "One quote per SKU, one copy, first SE-shippable variant, EUR ex VAT. Not part of the garment catalogue.",
+  "products": {
+    "GLOBAL-POST-MOH-7X5": {
+      "productStatus": 200,
+      "description": "A single 7x5\" postcard printed on premium 324gsm Mohawk card with option to print on both sides.",
+      "dimensions": {
+        "width": 17.8,
+        "height": 12.7,
+        "units": "cm"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 4322x1559": 1
+      },
+      "attributesSE": {
+        "finish": [
+          "matte"
+        ],
+        "paperType": [
+          "Mohawk Superfine"
+        ],
+        "style": [
+          "Single"
+        ],
+        "substrateWeight": [
+          "324gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-POST-MOH-7X5",
+        "copies": 1,
+        "attributes": {
+          "finish": "matte",
+          "paperType": "Mohawk Superfine",
+          "substrateWeight": "324gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "1.35",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "7.55",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "GLOBAL-POST-MOH-6X4-BLA": {
+      "productStatus": 200,
+      "description": "A single 6x4\" postcard printed on premium 324gsm Mohawk card with option to print on both sides. Includes a blank envelope to address to recipient.",
+      "dimensions": {
+        "width": 15.2,
+        "height": 10.2,
+        "units": "cm"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 3708x1263": 1
+      },
+      "attributesSE": {
+        "finish": [
+          "matte"
+        ],
+        "paperType": [
+          "Mohawk Superfine"
+        ],
+        "style": [
+          "Single"
+        ],
+        "substrateWeight": [
+          "324gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-POST-MOH-6X4-BLA",
+        "copies": 1,
+        "attributes": {
+          "finish": "matte",
+          "paperType": "Mohawk Superfine",
+          "substrateWeight": "324gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "1.05",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "7.55",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "GLOBAL-POST-GLOS-6X4": {
+      "productStatus": 200,
+      "description": "A single 6x4\" gloss coated postcard with option to print on both sides.",
+      "dimensions": {
+        "width": 15.2,
+        "height": 10.2,
+        "units": "cm"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 3708x1263": 1
+      },
+      "attributesSE": {
+        "finish": [
+          "gloss"
+        ],
+        "paperType": [
+          "Fine art card"
+        ],
+        "style": [
+          "Single"
+        ],
+        "substrateWeight": [
+          "280gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-POST-GLOS-6X4",
+        "copies": 1,
+        "attributes": {
+          "finish": "gloss",
+          "paperType": "Fine art card",
+          "substrateWeight": "280gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "0.48",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "10.25",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_gb2",
+        "service": "DHL Global Mail Tracked"
+      }
+    },
+    "GLOBAL-POST-GLOS-7X5": {
+      "productStatus": 200,
+      "description": "A single 7x5\" gloss coated postcard with option to print on both sides.",
+      "dimensions": {
+        "width": 17.8,
+        "height": 12.7,
+        "units": "cm"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 4322x1559": 1
+      },
+      "attributesSE": {
+        "finish": [
+          "gloss"
+        ],
+        "paperType": [
+          "Fine art card"
+        ],
+        "style": [
+          "Single"
+        ],
+        "substrateWeight": [
+          "280gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-POST-GLOS-7X5",
+        "copies": 1,
+        "attributes": {
+          "finish": "gloss",
+          "paperType": "Fine art card",
+          "substrateWeight": "280gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "0.71",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "10.21",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_gb2",
+        "service": "DHL Global Mail Tracked"
+      }
+    },
+    "M-STI-3X4": {
+      "productStatus": 200,
+      "description": "Small Matt vinyl kisscut sticker, 3x4” / 7.6x10.1cm",
+      "dimensions": {
+        "width": 3,
+        "height": 4,
+        "units": "in"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 900x1200": 1
+      },
+      "attributesSE": {},
+      "quoteRequestItem": {
+        "sku": "M-STI-3X4",
+        "copies": 1,
+        "attributes": {},
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "0.95",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "8.96",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_gb2",
+        "service": "Direct Link Level 3"
+      }
+    },
+    "M-STI-5_5X5_5": {
+      "productStatus": 200,
+      "description": "Medium Matt vinyl kisscut sticker, 5.5x5.5” / 14x14cm",
+      "dimensions": {
+        "width": 5.5,
+        "height": 5.5,
+        "units": "in"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 1650x1650": 1
+      },
+      "attributesSE": {},
+      "quoteRequestItem": {
+        "sku": "M-STI-5_5X5_5",
+        "copies": 1,
+        "attributes": {},
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "2.97",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "8.96",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_gb2",
+        "service": "Direct Link Level 3"
+      }
+    },
+    "M-STI-8_5X8_5": {
+      "productStatus": 200,
+      "description": "Large Matt vinyl kisscut sticker, 8.5x8.5” / 21.6x21.6cm",
+      "dimensions": {
+        "width": 8.5,
+        "height": 8.5,
+        "units": "in"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 2550x2550": 1
+      },
+      "attributesSE": {},
+      "quoteRequestItem": {
+        "sku": "M-STI-8_5X8_5",
+        "copies": 1,
+        "attributes": {},
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "5.34",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "11.52",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_gb2",
+        "service": "Direct Link Level 3"
+      }
+    },
+    "M-STI-14X14": {
+      "productStatus": 200,
+      "description": "Extra large Matt vinyl kisscut sticker , 14x14” / 35.6x35.6cm",
+      "dimensions": {
+        "width": 14,
+        "height": 14,
+        "units": "in"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 4200x4200": 1
+      },
+      "attributesSE": {},
+      "quoteRequestItem": {
+        "sku": "M-STI-14X14",
+        "copies": 1,
+        "attributes": {},
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "7.72",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "11.52",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_gb2",
+        "service": "Direct Link Level 3"
+      }
+    },
+    "GLOBAL-BFP-5X7": {
+      "productStatus": 200,
+      "description": "Budget Framed Poster, 13x18cm / 5x7\"",
+      "dimensions": {
+        "width": 13,
+        "height": 18,
+        "units": "cm"
+      },
+      "variants": 2,
+      "seVariants": 2,
+      "printAreaSE": {
+        "default 1535x2125": 2
+      },
+      "attributesSE": {
+        "frame": [
+          "Budget"
+        ],
+        "color": [
+          "natural",
+          "white"
+        ],
+        "glaze": [
+          "Acrylic / Perspex"
+        ],
+        "mount": [
+          "No mount / Mat"
+        ],
+        "paperType": [
+          "Silk"
+        ],
+        "substrateWeight": [
+          "150gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-BFP-5X7",
+        "copies": 1,
+        "attributes": {
+          "frame": "Budget",
+          "color": "natural",
+          "glaze": "Acrylic / Perspex",
+          "mount": "No mount / Mat",
+          "paperType": "Silk",
+          "substrateWeight": "150gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "11.87",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "31.99",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_gb3",
+        "service": "DPD Local Classic"
+      }
+    },
+    "GLOBAL-BFP-11X14": {
+      "productStatus": 200,
+      "description": "Budget Framed Poster, 28x35cm / 11x14\"",
+      "dimensions": {
+        "width": 28,
+        "height": 35.5,
+        "units": "cm"
+      },
+      "variants": 2,
+      "seVariants": 2,
+      "printAreaSE": {
+        "default 3307x4192": 2
+      },
+      "attributesSE": {
+        "frame": [
+          "Budget"
+        ],
+        "color": [
+          "natural",
+          "white"
+        ],
+        "glaze": [
+          "Acrylic / Perspex"
+        ],
+        "mount": [
+          "No mount / Mat"
+        ],
+        "paperType": [
+          "Silk"
+        ],
+        "substrateWeight": [
+          "150gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-BFP-11X14",
+        "copies": 1,
+        "attributes": {
+          "frame": "Budget",
+          "color": "natural",
+          "glaze": "Acrylic / Perspex",
+          "mount": "No mount / Mat",
+          "paperType": "Silk",
+          "substrateWeight": "150gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "17.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "GLOBAL-BFP-12X16": {
+      "productStatus": 200,
+      "description": "Budget Framed Poster, 30x40cm / 12x16\"",
+      "dimensions": {
+        "width": 30,
+        "height": 40,
+        "units": "cm"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 3543x4724": 1
+      },
+      "attributesSE": {
+        "frame": [
+          "Budget"
+        ],
+        "color": [
+          "white"
+        ],
+        "glaze": [
+          "Acrylic / Perspex"
+        ],
+        "mount": [
+          "No mount / Mat"
+        ],
+        "paperType": [
+          "Silk"
+        ],
+        "substrateWeight": [
+          "150gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-BFP-12X16",
+        "copies": 1,
+        "attributes": {
+          "frame": "Budget",
+          "color": "white",
+          "glaze": "Acrylic / Perspex",
+          "mount": "No mount / Mat",
+          "paperType": "Silk",
+          "substrateWeight": "150gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "19.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "GLOBAL-BFP-16X20": {
+      "productStatus": 200,
+      "description": "Budget Framed Poster, 40x50cm / 16x20\"",
+      "dimensions": {
+        "width": 40,
+        "height": 50,
+        "units": "cm"
+      },
+      "variants": 2,
+      "seVariants": 2,
+      "printAreaSE": {
+        "default 4724x5905": 2
+      },
+      "attributesSE": {
+        "frame": [
+          "Budget"
+        ],
+        "color": [
+          "natural",
+          "white"
+        ],
+        "glaze": [
+          "Acrylic / Perspex"
+        ],
+        "mount": [
+          "No mount / Mat"
+        ],
+        "paperType": [
+          "Silk"
+        ],
+        "substrateWeight": [
+          "150gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-BFP-16X20",
+        "copies": 1,
+        "attributes": {
+          "frame": "Budget",
+          "color": "natural",
+          "glaze": "Acrylic / Perspex",
+          "mount": "No mount / Mat",
+          "paperType": "Silk",
+          "substrateWeight": "150gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "24.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "GLOBAL-BFP-18X24": {
+      "productStatus": 200,
+      "description": "Budget Framed Poster, 45x60cm / 18x24\"",
+      "dimensions": {
+        "width": 45,
+        "height": 60,
+        "units": "cm"
+      },
+      "variants": 2,
+      "seVariants": 2,
+      "printAreaSE": {
+        "default 5314x7086": 2
+      },
+      "attributesSE": {
+        "frame": [
+          "Budget"
+        ],
+        "color": [
+          "natural",
+          "white"
+        ],
+        "glaze": [
+          "Acrylic / Perspex"
+        ],
+        "mount": [
+          "No mount / Mat"
+        ],
+        "paperType": [
+          "Silk"
+        ],
+        "substrateWeight": [
+          "150gsm"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-BFP-18X24",
+        "copies": 1,
+        "attributes": {
+          "frame": "Budget",
+          "color": "natural",
+          "glaze": "Acrylic / Perspex",
+          "mount": "No mount / Mat",
+          "paperType": "Silk",
+          "substrateWeight": "150gsm"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "28.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "H-MUG-W": {
+      "productStatus": 200,
+      "description": "11oz White Ceramic Photo Mug [full image wrap with top-to-bottom printing]",
+      "dimensions": {
+        "width": 22.86,
+        "height": 9.483,
+        "units": "cm"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 2700x1119": 1
+      },
+      "attributesSE": {
+        "color": [
+          "white"
+        ],
+        "size": [
+          "313ml / 11oz"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "H-MUG-W",
+        "copies": 1,
+        "attributes": {
+          "color": "white",
+          "size": "313ml / 11oz"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "5.34",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "5.88",
+          "currency": "EUR"
+        },
+        "lab": "uk2",
+        "service": "Royal Mail DSA"
+      }
+    },
+    "GLOBAL-MUG-W": {
+      "productStatus": 200,
+      "description": "11oz White Ceramic Photo Mug [full image wrap with top-to-bottom printing]",
+      "dimensions": {
+        "width": 22.86,
+        "height": 9.483,
+        "units": "cm"
+      },
+      "variants": 1,
+      "seVariants": 1,
+      "printAreaSE": {
+        "default 2670x1110": 1
+      },
+      "attributesSE": {
+        "color": [
+          "white"
+        ],
+        "size": [
+          "313ml / 11oz"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "GLOBAL-MUG-W",
+        "copies": 1,
+        "attributes": {
+          "color": "white",
+          "size": "313ml / 11oz"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "5.07",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "5.88",
+          "currency": "EUR"
+        },
+        "lab": "uk2",
+        "service": "Royal Mail DSA"
+      }
+    },
+    "ECO-CAN-8X8": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco canvas, 8x8\" / 20.3x20.3cm",
+      "dimensions": {
+        "width": 8,
+        "height": 8,
+        "units": "in"
+      },
+      "variants": 4,
+      "seVariants": 4,
+      "printAreaSE": {
+        "default 2472x2472": 2,
+        "default 3600x3600": 1,
+        "default 2400x2400": 1
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Recycled card"
+        ],
+        "glaze": [
+          "None"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-CAN-8X8",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Recycled card",
+          "glaze": "None",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "9.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "12.89",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "ECO-CAN-16X16": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco canvas, 16x16\" / 40.6x40.6cm",
+      "dimensions": {
+        "width": 16,
+        "height": 16,
+        "units": "in"
+      },
+      "variants": 4,
+      "seVariants": 4,
+      "printAreaSE": {
+        "default 4872x4872": 2,
+        "default 6000x6000": 1,
+        "default 4800x4800": 1
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Recycled card"
+        ],
+        "glaze": [
+          "None"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-CAN-16X16",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Recycled card",
+          "glaze": "None",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "19.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "ECO-CAN-8X12": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco canvas, 8x12\" / 20.3x30.5cm",
+      "dimensions": {
+        "width": 8,
+        "height": 12,
+        "units": "in"
+      },
+      "variants": 4,
+      "seVariants": 4,
+      "printAreaSE": {
+        "default 2472x3672": 2,
+        "default 3600x4800": 1,
+        "default 2400x3600": 1
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Recycled card"
+        ],
+        "glaze": [
+          "None"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-CAN-8X12",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Recycled card",
+          "glaze": "None",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "11.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "ECO-CAN-20X30": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco canvas, 20x30\" / 50.8x76.2cm",
+      "dimensions": {
+        "width": 20,
+        "height": 30,
+        "units": "in"
+      },
+      "variants": 4,
+      "seVariants": 4,
+      "printAreaSE": {
+        "default 6072x9072": 2,
+        "default 7200x10200": 1,
+        "default 6000x9000": 1
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Recycled card"
+        ],
+        "glaze": [
+          "None"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-CAN-20X30",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Recycled card",
+          "glaze": "None",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "32.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "19.40",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "DPD NL Classic"
+      }
+    },
+    "ECO-CAN-16X24": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco canvas, 16x24\" / 40.6x61cm",
+      "dimensions": {
+        "width": 16,
+        "height": 24,
+        "units": "in"
+      },
+      "variants": 4,
+      "seVariants": 4,
+      "printAreaSE": {
+        "default 4872x7272": 2,
+        "default 6000x8400": 1,
+        "default 4800x7200": 1
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Recycled card"
+        ],
+        "glaze": [
+          "None"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-CAN-16X24",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Recycled card",
+          "glaze": "None",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "26.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "ECO-FRA-CAN-8X8": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco framed canvas, 8x8\" / 20.3x20.3 cm",
+      "dimensions": {
+        "width": 8,
+        "height": 8,
+        "units": "in"
+      },
+      "variants": 24,
+      "seVariants": 24,
+      "printAreaSE": {
+        "default 2472x2472": 18,
+        "default 3600x3600": 6
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Float frame, 38mm standard stretcher bar"
+        ],
+        "color": [
+          "black",
+          "brown",
+          "gold",
+          "natural",
+          "silver",
+          "white"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-FRA-CAN-8X8",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Float frame, 38mm standard stretcher bar",
+          "color": "black",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "22.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "12.89",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "ECO-FRA-CAN-12X12": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco framed canvas, 12x12\" / 30.5x30.5 cm",
+      "dimensions": {
+        "width": 12,
+        "height": 12,
+        "units": "in"
+      },
+      "variants": 24,
+      "seVariants": 24,
+      "printAreaSE": {
+        "default 3672x3672": 18,
+        "default 4800x4800": 6
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Float frame, 38mm standard stretcher bar"
+        ],
+        "color": [
+          "black",
+          "brown",
+          "gold",
+          "natural",
+          "silver",
+          "white"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-FRA-CAN-12X12",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Float frame, 38mm standard stretcher bar",
+          "color": "black",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "28.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "ECO-FRA-CAN-16X16": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco framed canvas, 16x16\" / 40.6x40.6 cm",
+      "dimensions": {
+        "width": 16,
+        "height": 16,
+        "units": "in"
+      },
+      "variants": 24,
+      "seVariants": 24,
+      "printAreaSE": {
+        "default 4872x4872": 18,
+        "default 6000x6000": 6
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Float frame, 38mm standard stretcher bar"
+        ],
+        "color": [
+          "black",
+          "brown",
+          "gold",
+          "natural",
+          "silver",
+          "white"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-FRA-CAN-16X16",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Float frame, 38mm standard stretcher bar",
+          "color": "black",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "38.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "ECO-FRA-CAN-20X20": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco framed canvas, 20x20\" / 50.8x50.8 cm",
+      "dimensions": {
+        "width": 20,
+        "height": 20,
+        "units": "in"
+      },
+      "variants": 24,
+      "seVariants": 24,
+      "printAreaSE": {
+        "default 6072x6072": 18,
+        "default 7200x7200": 6
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Float frame, 38mm standard stretcher bar"
+        ],
+        "color": [
+          "black",
+          "brown",
+          "gold",
+          "natural",
+          "silver",
+          "white"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-FRA-CAN-20X20",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Float frame, 38mm standard stretcher bar",
+          "color": "black",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "45.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "13.95",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "Packet Tracked"
+      }
+    },
+    "ECO-FRA-CAN-20X30": {
+      "productStatus": 200,
+      "description": "Environmentally friendly recycled eco framed canvas, 20x30\" / 50.8x76.2 cm",
+      "dimensions": {
+        "width": 20,
+        "height": 30,
+        "units": "in"
+      },
+      "variants": 24,
+      "seVariants": 24,
+      "printAreaSE": {
+        "default 6072x9072": 18,
+        "default 7200x10200": 6
+      },
+      "attributesSE": {
+        "edge": [
+          "38mm"
+        ],
+        "frame": [
+          "Float frame, 38mm standard stretcher bar"
+        ],
+        "color": [
+          "black",
+          "brown",
+          "gold",
+          "natural",
+          "silver",
+          "white"
+        ],
+        "paperType": [
+          "Recycled canvas"
+        ],
+        "substrateWeight": [
+          "330gsm"
+        ],
+        "wrap": [
+          "Black",
+          "ImageWrap",
+          "MirrorWrap",
+          "White"
+        ]
+      },
+      "quoteRequestItem": {
+        "sku": "ECO-FRA-CAN-20X30",
+        "copies": 1,
+        "attributes": {
+          "edge": "38mm",
+          "frame": "Float frame, 38mm standard stretcher bar",
+          "color": "black",
+          "paperType": "Recycled canvas",
+          "substrateWeight": "330gsm",
+          "wrap": "Black"
+        },
+        "assets": [
+          {
+            "printArea": "default"
+          }
+        ]
+      },
+      "quoteStatus": 200,
+      "quoteOutcome": "Created",
+      "quote": {
+        "unit": {
+          "amount": "55.00",
+          "currency": "EUR"
+        },
+        "shipping": {
+          "amount": "19.40",
+          "currency": "EUR"
+        },
+        "lab": "prodigi_eu",
+        "service": "DPD NL Classic"
+      }
+    }
+  }
+}
