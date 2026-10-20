@@ -44,12 +44,15 @@ export type { AdminProduct, ProductStatus } from "./admin-product-reads";
  *   price_below_floor    PRISGOLV (podPricing.js): a price under the break-even floor
  *   pod_frame_unconfirmed (CP6-PS4, publish only) a mapping's printer model has
  *                        only stand-in frames while the print canvas is on
+ *   pod_required_slot_missing (CP11 U7) a mapping set leaves out a slot its
+ *                        printer requires (Prodigi: front)
  */
 export type AdminRefusalCode =
   | "currency_mismatch"
   | "pod_frame_unconfirmed"
   | "pod_mapping_missing"
   | "pod_mapping_suspended"
+  | "pod_required_slot_missing"
   | "pod_too_large"
   | "pod_unpriced"
   | "price_below_floor"

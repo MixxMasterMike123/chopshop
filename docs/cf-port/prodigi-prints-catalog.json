@@ -1,0 +1,241 @@
+{
+  "generatedAt": "2026-10-20T16:57:34.157Z",
+  "generator": "scripts/cf-port/prodigi-catalog.mjs --kind flat",
+  "source": {
+    "api": "https://api.sandbox.prodigi.com/v4.0",
+    "destination": "SE",
+    "shippingMethod": "Standard",
+    "quoteDate": "2026-10-20"
+  },
+  "models": {
+    "BFP-11X14": {
+      "brand": null,
+      "name": "Budget Framed Poster, 28x35cm / 11x14\"",
+      "garment": "poster",
+      "kind": "flat",
+      "prodigiSku": "GLOBAL-BFP-11X14",
+      "prodigiPrintArea": "default",
+      "attributes": {
+        "frame": "Budget",
+        "color": "white",
+        "glaze": "Acrylic / Perspex",
+        "mount": "No mount / Mat",
+        "paperType": "Silk",
+        "substrateWeight": "150gsm"
+      },
+      "requiredSlots": [
+        "front"
+      ],
+      "front": {
+        "h": 355,
+        "offsetTopMm": 0,
+        "w": 280
+      },
+      "printAreaPx": {
+        "front": {
+          "w": 3307,
+          "h": 4192
+        }
+      }
+    },
+    "BFP-12X16": {
+      "brand": null,
+      "name": "Budget Framed Poster, 30x40cm / 12x16\"",
+      "garment": "poster",
+      "kind": "flat",
+      "prodigiSku": "GLOBAL-BFP-12X16",
+      "prodigiPrintArea": "default",
+      "attributes": {
+        "frame": "Budget",
+        "color": "white",
+        "glaze": "Acrylic / Perspex",
+        "mount": "No mount / Mat",
+        "paperType": "Silk",
+        "substrateWeight": "150gsm"
+      },
+      "requiredSlots": [
+        "front"
+      ],
+      "front": {
+        "h": 400,
+        "offsetTopMm": 0,
+        "w": 300
+      },
+      "printAreaPx": {
+        "front": {
+          "w": 3543,
+          "h": 4724
+        }
+      }
+    },
+    "BFP-16X20": {
+      "brand": null,
+      "name": "Budget Framed Poster, 40x50cm / 16x20\"",
+      "garment": "poster",
+      "kind": "flat",
+      "prodigiSku": "GLOBAL-BFP-16X20",
+      "prodigiPrintArea": "default",
+      "attributes": {
+        "frame": "Budget",
+        "color": "white",
+        "glaze": "Acrylic / Perspex",
+        "mount": "No mount / Mat",
+        "paperType": "Silk",
+        "substrateWeight": "150gsm"
+      },
+      "requiredSlots": [
+        "front"
+      ],
+      "front": {
+        "h": 500,
+        "offsetTopMm": 0,
+        "w": 400
+      },
+      "printAreaPx": {
+        "front": {
+          "w": 4724,
+          "h": 5905
+        }
+      }
+    },
+    "BFP-18X24": {
+      "brand": null,
+      "name": "Budget Framed Poster, 45x60cm / 18x24\"",
+      "garment": "poster",
+      "kind": "flat",
+      "prodigiSku": "GLOBAL-BFP-18X24",
+      "prodigiPrintArea": "default",
+      "attributes": {
+        "frame": "Budget",
+        "color": "white",
+        "glaze": "Acrylic / Perspex",
+        "mount": "No mount / Mat",
+        "paperType": "Silk",
+        "substrateWeight": "150gsm"
+      },
+      "requiredSlots": [
+        "front"
+      ],
+      "front": {
+        "h": 600,
+        "offsetTopMm": 0,
+        "w": 450
+      },
+      "printAreaPx": {
+        "front": {
+          "w": 5314,
+          "h": 7086
+        }
+      }
+    }
+  },
+  "skus": {
+    "GLOBAL-BFP-11X14.white-frame.11x14": {
+      "model": "BFP-11X14",
+      "garment": "poster",
+      "colour": "White frame",
+      "size": "11x14",
+      "prodigiSku": "GLOBAL-BFP-11X14",
+      "attributes": {
+        "frame": "Budget",
+        "color": "white",
+        "glaze": "Acrylic / Perspex",
+        "mount": "No mount / Mat",
+        "paperType": "Silk",
+        "substrateWeight": "150gsm"
+      },
+      "unitCostMinor": 1700,
+      "lab": "prodigi_eu"
+    },
+    "GLOBAL-BFP-12X16.white-frame.12x16": {
+      "model": "BFP-12X16",
+      "garment": "poster",
+      "colour": "White frame",
+      "size": "12x16",
+      "prodigiSku": "GLOBAL-BFP-12X16",
+      "attributes": {
+        "frame": "Budget",
+        "color": "white",
+        "glaze": "Acrylic / Perspex",
+        "mount": "No mount / Mat",
+        "paperType": "Silk",
+        "substrateWeight": "150gsm"
+      },
+      "unitCostMinor": 1900,
+      "lab": "prodigi_eu"
+    },
+    "GLOBAL-BFP-16X20.white-frame.16x20": {
+      "model": "BFP-16X20",
+      "garment": "poster",
+      "colour": "White frame",
+      "size": "16x20",
+      "prodigiSku": "GLOBAL-BFP-16X20",
+      "attributes": {
+        "frame": "Budget",
+        "color": "white",
+        "glaze": "Acrylic / Perspex",
+        "mount": "No mount / Mat",
+        "paperType": "Silk",
+        "substrateWeight": "150gsm"
+      },
+      "unitCostMinor": 2400,
+      "lab": "prodigi_eu"
+    },
+    "GLOBAL-BFP-18X24.white-frame.18x24": {
+      "model": "BFP-18X24",
+      "garment": "poster",
+      "colour": "White frame",
+      "size": "18x24",
+      "prodigiSku": "GLOBAL-BFP-18X24",
+      "attributes": {
+        "frame": "Budget",
+        "color": "white",
+        "glaze": "Acrylic / Perspex",
+        "mount": "No mount / Mat",
+        "paperType": "Silk",
+        "substrateWeight": "150gsm"
+      },
+      "unitCostMinor": 2800,
+      "lab": "prodigi_eu"
+    }
+  },
+  "unquoted": [],
+  "warnings": [
+    "BFP-11X14: no black frame in the SE variants; \"white\" is the fixed frame colour",
+    "BFP-12X16: no black frame in the SE variants; \"white\" is the fixed frame colour",
+    "BFP-16X20: no black frame in the SE variants; \"white\" is the fixed frame colour",
+    "BFP-18X24: no black frame in the SE variants; \"white\" is the fixed frame colour"
+  ],
+  "pricingBasis": {
+    "currency": "EUR",
+    "unit": "minor (cents), ex VAT, one print incl.",
+    "quoteDate": "2026-10-20",
+    "destination": "SE",
+    "shippingMethod": "Standard",
+    "shippingCostMinor": 1395,
+    "lab": "prodigi_eu",
+    "perSkuIn": "catalog.skus[key].unitCostMinor / .lab"
+  },
+  "applyPricingEur": {
+    "basis": "eur",
+    "note": "Fragment of POST .../catalog/apply `pricing`. eurSek and bufferBp are the platform's decision. One print (front) is the product, so extraPrintEurCents is 0 and baseEurCents is the quoted unit cost.",
+    "extraPrintEurCents": 0,
+    "printSlots": [
+      "front"
+    ],
+    "models": {
+      "BFP-11X14": {
+        "baseEurCents": 1700
+      },
+      "BFP-12X16": {
+        "baseEurCents": 1900
+      },
+      "BFP-16X20": {
+        "baseEurCents": 2400
+      },
+      "BFP-18X24": {
+        "baseEurCents": 2800
+      }
+    }
+  }
+}

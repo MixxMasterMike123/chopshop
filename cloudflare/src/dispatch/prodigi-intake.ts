@@ -2,8 +2,9 @@ import { jsonResponse } from "../lib/http";
 import { clientIp, enforceRateLimit, visitorRateKey } from "../lib/rate-limit";
 import { rateLimitedResponse, readJsonBodyWithin, routeNotFoundResponse } from "../lib/responses";
 import { alertStatement } from "../outbox/outbox";
+import { printerOrderIssueAlertStatement } from "./printer-order-alerts";
 import { PRODIGI_ORDER_REF_PATTERN, prodigiSubmitConfig, readProdigiOrder } from "./prodigi-client";
-import { PRODIGI_CALLBACK_PATH } from "./prodigi-wire";
+import { PRODIGI_CALLBACK_PATH, PRODIGI_MAX_ISSUE_CODES, prodigiIssueCodes } from "./prodigi-wire";
 import {
   parseProductionStatusInput,
   type ProductionStatusInput,
@@ -50,14 +51,28 @@ import { printerJobId } from "./snapwear-wire";
  *      (`ori_…`) among its `items[].itemId` → `shipped`, with the tracking
  *      number, the tracking URL and `carrier.name` (each dropped alone when
  *      0051's rules would refuse it);
- *   2. the order's `status.stage` is Cancelled → no state change; if the line
+ *   2. a shipment whose `status` is Cancelled lists the item's `id` (CP11 U7,
+ *      audit F6: Prodigi cancels PART of an order this way while the order
+ *      itself stays InProgress) → as 3, for this line only;
+ *   3. the order's `status.stage` is Cancelled → no state change; if the line
  *      is accepted here, in an order neither cancelled nor refunded, ONE
  *      critical alert per line (`printer_order_cancelled`, see below);
- *   3. `status.details.inProduction` is InProgress or Complete, or
+ *   4. `status.details.inProduction` is InProgress or Complete, or
  *      `status.stage` is Complete → `in_production`;
- *   4. anything else → nothing.
+ *   5. anything else → nothing.
  * Cancelled comes before in production on purpose: a cancelled order's
- * details may still say a step was in progress when it stopped.
+ * details may still say a step was in progress when it stopped, and a line
+ * whose shipment was cancelled must not read as in production (it would hold
+ * the order's completion with no explanation).
+ *
+ * ── ISSUES (CP11 U7, audit F5), once per re-read, before the lines ──────────
+ * `status.issues[]` (each its `errorCode`), any `status.details.<step>` in
+ * Error (`details_<step>_error`), and any item or asset whose `status` is
+ * Invalid or Error (`item_invalid`, `asset_error`, …) → ONE critical
+ * `printer_order_issues` alert per (order, code) (printer-order-alerts.ts),
+ * no state change. The same kind and dedupe as the dispatcher's alert for a
+ * CreatedWithIssues answer, so an issue reported at creation and again on a
+ * callback is one alert.
  * Every write goes through recordProductionStatus — the ONLY writer of a
  * line's production state — with actorUserId = null (the printer).
  *
@@ -143,7 +158,8 @@ export function prodigiOrderIdOfEvent(body: unknown): string | null {
 
 export type ProdigiLineFact =
   | { input: ProductionStatusInput; kind: "shipped" }
-  | { kind: "cancelled" }
+  /** `shipment`: the line's shipment was cancelled (audit F6); `order`: the whole order. */
+  | { kind: "cancelled"; scope: "order" | "shipment" }
   | { kind: "in_production" }
   | { kind: "none" };
 
@@ -190,23 +206,32 @@ export function prodigiLineFact(order: Record<string, unknown>, lineNo: number):
   }
 
   const itemId = text(item.id);
+  const shipmentsOfItem: Array<Record<string, unknown>> = [];
   if (itemId !== null && Array.isArray(order.shipments)) {
     for (const shipment of order.shipments) {
       if (
         isRecord(shipment) &&
-        lower(shipment.status) === "shipped" &&
         Array.isArray(shipment.items) &&
         shipment.items.some((entry) => isRecord(entry) && entry.itemId === itemId)
       ) {
-        return { input: shippedInput(shipment), kind: "shipped" };
+        shipmentsOfItem.push(shipment);
       }
     }
+  }
+  const shipped = shipmentsOfItem.find((shipment) => lower(shipment.status) === "shipped");
+  if (shipped !== undefined) {
+    return { input: shippedInput(shipped), kind: "shipped" };
+  }
+  // Audit F6: a cancelled shipment carrying this item, while the order may
+  // still be InProgress for its other items — checked BEFORE the aggregate.
+  if (shipmentsOfItem.some((shipment) => lower(shipment.status) === "cancelled")) {
+    return { kind: "cancelled", scope: "shipment" };
   }
 
   const status = isRecord(order.status) ? order.status : {};
   const stage = lower(status.stage);
   if (stage === "cancelled") {
-    return { kind: "cancelled" };
+    return { kind: "cancelled", scope: "order" };
   }
   const details = isRecord(status.details) ? status.details : {};
   const inProduction = lower(details.inProduction);
@@ -214,6 +239,53 @@ export function prodigiLineFact(order: Record<string, unknown>, lineNo: number):
     return { kind: "in_production" };
   }
   return { kind: "none" };
+}
+
+/** The statuses of an item or an asset that need a human (audit F5). */
+const FAILED_PART_STATUSES = new Set(["invalid", "error"]);
+
+/** A code fragment from a Prodigi name: letters and digits, bounded. */
+function codePart(value: string): string {
+  return value.replace(/[^A-Za-z0-9]/g, "").slice(0, 30) || "unknown";
+}
+
+/**
+ * CP11 U7 (audit F5): the issue codes a re-read order carries — see the
+ * header's ISSUES. Deduplicated, bounded (PRODIGI_MAX_ISSUE_CODES), codes
+ * only: `status.issues[].errorCode` (prodigiIssueCodes), then
+ * `details_<step>_error`, `item_<status>`, `asset_<status>`.
+ */
+export function prodigiOrderIssueCodes(order: Record<string, unknown>): string[] {
+  const codes = prodigiIssueCodes(order);
+  const add = (code: string): void => {
+    if (!codes.includes(code) && codes.length < PRODIGI_MAX_ISSUE_CODES) {
+      codes.push(code);
+    }
+  };
+  const status = isRecord(order.status) ? order.status : {};
+  if (isRecord(status.details)) {
+    for (const [step, value] of Object.entries(status.details)) {
+      if (lower(value) === "error") {
+        add(`details_${codePart(step)}_error`);
+      }
+    }
+  }
+  for (const item of Array.isArray(order.items) ? order.items : []) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const itemStatus = lower(item.status);
+    if (itemStatus !== null && FAILED_PART_STATUSES.has(itemStatus)) {
+      add(`item_${itemStatus}`);
+    }
+    for (const asset of Array.isArray(item.assets) ? item.assets : []) {
+      const assetStatus = isRecord(asset) ? lower(asset.status) : null;
+      if (assetStatus !== null && FAILED_PART_STATUSES.has(assetStatus)) {
+        add(`asset_${assetStatus}`);
+      }
+    }
+  }
+  return codes;
 }
 
 // ── the intake ──────────────────────────────────────────────────────────────
@@ -289,6 +361,19 @@ export async function intakeProdigiOrder(
     return "not_found";
   }
 
+  // Audit F5: the printer's issues on this order, one alert per code (the
+  // id dedupes across callbacks and the dispatcher's CreatedWithIssues
+  // alert). No line changes for them. Every line of one order is one tenant.
+  const issueCodes = prodigiOrderIssueCodes(order);
+  const tenantId = lines[0]?.tenant_id;
+  if (issueCodes.length > 0 && tenantId !== undefined) {
+    await env.DB.batch(
+      issueCodes.map((code) =>
+        printerOrderIssueAlertStatement(env.DB, { code, nowMs, orderId, printerRef: prodigiOrderId, tenantId }),
+      ),
+    );
+  }
+
   let retry = false;
   // One line at a time, in line order: a 'shipped' write decides whether the
   // whole order is now shipped (printerShippedOrderStatements), so the last
@@ -324,7 +409,7 @@ export async function intakeProdigiOrder(
           {
             id: printerOrderCancelledAlertId(jobId),
             kind: PRINTER_ORDER_CANCELLED_ALERT_KIND,
-            message: `Print job ${jobId} (order ${orderId}, line ${lineNo}): the printer reports its order ${prodigiOrderId} cancelled, while the line is accepted here and the order is neither cancelled nor refunded. Nothing was changed. Find out why with the printer, then place the line again or refund it.`,
+            message: `Print job ${jobId} (order ${orderId}, line ${lineNo}): the printer reports ${fact.scope === "shipment" ? "the shipment of this line in its order" : "its order"} ${prodigiOrderId} cancelled, while the line is accepted here and the order is neither cancelled nor refunded. Nothing was changed. Find out why with the printer, then place the line again or refund it.`,
             nowMs,
             resourceId: jobId,
             resourceType: "print_job",

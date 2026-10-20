@@ -150,6 +150,14 @@ export const CartProvider = ({ children }) => {
   const cartAllowsHome = cart.items.length > 0 && cart.items.every((i) => i.delivery?.shipping !== false);
   const cartAllowsPickup = cart.items.length > 0 && cart.items.every((i) => i.delivery?.pickup !== false);
   const hasDeliveryConflict = cart.items.length > 0 && !cartAllowsHome && !cartAllowsPickup;
+  // CP11 U7: the countries EVERY line can be shipped to (the intersection of
+  // the lines' `shipsTo`), or null when no line restricts — the same rule the
+  // checkout applies (it refuses any other country).
+  const cartShipsTo = cart.items.reduce((allowed, item) => {
+    const own = item.delivery?.shipsTo;
+    if (!Array.isArray(own)) return allowed;
+    return allowed === null ? [...own] : allowed.filter((code) => own.includes(code));
+  }, null);
 
   useEffect(() => {
     if (cart.items.length === 0 || hasDeliveryConflict) return;
@@ -353,6 +361,9 @@ export const CartProvider = ({ children }) => {
       delivery: {
         shipping: product.delivery?.shipping !== false,
         pickup: product.delivery?.pickup !== false,
+        // CP11 U7: the countries a POD product's printer ships to (the API's
+        // `shipsTo`); absent = no restriction.
+        ...(Array.isArray(product.delivery?.shipsTo) ? { shipsTo: product.delivery.shipsTo } : {}),
       },
       isPersonalized: product.isPersonalized === true,
       quantity: qty,
@@ -481,6 +492,7 @@ export const CartProvider = ({ children }) => {
     selectPickup,
     cartAllowsHome,
     cartAllowsPickup,
+    cartShipsTo,
     hasDeliveryConflict,
   };
 

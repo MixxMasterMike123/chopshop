@@ -52,6 +52,7 @@ import {
   PRINT_CANVAS_PENDING,
   printCanvasEnabled,
 } from "./print-canvas";
+import { printerOrderIssueAlertStatement } from "./printer-order-alerts";
 import { splitProdigiSkuKey } from "./prodigi-wire";
 import { parsePrinterJobId, type PrintLocation, printerJobId } from "./snapwear-wire";
 
@@ -1280,6 +1281,13 @@ async function runOrderUnit(
     if (provider === "prodigi" && splitProdigiSkuKey(built.value.sku) === null) {
       return failPreparation(ctx, own.lineNo, lineRef, { error: "sku_invalid", kind: "terminal", lineNo: entry.lineNo });
     }
+    // CP11 U7 (audit F2), the same rule: a Prodigi line without a front print
+    // is THAT line's fault (terminal `front_missing` for its own row, a wait
+    // for the others). Publication and checkout refuse such a line first; the
+    // body builder's own `front_missing` stays as the last resort.
+    if (provider === "prodigi" && !built.value.printFiles.some((file) => file.location === "front")) {
+      return failPreparation(ctx, own.lineNo, lineRef, { error: "front_missing", kind: "terminal", lineNo: entry.lineNo });
+    }
     targets.push({ job: built.value, lineNo: entry.lineNo });
   }
 
@@ -1542,6 +1550,19 @@ async function recordSubmitResult(
                 guard,
               ),
             ]),
+        // CP11 U7 (audit F5): the printer took the order but reports issues
+        // (Prodigi's CreatedWithIssues): accepted all the same — the order
+        // exists, re-submitting would only answer AlreadyExists — and ONE
+        // alert per issue code, deduplicated by order + code, in this batch.
+        ...(result.status !== "accepted" || result.issueCodes === undefined || printerRef === null
+          ? []
+          : result.issueCodes.map((code) =>
+              printerOrderIssueAlertStatement(
+                env.DB,
+                { code, nowMs: now, orderId: row.aggregate_id, printerRef, tenantId },
+                guard,
+              ),
+            )),
         // A cancellation that arrived while the call was out (§2.3 path 2).
         printerCancellationInsert(env.DB, {
           nowMs: now,
@@ -1609,8 +1630,8 @@ async function recordSubmitResult(
  * The `printer_cancellation` effect: an accepted printer job belongs to a
  * cancelled order. SnapWear has no cancellation API (LAUNCH_TODO A6; nor does
  * the fake), so the effect is a human-action alert, raised exactly once, and
- * the row is done when the alert exists. A printer with a cancellation API
- * would call it here instead.
+ * the row is done when the alert exists. A printer with a usable cancellation
+ * API would call it here instead.
  *
  * CP11 (D4.6): Prodigi HAS one (`POST /v4.0/orders/{id}/actions/cancel`), but
  * it answers `ActionNotAvailable` once the order is in production (within
@@ -1639,7 +1660,7 @@ export async function runPrinterCancellationEffect(
         {
           id: alertId,
           kind: "printer_cancellation_needed",
-          message: `Order ${row.aggregate_id} was cancelled after the printer accepted job ${jobId}${ref === null ? "" : ` (printer reference ${ref})`}. The printer has no cancellation API: cancel the job with the printer by hand.`,
+          message: `Order ${row.aggregate_id} was cancelled after the printer accepted job ${jobId}${ref === null ? "" : ` (printer reference ${ref})`}. No cancellation was sent to the printer: SnapWear has no cancellation API, and Prodigi refuses a cancel once the order is in production (within minutes). Cancel the job with the printer by hand, or confirm that it can no longer be cancelled.`,
           nowMs: now,
           resourceId: row.outbox_id,
           resourceType: "outbox_event",

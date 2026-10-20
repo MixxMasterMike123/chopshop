@@ -195,6 +195,11 @@ describe('toPageProduct: a product answer', () => {
     assert.equal(product.size, null);
   });
 
+  it("CP11 U7: carries the countries a POD product ships to, and only when the API names them", () => {
+    assert.deepEqual(toPageProduct({ ...DETAIL, shipsTo: ['SE'] }).delivery, { shipping: true, pickup: false, shipsTo: ['SE'] });
+    assert.deepEqual(toPageProduct({ ...DETAIL, shipsTo: null }).delivery, { shipping: true, pickup: false });
+  });
+
   it('reads the print previews of a POD product through apiUrl', () => {
     assert.equal(product.isPodProduct, true);
     assert.deepEqual(previews, ['/v1/storefront/pod-previews/p-linne/art-1']);

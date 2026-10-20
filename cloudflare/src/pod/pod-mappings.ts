@@ -14,7 +14,10 @@ import {
   isStandInSku,
   loadUsablePrinter,
   PRINT_SLOTS,
+  printerShipsTo,
   providerAllowedIn,
+  providerTakesCollectedOrders,
+  requiredSlotsOf,
   slotFrame,
   toPrinter,
 } from "./printers";
@@ -454,6 +457,8 @@ export type PodGateFailure =
   | "pod_frame_unconfirmed"
   | "pod_mapping_missing"
   | "pod_mapping_suspended"
+  /** CP11 U7 (audit F2): a mapping set leaves out a slot its printer requires (Prodigi: front). */
+  | "pod_required_slot_missing"
   | "pod_too_large"
   | "pod_unpriced"
   | "price_below_floor";
@@ -482,6 +487,8 @@ export function podRefusalMessage(code: string): string {
       return "The printer cannot make this product as it is set up. Contact support.";
     case "pod_frame_unconfirmed":
       return "The printer has not confirmed the print area for this garment yet, so it cannot be sold now. Choose another garment, or try again once the printer has confirmed it.";
+    case "pod_required_slot_missing":
+      return "This garment must have a print on the front. Add a front print to every print mapping of the product, then publish again.";
     case "price_below_floor":
       return "The price is below this product's price floor. Raise it to at least the floor shown with the product's print quote.";
     case "taken_down":
@@ -509,6 +516,14 @@ export function podRefusalMessage(code: string): string {
  * (eligibility.ts STAND_IN_FRAME_TERM). Checked LAST, after every other rule
  * passed: a caller that acts on only some codes (deleteMapping, the live
  * mapping edit) never loses the floor check to an earlier return.
+ *
+ * CP11 U7 (audit F2): every active mapping set must print each slot its
+ * printer requires for its SKU (requiredSlotsOf: Prodigi's `front`), or the
+ * product is refused `pod_required_slot_missing` — product-wide, after the
+ * floor rules and before the stand-in rule, for the same reason. A back-only
+ * Prodigi garment is thereby never published; checkout's line resolution
+ * refuses it again (decideProductionLine) and the Prodigi body builder is the
+ * last guard (`front_missing`).
  */
 export async function evaluatePodGate(
   db: D1Database,
@@ -580,6 +595,9 @@ export async function evaluatePodGate(
       return "price_below_floor";
     }
   }
+  if (await missesRequiredSlot(db, scopes)) {
+    return "pod_required_slot_missing";
+  }
   if (options.refuseStandInFrames === true && (await routesToStandIn(db, mappings))) {
     return "pod_frame_unconfirmed";
   }
@@ -587,29 +605,64 @@ export async function evaluatePodGate(
 }
 
 /**
- * Whether any ACTIVE one of `mappings` routes to a stand-in model on its
- * printer (isStandInSku), whatever the printer's status: the SQL twin joins
- * the printer by id alone. One read of the printers, complete (the ids are
- * the set's own).
+ * The printers `mappings` route to, by id, whatever their status: one read,
+ * complete (the ids are the mappings' own). A row that does not parse maps to
+ * null.
  */
-async function routesToStandIn(db: D1Database, mappings: readonly PodMapping[]): Promise<boolean> {
-  const active = mappings.filter((mapping) => mapping.status === "active");
-  const printerIds = [...new Set(active.map((mapping) => mapping.printerId))];
+async function printersOf(
+  db: D1Database,
+  mappings: readonly PodMapping[],
+): Promise<Map<string, Printer | null>> {
+  const printerIds = [...new Set(mappings.map((mapping) => mapping.printerId))];
   if (printerIds.length === 0) {
-    return false;
+    return new Map();
   }
   const rows = await db
     .prepare(
-      `SELECT id, tenant_id, type, name, status, currency, shipping_cost_minor, capabilities_json
+      `SELECT id, tenant_id, type, provider, name, status, currency, shipping_cost_minor, capabilities_json
        FROM printers
        WHERE id IN (SELECT value FROM json_each(?))`,
     )
     .bind(JSON.stringify(printerIds))
     .all<PrinterRow>();
-  const printers = new Map(rows.results.map((row) => [row.id, toPrinter(row)]));
+  return new Map(rows.results.map((row) => [row.id, toPrinter(row)]));
+}
+
+/**
+ * Whether any ACTIVE one of `mappings` routes to a stand-in model on its
+ * printer (isStandInSku), whatever the printer's status: the SQL twin joins
+ * the printer by id alone.
+ */
+async function routesToStandIn(db: D1Database, mappings: readonly PodMapping[]): Promise<boolean> {
+  const active = mappings.filter((mapping) => mapping.status === "active");
+  const printers = await printersOf(db, active);
   return active.some((mapping) => {
     const printer = printers.get(mapping.printerId);
     return printer !== null && printer !== undefined && isStandInSku(printer.capabilities, mapping.sku);
+  });
+}
+
+/**
+ * CP11 U7 (audit F2): whether some scope's set (already active-only) leaves
+ * out a slot its printer requires for its SKU. A set that does not route to
+ * one printer + SKU, or names a printer that cannot be read, is judged by the
+ * gate's other rules, not here.
+ */
+async function missesRequiredSlot(
+  db: D1Database,
+  scopes: ReadonlyMap<string, PodMapping[]>,
+): Promise<boolean> {
+  const sets = [...scopes.values()];
+  const printers = await printersOf(db, sets.flat());
+  return sets.some((set) => {
+    const routing = setRouting(set);
+    const printer = routing === null ? null : (printers.get(routing.printerId) ?? null);
+    if (routing === null || printer === null) {
+      return false;
+    }
+    return requiredSlotsOf(printer.provider, printer.capabilities, routing.sku).some(
+      (slot) => !routing.slots.some((mapped) => mapped.slot === slot),
+    );
   });
 }
 
@@ -1423,12 +1476,34 @@ function productionReadStatements(
  */
 export type ProductionPolicy = PrinterEnvironment | "any";
 
+/**
+ * CP11 U7 (audit F3, F4): where the order goes — collected, or shipped to a
+ * country (ISO 3166-1 alpha-2, upper case). A line is not producible when its
+ * printer cannot take a collected order (providerTakesCollectedOrders), or
+ * does not ship to that country (printerShipsTo). Undefined = not judged (a
+ * caller that knows no destination).
+ */
+export type ProductionDestination = { country: string; method: "ship" } | { method: "pickup" };
+
+/** Whether `printer` can deliver to `destination` (see ProductionDestination). */
+export function printerDelivers(
+  printer: Pick<Printer, "capabilities" | "provider">,
+  destination: ProductionDestination,
+): boolean {
+  if (destination.method === "pickup") {
+    return providerTakesCollectedOrders(printer.provider);
+  }
+  const shipsTo = printerShipsTo(printer.provider, printer.capabilities);
+  return shipsTo === null || shipsTo.includes(destination.country);
+}
+
 function decideProductionLine(
   tenantId: string,
   item: ProductionItem,
   policy: ProductionPolicy,
   refuseStandInFrames: boolean,
   results: ReadonlyArray<D1Result<unknown> | undefined>,
+  destination: ProductionDestination | undefined,
 ): ProductionLine | null {
   const [mappingResult, printerResult, tierResult] = results;
   const rowsRead = (mappingResult?.results ?? []) as ProductionRow[];
@@ -1471,6 +1546,20 @@ function decideProductionLine(
     (printer.tenantId !== null && printer.tenantId !== tenantId) ||
     printer.capabilities.skus[routing.sku] === undefined
   ) {
+    return null;
+  }
+  // CP11 U7 (audit F2): every slot the printer requires is printed (Prodigi:
+  // front). A back-only Prodigi line is refused BEFORE payment, never left to
+  // the printer's validation after it.
+  if (
+    requiredSlotsOf(printer.provider, printer.capabilities, routing.sku).some(
+      (slot) => !routing.slots.some((mapped) => mapped.slot === slot),
+    )
+  ) {
+    return null;
+  }
+  // CP11 U7 (audit F3, F4): the printer can deliver where this order goes.
+  if (destination !== undefined && !printerDelivers(printer, destination)) {
     return null;
   }
 
@@ -1553,6 +1642,7 @@ export async function resolveProductionLines(
   items: readonly ProductionItem[],
   policy: ProductionPolicy,
   refuseStandInFrames: boolean,
+  destination?: ProductionDestination,
 ): Promise<Array<ProductionLine | null>> {
   if (items.length === 0) {
     return [];
@@ -1567,6 +1657,7 @@ export async function resolveProductionLines(
       policy,
       refuseStandInFrames,
       results.slice(index * STATEMENTS_PER_LINE, (index + 1) * STATEMENTS_PER_LINE),
+      destination,
     ),
   );
 }
@@ -1580,8 +1671,9 @@ export async function resolveProductionLine(
   tenantId: string,
   item: ProductionItem,
   policy: ProductionPolicy,
+  destination?: ProductionDestination,
 ): Promise<ProductionLine | null> {
-  const [line] = await resolveProductionLines(db, tenantId, [item], policy, false);
+  const [line] = await resolveProductionLines(db, tenantId, [item], policy, false, destination);
   return line ?? null;
 }
 
@@ -1626,4 +1718,44 @@ export async function publicPodFields(
   }
   printAreas.sort((a, b) => (SLOT_ORDER.get(a.slot) ?? 0) - (SLOT_ORDER.get(b.slot) ?? 0));
   return { previewUrls, printAreas };
+}
+
+/**
+ * CP11 U7 (audit F3, F4): how a POD product may be delivered, from the
+ * printers its ACTIVE mappings route to — the same rules checkout's line
+ * resolution applies (printerDelivers), so the storefront never offers what
+ * checkout would refuse:
+ *   pickup   false when any of those printers cannot take a collected order;
+ *   shipsTo  the countries EVERY one of them ships to (their intersection),
+ *            or null when none restricts.
+ * Display-only, of a product already proven public. Only the rule's result
+ * leaves: never a printer, a provider or an SKU.
+ */
+export interface PublicPodDelivery {
+  pickup: boolean;
+  shipsTo: string[] | null;
+}
+
+export async function publicPodDelivery(
+  db: D1Database,
+  tenantId: string,
+  productId: string,
+): Promise<PublicPodDelivery> {
+  const mappings = (await loadActiveMappings(db, tenantId, productId)) ?? [];
+  const printers = await printersOf(db, mappings);
+  let pickup = true;
+  let shipsTo: string[] | null = null;
+  for (const printer of printers.values()) {
+    if (printer === null) {
+      continue;
+    }
+    if (!providerTakesCollectedOrders(printer.provider)) {
+      pickup = false;
+    }
+    const own = printerShipsTo(printer.provider, printer.capabilities);
+    if (own !== null) {
+      shipsTo = shipsTo === null ? [...own] : shipsTo.filter((country) => own.includes(country));
+    }
+  }
+  return { pickup, shipsTo: shipsTo === null ? null : [...shipsTo].sort() };
 }

@@ -291,7 +291,9 @@ describe("the wire (D6)", () => {
       expect(splitProdigiSkuKey(bad), bad).toBeNull();
     }
     const job = twoLineJob();
-    expect(toProdigiOrderBody({ ...job, lines: [{ ...job.lines[0]!, sku: "GLOBAL-TEE-GIL-64000" }], shipTo: SHIP_TO }, "https://x.test/")).toBeNull();
+    expect(toProdigiOrderBody({ ...job, lines: [{ ...job.lines[0]!, sku: "GLOBAL-TEE-GIL-64000" }], shipTo: SHIP_TO }, "https://x.test/")).toStrictEqual({
+      refusal: "sku_invalid",
+    });
   });
 
   it("a line whose SKU key does not split is refused sku_invalid, before any call", async () => {
@@ -299,6 +301,18 @@ describe("the wire (D6)", () => {
     const job = twoLineJob();
     const bad = { ...job, lines: [job.lines[0]!, { ...job.lines[1]!, sku: "2700003" }] };
     expect(await client(prodigi.fetcher).submit(bad)).toStrictEqual({ code: "sku_invalid", status: "rejected" });
+    expect(prodigi.calls).toHaveLength(0);
+  });
+
+  it("CP11 U7 (audit F2): a line without a front asset is refused front_missing, before any call — the last guard", async () => {
+    const prodigi = fakeProdigi([created()]);
+    const job = twoLineJob();
+    const backOnly = {
+      ...job,
+      lines: [job.lines[0]!, { ...job.lines[1]!, artworks: [{ location: "back" as const, url: "https://r2.test.invalid/b.png" }] }],
+    };
+    expect(toProdigiOrderBody({ ...backOnly, shipTo: SHIP_TO }, "https://x.test/")).toStrictEqual({ refusal: "front_missing" });
+    expect(await client(prodigi.fetcher).submit(backOnly)).toStrictEqual({ code: "front_missing", status: "rejected" });
     expect(prodigi.calls).toHaveLength(0);
   });
 
@@ -364,10 +378,35 @@ describe("the classifier (D6; outcomes read case-insensitively)", () => {
   const TABLE: Array<[string, number, unknown, unknown]> = [
     ["Created (sandbox, PascalCase)", 200, order("ord_1186010", "Created"), { printerJobId: "ord_1186010", status: "accepted" }],
     ["created (reference, camelCase)", 200, order("ord_42", "created"), { printerJobId: "ord_42", status: "accepted" }],
-    ["CreatedWithIssues (the order exists)", 200, order("ord_43", "CreatedWithIssues"), { printerJobId: "ord_43", status: "accepted" }],
+    // CP11 U7 (audit F5): accepted AND its issue codes; an answer that names none still carries one.
+    ["CreatedWithIssues without readable issues (the order exists)", 200, order("ord_43", "CreatedWithIssues"), { issueCodes: ["issue_unreadable"], printerJobId: "ord_43", status: "accepted" }],
+    [
+      "CreatedWithIssues with the order's issues: their codes, deduplicated, never a description",
+      200,
+      {
+        order: {
+          id: "ord_45",
+          status: {
+            issues: [
+              { description: "could not fetch https://r2.test.invalid/x", errorCode: "items.assets.FailedToDownload" },
+              { errorCode: "items.assets.FailedToDownload" },
+              { errorCode: "order.authorisation.PaymentAuthorisationRequired" },
+            ],
+          },
+        },
+        outcome: "createdWithIssues",
+      },
+      {
+        issueCodes: ["items.assets.FailedToDownload", "order.authorisation.PaymentAuthorisationRequired"],
+        printerJobId: "ord_45",
+        status: "accepted",
+      },
+    ],
+    ["CreatedWithIssues without an order id", 200, { outcome: "CreatedWithIssues" }, { reason: "malformed_response", status: "unknown" }],
     ["onHold (the order exists)", 200, order("ord_44", "onHold"), { printerJobId: "ord_44", status: "accepted" }],
     ["AlreadyExists with the order", 200, order("ord_1186010", "AlreadyExists"), { printerJobId: "ord_1186010", status: "duplicate" }],
-    ["alreadyExists without a readable order", 200, { outcome: "alreadyExists" }, { status: "duplicate" }],
+    // CP11 U7 (audit F9): never a duplicate without the reference.
+    ["alreadyExists without a readable order", 200, { outcome: "alreadyExists" }, { reason: "duplicate_unreadable", status: "unknown" }],
     ["ValidationFailed on a 200", 200, { issues: [{ errorCode: "items.sku.NotFound" }], outcome: "ValidationFailed" }, { code: "items.sku.NotFound", status: "rejected" }],
     ["400 with failures", 400, { failures: { "recipient.address.countryCode": [{ code: "Invalid" }] }, outcome: "ValidationFailed" }, { code: "recipient.address.countryCode", status: "rejected" }],
     ["400 without a body we can read", 400, null, { code: "validation_failed", status: "rejected" }],

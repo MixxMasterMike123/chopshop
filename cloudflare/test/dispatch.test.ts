@@ -664,6 +664,11 @@ describe("cancellation vs dispatch (§2.3, the four paths)", () => {
     await dispatch(quietEnv().env, followUp);
     await dispatch(quietEnv().env, followUp);
     expect((await alertsFor(followUp)).map((alert) => alert.kind)).toEqual(["printer_cancellation_needed"]);
+    // CP11 U7 (audit): the text says why nothing was sent, true for both
+    // printers — never that every printer lacks a cancellation API.
+    const [alert] = await alertsFor(followUp);
+    expect(alert?.message).toContain("Prodigi refuses a cancel once the order is in production");
+    expect(alert?.message).not.toContain("The printer has no cancellation API");
     // The accepted job is the printer's; only the human cancels it there.
     expect(await printerJobs(order.orderId)).toHaveLength(1);
     const count = await env.DB.prepare(

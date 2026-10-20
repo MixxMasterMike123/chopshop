@@ -118,11 +118,13 @@ export function createProdigiClient(env: Env, config: ProdigiSubmitConfig): Prin
       if (job.lines.length === 0) {
         return { code: "no_lines", status: "rejected" };
       }
-      const body = toProdigiOrderBody({ ...job, shipTo }, config.callbackUrl);
-      if (body === null) {
-        // A line's SKU key is not `<prodigiSku>.<colour>.<size>`: never sent.
-        return { code: "sku_invalid", status: "rejected" };
+      const built = toProdigiOrderBody({ ...job, shipTo }, config.callbackUrl);
+      if ("refusal" in built) {
+        // A line's SKU key is not `<prodigiSku>.<colour>.<size>`, or a line
+        // has no front asset (CP11 U7, audit F2): never sent.
+        return { code: built.refusal, status: "rejected" };
       }
+      const body = built.body;
 
       let response: Response;
       try {

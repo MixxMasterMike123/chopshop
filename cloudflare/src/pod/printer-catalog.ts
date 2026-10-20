@@ -21,6 +21,8 @@ import {
   MAX_PRINTER_SKUS,
   parsePrintArea,
   parsePrinterCapabilities,
+  parseRequiredSlots,
+  parseShipsTo,
   parseTierEntry,
   PRINT_SLOTS,
 } from "./printers";
@@ -642,15 +644,28 @@ function skuLabel(entry: Record<string, unknown>): string | undefined | null {
  * `{ model, label: "<colour> / <size>" }`, each model it points at becomes
  * `{ garment, name, printAreasMm: { front, back } }` from the catalogue's
  * frames (or a stand-in, marked provisional), and the tiers follow `pricing`.
+ *
+ * CP11 U7: a catalogue model's `requiredSlots` (the supplier's required print
+ * areas, audit F2) is carried onto the model, and must name slots the built
+ * model frames. The document's `shipsTo` (audit F4) is the catalogue's own
+ * top-level `shipsTo` when it names one, else `currentShipsTo` — the
+ * printer's current list, so applying a catalogue never silently widens or
+ * narrows where the printer ships.
  */
 export function buildFromCatalog(
   catalog: unknown,
   input: CatalogApplyInput,
+  currentShipsTo?: readonly string[],
 ): { built: BuiltPrinterDocument; status: "ok" } | { problems: string[]; status: "invalid" } {
   const problems: string[] = [];
   if (!isPlainObject(catalog) || !isPlainObject(catalog.models) || !isPlainObject(catalog.skus)) {
     return { problems: ["the stored catalogue has no `models` / `skus` objects"], status: "invalid" };
   }
+  const catalogShipsTo = parseShipsTo(catalog.shipsTo);
+  if (catalogShipsTo === null) {
+    problems.push("shipsTo must be a list of distinct ISO 3166-1 alpha-2 codes in upper case");
+  }
+  const shipsTo = catalogShipsTo ?? (currentShipsTo === undefined ? undefined : [...currentShipsTo]);
   const catalogModels = catalog.models;
   const catalogSkus = catalog.skus;
   const modelOf = (sku: string): string | null => {
@@ -746,11 +761,17 @@ export function buildFromCatalog(
         );
       }
     }
+    const requiredSlots = parseRequiredSlots(source.requiredSlots, areas);
+    if (requiredSlots === null) {
+      problems.push(`model ${model}: requiredSlots must be distinct print slots the model frames`);
+      continue;
+    }
     const entry: PrinterModel = {
       garment: isGarment(source.garment) ? source.garment : null,
       ...(isLabel(source.name) ? { name: source.name } : {}),
       printAreasMm: areas,
       ...(provisional ? { provisional: true as const } : {}),
+      ...(requiredSlots === undefined ? {} : { requiredSlots }),
     };
     models[model] = entry;
   }
@@ -812,7 +833,7 @@ export function buildFromCatalog(
   if (problems.length > 0) {
     return { problems, status: "invalid" };
   }
-  const capabilities = parsePrinterCapabilities({ models, skus });
+  const capabilities = parsePrinterCapabilities({ models, ...(shipsTo === undefined ? {} : { shipsTo }), skus });
   if (capabilities === null) {
     return { problems: ["the built capability document does not validate"], status: "invalid" };
   }
@@ -847,13 +868,19 @@ export async function applyCatalog(
 ): Promise<ApplyCatalogResult> {
   const row = await db
     .prepare(
-      `SELECT p.id, p.currency, c.catalog_json, c.content_sha256
+      `SELECT p.id, p.currency, p.capabilities_json, c.catalog_json, c.content_sha256
        FROM printers AS p
        LEFT JOIN printer_catalog AS c ON c.printer_id = p.id
        WHERE p.id = ?`,
     )
     .bind(printerId)
-    .first<{ catalog_json: string | null; content_sha256: string | null; currency: string; id: string }>();
+    .first<{
+      capabilities_json: string;
+      catalog_json: string | null;
+      content_sha256: string | null;
+      currency: string;
+      id: string;
+    }>();
   if (row === null) {
     return { status: "not_found" };
   }
@@ -877,7 +904,13 @@ export async function applyCatalog(
       status: "invalid",
     };
   }
-  const built = buildFromCatalog(JSON.parse(row.catalog_json) as unknown, input);
+  let current: PrinterCapabilities | null = null;
+  try {
+    current = parsePrinterCapabilities(JSON.parse(row.capabilities_json) as unknown);
+  } catch {
+    current = null;
+  }
+  const built = buildFromCatalog(JSON.parse(row.catalog_json) as unknown, input, current?.shipsTo);
   if (built.status === "invalid") {
     return { code: "invalid_selection", problems: built.problems, status: "invalid" };
   }

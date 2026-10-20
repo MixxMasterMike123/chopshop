@@ -13,7 +13,9 @@
 //              (src/storefront/replacements/productPricing.js)
 //   texts      `description` → `descriptions.b2c`, `moreInfo` →
 //              `descriptions.b2cMoreInfo` (HTML, cleaned where it is rendered)
-//   delivery   `allowShipping` / `allowPickup` → `delivery.{shipping,pickup}`
+//   delivery   `allowShipping` / `allowPickup` → `delivery.{shipping,pickup}`,
+//              and `shipsTo` (CP11 U7: the countries a POD product's printer
+//              ships to; absent = no restriction) → `delivery.shipsTo`
 //   address    `path` is kept: the storefront's getProductUrl puts the root in
 //              front of it (src/storefront/replacements/productUrls.js)
 //
@@ -60,6 +62,19 @@ function toSwatchVariant(swatch) {
     image: addressOf(swatch.image) ?? '',
     images: [],
   };
+}
+
+/**
+ * The delivery restriction the cart reads (`delivery.{shipping,pickup}`), plus
+ * `shipsTo` only when the API names a list of countries (CP11 U7: checkout
+ * refuses any other; the checkout's country selector offers only these).
+ */
+export function deliveryOf(api) {
+  const delivery = { shipping: api.allowShipping !== false, pickup: api.allowPickup !== false };
+  if (Array.isArray(api.shipsTo)) {
+    delivery.shipsTo = api.shipsTo.filter((code) => typeof code === 'string');
+  }
+  return delivery;
 }
 
 /**
@@ -118,7 +133,7 @@ export function toPageProduct(api, { apiUrl } = {}) {
     sizeGuide: text(api.sizeGuide),
     launchDate: typeof api.launchDate === 'string' && api.launchDate ? api.launchDate : null,
     isPersonalized: api.isPersonalized === true,
-    delivery: { shipping: api.allowShipping !== false, pickup: api.allowPickup !== false },
+    delivery: deliveryOf(api),
     stock: typeof api.stock === 'number' ? api.stock : null,
     brand: typeof api.brand === 'string' && api.brand ? api.brand : null,
     eanCode: typeof api.eanCode === 'string' && api.eanCode ? api.eanCode : null,

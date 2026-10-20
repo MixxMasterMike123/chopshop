@@ -1,5 +1,6 @@
 import type { PlatformPrincipal } from "../auth/live-authorization";
 import { SNAPWEAR_SKUS } from "../dispatch/snapwear-skus";
+import { SNAPWEAR_SUBMIT_WITHOUT_SHIP_TO } from "../dispatch/snapwear-wire";
 import { podPriceFloorMinor, quoteFromTier } from "./pod-quote";
 
 /**
@@ -50,10 +51,24 @@ export interface PrinterModel {
    * `provisionalAreas`). Stored only when true.
    */
   provisional?: true;
+  /**
+   * CP11 U7 (audit F2): the slots EVERY order of this model must print — for
+   * Prodigi, the product's `printAreas.<area>.required` (all its apparel
+   * requires `front`). Absent = the provider's default (requiredSlotsOf).
+   * Each slot must be one the model frames. Stored only when given.
+   */
+  requiredSlots?: PrintSlot[];
 }
 
 export interface PrinterCapabilities {
   models: Record<string, PrinterModel>;
+  /**
+   * CP11 U7 (audit F4): the ISO 3166-1 alpha-2 countries (upper case) this
+   * printer's orders may be shipped to. Absent = the provider's default
+   * (printerShipsTo: Prodigi ["SE"] at launch, no restriction otherwise).
+   * Stored only when given.
+   */
+  shipsTo?: string[];
   skus: Record<string, { label?: string; model: string }>;
 }
 
@@ -107,6 +122,69 @@ export function providerAllowedIn(provider: PrinterProvider, environment: Printe
     case "manual":
       return true;
   }
+}
+
+/**
+ * CP11 U7 (audit F3): may an order of `provider` be COLLECTED (no parcel
+ * address)? Prodigi ships every order to a recipient address and has no
+ * ship-to-shop route; SnapWear's client refuses an order without an address
+ * until SnapWear names one (snapwear-wire.ts SNAPWEAR_SUBMIT_WITHOUT_SHIP_TO);
+ * the staging fake takes a job without one. A manual printer never receives
+ * a job from the dispatcher. Read by checkout's line resolution (a pickup
+ * cart is refused) and by the public product read (allowPickup is false for
+ * a product whose print routes here), so the storefront never offers what
+ * checkout would refuse.
+ */
+export function providerTakesCollectedOrders(provider: PrinterProvider): boolean {
+  switch (provider) {
+    case "prodigi":
+      return false;
+    case "snapwear":
+      return SNAPWEAR_SUBMIT_WITHOUT_SHIP_TO;
+    case "fake":
+    case "manual":
+      return true;
+  }
+}
+
+/**
+ * CP11 U7 (audit F4): the countries a printer's orders may go to, or null for
+ * no restriction. The capability document's `shipsTo` when it names one;
+ * otherwise Prodigi's launch default, Sweden only (the importer kept only
+ * variants that ship to SE, and the supplier cost frozen at checkout is SE's),
+ * and no restriction for the other providers (as before).
+ */
+export const PRODIGI_DEFAULT_SHIPS_TO: readonly string[] = ["SE"];
+
+export function printerShipsTo(
+  provider: PrinterProvider,
+  capabilities: PrinterCapabilities,
+): readonly string[] | null {
+  if (capabilities.shipsTo !== undefined) {
+    return capabilities.shipsTo;
+  }
+  return provider === "prodigi" ? PRODIGI_DEFAULT_SHIPS_TO : null;
+}
+
+/**
+ * CP11 U7 (audit F2): the slots an order of `sku` must print. The model's
+ * `requiredSlots` when it names them; otherwise Prodigi's default, `front`
+ * (every apparel product Prodigi lists says `printAreas.front.required`), and
+ * none for the other providers (as before). An unknown SKU requires nothing
+ * here: it is refused on its own elsewhere.
+ */
+export const PRODIGI_DEFAULT_REQUIRED_SLOTS: readonly PrintSlot[] = ["front"];
+
+export function requiredSlotsOf(
+  provider: PrinterProvider,
+  capabilities: PrinterCapabilities,
+  sku: string,
+): readonly PrintSlot[] {
+  const model = capabilities.models[capabilities.skus[sku]?.model ?? ""];
+  if (model?.requiredSlots !== undefined) {
+    return model.requiredSlots;
+  }
+  return provider === "prodigi" ? PRODIGI_DEFAULT_REQUIRED_SLOTS : [];
 }
 
 export interface PrinterInput {
@@ -171,6 +249,10 @@ const MAX_AREA_MM = 2_000;
 export const MAX_COST_MINOR = 10_000_000;
 const LABEL_MAX_LENGTH = 200;
 const GARMENT_MAX_LENGTH = 40;
+/** ISO 3166-1 alpha-2, upper case (src/commerce/recipient.ts COUNTRY_PATTERN). */
+const COUNTRY_CODE_PATTERN = /^[A-Z]{2}$/;
+/** More than every ISO 3166-1 country; a bound, not a policy. */
+export const MAX_SHIPS_TO = 250;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -240,9 +322,56 @@ function parseLabel(value: unknown): string | undefined | null {
   return isLabel(value) ? value : null;
 }
 
+/**
+ * `shipsTo` (CP11 U7): 1–MAX_SHIPS_TO distinct alpha-2 codes, upper case.
+ * undefined when absent, null when malformed.
+ */
+export function parseShipsTo(value: unknown): string[] | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_SHIPS_TO ||
+    !value.every((code) => typeof code === "string" && COUNTRY_CODE_PATTERN.test(code)) ||
+    new Set(value).size !== value.length
+  ) {
+    return null;
+  }
+  return [...(value as string[])];
+}
+
+/**
+ * `requiredSlots` (CP11 U7): 1–5 distinct print slots, each one the model
+ * frames (`areas`). undefined when absent, null when malformed.
+ */
+export function parseRequiredSlots(
+  value: unknown,
+  areas: Partial<Record<PrintSlot, PrintArea>>,
+): PrintSlot[] | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > PRINT_SLOTS.length ||
+    !value.every((slot) => isPrintSlot(slot) && areas[slot] !== undefined) ||
+    new Set(value).size !== value.length
+  ) {
+    return null;
+  }
+  return [...(value as PrintSlot[])];
+}
+
 /** The capability document, validated key by key (unknown keys refuse it). */
 export function parsePrinterCapabilities(value: unknown): PrinterCapabilities | null {
-  if (!isPlainObject(value) || !hasOnlyKeys(value, ["models", "skus"])) {
+  if (!isPlainObject(value) || !hasOnlyKeys(value, ["models", "shipsTo", "skus"])) {
+    return null;
+  }
+  const shipsTo = parseShipsTo(value.shipsTo);
+  if (shipsTo === null) {
     return null;
   }
   const { models, skus } = value;
@@ -261,7 +390,7 @@ export function parsePrinterCapabilities(value: unknown): PrinterCapabilities | 
     if (
       !MODEL_KEY_PATTERN.test(key) ||
       !isPlainObject(model) ||
-      !hasOnlyKeys(model, ["garment", "name", "printAreasMm", "provisional"])
+      !hasOnlyKeys(model, ["garment", "name", "printAreasMm", "provisional", "requiredSlots"])
     ) {
       return null;
     }
@@ -284,11 +413,16 @@ export function parsePrinterCapabilities(value: unknown): PrinterCapabilities | 
       }
       areas[slot] = area;
     }
+    const requiredSlots = parseRequiredSlots(model.requiredSlots, areas);
+    if (requiredSlots === null) {
+      return null;
+    }
     parsedModels[key] = {
       garment: garment as string | null,
       ...(name === undefined ? {} : { name }),
       printAreasMm: areas,
       ...(model.provisional === true ? { provisional: true as const } : {}),
+      ...(requiredSlots === undefined ? {} : { requiredSlots }),
     };
   }
 
@@ -305,7 +439,11 @@ export function parsePrinterCapabilities(value: unknown): PrinterCapabilities | 
     parsedSkus[key] = label === undefined ? { model: entry.model } : { label, model: entry.model };
   }
 
-  return { models: parsedModels, skus: parsedSkus };
+  return {
+    models: parsedModels,
+    ...(shipsTo === undefined ? {} : { shipsTo }),
+    skus: parsedSkus,
+  };
 }
 
 /** One tier's SHAPE (the SKU's membership in a capability document is checked by the caller). */

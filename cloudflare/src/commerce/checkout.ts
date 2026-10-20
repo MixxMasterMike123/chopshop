@@ -14,7 +14,7 @@ import {
   ELIGIBLE_PRODUCTS_FROM,
   publicEligibilityPredicate,
 } from "../catalog/eligibility";
-import { resolveProductionLines } from "../pod/pod-mappings";
+import { type ProductionDestination, resolveProductionLines } from "../pod/pod-mappings";
 import type { PrinterEnvironment, PrinterProvider } from "../pod/printers";
 import type { FrozenRecipient, RecipientInput } from "./recipient";
 import {
@@ -1054,7 +1054,10 @@ export interface CheckoutOptions {
  * resolveProductionLines re-proves every POD line's mapping, printer, capability,
  * artwork and price (and, with `refuseStandInFrames`, that the frame is not a
  * stand-in: CP6-PS3) — and ANY miss refuses the whole checkout: a line that
- * cannot be produced must not be paid for.
+ * cannot be produced must not be paid for. CP11 U7: also every slot the
+ * printer requires (audit F2), and that the printer delivers where this order
+ * goes (`destination`: a collected order, audit F3; the shipping country,
+ * audit F4) — refused before payment, never by the printer after it.
  *
  * Money (LAUNCH_TODO A1, productionWithholding.ts): a line's cost is
  * (blank + Σ prints + platform cut) × quantity, ex VAT; the totals add the
@@ -1076,6 +1079,7 @@ async function freezeProductionSnapshot(
   totalMinor: number,
   printerEnvironment: PrinterEnvironment | null | undefined,
   refuseStandInFrames: boolean,
+  destination: ProductionDestination,
 ): Promise<{ json: string | null } | null> {
   const podLines = lines.filter((line) => line.isPod);
   if (podLines.length === 0) {
@@ -1105,6 +1109,7 @@ async function freezeProductionSnapshot(
     // a line whose printer is not an active api printer allowed here).
     printerEnvironment ?? "any",
     refuseStandInFrames,
+    destination,
   );
   for (const [index, line] of podLines.entries()) {
     const production = productions[index] ?? null;
@@ -1351,7 +1356,11 @@ async function attemptCheckout(
 
   // Refused with the same opaque answer as any other unresolvable line: naming
   // which POD line cannot be produced would be an oracle for a tenant's
-  // printer set-up. The ceiling is the UNDISCOUNTED total: a basket whose
+  // printer set-up. That includes a line whose printer cannot deliver this
+  // way (CP11 U7: a collected order, or a country it does not ship to) — the
+  // same answer quoteCarriage gives a product that does not allow the
+  // delivery method; the storefront offers neither (the public product read
+  // says allowPickup false and names `shipsTo`). The ceiling is the UNDISCOUNTED total: a basket whose
   // withholding its own price covers is purchasable, and whether a discount
   // may come off it is decided by discountStillApplies below, which answers
   // "the code does not apply" instead of refusing the basket. Without a code
@@ -1364,6 +1373,10 @@ async function attemptCheckout(
     carriage.subtotalMinor + carriage.shippingMinor,
     options.printerEnvironment,
     options.refuseStandInFrames === true,
+    // quoteCarriage has proven a shipped basket names its country.
+    input.deliveryMethod === "pickup"
+      ? { method: "pickup" }
+      : { country: input.shippingCountry ?? "", method: "ship" },
   );
   if (snapshot === null) {
     return { status: "invalid_items" };

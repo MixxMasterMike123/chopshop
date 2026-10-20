@@ -573,6 +573,8 @@ const REFUSALS = {
   // CP6-PS4: a mapping's printer model has only stand-in frames while the print canvas is on.
   pod_frame_unconfirmed: 'Tryckeriet har inte bekräftat tryckytan för plagget än, så produkten kan inte publiceras just nu. Den kan publiceras när tryckeriet har bekräftat tryckytan.',
   pod_too_large: 'Produkten har för många aktiva varianter för att prisgolvet ska kunna kontrolleras. Avpublicera den och minska varianterna till högst 200.',
+  // CP11 U7: a print mapping leaves out a side the printer requires (Prodigi: the front).
+  pod_required_slot_missing: 'Plagget måste ha ett tryck på framsidan. Lägg till ett framtryck i produktens tryckkopplingar och publicera igen.',
   taken_down: 'Produkten är avpublicerad av plattformen efter en anmälan och kan inte publiceras.',
   variant_limit: 'Produkten har så många varianter som tillåts (högst 200 aktiva).',
 };

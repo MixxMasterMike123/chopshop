@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  MODELS, assertKey, areaPx, buildCatalog, buildPricing, colourOfSlug, colourSizes, eurToMinor,
+  FLAT_MODELS, MODELS, assertKey, buildFlatCatalog, flatChoice, flatQuoteRequest, matchQuoteItem, areaPx, buildCatalog, buildPricing, colourOfSlug, colourSizes, eurToMinor,
   modelFrame, normSize, pickProbes, pxToMm, quoteJobs, readQuote, skuKey, slug, splitSkuKey, variantsFor,
 } from "../prodigi-catalog.mjs";
 
@@ -217,4 +217,101 @@ test("the committed catalogue carries the U4B models", () => {
   assert.equal(cat.models.STAU773.front.w, 270);
   assert.equal(cat.unquoted.length, 0);
   assert.ok(Object.values(cat.skus).filter((s) => s.model === "STAU773").every((s) => !("size" in s.attributes)));
+});
+
+// ── CP11-U8: F8 (opaque quote item ids) ──────────────────────────────────
+/** A real saved quote with every item id (and the shipment references) replaced by an opaque `qit_…` string, order shuffled. */
+function opaque(body) {
+  const copy = structuredClone(body);
+  const q = copy.quotes[0];
+  const map = new Map(q.items.map((it, i) => [it.id, `qit_${(i * 7919 + 13).toString(36)}x${i}`]));
+  q.items.forEach((it) => (it.id = map.get(it.id)));
+  q.items.reverse();
+  q.shipments.forEach((sh) => (sh.items = sh.items.map((id) => map.get(id))));
+  return copy;
+}
+
+test("F8: readQuote + matchQuoteItem work with opaque qit_ ids and a reordered response", () => {
+  const e = load("quotes-GLOBAL-TEE-GIL-5000.json")[0];
+  const plain = readQuote(e.body);
+  const o = readQuote(opaque(e.body));
+  assert.ok(Object.keys(o.items).every((id) => id.startsWith("qit_")));
+  for (const item of e.request.items) {
+    const a = matchQuoteItem(plain, item);
+    const b = matchQuoteItem(o, item);
+    assert.equal(b.unitMinor, a.unitMinor);
+    assert.equal(b.lab, a.lab);
+    assert.ok(b.id.startsWith("qit_"));
+  }
+  assert.equal(o.shipments[0].itemIds.every((id) => id.startsWith("qit_")), true);
+});
+
+test("F8: pickProbes finds the same probes when the ids are opaque (it returned none before)", () => {
+  const log = load("quotes-GLOBAL-TEE-GIL-5000.json").filter((x) => !x.shippingProbe);
+  const want = pickProbes(log).map((p) => p.lab).sort();
+  assert.ok(want.length > 0);
+  const got = pickProbes(log.map((x) => ({ ...x, body: opaque(x.body) }))).map((p) => p.lab).sort();
+  assert.deepEqual(got, want);
+});
+
+test("F8: no match and an ambiguous match both throw", () => {
+  const e = load("quotes-GLOBAL-TEE-GIL-5000.json")[0];
+  const q = readQuote(opaque(e.body));
+  assert.throws(() => matchQuoteItem(q, { ...e.request.items[0], sku: "NOPE" }), /not found/);
+  assert.throws(() => matchQuoteItem(q, { ...e.request.items[0], attributes: { color: "no-such" } }), /not found/);
+  const dup = { ...q, list: [...q.list, { ...q.list[0], id: "qit_dup" }] };
+  assert.throws(() => matchQuoteItem(dup, e.request.items.find((i) => i.attributes.size === q.list[0].attributes.size && i.attributes.color === q.list[0].attributes.color)), /ambiguous/);
+  // duplicate ids make the quote unusable rather than silently overwriting
+  const bad = structuredClone(e.body);
+  bad.quotes[0].items[1].id = bad.quotes[0].items[0].id;
+  assert.equal(readQuote(bad), null);
+});
+
+test("F8: every request asks for EUR", () => {
+  assert.ok(quoteJobs(MODELS[0], tee).every((j) => j.request.currencyCode === "EUR"));
+  assert.equal(flatQuoteRequest(FLAT_MODELS[0], {}).currencyCode, "EUR");
+});
+
+// ── CP11-U8: the flat catalogue (framed posters) ─────────────────────────
+const flatProducts = () => Object.fromEntries(FLAT_MODELS.map((d) => [d.model, load(`product-${d.sku}.json`)]));
+const flatQuotesOf = (ids) =>
+  Object.fromEntries(
+    FLAT_MODELS.map((d) => {
+      const e = load(`quotes-${d.sku}.json`)[0];
+      return [d.model, matchQuoteItem(readQuote(ids ? opaque(e.body) : e.body), e.request.items[0])];
+    }),
+  );
+
+test("flatChoice: black is preferred but does not exist; white is the only colour common to all four", () => {
+  for (const d of FLAT_MODELS) {
+    const c = flatChoice(load(`product-${d.sku}.json`).product);
+    assert.equal(c.color, "white");
+    assert.equal(c.attributes.mount, "No mount / Mat");
+  }
+});
+
+test("buildFlatCatalog: the 12x16 poster (kind flat, one default area, fixed attributes, SKU key grammar)", () => {
+  const doc = buildFlatCatalog({ products: flatProducts(), quotes: flatQuotesOf(true), quoteDate: "2026-10-20", generatedAt: "x" });
+  const m = doc.models["BFP-12X16"];
+  assert.equal(m.kind, "flat");
+  assert.equal(m.garment, "poster");
+  assert.equal(m.prodigiPrintArea, "default");
+  assert.deepEqual(m.requiredSlots, ["front"]);
+  assert.deepEqual(m.printAreaPx.front, { w: 3543, h: 4724 });
+  assert.deepEqual(m.front, { h: 400, offsetTopMm: 0, w: 300 });
+  const key = "GLOBAL-BFP-12X16.white-frame.12x16";
+  assert.match(key, SKU_GRAMMAR);
+  assert.equal(doc.skus[key].unitCostMinor, 1900);
+  assert.equal(doc.skus[key].lab, "prodigi_eu");
+  assert.deepEqual(doc.skus[key].attributes, m.attributes);
+  assert.deepEqual(Object.keys(doc.skus).length, 4);
+  assert.deepEqual(doc.unquoted, []);
+  assert.equal(doc.pricingBasis.shippingCostMinor, 1395);
+  assert.deepEqual(doc.applyPricingEur.models["BFP-18X24"], { baseEurCents: 2800 });
+});
+
+test("the committed docs/cf-port/prodigi-prints-catalog.json agrees with the fixtures", () => {
+  const committed = JSON.parse(readFileSync(join(SAMPLES, "../prodigi-prints-catalog.json"), "utf8"));
+  const doc = buildFlatCatalog({ products: flatProducts(), quotes: flatQuotesOf(false), quoteDate: committed.source.quoteDate, generatedAt: committed.generatedAt });
+  assert.deepEqual(committed, JSON.parse(JSON.stringify(doc)));
 });

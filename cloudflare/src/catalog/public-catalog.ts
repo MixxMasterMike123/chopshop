@@ -1,6 +1,6 @@
 import type { TenantContext } from "../tenancy/resolve-tenant";
 import type { PublicPodFields } from "../pod/pod-mappings";
-import { publicPodFields } from "../pod/pod-mappings";
+import { publicPodDelivery, publicPodFields } from "../pod/pod-mappings";
 import { productPath } from "../storefront/addresses";
 import type {
   DisplayCursor,
@@ -89,6 +89,11 @@ export interface PublicProductVariant {
 }
 
 export interface PublicProductDetail extends PublicProductSummary {
+  /**
+   * The product's flag, AND — for a POD product — whether every printer its
+   * print mappings route to can take a collected order (CP11 U7, audit F3:
+   * Prodigi cannot). The same rule refuses a pickup checkout.
+   */
   allowPickup: boolean;
   allowShipping: boolean;
   brand: string | null;
@@ -104,6 +109,13 @@ export interface PublicProductDetail extends PublicProductSummary {
    * printer, or a cost (A13).
    */
   pod: PublicPodFields | null;
+  /**
+   * CP11 U7 (audit F4): the countries (ISO 3166-1 alpha-2) this product can be
+   * shipped to, or null for no restriction. Only a POD product whose printer
+   * restricts its destinations has a list (Prodigi: SE at launch); checkout
+   * refuses any other country. Never names the printer.
+   */
+  shipsTo: string[] | null;
   size: string | null;
   sizeGuide: string | null;
   stock: number | null;
@@ -443,6 +455,8 @@ async function toDetail(
 ): Promise<PublicProductDetail | null> {
   const parts = await loadParts(env, db, tenant.tenantId, [row.product_id]);
   const pod = row.is_pod === 1 ? await publicPodFields(db, tenant.tenantId, row.product_id) : null;
+  const delivery =
+    row.is_pod === 1 ? await publicPodDelivery(db, tenant.tenantId, row.product_id) : { pickup: true, shipsTo: null };
   // Asked last: see stillPublic.
   if (!(await stillPublic(db, tenant, [row.product_id])).has(row.product_id)) {
     return null;
@@ -450,7 +464,7 @@ async function toDetail(
   const visible = parts.images.get(row.product_id) ?? [];
   return {
     ...toSummary(row, parts),
-    allowPickup: row.allow_pickup === 1,
+    allowPickup: row.allow_pickup === 1 && delivery.pickup,
     allowShipping: row.allow_shipping === 1,
     brand: row.brand,
     eanCode: row.ean_code,
@@ -459,6 +473,7 @@ async function toDetail(
     launchDate: row.launch_date,
     moreInfo: row.more_info,
     pod,
+    shipsTo: delivery.shipsTo,
     size: row.size,
     sizeGuide: row.size_guide,
     stock: row.stock,

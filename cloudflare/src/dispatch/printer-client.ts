@@ -87,7 +87,12 @@ export interface PrinterJob {
 }
 
 export type PrinterSubmitResult =
-  | { printerJobId: string; status: "accepted" }
+  /**
+   * `issueCodes` (CP11 U7, audit F5): the order exists but the printer
+   * reported issues that need a human (Prodigi's CreatedWithIssues). The
+   * dispatcher accepts it AND raises one alert per code. Absent otherwise.
+   */
+  | { issueCodes?: string[]; printerJobId: string; status: "accepted" }
   /** `printerJobId` when the printer's answer names the existing job (Prodigi). */
   | { printerJobId?: string; status: "duplicate" }
   | { code: string; status: "rejected" }

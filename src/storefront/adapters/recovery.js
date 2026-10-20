@@ -9,6 +9,8 @@
 // price, no total, no discount (AC8, AC12); the checkout then prices the new
 // cart from scratch.
 
+import { deliveryOf } from './products.js';
+
 const MAX_QUANTITY = 999;
 
 function quantityOf(value) {
@@ -59,10 +61,7 @@ export function recoveryPlan(items, productsById) {
  */
 function withDelivery(product) {
   if (product.delivery && typeof product.delivery === 'object') return product;
-  return {
-    ...product,
-    delivery: { shipping: product.allowShipping !== false, pickup: product.allowPickup !== false },
-  };
+  return { ...product, delivery: deliveryOf(product) };
 }
 
 /** The distinct product ids of the link's lines, for the reads `recoveryPlan` needs. */

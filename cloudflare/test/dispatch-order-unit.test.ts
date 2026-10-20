@@ -563,3 +563,105 @@ describe("holding per provider (D1/D2)", () => {
     expect(await outboxRow(order.dispatchIds[0]!)).toMatchObject({ last_error: "printer_mismatch", status: "failed" });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CP11 U7 — the Codex audit of 2026-10-19 (F2, F5, F9), each reproduction case
+// inverted: what the audit saw pass silently is now refused or raised.
+describe("CP11 U7: the audit's dispatch cases", () => {
+  async function issueAlerts(orderId: string) {
+    const rows = await env.DB.prepare(
+      `SELECT id, kind, severity, message, resource_type, tenant_id FROM alerts
+       WHERE kind = 'printer_order_issues' AND resource_id = ? ORDER BY id`,
+    )
+      .bind(orderId)
+      .all<{ id: string; kind: string; message: string; resource_type: string; severity: string; tenant_id: string }>();
+    return rows.results;
+  }
+
+  it("F5: CreatedWithIssues → the lines accepted with the reference AND one alert per issue code, ids only", async () => {
+    const order = await prodigiOrder(TWO_LINES);
+    const [first, second] = order.dispatchIds as [string, string];
+    let calls = 0;
+    const fetcher = async (): Promise<Response> => {
+      calls += 1;
+      return Response.json(
+        {
+          order: {
+            id: "ord_77001",
+            status: {
+              issues: [
+                { description: "Storgatan 1 could not …", errorCode: "items.assets.FailedToDownload", objectId: "ast_1" },
+                { errorCode: "items.assets.FailedToDownload", objectId: "ast_2" },
+                { errorCode: "order.authorisation.PaymentAuthorisationRequired" },
+              ],
+              stage: "InProgress",
+            },
+          },
+          outcome: "CreatedWithIssues",
+        },
+        { status: 200 },
+      );
+    };
+    const target = prodigiEnv(fetcher).env;
+
+    expect(await run(target, first)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(calls).toBe(1);
+    expect(await lineRow(order.orderId, 1)).toMatchObject({ dispatch_state: "accepted", printer_job_ref: "ord_77001" });
+    expect(await lineRow(order.orderId, 2)).toMatchObject({ dispatch_state: "accepted", printer_job_ref: "ord_77001" });
+    const alerts = await issueAlerts(order.orderId);
+    expect(alerts.map((alert) => alert.id)).toEqual([
+      `printer-order-issues:${order.orderId}:items.assets.FailedToDownload`,
+      `printer-order-issues:${order.orderId}:order.authorisation.PaymentAuthorisationRequired`,
+    ]);
+    for (const alert of alerts) {
+      expect(alert).toMatchObject({ resource_type: "order", severity: "critical", tenant_id: TENANT });
+      expect(alert.message).toContain("ord_77001");
+      expect(alert.message).not.toMatch(/Storgatan|description|https?:/);
+    }
+    // The sibling adopts; nothing is re-submitted and no alert is repeated.
+    expect(await run(target, second)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(calls).toBe(1);
+    expect(await issueAlerts(order.orderId)).toHaveLength(2);
+  });
+
+  it("F9: AlreadyExists WITHOUT a readable order id is unknown, never done with a null reference; the same key settles it", async () => {
+    const order = await prodigiOrder([{ sku: KEY_TEE }]);
+    const id = order.dispatchIds[0]!;
+    let calls = 0;
+    const keys: string[] = [];
+    const fetcher = async (request: Request): Promise<Response> => {
+      calls += 1;
+      keys.push(((await request.json()) as { idempotencyKey: string }).idempotencyKey);
+      return calls === 1
+        ? Response.json({ outcome: "AlreadyExists" }, { status: 200 })
+        : Response.json({ order: { id: "ord_88001" }, outcome: "AlreadyExists" }, { status: 200 });
+    };
+    const target = prodigiEnv(fetcher).env;
+
+    expect(await run(target, id)).toMatchObject({ outcome: { kind: "unknown" } });
+    expect(await outboxRow(id)).toMatchObject({ last_error: "unknown_duplicate_unreadable", result_ref: null, status: "unknown" });
+    expect(await lineRow(order.orderId, 1)).toMatchObject({ dispatch_state: "unknown", printer_job_ref: null });
+
+    expect(await run(target, id, () => Date.now() + 60 * MIN)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(keys).toEqual([order.orderId, order.orderId]);
+    expect(await outboxRow(id)).toMatchObject({ result_ref: "ord_88001", status: "done" });
+    expect(await lineRow(order.orderId, 1)).toMatchObject({ dispatch_state: "accepted", printer_job_ref: "ord_88001" });
+  });
+
+  it("F2: a Prodigi line without a front print is never sent (front_missing); a sibling waits, then goes alone", async () => {
+    const order = await prodigiOrder([{ sku: KEY_TEE }, { printFiles: [{ slot: "back" }], sku: KEY_HOOD }]);
+    const [first, second] = order.dispatchIds as [string, string];
+    const prodigi = prodigiServer();
+    const target = prodigiEnv(prodigi.fetcher).env;
+
+    expect(await run(target, first)).toMatchObject({ outcome: { kind: "retry" } });
+    expect(await outboxRow(first)).toMatchObject({ last_error: "sibling_front_missing", status: "pending" });
+    expect(await run(target, second)).toEqual({ kind: "ran", outcome: { kind: "failed" } });
+    expect(await outboxRow(second)).toMatchObject({ last_error: "front_missing", status: "failed" });
+    expect(prodigi.calls).toBe(0);
+
+    expect(await run(target, first, () => Date.now() + 60 * MIN)).toEqual({ kind: "ran", outcome: { kind: "done" } });
+    expect(prodigi.calls).toBe(1);
+    expect(prodigi.bodies[0]!.items.map((item) => item.merchantReference)).toEqual(["1"]);
+  });
+});

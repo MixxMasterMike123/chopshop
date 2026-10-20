@@ -117,24 +117,35 @@ export function prodigiRecipient(shipTo: ShipTo): ProdigiRecipient {
   return recipient;
 }
 
+/** Why toProdigiOrderBody built no body (the job's `rejected` code). */
+export type ProdigiBodyRefusal = "front_missing" | "sku_invalid";
+
 /**
  * THE ONE PLACE the Prodigi body is built (D6). `job.lines` are the order's
  * dispatchable lines (dispatch-effect.ts runOrderUnit), each one item with
  * its front/back assets and its colour and size split from the line's SKU
  * key (splitProdigiSkuKey); the order's id is the idempotency key. The caller
  * has already refused a job without a parcel address (ship_to_missing).
- * Null when a line's SKU key does not split: the caller refuses the job
- * `sku_invalid`; no line is ever sent without its colour and size.
+ * A refusal instead of a body, and the caller refuses the job with it:
+ *   sku_invalid    a line's SKU key does not split — no line is ever sent
+ *                  without its colour and size;
+ *   front_missing  a line has no `front` asset (CP11 U7, audit F2: every
+ *                  apparel product Prodigi lists requires its front print
+ *                  area). The LAST guard: publication and checkout refuse
+ *                  such a line first (pod-mappings.ts requiredSlotsOf).
  */
 export function toProdigiOrderBody(
   job: PrinterJob & { shipTo: ShipTo },
   callbackUrl: string,
-): ProdigiOrderBody | null {
+): { body: ProdigiOrderBody } | { refusal: ProdigiBodyRefusal } {
   const items: ProdigiItem[] = [];
   for (const line of job.lines) {
     const split = splitProdigiSkuKey(line.sku);
     if (split === null) {
-      return null;
+      return { refusal: "sku_invalid" };
+    }
+    if (!line.artworks.some((artwork) => artwork.location === "front")) {
+      return { refusal: "front_missing" };
     }
     items.push({
       assets: line.artworks.map((artwork) => ({ printArea: artwork.location, url: artwork.url })),
@@ -146,12 +157,14 @@ export function toProdigiOrderBody(
     });
   }
   return {
-    callbackUrl,
-    idempotencyKey: job.orderId,
-    items,
-    merchantReference: job.orderId,
-    recipient: prodigiRecipient(job.shipTo),
-    shippingMethod: "Standard",
+    body: {
+      callbackUrl,
+      idempotencyKey: job.orderId,
+      items,
+      merchantReference: job.orderId,
+      recipient: prodigiRecipient(job.shipTo),
+      shippingMethod: "Standard",
+    },
   };
 }
 
@@ -176,6 +189,44 @@ function outcomeOf(body: unknown): string | null {
 function asCode(value: string): string | null {
   const code = value.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 60);
   return /[A-Za-z0-9]/.test(code) ? code : null;
+}
+
+/** At most this many issue codes are carried from one answer (each is an alert). */
+export const PRODIGI_MAX_ISSUE_CODES = 10;
+
+/** The code of an issue whose `errorCode` is missing or unreadable. */
+export const PRODIGI_UNREADABLE_ISSUE_CODE = "issue_unreadable";
+
+/**
+ * CP11 U7 (audit F5): the issue codes an order carries — `order.status.issues
+ * [].errorCode` (Prodigi's v4 status object) and a top-level `issues[]` —
+ * bounded and stored-safe (asCode), deduplicated, in the order given, at most
+ * PRODIGI_MAX_ISSUE_CODES. An issue without a readable code counts as
+ * `issue_unreadable`. Codes only: never a description, an object id's
+ * neighbour text or anything of the recipient.
+ */
+export function prodigiIssueCodes(body: unknown): string[] {
+  const codes: string[] = [];
+  if (!isRecord(body)) {
+    return codes;
+  }
+  const order = isRecord(body.order) ? body.order : body;
+  const status = isRecord(order.status) ? order.status : null;
+  for (const issues of [status?.issues, body.issues]) {
+    if (!Array.isArray(issues)) {
+      continue;
+    }
+    for (const issue of issues as unknown[]) {
+      const code =
+        isRecord(issue) && typeof issue.errorCode === "string"
+          ? (asCode(issue.errorCode) ?? PRODIGI_UNREADABLE_ISSUE_CODE)
+          : PRODIGI_UNREADABLE_ISSUE_CODE;
+      if (!codes.includes(code) && codes.length < PRODIGI_MAX_ISSUE_CODES) {
+        codes.push(code);
+      }
+    }
+  }
+  return codes;
 }
 
 /**
@@ -215,9 +266,16 @@ export function prodigiRejectionCode(body: unknown): string {
  * readable refusal is `unknown`, and the same idempotency key is re-submitted
  * later — Prodigi's `AlreadyExists` then settles it.
  *
- *   2xx  created | createdWithIssues | onHold  → accepted, ref = order.id
- *          (issues and holds are the printer's to raise; the order exists)
- *        alreadyExists                          → duplicate (+ order.id when readable)
+ *   2xx  created | onHold                      → accepted, ref = order.id
+ *        createdWithIssues                      → accepted, ref = order.id, AND
+ *          its issue codes (CP11 U7, audit F5: the dispatcher raises one
+ *          `printer_order_issues` alert per code; the order exists, so it is
+ *          never re-submitted under a new key)
+ *        alreadyExists                          → duplicate, ref = order.id;
+ *          WITHOUT a readable order.id → unknown `duplicate_unreadable`
+ *          (CP11 U7, audit F9: a duplicate with no reference would complete
+ *          the row with none, and no callback could bind the order again;
+ *          the same idempotency key is re-submitted instead)
  *        validationFailed                       → rejected
  *        an unreadable order id, another outcome, no JSON → unknown
  *   400 / 422                                   → rejected (code from the body)
@@ -230,16 +288,29 @@ export function classifyProdigiResponse(status: number, body: unknown): PrinterS
     const outcome = outcomeOf(body);
     switch (outcome) {
       case "created":
-      case "createdwithissues":
       case "onhold": {
         const ref = prodigiOrderId(body);
         return ref === null
           ? { reason: "malformed_response", status: "unknown" }
           : { printerJobId: ref, status: "accepted" };
       }
+      case "createdwithissues": {
+        const ref = prodigiOrderId(body);
+        if (ref === null) {
+          return { reason: "malformed_response", status: "unknown" };
+        }
+        const codes = prodigiIssueCodes(body);
+        return {
+          issueCodes: codes.length === 0 ? [PRODIGI_UNREADABLE_ISSUE_CODE] : codes,
+          printerJobId: ref,
+          status: "accepted",
+        };
+      }
       case "alreadyexists": {
         const ref = prodigiOrderId(body);
-        return ref === null ? { status: "duplicate" } : { printerJobId: ref, status: "duplicate" };
+        return ref === null
+          ? { reason: "duplicate_unreadable", status: "unknown" }
+          : { printerJobId: ref, status: "duplicate" };
       }
       case "validationfailed":
         return { code: prodigiRejectionCode(body), status: "rejected" };

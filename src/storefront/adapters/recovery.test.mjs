@@ -43,6 +43,11 @@ describe('recoveryPlan', () => {
     ]);
     // The read's own object is not changed.
     assert.equal(products.pickupOnly.delivery, undefined);
+    // CP11 U7: a POD product's countries come along.
+    const pod = recoveryPlan([{ productId: 'pod', quantity: 1 }], {
+      pod: { productId: 'pod', allowPickup: false, shipsTo: ['SE'] },
+    });
+    assert.deepEqual(pod.lines[0].product.delivery, { shipping: true, pickup: false, shipsTo: ['SE'] });
   });
 
   it('matches each line against the LIVE product and its variant, keeping the quantity', () => {

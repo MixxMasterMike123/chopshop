@@ -8,6 +8,7 @@ import {
   prodigiSubmitConfig,
   readProdigiOrder,
 } from "../src/dispatch/prodigi-client";
+import { printerOrderIssuesAlertId } from "../src/dispatch/printer-order-alerts";
 import {
   isAcceptedContentType,
   PRINTER_ORDER_CANCELLED_ALERT_KIND,
@@ -17,6 +18,7 @@ import {
   PRODIGI_WEBHOOK_PATH,
   prodigiLineFact,
   prodigiOrderIdOfEvent,
+  prodigiOrderIssueCodes,
 } from "../src/dispatch/prodigi-intake";
 import { printerJobId } from "../src/dispatch/snapwear-wire";
 import { processOutboxRowById } from "../src/outbox/effects";
@@ -716,7 +718,9 @@ describe("the mapping, pure (prodigiLineFact)", () => {
     ] as const) {
       const order = base();
       order.status = { details: { inProduction }, stage };
-      expect(prodigiLineFact(order, 1), `${inProduction}/${stage}`).toEqual({ kind });
+      expect(prodigiLineFact(order, 1), `${inProduction}/${stage}`).toEqual(
+        kind === "cancelled" ? { kind, scope: "order" } : { kind },
+      );
     }
   });
 
@@ -819,5 +823,109 @@ describe("tenancy", () => {
       .bind(printerJobId(a.orderId, 1), printerJobId(b.orderId, 1))
       .all<{ tenant_id: string }>();
     expect(audits.results.map((row) => row.tenant_id)).toEqual([TENANT, OTHER_TENANT].sort());
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CP11 U7 — the Codex audit of 2026-10-19, F5 and F6, each reproduction case
+// inverted: what the audit saw end `ok` with nothing raised now raises.
+describe("CP11 U7 · F6: a cancelled shipment is not in production", () => {
+  it("one shipment cancelled under an InProgress order: that line alerts and stays out of production; the other moves", async () => {
+    const prodigi = fakeProdigi();
+    const { fake, ordId, orderId } = await acceptedOrder(prodigi);
+    fake.status.details.inProduction = "InProgress";
+    fake.shipments = [
+      shipment([fake.items[0]!.id], { id: "shp_c", status: "Cancelled", tracking: null }),
+      shipment([fake.items[1]!.id], { id: "shp_p", status: "Processing" }),
+    ];
+    const target = prodigiEnv(prodigi);
+    expect((await callback(target, cloudEvent(ordId))).status).toBe(200);
+    expect((await callback(target, cloudEvent(ordId))).status).toBe(200);
+
+    expect((await lineRow(orderId, 1)).production_state).toBeNull();
+    const jobId = printerJobId(orderId, 1);
+    const alerts = await alertsFor(jobId);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      id: printerOrderCancelledAlertId(jobId),
+      kind: PRINTER_ORDER_CANCELLED_ALERT_KIND,
+      severity: "critical",
+    });
+    expect(alerts[0]!.message).toContain("shipment of this line");
+    expect(alerts[0]!.message).not.toMatch(/Storgatan|Klippan|Köpare|https?:/);
+    expect((await lineRow(orderId, 2)).production_state).toBe("in_production");
+    expect(await alertsFor(printerJobId(orderId, 2))).toHaveLength(0);
+  });
+
+  it("pure: a Cancelled shipment listing the item wins over the aggregate; a Shipped one still wins over both", () => {
+    const order = {
+      id: "ord_1",
+      items: [{ id: "ori_a", merchantReference: "1" }, { id: "ori_b", merchantReference: "2" }],
+      shipments: [{ items: [{ itemId: "ori_a" }], status: "cancelled" }],
+      status: { details: { inProduction: "Complete" }, stage: "InProgress" },
+    };
+    expect(prodigiLineFact(order, 1)).toEqual({ kind: "cancelled", scope: "shipment" });
+    expect(prodigiLineFact(order, 2)).toEqual({ kind: "in_production" });
+    const reshipped = { ...order, shipments: [...order.shipments, { items: [{ itemId: "ori_a" }], status: "Shipped" }] };
+    expect(prodigiLineFact(reshipped, 1)).toMatchObject({ kind: "shipped" });
+  });
+});
+
+describe("CP11 U7 · F5: provider issues on a re-read raise alerts", () => {
+  async function issueAlerts(orderId: string) {
+    const rows = await env.DB.prepare(
+      `SELECT id, message, severity FROM alerts WHERE kind = 'printer_order_issues' AND resource_id = ? ORDER BY id`,
+    )
+      .bind(orderId)
+      .all<{ id: string; message: string; severity: string }>();
+    return rows.results;
+  }
+
+  it("an exhausted asset download, downloadAssets Error and an asset in Error: one alert per code, deduplicated, no state change", async () => {
+    const prodigi = fakeProdigi();
+    const { fake, ordId, orderId } = await acceptedOrder(prodigi);
+    fake.status.issues = [
+      { description: "We could not download https://r2.example/x.png", errorCode: "items.assets.FailedToDownloaded", objectId: "ast_1" },
+    ];
+    fake.status.details.downloadAssets = "Error";
+    (fake.items[0] as Record<string, unknown>).assets = [{ id: "ast_1", printArea: "front", status: "Error" }];
+    const target = prodigiEnv(prodigi);
+
+    expect((await callback(target, cloudEvent(ordId))).status).toBe(200);
+    expect((await callback(target, cloudEvent(ordId))).status).toBe(200);
+
+    const alerts = await issueAlerts(orderId);
+    expect(alerts.map((alert) => alert.id)).toEqual(
+      ["asset_error", "details_downloadAssets_error", "items.assets.FailedToDownloaded"]
+        .map((code) => printerOrderIssuesAlertId(orderId, code))
+        .sort(),
+    );
+    for (const alert of alerts) {
+      expect(alert.severity).toBe("critical");
+      expect(alert.message).toContain(ordId);
+      expect(alert.message).not.toMatch(/https?:|r2\.example|Storgatan|Köpare/);
+    }
+    for (const lineNo of [1, 2]) {
+      expect(await lineRow(orderId, lineNo)).toMatchObject({ dispatch_state: "accepted", production_state: null });
+    }
+  });
+
+  it("a clean re-read raises nothing", async () => {
+    const prodigi = fakeProdigi();
+    const { ordId, orderId } = await acceptedOrder(prodigi);
+    expect((await callback(prodigiEnv(prodigi), cloudEvent(ordId))).status).toBe(200);
+    expect(await issueAlerts(orderId)).toHaveLength(0);
+  });
+
+  it("pure: the codes, bounded and named by codes only", () => {
+    expect(prodigiOrderIssueCodes({ status: { details: { inProduction: "InProgress" }, issues: [], stage: "InProgress" } })).toEqual([]);
+    expect(
+      prodigiOrderIssueCodes({
+        items: [{ status: "Invalid" }, { assets: [{ status: "error" }, { status: "Complete" }], status: "Ok" }],
+        status: { details: { shipping: "ERROR" }, issues: [{ errorCode: "x y" }, {}], stage: "InProgress" },
+      }),
+    ).toEqual(["x_y", "issue_unreadable", "details_shipping_error", "item_invalid", "asset_error"]);
+    const many = { status: { issues: Array.from({ length: 30 }, (_, index) => ({ errorCode: `code${index}` })) } };
+    expect(prodigiOrderIssueCodes(many)).toHaveLength(10);
   });
 });

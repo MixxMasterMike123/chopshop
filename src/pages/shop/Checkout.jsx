@@ -23,11 +23,21 @@ import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import { formatPickupDayShort } from '../../utils/pickupDates';
 import { requiresWithdrawalGate, resolveWithdrawalNotice } from '../../utils/withdrawal';
 
+// The countries the checkout's selector can offer, in display order.
+const COUNTRY_OPTIONS = [
+  ['SE', 'checkout_country_sweden', 'Sverige'],
+  ['NO', 'checkout_country_norway', 'Norge'],
+  ['DK', 'checkout_country_denmark', 'Danmark'],
+  ['FI', 'checkout_country_finland', 'Finland'],
+  ['DE', 'checkout_country_germany', 'Tyskland'],
+  ['US', 'checkout_country_usa', 'USA'],
+];
+
 const Checkout = () => {
   const {
     cart, clearCart, updateShippingCountry, reconcileCart, removeDiscount,
     deliveryMethod, pickupLocation, pickupDate, setPickupDate, selectHomeDelivery, selectPickup,
-    cartAllowsHome, cartAllowsPickup, hasDeliveryConflict,
+    cartAllowsHome, cartAllowsPickup, hasDeliveryConflict, cartShipsTo,
   } = useCart();
   const store = useStoreSettings();
   const pickupLocations = Array.isArray(store?.pickupLocations) ? store.pickupLocations : [];
@@ -210,6 +220,18 @@ const Checkout = () => {
     // Once on mount: re-running on every cart change would loop via setCart.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // CP11 U7: offer only the countries every cart line can be shipped to (the
+  // API's `shipsTo`, the rule checkout applies); no restriction = all of them.
+  const countryOptions = COUNTRY_OPTIONS.filter(
+    ([code]) => !Array.isArray(cartShipsTo) || cartShipsTo.includes(code),
+  );
+  useEffect(() => {
+    if (countryOptions.length > 0 && !countryOptions.some(([code]) => code === shippingInfo.country)) {
+      setShippingInfo((info) => ({ ...info, country: countryOptions[0][0] }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countryOptions.map(([code]) => code).join(','), shippingInfo.country]);
 
   // Keep cart shipping country in sync with the address chosen at checkout,
   // so shipping cost and totals reflect the actual destination
@@ -772,12 +794,9 @@ const Checkout = () => {
                         onChange={(e) => setShippingInfo({...shippingInfo, country: e.target.value})}
                         className="w-full px-3 sm:px-4 py-3 border border-ink/15 bg-white rounded-el focus:outline-hidden focus:ring-4 focus:ring-accent/10 focus:border-accent text-base transition-colors"
                       >
-                        <option value="SE">{t('checkout_country_sweden', 'Sverige')}</option>
-                        <option value="NO">{t('checkout_country_norway', 'Norge')}</option>
-                        <option value="DK">{t('checkout_country_denmark', 'Danmark')}</option>
-                        <option value="FI">{t('checkout_country_finland', 'Finland')}</option>
-                        <option value="DE">{t('checkout_country_germany', 'Tyskland')}</option>
-                        <option value="US">{t('checkout_country_usa', 'USA')}</option>
+                        {countryOptions.map(([code, key, fallback]) => (
+                          <option key={code} value={code}>{t(key, fallback)}</option>
+                        ))}
                       </select>
                     </div>
                   </div>

@@ -277,6 +277,7 @@ describe("GET /v1/products/{productId}", () => {
         path: "/product/SKU-A-LIVE",
         // Not a POD product: no print areas, no previews.
         pod: null,
+        shipsTo: null,
         priceMinor: 12_900,
         productId: "product-a-live",
         size: null,

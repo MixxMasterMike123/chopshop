@@ -13,6 +13,7 @@
  *   PRODIGI_API_TOKEN=test_… node scripts/cf-port/prodigi-catalog.mjs          # fetch + build
  *   node scripts/cf-port/prodigi-catalog.mjs --offline                         # rebuild from saved samples
  *   PRODIGI_API_TOKEN=test_… node scripts/cf-port/prodigi-catalog.mjs --only=STTU169,JH001   # re-fetch only these models
+ *   PRODIGI_API_TOKEN=test_… node scripts/cf-port/prodigi-catalog.mjs --kind flat             # the four framed posters -> docs/cf-port/prodigi-prints-catalog.json (--offline rebuilds from samples)
  *
  * The key is read from the environment only, must start with `test_` (unless
  * --live, which this script's default run never uses), and is never logged or
@@ -183,11 +184,34 @@ export function readQuote(body) {
     return { itemIds: s.items ?? [], lab, shippingMinor: eurToMinor(s.cost?.amount ?? "0"), service: s.carrier?.service ?? null };
   });
   const items = {};
+  const list = [];
   for (const it of q.items) {
-    if (it.unitCost?.currency !== "EUR") return null;
-    items[it.id] = { unitMinor: eurToMinor(it.unitCost.amount), lab: labOf[it.id] ?? null };
+    if (it.unitCost?.currency !== "EUR" || typeof it.id !== "string" || it.id in items) return null;
+    const hit = { unitMinor: eurToMinor(it.unitCost.amount), lab: labOf[it.id] ?? null };
+    items[it.id] = hit;
+    // the returned SKU / attributes / assets are what a request item is correlated by (CP11-U8 F8); the id only links to shipments
+    list.push({ id: it.id, sku: it.sku, attributes: it.attributes ?? {}, assets: it.assets ?? [], ...hit });
   }
-  return { items, shipments };
+  return { items, list, shipments };
+}
+
+/**
+ * CP11-U8 F8: the quote item answering one REQUEST item, found by SKU + attributes + asset print areas, never by
+ * position or by a numeric id (Prodigi's published ids look like `qit_…`). Returns the hit ({ id, unitMinor, lab, … }).
+ * Throws on no match and on more than one match, naming the item: a price must not be guessed.
+ */
+export function matchQuoteItem(quote, requestItem) {
+  const areas = (requestItem.assets ?? []).map((a) => a.printArea).sort().join(",");
+  const hits = (quote.list ?? []).filter(
+    (it) =>
+      it.sku === requestItem.sku &&
+      Object.entries(requestItem.attributes ?? {}).every(([k, v]) => it.attributes[k] === v) &&
+      it.assets.map((a) => a.printArea).sort().join(",") === areas,
+  );
+  const what = `${requestItem.sku} ${JSON.stringify(requestItem.attributes ?? {})} [${areas}]`;
+  if (hits.length === 0) throw new Error(`quote item not found in the response: ${what}`);
+  if (hits.length > 1) throw new Error(`quote item ambiguous (${hits.length} matches): ${what}`);
+  return hits[0];
 }
 
 /** Build the catalogue document. products: { [model]: productResponse }, quotes: { [skuKey]: { unitMinor, lab } }. */
@@ -307,6 +331,120 @@ export function buildPricing({ document, shipping, quoteDate, extraItemMinor }) 
   return { pricingBasis, applyEur };
 }
 
+
+// ── CP11-U8 / CP12 F1: flat prints (framed posters) ───────────────────────
+
+/** The four EU framed posters (budget frame). `model` is our catalogue key, `size` the sheet size in the SKU key. */
+export const FLAT_MODELS = [
+  { model: "BFP-11X14", sku: "GLOBAL-BFP-11X14", size: "11x14", garment: "poster" },
+  { model: "BFP-12X16", sku: "GLOBAL-BFP-12X16", size: "12x16", garment: "poster" },
+  { model: "BFP-16X20", sku: "GLOBAL-BFP-16X20", size: "16x20", garment: "poster" },
+  { model: "BFP-18X24", sku: "GLOBAL-BFP-18X24", size: "18x24", garment: "poster" },
+];
+/** The frame colours we would sell, best first. Prodigi's budget frame lists only natural / white for SE (2026-10-20): "black" does not exist. */
+export const FLAT_FRAME_PREFERENCE = ["black", "white", "natural"];
+export const FLAT_SHIPPING_MINOR = 1395; // prodigi_eu, first item (CP12 design section 1)
+
+/**
+ * The fixed attribute object of a flat product: the preferred frame colour among the SE-shipping variants, every other
+ * attribute exactly as the SE variant lists it. Throws when the remaining attributes are not a single choice.
+ */
+export function flatChoice(product, preference = FLAT_FRAME_PREFERENCE) {
+  const vs = variantsFor(product);
+  if (vs.length === 0) throw new Error(`${product.sku}: no variant ships to ${DESTINATION}`);
+  const colours = new Set(vs.map((v) => v.attributes?.color));
+  const color = preference.find((c) => colours.has(c)) ?? [...colours].sort()[0];
+  const chosen = vs.filter((v) => v.attributes?.color === color);
+  const attributes = chosen[0].attributes;
+  for (const v of chosen) {
+    if (JSON.stringify(v.attributes) !== JSON.stringify(attributes)) throw new Error(`${product.sku}: the ${color} variants differ in attributes`);
+  }
+  const areas = new Set(chosen.map((v) => JSON.stringify(v.printAreaSizes?.default)));
+  if (areas.size !== 1) throw new Error(`${product.sku}: the ${color} variants have different print areas`);
+  return { color, attributes: { ...attributes }, variants: chosen };
+}
+
+export function flatQuoteRequest(def, attributes) {
+  return {
+    shippingMethod: "Standard",
+    destinationCountryCode: DESTINATION,
+    currencyCode: "EUR",
+    items: [{ sku: def.sku, copies: 1, attributes, assets: [{ printArea: "default" }] }],
+  };
+}
+
+/** products: { [model]: productResponse }, quotes: { [model]: { unitMinor, lab } }. Returns the `catalog` document (kind "flat" models). */
+export function buildFlatCatalog({ products, quotes, quoteDate, generatedAt }) {
+  const models = {};
+  const skus = {};
+  const warnings = [];
+  const unquoted = [];
+  for (const def of FLAT_MODELS) {
+    const product = products[def.model]?.product;
+    if (!product) {
+      warnings.push(`model ${def.model}: no product response`);
+      continue;
+    }
+    const { color, attributes, variants } = flatChoice(product);
+    const frame = modelFrame(variants, "default");
+    models[def.model] = {
+      brand: product.attributes?.brand?.[0] ?? null,
+      name: product.description ?? null,
+      garment: def.garment,
+      kind: "flat",
+      prodigiSku: def.sku,
+      prodigiPrintArea: "default",
+      attributes,
+      requiredSlots: ["front"],
+      front: frame.mm,
+      printAreaPx: { front: frame.px },
+    };
+    const key = `${def.sku}.${slug(color)}-frame.${def.size}`;
+    if (key.length > SKU_KEY_MAX) throw new Error(`sku key too long: ${key}`);
+    const q = quotes[def.model];
+    if (!q) unquoted.push(key);
+    skus[key] = {
+      model: def.model,
+      garment: def.garment,
+      colour: `${titleCase(color)} frame`,
+      size: def.size,
+      prodigiSku: def.sku,
+      attributes,
+      ...(q ? { unitCostMinor: q.unitMinor, lab: q.lab } : {}),
+    };
+    if (color !== "black") warnings.push(`${def.model}: no black frame in the SE variants; "${color}" is the fixed frame colour`);
+  }
+  const labs = [...new Set(Object.values(skus).map((v) => v.lab).filter(Boolean))];
+  if (labs.some((l) => !EU_LABS.concat(["prodigi_eu"]).includes(l))) warnings.push(`a poster was quoted from a non-EU lab: ${labs.join(", ")}`);
+  const perModel = Object.fromEntries(Object.values(skus).filter((v) => v.unitCostMinor !== undefined).map((v) => [v.model, { baseEurCents: v.unitCostMinor }]));
+  return {
+    generatedAt,
+    generator: "scripts/cf-port/prodigi-catalog.mjs --kind flat",
+    source: { api: SANDBOX_BASE, destination: DESTINATION, shippingMethod: "Standard", quoteDate },
+    models,
+    skus,
+    unquoted,
+    warnings,
+    pricingBasis: {
+      currency: "EUR",
+      unit: "minor (cents), ex VAT, one print incl.",
+      quoteDate,
+      destination: DESTINATION,
+      shippingMethod: "Standard",
+      shippingCostMinor: FLAT_SHIPPING_MINOR,
+      lab: "prodigi_eu",
+      perSkuIn: "catalog.skus[key].unitCostMinor / .lab",
+    },
+    applyPricingEur: {
+      basis: "eur",
+      note: "Fragment of POST .../catalog/apply `pricing`. eurSek and bufferBp are the platform's decision. One print (front) is the product, so extraPrintEurCents is 0 and baseEurCents is the quoted unit cost.",
+      extraPrintEurCents: 0,
+      printSlots: ["front"],
+      models: perModel,
+    },
+  };
+}
+
 // ── network (only in main) ─────────────────────────────────────────────────
 
 export function assertKey(key, live = false) {
@@ -368,10 +506,10 @@ export function pickProbes(log) {
     if (e.shippingProbe) continue;
     const q = readQuote(e.body);
     if (!q) continue;
-    e.request.items.forEach((item, i) => {
-      const lab = q.items[String(i + 1)]?.lab;
+    for (const item of e.request.items) {
+      const lab = matchQuoteItem(q, item).lab;
       if (lab && !probed.has(lab) && !picks.has(lab)) picks.set(lab, item);
-    });
+    }
   }
   return [...picks].map(([lab, item]) => ({ lab, item }));
 }
@@ -395,6 +533,7 @@ export function quoteJobs(def, product) {
     request: {
       shippingMethod: "Standard",
       destinationCountryCode: DESTINATION,
+      currencyCode: "EUR",
       items: sizes.map((size) => ({
         sku: def.sku,
         copies: 1,
@@ -419,6 +558,45 @@ async function main() {
   let extraItemMinor = null;
   const quoteLog = {};
 
+  if (process.argv.includes("--kind=flat") || process.argv.some((a, i, v) => a === "--kind" && v[i + 1] === "flat")) {
+    const flatProducts = {};
+    const flatQuotes = {};
+    const flatLog = {};
+    if (offline) {
+      for (const def of FLAT_MODELS) {
+        flatProducts[def.model] = readJson(join(samples, `product-${def.sku}.json`));
+        flatLog[def.model] = readJson(join(samples, `quotes-${def.sku}.json`));
+      }
+    } else {
+      const key = process.env.PRODIGI_API_TOKEN;
+      assertKey(key, live);
+      const call = makeClient({ key, base: live ? LIVE_BASE : SANDBOX_BASE });
+      for (const def of FLAT_MODELS) {
+        const r = await call("GET", `/products/${def.sku}`);
+        if (r.status !== 200) throw new Error(`product ${def.sku} answered ${r.status}`);
+        flatProducts[def.model] = r.body;
+        writeJson(join(samples, `product-${def.sku}.json`), r.body, false);
+        const request = flatQuoteRequest(def, flatChoice(r.body.product).attributes);
+        const res = await call("POST", "/quotes", request);
+        flatLog[def.model] = [{ request, status: res.status, body: res.body }];
+        writeJson(join(samples, `quotes-${def.sku}.json`), flatLog[def.model], false);
+      }
+    }
+    for (const def of FLAT_MODELS) {
+      for (const e of flatLog[def.model]) {
+        const q = readQuote(e.body);
+        if (!q) throw new Error(`${def.sku}: the quote is not usable`);
+        const { unitMinor, lab } = matchQuoteItem(q, e.request.items[0]);
+        flatQuotes[def.model] = { unitMinor, lab };
+      }
+    }
+    const generatedAt = process.env.PRODIGI_GENERATED_AT ?? new Date().toISOString();
+    const document = buildFlatCatalog({ products: flatProducts, quotes: flatQuotes, quoteDate, generatedAt });
+    writeJson(join(REPO, "docs/cf-port/prodigi-prints-catalog.json"), document);
+    console.error(`flat: models ${Object.keys(document.models).length}, skus ${Object.keys(document.skus).length}, unquoted ${document.unquoted.length}, warnings ${document.warnings.length}`);
+    return;
+  }
+
   if (args.has("--probe")) {
     // add the shipping probes to the saved quote logs (network), then rebuild offline
     const key = process.env.PRODIGI_API_TOKEN;
@@ -429,7 +607,7 @@ async function main() {
       const log = readJson(f);
       for (const probe of pickProbes(log)) {
         for (const copies of [1, 2]) {
-          const request = { shippingMethod: "Standard", destinationCountryCode: DESTINATION, items: [{ ...probe.item, copies }] };
+          const request = { shippingMethod: "Standard", destinationCountryCode: DESTINATION, currencyCode: "EUR", items: [{ ...probe.item, copies }] };
           const res = await call("POST", "/quotes", request);
           log.push({ request, status: res.status, body: res.body, shippingProbe: { lab: probe.lab, copies } });
         }
@@ -475,7 +653,7 @@ async function main() {
       }
       for (const probe of pickProbes(log)) {
         for (const copies of [1, 2]) {
-          const request = { shippingMethod: "Standard", destinationCountryCode: DESTINATION, items: [{ ...probe.item, copies }] };
+          const request = { shippingMethod: "Standard", destinationCountryCode: DESTINATION, currencyCode: "EUR", items: [{ ...probe.item, copies }] };
           const res = await call("POST", "/quotes", request);
           log.push({ request, status: res.status, body: res.body, shippingProbe: { lab: probe.lab, copies } });
         }
@@ -499,10 +677,10 @@ async function main() {
         else slot.twoCopiesMinor = s.shippingMinor;
         continue;
       }
-      e.request.items.forEach((item, i) => {
-        const hit = q.items[String(i + 1)];
-        if (hit) quotes[skuKey(item.sku, item.attributes.color, item.attributes.size ?? "one size")] = hit;
-      });
+      for (const item of e.request.items) {
+        const { unitMinor, lab } = matchQuoteItem(q, item);
+        quotes[skuKey(item.sku, item.attributes.color, item.attributes.size ?? "one size")] = { unitMinor, lab };
+      }
     }
   }
   for (const slot of Object.values(shipping)) {
