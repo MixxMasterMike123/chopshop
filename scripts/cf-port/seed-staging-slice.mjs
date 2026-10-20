@@ -906,9 +906,12 @@ async function ensurePrintShop() {
 
 async function ensureArtwork() {
   step("artwork");
-  const bytes = existsSync(BENCH_PNG) ? readFileSync(BENCH_PNG) : generatedPng();
+  // SLICE_GENERATED_ARTWORK=1 forces the generated 3600 × 3600 PNG even when the bench file
+  // exists (the bench file is 3240 px: too small for a 12 × 16" poster at 300 dpi, CP12).
+  const useBench = existsSync(BENCH_PNG) && process.env.SLICE_GENERATED_ARTWORK !== "1";
+  const bytes = useBench ? readFileSync(BENCH_PNG) : generatedPng();
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  info("original", `${existsSync(BENCH_PNG) ? ".bench/render-bench-typical.png" : "generated 3600×3600 PNG"} (${bytes.length} bytes, sha256 ${sha256.slice(0, 12)}…)`);
+  info("original", `${useBench ? ".bench/render-bench-typical.png" : "generated 3600×3600 PNG"} (${bytes.length} bytes, sha256 ${sha256.slice(0, 12)}…)`);
 
   const listed = expectStatus(
     await api("GET", "/v1/admin/pod/artwork", { session: true, shop: true }),
