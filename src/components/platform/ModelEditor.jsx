@@ -25,6 +25,7 @@ import {
   removeColorwayConfirm,
 } from '../../pages/platform/platformModelsData';
 import { LOW_CONTRAST_SD_THRESHOLD } from '../../utils/pod3dUpload';
+import { deriveDisplacementMapFile } from '../../utils/displacementBake';
 import { clearPod3dModelsCache } from '../../config/pod3dModels';
 import toast from 'react-hot-toast';
 import { XMarkIcon } from '@heroicons/react/24/outline';
@@ -134,6 +135,7 @@ const ModelEditor = ({
   const [cwLabel, setCwLabel] = useState('');
   const [cwPhoto, setCwPhoto] = useState(null);
   const [cwMap, setCwMap] = useState(null);
+  const [derivingMap, setDerivingMap] = useState(false);
   const [cwMask, setCwMask] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [addError, setAddError] = useState('');
@@ -174,17 +176,27 @@ const ModelEditor = ({
     if (!newId) return setAddError('Namnet ger inget giltigt id — använd bokstäver eller siffror.');
     if (colorways[newId]) return setAddError(`Färgvägen "${newId}" finns redan. Välj ett annat namn.`);
     if (!cwPhoto) return setAddError('Plaggfoto krävs.');
-    if (!cwMap) return setAddError('Displacement-karta krävs.');
 
     writing.current = true;
     setUploading(true);
     try {
+      // No map uploaded → bake one from the photo (docs/POD_MOCKUP_TEMPLATES.md's
+      // recipe, at the photo's original size so the registration gate passes).
+      let mapFile = cwMap;
+      if (!mapFile) {
+        setDerivingMap(true);
+        try {
+          mapFile = await deriveDisplacementMapFile(cwPhoto);
+        } finally {
+          setDerivingMap(false);
+        }
+      }
       const res = await uploadAssets({
         modelId,
         viewId: 'front',
         colorwayId: newId,
         photoFile: cwPhoto,
-        displacementFile: cwMap,
+        displacementFile: mapFile,
         maskFile: cwMask || undefined,
         // undefined for the FIRST colorway → the util fixes the view's dims.
         expectedOriginalDims: originalDims || undefined,
@@ -540,7 +552,7 @@ const ModelEditor = ({
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs text-gray-400">Displacement-karta (krävs)</label>
+                  <label className="mb-1 block text-xs text-gray-400">Displacement-karta (valfri – skapas från fotot om tom)</label>
                   <input
                     ref={mapInput}
                     type="file"
@@ -570,7 +582,7 @@ const ModelEditor = ({
                   disabled={uploading || saving}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
                 >
-                  {uploading ? 'Laddar upp…' : 'Lägg till färgväg'}
+                  {derivingMap ? 'Skapar karta…' : uploading ? 'Laddar upp…' : 'Lägg till färgväg'}
                 </button>
               </div>
             </div>
