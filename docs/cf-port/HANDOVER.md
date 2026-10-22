@@ -10,6 +10,12 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 - Corrections found on the way: the kickoff had the 15/10 labels reversed (15 % = commission); spec §9.1's `UNIQUE(order_id, kind)` and §9.2's "reverse in the cancel endpoint" are rejected; no pending-object sweep exists (A4 adds one); `email_deliveries.kind` must be rebuilt from 0056's list, not 0050's.
 - **Next:** Codex round on the design (`codex exec`, read-only, the design + audit as input), fix, then Mikael's go on design §13 (manual rail at launch; one address = one account kind; cancel without refund keeps the commission; legal read of the terms text), then A1 in a worktree. Migration numbers: 0058 next (unchanged since CP11).
 
+### ✅ UPDATE 2026-10-23 00:40 — A1 (server side) COMMITTED `b812050a` on `cp13-affiliate`, pushed; NOT deployed; A2/A3/A4 start 01:57 (usage window)
+
+- A1 built by an Opus builder, reviewed by an Opus adversarial reviewer (no blocker; 10 findings fixed: legacy-tolerant coherence triggers for the deploy window, invoice reservation cap + limiter, 201 `invited:false` after a committed admission, no applicant text in applicant mails, discount label only when > 0, audit guarded on the edit's stamp, re-activation of revoked memberships only, portal download by payout ownership, guarded accrual with `affiliate_accrual_failed` alert, acting-as grant on the invoice freeze). Gate: tsc ×3 clean, 152 files / 5343 tests, guard PASS. Report `CP13_A1_REPORT.md` (§4 = the route table A2/A3 build against; §10 = the fixes).
+- Reviewer wiring applied: `REQUIRED_MIGRATION = 0059_affiliate.sql`, refCode counts against the checkout's discount-attempt limiter, the CP4-ROUTES-D `/v1/seo` registration removed (CP13-ROUTES-A1 owns it), `test/health` + `test/public-catalog` pin 0059.
+- Staging deploy needs: `wrangler d1 migrations apply` (0058 rebuilds `identity_access` + `email_deliveries`, 0059 backfills `discount_authority`), then the API; the web and admin Workers after A2/A3. **Owed: Codex rounds (design v2 + A1 diff) when its quota returns 02:18.** A one-shot timer in this session fires 01:57 to launch A2 ‖ A3 ‖ A4.
+
 ### 🔨 UPDATE 2026-10-22 (late) — design v2 after a second review; A1 BUILDING in the worktree `.claude/worktrees/cp13-affiliate` (branch `cp13-affiliate`, pushed)
 
 - Mikael: "keep going, in auto mode"; every Firebase affiliate surface must follow through (design §7.1b parity table); `/impeccable` on every page; NORD for the storefront, Admin-Neutral for the admin pages and the portal (§7.1c).
