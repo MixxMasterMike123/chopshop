@@ -10,6 +10,13 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 - Corrections found on the way: the kickoff had the 15/10 labels reversed (15 % = commission); spec §9.1's `UNIQUE(order_id, kind)` and §9.2's "reverse in the cancel endpoint" are rejected; no pending-object sweep exists (A4 adds one); `email_deliveries.kind` must be rebuilt from 0056's list, not 0050's.
 - **Next:** Codex round on the design (`codex exec`, read-only, the design + audit as input), fix, then Mikael's go on design §13 (manual rail at launch; one address = one account kind; cancel without refund keeps the commission; legal read of the terms text), then A1 in a worktree. Migration numbers: 0058 next (unchanged since CP11).
 
+### 🔨 UPDATE 2026-10-22 (late) — design v2 after a second review; A1 BUILDING in the worktree `.claude/worktrees/cp13-affiliate` (branch `cp13-affiliate`, pushed)
+
+- Mikael: "keep going, in auto mode"; every Firebase affiliate surface must follow through (design §7.1b parity table); `/impeccable` on every page; NORD for the storefront, Admin-Neutral for the admin pages and the portal (§7.1c).
+- Codex's round on the design died on its usage limit (back 2026-10-23 02:18) → an Opus reviewer with fresh context reviewed v1 instead: 30 findings, two blockers (reversal sign CHECK; `discount_authority` backfill), all folded into v2 (`CP13_AFFILIATE_REVIEW2.md` is the index). **Owed: `codex exec` on the v2 design + per-unit Codex rounds once the quota is back.**
+- Baseline in the worktree: tsc clean (api/web/admin), vitest 143 files / 5165 tests. A1 (Opus builder, brief `CP13_BRIEFS.md` §A1, 11 steps) started 2026-10-22 ≈ 23:00; its report will be `CP13_A1_REPORT.md`. A2 ‖ A3 after A1's route table; A4 after A1.
+- Decisions taken by default under auto mode, listed for Mikael in design §13 (1–9): manual payout rail at launch (Connect = A5 later), one address = one account kind (an unaccepted affiliate identity can be converted by a seller's/platform's invite), cancel without refund keeps the commission, D30 = one credential + membership per shop, denied applications purged after 12 months, the portal has its own slim shell.
+
 ## CP11 — Prodigi printer adapter (GO 2026-10-19 ≈ 21:30, "build the adapter for Prodigi")
 
 ### ✅ UPDATE 2026-10-22 — staging admin deployed at `daa83368` (version `104a3b47-…`): the 3D model editor bakes a displacement map from the garment photo when none is uploaded
