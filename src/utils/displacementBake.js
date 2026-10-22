@@ -64,11 +64,36 @@ const blurAxis = (src, dst, w, h, kernel, alongX) => {
   }
 };
 
+/** Mean and standard deviation of a plane over its centred `fraction` box. */
+export const regionStats = (plane, w, h, fraction) => {
+  const rw = Math.max(1, Math.floor(w * fraction));
+  const rh = Math.max(1, Math.floor(h * fraction));
+  const x0 = Math.floor((w - rw) / 2);
+  const y0 = Math.floor((h - rh) / 2);
+  let n = 0;
+  let sum = 0;
+  for (let y = y0; y < y0 + rh; y += 1) {
+    for (let x = x0; x < x0 + rw; x += 1) {
+      sum += plane[y * w + x];
+      n += 1;
+    }
+  }
+  const mean = sum / n;
+  let sumSq = 0;
+  for (let y = y0; y < y0 + rh; y += 1) {
+    for (let x = x0; x < x0 + rw; x += 1) {
+      const d = plane[y * w + x] - mean;
+      sumSq += d * d;
+    }
+  }
+  return { mean, sd: Math.sqrt(sumSq / n) };
+};
+
 /**
  * bakeDisplacementPixels(rgba, w, h, opts?) → Uint8ClampedArray (RGBA, opaque grey)
  *
- * luminance → gaussian blur σ → mean-centred stretch so the result's standard
- * deviation is `targetSd` around `targetMean`, clamped to 0..255. A flat input
+ * luminance → gaussian blur σ → mean-centred stretch so the CENTRE region's
+ * standard deviation is `targetSd` around `targetMean`, clamped to 0..255. A flat input
  * (sd 0) stays flat at `targetMean`: nothing is amplified out of noise.
  */
 export const bakeDisplacementPixels = (rgba, w, h, opts = {}) => {
@@ -89,15 +114,14 @@ export const bakeDisplacementPixels = (rgba, w, h, opts = {}) => {
     blurAxis(tmp, blurred, w, h, kernel, false);
   }
 
-  let sum = 0;
-  for (let p = 0; p < n; p += 1) sum += blurred[p];
-  const mean = sum / n;
-  let sumSq = 0;
-  for (let p = 0; p < n; p += 1) {
-    const d = blurred[p] - mean;
-    sumSq += d * d;
-  }
-  const sd = Math.sqrt(sumSq / n);
+  // The statistics come from the CENTRE 60 % of the frame (the same region
+  // pod3dUpload's measureMapContrastSd samples: where the print lands), never
+  // the whole photo. On a dark garment against a light background the
+  // whole-frame deviation is the garment's silhouette, and a stretch fitted to
+  // it leaves the folds under the artwork nearly flat (Codex, 2026-10-22). The
+  // transform is then applied to every pixel; the background may clip, which
+  // is fine: it is outside the print and the mask hides it anyway.
+  const { mean, sd } = regionStats(blurred, w, h, 0.6);
   const gain = sd > 1e-6 ? targetSd / sd : 0;
 
   const out = new Uint8ClampedArray(n * 4);
