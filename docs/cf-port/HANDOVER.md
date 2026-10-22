@@ -2,6 +2,14 @@
 
 One entry per checkpoint (PLAN §9): what exists, how it was verified, both review notes, open gaps. Newest first. Branch `cf-port`.
 
+## CP13 — Affiliate (kickoff 2026-10-22, Mikael: in scope for launch)
+
+### 📐 2026-10-22 — Codex audit + design DRAFT written; nothing built, nothing deployed
+
+- Inputs: `CP13_AFFILIATE_KICKOFF.md` (§3 D24–D30 taken, §4 Q1 = admin host + `affiliate` account type). Step 1: `CP13_AFFILIATE_CODEX_AUDIT.md` (gpt-6-astra, read-only): A = 20 things not to inherit, B = 11 seams with the invariants quoted, C = 12 ranked risks. Step 2: `CP13_AFFILIATE_DESIGN.md` (14 decisions A1–A14, migration 0058 (+0059) shape, the seam representation (affiliate id in `discount_code_id` + `discount_authority` discriminator, holds/burns re-gated), frozen checkout facts incl. the self-referral verdict, accrual in the order batch, reversal in `orderEffectStatements` + `applyDisputeFact`, balances as sums, manual payout rail at launch with the Connect rail (Account Debit + transfer) deferred to A5, identity = one credential + per-shop `affiliate` membership, web-Worker click counting without identifiers, mails + terms, pages with Swedish copy, units A1–A4 ≈ 4½).
+- Corrections found on the way: the kickoff had the 15/10 labels reversed (15 % = commission); spec §9.1's `UNIQUE(order_id, kind)` and §9.2's "reverse in the cancel endpoint" are rejected; no pending-object sweep exists (A4 adds one); `email_deliveries.kind` must be rebuilt from 0056's list, not 0050's.
+- **Next:** Codex round on the design (`codex exec`, read-only, the design + audit as input), fix, then Mikael's go on design §13 (manual rail at launch; one address = one account kind; cancel without refund keeps the commission; legal read of the terms text), then A1 in a worktree. Migration numbers: 0058 next (unchanged since CP11).
+
 ## CP11 — Prodigi printer adapter (GO 2026-10-19 ≈ 21:30, "build the adapter for Prodigi")
 
 ### ✅ UPDATE 2026-10-22 — staging admin deployed at `daa83368` (version `104a3b47-…`): the 3D model editor bakes a displacement map from the garment photo when none is uploaded

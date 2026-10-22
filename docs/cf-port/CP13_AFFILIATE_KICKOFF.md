@@ -4,6 +4,8 @@ Written 2026-10-22 on `ed35268c` (branch `cf-port`). **Scope decision (Mikael, 2
 
 This file is the starting point for a NEW context window. Read it whole, then the inputs in §1, then do §4 in order.
 
+**Status 2026-10-22 (same day, later):** step 1 done — `CP13_AFFILIATE_CODEX_AUDIT.md`; step 2 drafted — `CP13_AFFILIATE_DESIGN.md` (answers Q1–Q4 and every audit item; its §13 lists what Mikael must confirm). Next: Codex round on the design, then Mikael's go, then A1.
+
 ## 1. Inputs (read before designing; nothing here is to be re-derived)
 
 | What | Where | Why it matters |
@@ -24,7 +26,7 @@ This file is the starting point for a NEW context window. Read it whole, then th
 
 1. **Application → approval → code.** A public application form on the shop's storefront (anonymous, rate-limited, no open-create abuse: §8.3), the shop admin's queue, approve/deny, a vanity or random code issued at approval, collisions with Rabattkoder refused at creation (D30), affiliate terms with a stored version accepted at first login (D28, MFL ad-marking duty).
 2. **Attribution.** Code-only by default (D27): the code typed at checkout earns the commission; a `?ref=` link sets the code for the session and wins over a typed code (D24); a 30-day cookie ONLY behind consent, and no raw IPs stored. Precedence over Rabattkoder as in spec §4 and the seam in `discount-codes.ts`.
-3. **Commission ledger.** On a PAID order: base = paid total − shipping, ex VAT from the order's actual VAT lines (D25); default rates kept (15 % affiliate discount / 10 % commission — confirm the pair in spec §3.2/§3.5); held through the 14-day withdrawal window; reversed pro-rata on partial refunds, fully on dashboard refunds and lost disputes (D26). Append-only ledger rows; the order carries the attribution (spec §2.5's fields, as D1 columns on `orders`/`checkouts`).
+3. **Commission ledger.** On a PAID order: base = paid total − shipping, ex VAT from the order's actual VAT lines (D25); default rates kept (**15 % commission to the affiliate / 10 % discount to the buyer** — corrected 2026-10-22 by the Codex audit; this line first had the labels reversed; spec §2.2, §3.5); held through the 14-day withdrawal window; reversed pro-rata on partial refunds, fully on dashboard refunds and lost disputes (D26). Append-only ledger rows; the order carries the attribution (spec §2.5's fields, as D1 columns on `orders`/`checkouts`).
 4. **Payout.** Connect transfer where the affiliate has a Connect account, manual (invoice) otherwise; no platform cut at first (D29). Payout rows + status; the affiliate's "Begär utbetalning".
 5. **Surfaces.** Shop admin: Affiliates list, detail/edit, create, payout, analytics (behind the `affiliate` feature key, below the add-on divider). Affiliate-facing: registration page, login, portal (stats, code, link, payouts, terms). Platform: the add-on toggle only.
 6. **Mails.** Application received (applicant), application notification (shop admin), welcome with the password-set link (the invite mechanism of `invites.ts`, never a plaintext password: §8.2), conversion / payout / denial notifications (D30).
