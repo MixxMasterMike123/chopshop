@@ -1,6 +1,6 @@
 # CP13 — Affiliate on the Cloudflare port: design
 
-Status: DRAFT 2026-10-22 on `485a6ec9` (branch `cf-port`), written after the Codex audit of step 1 (`CP13_AFFILIATE_CODEX_AUDIT.md`; its findings A/B/C are each answered below, marked **[CX-§]**). Waits for a Codex round on this document and Mikael's go before any unit is built (kickoff §5 step 2).
+Status: v2 2026-10-22 on branch `cp13-affiliate`, written after the Codex audit of step 1 (`CP13_AFFILIATE_CODEX_AUDIT.md`; its findings A/B/C are each answered below, marked **[CX-§]**) and a second adversarial review of v1 (an Opus reviewer with fresh context, 30 findings, verdict "ready with fixes"; every finding is folded in below, marked **[R2-n]**; Codex's own round on the design is owed once its quota returns 2026-10-23 02:18). Mikael 2026-10-22: "keep going, in auto mode" — the build proceeds on the recommendations; §13 lists what he can still overturn.
 
 **Correction to the kickoff (CX-A):** the retained defaults are **15 % commission to the affiliate and 10 % discount to the buyer** (spec §2.2, §3.5); kickoff §2.3 reverses the labels.
 
@@ -20,12 +20,12 @@ Inputs (not re-derived here): `CP13_AFFILIATE_KICKOFF.md` (§2 launch scope, §3
 | A4 | Attribution is code-only: `?ref=CODE` puts the code into the per-shop cart (already strictly necessary storage) as the cart's `refCode`; no separate 30-day key, no cookie, no click row with IP/UA. Clicks are counted server-side per affiliate and day with no identifier. | D27 [DEV-3] §3.3, §8.7 |
 | A5 | At checkout the link code wins over a typed code; a typed affiliate code earns (attribution `code`); one code per cart at the money level; affiliate resolves before a Rabattkod on a string collision; collisions are refused at creation in both directions. | D24, D30, §4 |
 | A6 | Commission base = (paid total − shipping) ex VAT at the ORDER's frozen rate; amount = round-half-up(base × commission_bp / 10 000). Defaults 15 % commission / 10 % buyer discount kept. The accrual is one append-only ledger row in the webhook's order batch, a pure function of facts frozen at quote time (including the self-referral verdict); nothing is re-resolved after payment. | D25, D30, §3.5 [DEV-4] §3.5 non-transactional award; CX-B2 |
-| A7 | Reversal follows MONEY that went back: pro-rata on every settled refund (cumulative formula, idempotent per refund transition, restored when a succeeded refund later fails), full on a lost dispute (capped at the accrual). A cancel that moves no money reverses nothing; the refund that follows does. "Reverse iff accrued", never flag-gated. | D26 [DEV-5] §3.6; CX-B3 |
+| A7 | Reversal follows MONEY that went back: pro-rata on every settled refund (cumulative formula in basis points of the charge, idempotent per refund TRANSITION, restored when a succeeded refund later fails), full once a dispute is LOST whatever the refunds do afterwards (capped at the accrual). A cancel that moves no money reverses nothing; the refund that follows does. "Reverse iff accrued", never flag-gated. | D26 [DEV-5] §3.6; CX-B3; R2-1/3/4/5 |
 | A8 | Hold: an accrual becomes payable 14 days after `paid_at` (the port's `WITHDRAWAL_WINDOW_MS`) and only while the order has no open dispute. | D26 |
 | A9 | Payout rail at launch = MANUAL against the affiliate's invoice (the Firebase rail), rebuilt as a reserve-first state machine (`requested → paid`, or `void` by a compensating row). The Connect rail (D29) is designed in §6.3 and built as unit A5 after launch, on Mikael's go. | [DEV-6] from D29's default, argued in §6.3 |
 | A10 | Affiliate terms (platform template with shop merge fields, versioned) are accepted with a checkbox at application and again in the portal at first login when the version moved; the MFL ad-marking duty is in the text. | D28 |
 | A11 | Mails: application received (applicant), new application (shop), invite/welcome (affiliate), denial (applicant), conversion / reversal / payout (affiliate). Every mail to an affiliate or applicant is sent under the SHOP's display name. No mail leaves staging; the smoke reads the ledger. | D30, Q4, §5 [DEV-7] (shop sender, F05's rule) |
-| A12 | Feature key `affiliate`: allowed, OPT-IN (off by default), platform-switched. OFF = stop new activity (no form, no `?ref=`, no discount, no accrual, no approval, admin menu hidden), keep data, reversals and payouts still work. | D62 pattern, §2.8 |
+| A12 | Feature key `affiliate`: allowed, OPT-IN (off by default, and OFF at provisioning), platform-switched. OFF = no NEW activity (no form, no `?ref=` count, no new affiliate QUOTE, no approval, the admin list page and menu item hidden), keep data; a quote accepted before the switch still settles and accrues; reversals, the ledger and the payout pages still work (§4.5 names them). | D62 pattern, §2.8; R2-16/17/18 |
 | A13 | Campaigns, revenue share, `?campaign=`, the ambassador CRM, the admin "view portal" URL trick, client-side commission maths and "verify" helpers are not built. | D30, §7, §8.6 |
 | A14 | The seller sees ONE number stays: the affiliate commission is the SHOP's own cost to its affiliate and IS shown to the shop admin per order (labelled "Affiliate-provision", never "intäkt"); the platform fee stays one figure; an affiliate never sees buyer data (allowlisted projection). | memory, §8.9 |
 
@@ -43,13 +43,15 @@ Inputs (not re-derived here): `CP13_AFFILIATE_KICKOFF.md` (§2 launch scope, §3
 
 ### 1.2 Login and the password-set link
 
-- Login page: the admin host's existing login (`src/pages/LoginPage.jsx`), unchanged; after sign-in `/v1/me` says `affiliate` and the SPA routes to `/affiliate`. Password reset: the ordinary reset, unchanged (it lands on the admin surface, which now serves affiliates; it stays platform-branded, as a shared multi-shop credential has no one shop).
-- **D30 "per-shop logins" is read as ONE affiliate credential (one email, one password) with one scoped membership per shop**, the kickoff's membership reading. Literally separate credentials per shop would need separate addresses or an auth redesign (Better Auth's email UNIQUE); not done. [CX-C2]
+- Login page: the admin host's existing login (`src/pages/LoginPage.jsx`); after sign-in `/v1/me` says `affiliate` and the page sends the person to `/affiliate` (today it navigates to `/admin`, where `AdminRoute` bounces a non-admin to `/login` with "Du har inte behörighet": both files change, R2-13). The admin build mounts the trees by PATH, synchronously (`src/admin-app/main.jsx`: `/platform/*` → PlatformApp, else AdminApp), so the affiliate portal is a third PATH tree `/affiliate/*` → `AffiliateApp` (the D102 pattern), and `AdminRoute`/`AdminApp` redirect an `affiliate` account type there. Password reset: the ordinary reset, unchanged (it lands on the admin surface, which now serves affiliates; it stays platform-branded, as a shared multi-shop credential has no one shop).
+- **D30 "per-shop logins" is read as ONE affiliate credential (one email, one password) with one scoped membership per shop**, the kickoff's membership reading. Literally separate credentials per shop would need separate addresses or an auth redesign (Better Auth's email UNIQUE); not done. [CX-C2] Listed in §13 for Mikael (R2-Q10).
 - The invite: `issueInvite` with the new surface; the token is the reset token (single use, 72 h, previous unused token superseded). The mail is the affiliate welcome (§9.3) carrying the link, the code, the `?ref=` link and the rates. Resend from the admin's affiliate detail page while the person has not set a password (tenant-members.ts's `ownPasswordSql` rule reused).
 
 ### 1.3 The collision rule (A2) and why
 
-One `"user"` row per email (Better Auth UNIQUE), one `identity_access` row per user, one `account_type`. So an address is EITHER an admin's or an affiliate's. The alternative (a second user row per affiliate) is forbidden by the UNIQUE; the alternative (`account_type = 'ordinary'` + role) would make an affiliate indistinguishable from a future customer account in the directory, the lifecycle and `/v1/me`. Refusing the collision costs one line of copy on the approval screen: "Adressen används redan av ett annat konto på plattformen. Be personen ansöka med en annan e-postadress." A shop admin of shop A may still be an affiliate of shop B — with another address. Self-referral (§5.4) is unaffected.
+One `"user"` row per email (Better Auth UNIQUE), one `identity_access` row per user, one `account_type`. So an address is EITHER an admin's or an affiliate's.
+
+**Address squatting (R2-6).** A shop admin could otherwise "bjud in" ANY address as an affiliate and thereby block that address from ever becoming a tenant admin or platform user. Rule: an `affiliate` identity that has NEVER set a password (tenant-members.ts's `ownPasswordSql` is false) and holds no ledger row may be CONVERTED by the tenant-admin invite path (`tenant-members.ts`) and the platform's provisioning: one guarded UPDATE of `identity_access.account_type` (status-stamped like user-lifecycle.ts), every `affiliate` membership revoked and the open invite superseded in the same batch, audited `identity.convert_unaccepted_affiliate`. An affiliate who HAS set a password is a real account and stays `not_addable`. The reverse conversion (an unaccepted tenant-admin invite into an affiliate) is NOT offered: a shop admin's invite is the platform's or a seller's intent, never overridden by an affiliate application. The alternative (a second user row per affiliate) is forbidden by the UNIQUE; the alternative (`account_type = 'ordinary'` + role) would make an affiliate indistinguishable from a future customer account in the directory, the lifecycle and `/v1/me`. Refusing the collision costs one line of copy on the approval screen: "Adressen används redan av ett annat konto på plattformen. Be personen ansöka med en annan e-postadress." A shop admin of shop A may still be an affiliate of shop B — with another address. Self-referral (§5.4) is unaffected.
 
 ---
 
@@ -59,7 +61,7 @@ One `"user"` row per email (Better Auth UNIQUE), one `identity_access` row per u
 
 - Anywhere on `<shop>.flippinstuff.se/...?ref=CODE` (the web Worker already serves the SPA shell for every page). The SPA (`AffiliateRef` hook mounted in the storefront app, replacing `AffiliateTracker.jsx`) normalises the code (trim, upper-case; §7.6's case bug cannot recur), stores `{ refCode }` in the per-shop cart (`CartContext`'s existing per-shop `localStorage` key) and strips the parameter from the address. Nothing else is stored: no expiry key, no click id, no global key (§8.5's cross-shop leak cannot recur).
 - The storefront reports `features.affiliate` in `GET /v1/storefront` (`PORTED_FEATURE_KEYS` gains `affiliate`); with it OFF the hook is inert and the form page answers the shop's 404 page.
-- The click count [CX-B9]: the WEB WORKER counts, not the browser. When `servePage` serves a storefront page whose URL carries `?ref=`, it calls the API over the service binding (`POST /v1/internal/affiliate/ref { code }`, NOT on the browser allowlist, so no browser can inflate it directly) with the normalised code and the tenant from routing; the API resolves `(tenant, code)` to an ACTIVE affiliate of a shop with the add-on ON and upserts `affiliate_click_days(tenant_id, affiliate_id, day) += 1`; the page is served whatever the answer (the count never delays or fails a page: `ctx.waitUntil`). Only page landings count: never assets, HEAD, API calls. No IP, UA or referrer is read for it. What this gives: referral-link landings per affiliate per day, labelled so in the UI ("Länkbesök"), never "unika besökare". What it does NOT give: unique visitors, conversion per click. Conversions come from orders attributed by code; the ratio shown is "beställningar per länkbesök", an aggregate, not a click-conversion rate.
+- The click count [CX-B9, R2-20/25]: the WEB WORKER reports, the API counts. `servePage` already calls `GET /v1/seo` over the service binding on every page landing (an internal-only route, not on the browser allowlist); when the landing URL carries `?ref=`, the normalised code rides along as `ref=` on that same call. The SEO handler hands it to `clicks.ts` which, under the API's own `ctx.waitUntil` (the internal app has an ExecutionContext; the web Worker needs none), resolves `(tenant, code)` to an ACTIVE affiliate of a shop with the add-on ON and upserts `affiliate_click_days(tenant_id, affiliate_id, day) += 1`, behind a hashed-visitor rate limit (0008, scope `affiliate-ref-ip`, 60 / 10 min) so a reload loop is one D1 write per window, not per load. The page is served whatever the count did. Only GET page landings count: never assets, HEAD (excluded explicitly), API calls. A `301` the SEO route answers (`redirectLocation`) KEEPS `ref` on its Location so the link survives a redirect. No IP, UA or referrer is stored (the limiter's key is a hash, as for every anonymous route). What this gives: referral-link landings per affiliate per day, labelled so in the UI ("Länkbesök"), never "unika besökare". What it does NOT give: unique visitors, conversion per click. Conversions come from orders attributed by code; the ratio shown is "beställningar per länkbesök", an aggregate, not a click-conversion rate.
 - A later consent-gated 30-day cookie (D27's "only with consent") is NOT built: the storefront has no consent banner because it runs no trackers (memory `cookie_consent_own_solution`), and a cookie would need one; if it ever is, it is set by the WEB WORKER's page response (the API's `Set-Cookie` is stripped by forward.ts). The cart-carried code lives with the cart (the port's cart `src/storefront/providers/Cart.jsx`, per-shop `localStorage`; it stores a normalised code today and gains `refCode` + `source`); the hook stamps `refCode` with its time and drops it after 30 days, and a completed checkout clears it. No 30-day promise is made to affiliates beyond that. [DEV-3]
 - The link an affiliate copies is built from the shop's CANONICAL origin as the API reports it (the storefront's own `shopUrl`), never from a hostname transform assumed here: CP14 owns the `<shop>.flippinstuff.se` shape [CX-B9].
 
@@ -69,34 +71,35 @@ The checkout body (`POST /v1/checkout`) gains `refCode` (optional, same grammar 
 
 1. If `ref` resolves to an ACTIVE affiliate of this tenant (add-on ON) → that affiliate wins: `discountMinor = ceil(subtotal × discount_bp / 10 000)` (percentDiscountMinor, the port's integer form of Firebase's `Math.ceil`), `attribution = 'link'`. The typed code is ignored and the answer says so (`discount.overriddenBy: 'link'`), so the storefront can show "Länkkoden ANNA10 används".
 2. Else if `typed` resolves to an active affiliate → it wins, `attribution = 'code'`. [DEV: §3.4 by accident paid nothing for a typed code; D24 says it earns]
-3. Else the campaign lookup (unchanged, only when `discountCodes` is ON), no attribution.
+3. Else the campaign lookup on the TYPED code only (never on `ref`: a `?ref=<campaign code>` link applies nothing, R2-24), unchanged, only when `discountCodes` is ON; no attribution.
 4. Else `discountMinor = 0`, as today.
 
-An affiliate discount applies to the whole subtotal (never shipping) and has no cap, window or minimum spend (§4.7). Inactive/suspended affiliates and the add-on OFF fall through to step 3 on BOTH the preview and the checkout (§4.2's disagreement cannot recur: one function serves both).
+An affiliate discount applies to the whole subtotal (never shipping) and has no cap, window or minimum spend (§4.7). Inactive/suspended affiliates and the add-on OFF fall through to step 3 on BOTH the preview and the checkout (§4.2's disagreement cannot recur: one function serves both). **Attribution is independent of the discount amount (R2-8):** `discount_bp` may be 0 (a commission-only affiliate, CHECK 0..10000 stays), and when the viability checks (minimum charge, fee coverage) discard a discount the affiliate facts STAY frozen with `discount_minor = 0` (the 0010/0011 CHECK admits an id beside a zero discount); the affiliate then earns on the undiscounted base. The campaign branch keeps today's rule (a code worth zero stores no id, checkpoint 22).
 
 **The representation [CX-B1, CX-C3]: a discriminated authority in the existing id column.** `ResolvedDiscount` gains `authority: 'campaign' | 'affiliate' | null` and `affiliate: { affiliateId, code, attribution, commissionBp, discountBp } | null`; **`discountCodeId` carries the affiliate's id for an affiliate hit** (the seam's stated contract, "the id of whatever authorized it"), which satisfies the 0010/0011 CHECK "discounted money was authorised by something" without rebuilding `checkouts` or `orders`. Every consumer of that id is made authority-aware; the audit's list is the checklist:
 - `resolveDiscount` takes BOTH gates (`affiliate`, `discountCodes`) and runs each branch under its own; `checkout.ts` (~L1357) and `discount-preview.ts` (~L98) no longer skip resolution when only `discountCodes` is off, so an affiliate-only shop gets its discount.
 - The checkout's HOLD insert (~L1522, FK to `discount_codes`) runs ONLY for `authority = 'campaign'`; an affiliate code is uncapped and holds nothing.
-- The webhook's burn and hold statements (~L780–820) are re-gated on the frozen `discount_authority = 'campaign'`.
+- The webhook's burn and hold statements (~L780–820) are re-gated on the frozen `discount_authority IS NOT 'affiliate'` (NOT on `= 'campaign'`: a checkout quoted before the deploy carries NULL and must still burn, R2-2).
 - `matchesExisting` (~L860–900) compares authority, affiliate id, both rates and the self-referral verdict beside amount and id: two affiliates with the same discount are never interchangeable under one idempotency key.
 - The preview answers the same `{ applies, code, discountMinor }` for an affiliate hit as for a campaign hit; no identity, rate or reason leaves it (its DISPLAY-ONLY rule and the no-oracle rule both hold); `overriddenBy: 'link'` is the one new field, on the checkout answer only.
 - The viability checks (minimum charge, fee coverage, ~L1401) run after resolution as today; when they discard the discount, the affiliate facts are discarded with it.
 - `discount_authority` (new column, both tables) is the discriminator every reader uses; the Rabattkoder admin reads join `discount_codes` by tenant and never see an affiliate id.
+- Three readers join `discount_codes` by the frozen id to LABEL the discount (R2-7): `outbox/email-effect.ts` (the buyer's confirmation mail), `commerce/receipts.ts` (the public order read / confirmation page) and `commerce/admin-orders.ts` (the detail). Each becomes `COALESCE(dc.code, o.affiliate_code)`: the code STRING is shown, never the affiliate. All three belong to A1.
 
 ### 2.3 Frozen on the checkout, copied to the order (Q2)
 
-New nullable columns (ADD COLUMN with CHECKs, no FK — the 0010 reasoning for `discount_code_id`: a deleted or re-coded affiliate must not change a historical order):
+New nullable columns (ADD COLUMN, no FK — the 0010 reasoning for `discount_code_id`: a re-coded or retired affiliate must not change a historical order). **Migration order matters (R2-2):** SQLite ≥ 3.37 tests an ADD COLUMN CHECK against EXISTING rows, so `discount_authority` is added WITHOUT the "NULL iff id NULL" CHECK, then backfilled `'campaign'` on both tables `WHERE discount_code_id IS NOT NULL`, and only then the coherence rules are declared as BEFORE INSERT / BEFORE UPDATE triggers (which SQLite does not apply retroactively). A pre-deploy checkout paid after the deploy therefore carries `'campaign'` and burns as before.
 
 | Column (both tables) | Meaning |
 |---|---|
-| `discount_authority` | `'campaign' \| 'affiliate' \| NULL`; NULL iff `discount_code_id IS NULL` (CHECK) |
+| `discount_authority` | `'campaign' \| 'affiliate' \| NULL`; NULL iff `discount_code_id IS NULL` (trigger-enforced after the backfill) |
 | `affiliate_id` | the affiliate row's id; NOT NULL iff `discount_authority = 'affiliate'` (CHECK) |
 | `affiliate_code` | the code as resolved (upper-case), for display without a join |
 | `affiliate_attribution` | `'link' \| 'code'` |
 | `affiliate_commission_bp`, `affiliate_discount_bp` | the rates frozen at quote time; the accrual is a pure function of frozen facts |
 | `affiliate_self_referral` | `0 \| 1`, decided at QUOTE time from the checkout's buyer email (§4.3) and frozen, so a profile change between quote and payment cannot change the award [CX-B2] |
 
-Written in the checkout INSERT (checkout.ts ~L1450); the replay-parity check compares them (above). The webhook's INSERT INTO orders copies them (~L525–560). Frozen from the moment they are written: a new BEFORE UPDATE trigger on each table aborts any change to the six columns (the 0019 `checkouts_connect_facts_frozen` shape, but with no "first non-null" exception: a checkout is quoted once) [CX-B2]. Coherence CHECKs tie them together (authority ⇔ id; affiliate ⇔ the five affiliate columns non-null).
+Written in the checkout INSERT (checkout.ts ~L1450) and in `loadExisting`'s SELECT; the replay-parity check compares them (above). The webhook's INSERT INTO orders copies them (~L525–560). Frozen from the moment they are written: a new BEFORE UPDATE trigger on each table aborts any change to the SEVEN columns (`discount_authority` + the six affiliate columns; 0011's `orders_money_immutable` covers `discount_code_id` but not these; the 0019 `checkouts_connect_facts_frozen` shape, with no "first non-null" exception: a checkout is quoted once) [CX-B2, R2-Q1]. Coherence triggers tie them together (authority ⇔ id; affiliate ⇔ the six affiliate columns non-null).
 
 Projections: the tenant admin's order list/detail (`admin-orders.ts`, `admin-order-list.ts`) add `affiliate: { code, attribution, commissionMinor, ledgerState } | null` (A14); the public order read (`/v1/orders/:id`, the buyer's receipt page) adds NOTHING (§8.7: the guest page must not learn the affiliate's id or commission); the confirmation page keeps its discount row labelled with the code only.
 
@@ -123,6 +126,7 @@ preferred_lang      TEXT NOT NULL CHECK IN ('sv','en')  (Firebase sv-SE/en-GB/en
 terms_version       TEXT NOT NULL                     (the version accepted, §8)
 terms_accepted_at   TEXT NOT NULL (ISO)
 application_id      TEXT                               (NULL for an invited affiliate)
+currency            TEXT NOT NULL CHECK (length 3)     (the ledger currency this affiliate is paid in = the tenant's currency at approval; R2-11)
 created_by          TEXT NOT NULL                      (the approving/inviting admin)
 created_at, updated_at TEXT (ISO)
 UNIQUE (tenant_id, code)
@@ -130,7 +134,7 @@ UNIQUE (tenant_id, code)
 
 Code uniqueness across the two code families is a trigger pair: `BEFORE INSERT/UPDATE OF code ON affiliates` aborts when `discount_codes(tenant_id, code)` exists; `BEFORE INSERT/UPDATE OF code ON discount_codes` aborts when `affiliates(tenant_id, code)` exists (D30: refused at creation, both directions; the routes answer `conflict` as the Rabattkoder route does for its own name clash). Reserved words refused app-side: `ADMIN, TEST, REF, AFFILIATE, FLIPPINSTUFF, METEORPR` + the shop's tenant id.
 
-**Status semantics (§2.2, §3.8):** only `active` resolves at checkout, counts clicks or accrues. Reversals, the ledger and payouts ignore status. The admin's toggle is explicit (three buttons), not Firebase's cycle. Delete is NOT offered: an affiliate with history is set `inactive`; an affiliate with no ledger rows may be deleted (the membership revoked, the identity left for the user-lifecycle) — [DEV-8] §3.8 delete left orphans.
+**Status semantics (§2.2, §3.8):** only `active` resolves at checkout, counts clicks or accrues. Reversals, the ledger and payouts ignore status. The admin's toggle is explicit (three buttons), not Firebase's cycle. **No hard delete, ever (R2-9):** an affiliate row is a tombstone for every checkout and order that froze its id (an open checkout may pay within 24 h of a "delete"); "Ta bort" sets `inactive` and revokes the membership (`revokeAffiliateMembership`), the row and its code stay. [DEV-8] §3.8 delete left orphans.
 
 ### 3.2 `affiliate_applications`
 
@@ -164,9 +168,11 @@ entry_id        TEXT PRIMARY KEY
 tenant_id       TEXT NOT NULL (immutable)
 affiliate_id    TEXT NOT NULL
 kind            TEXT NOT NULL CHECK IN ('accrual','reversal','payout','payout_void','adjustment')
-amount_minor    INTEGER NOT NULL              (accrual > 0; reversal, payout < 0; payout_void > 0; adjustment ≠ 0)
+amount_minor    INTEGER NOT NULL              (accrual > 0; reversal ≠ 0 — NEGATIVE on a refund, POSITIVE when a succeeded refund later fails (R2-1); payout < 0; payout_void > 0; adjustment ≠ 0)
+currency        TEXT NOT NULL CHECK (length 3) (the order's currency; balances are per (affiliate, currency), R2-11)
 order_id        TEXT                           (accrual, reversal)
-ref             TEXT NOT NULL                  (the idempotency key: accrual = order_id; reversal = the refund operation id or the dispute id; payout/void = payout_id; adjustment = a fresh id)
+ref             TEXT NOT NULL                  (the idempotency key: accrual = order_id; reversal = the refund TRANSITION id (one per state change, so a restoration after a failure is its own row, R2-4) or the dispute id; payout/void = payout_id; adjustment = a fresh id)
+formula_version INTEGER                        (accrual: 1)
 available_at    TEXT                           (accrual only: paid_at + 14 days)
 reason          TEXT                           (adjustment: required, ≤ 500)
 created_by      TEXT                           (admin user id, or 'system')
@@ -174,7 +180,7 @@ created_at      TEXT NOT NULL
 UNIQUE (tenant_id, affiliate_id, kind, ref)
 ```
 
-Triggers: no UPDATE, no DELETE (the 0031 append-only pair). Balances are sums (§4.4). `UNIQUE (…, kind, ref)` makes every writer idempotent by construction: a replayed webhook, a replayed refund fact, a double-clicked payout request each insert nothing the second time (the writers use `INSERT … SELECT … WHERE NOT EXISTS`, so a batch never aborts on the replay).
+Triggers: no UPDATE, no DELETE (the 0031 append-only pair) AND the 0033 displacement guard (a BEFORE INSERT that aborts when the primary key already exists, so `INSERT OR REPLACE` cannot rewrite a row behind the DELETE trigger's back, R2-22). Balances are sums (§4.4). `UNIQUE (…, kind, ref)` makes every writer idempotent by construction: a replayed webhook, a replayed refund fact, a double-clicked payout request each insert nothing the second time (the writers use `INSERT … SELECT … WHERE NOT EXISTS`, so a batch never aborts on the replay).
 
 ### 3.6 `affiliate_payouts`
 
@@ -182,9 +188,10 @@ Triggers: no UPDATE, no DELETE (the 0031 append-only pair). Balances are sums (�
 payout_id         TEXT PRIMARY KEY
 tenant_id, affiliate_id
 amount_minor      INTEGER NOT NULL CHECK > 0
+currency          TEXT NOT NULL CHECK (length 3)   (one request = one currency; R2-11)
 status            TEXT NOT NULL CHECK IN ('requested','paid','void')
 rail              TEXT NOT NULL CHECK IN ('manual','connect')     (launch: manual only)
-invoice_object_id TEXT                       (private `document` object, nullable: a private person cannot invoice)
+invoice_object_id TEXT                       (private `document` object, nullable: a private person cannot invoice; the object must be listed in `affiliate_invoice_objects` for THIS affiliate and is made immutable in the request batch, R2-12)
 invoice_number    TEXT CHECK length 1..50
 requested_by      TEXT NOT NULL              (the affiliate's user id, or the admin's)
 requested_at      TEXT NOT NULL
@@ -194,6 +201,10 @@ created_at, updated_at
 ```
 
 State machine by trigger: `requested → paid`, `requested → void`; `paid` and `void` are final. The ledger `payout` row is written in the SAME batch as the `requested` row; a void writes a `payout_void` row (+amount) in the batch that sets `void`. One open request per affiliate (partial UNIQUE `WHERE status = 'requested'`).
+
+### 3.6b `affiliate_invoice_objects`
+
+`(object_id PK, tenant_id, affiliate_id, created_at)`, written in the batch that reserves an affiliate's invoice upload (the affiliate object route, §7.1). The request route checks the object is active, kind `document`, same tenant AND listed here for the requesting affiliate; then `markObjectImmutable` in the request batch, so the shop admin's `DELETE /v1/admin/objects/:id` (mutable objects only) cannot remove financial evidence. [R2-12]
 
 ### 3.7 Columns on `checkouts` / `orders`
 
@@ -229,15 +240,19 @@ Worked example (§3.5): 500 kr cart, 10 % → 50 kr off, shipping 29 kr: `total 
 
 Hook points, each inserting `kind = 'reversal'` with the cumulative formula below, in the SAME batch as the money fact [CX-B3]:
 
-- `refunds.ts orderEffectStatements` (~L135), the statement builder every refund transition runs through (`transitionOperation` for known operations, and the INSERT path that births a dashboard refund from `charge.refunded` or the reconciliation cron). The ledger statement is appended right after the `refund_succeeded_minor` UPDATE and is guarded by the same `transition_id` EXISTS, so it fires exactly when THIS batch moved the money. `ref = <transition_id>`; the amount is the DIFFERENCE between the required cumulative reversal (from the updated `refund_succeeded_minor`) and the sum already reversed: negative on a refund, POSITIVE when a succeeded refund later fails (`succeeded → failed` subtracts the amount again; the ledger restores the same way). Never keyed on `orders.status` (a partial refund of a shipped order keeps its fulfilment status).
-- `stripe-events.ts applyDisputeFact` (~L556): its guarded order UPDATE becomes a two-statement batch, the UPDATE plus, when the status became `lost`, a reversal row with `ref = <dispute id>` and amount = −(accrual − already reversed), guarded on the UPDATE's own `dispute_recovery IS ?` read. An open dispute blocks payout (§4.4) and reverses nothing; `won`/`warning_closed`/`prevented` reverse nothing.
+- `refunds.ts orderEffectStatements` (~L135), the statement builder every refund transition runs through (`transitionOperation` for known operations, and the INSERT path that births a dashboard refund from `charge.refunded` or the reconciliation cron). The ledger statement is appended right after the `refund_succeeded_minor` UPDATE and is guarded by the same `transition_id` EXISTS (binds `?1` op id, `?2` transition id are already there; the row adds its own id and time), so it fires exactly when THIS batch moved the money. `ref = <transition_id>`; the amount is the DIFFERENCE between the required cumulative reversal (from the UPDATED `refund_succeeded_minor` and the stored `dispute_status`) and the sum already reversed: negative on a refund, POSITIVE when a succeeded refund later fails (`succeeded → failed` subtracts the amount again; the ledger restores the same way, and the `reversal` kind admits both signs). Never keyed on `orders.status` (a partial refund of a shipped order keeps its fulfilment status).
+- `stripe-events.ts applyDisputeFact` (~L556): its guarded order UPDATE becomes a two-statement batch, the UPDATE plus a reversal row with `ref = <dispute id>` guarded on the STORED post-state (`orders.dispute_status = 'lost'` for this order) and `NOT EXISTS` the same ref (R2-5: a guard on the recovery value the UPDATE just changed would be false exactly when it applied). An open dispute blocks payout (§4.4) and reverses nothing; `won`/`warning_closed`/`prevented` reverse nothing.
 
-Cumulative, so partial refunds in any order sum exactly and a full refund reverses exactly the accrual:
+Cumulative, so partial refunds in any order sum exactly, a full refund reverses exactly the accrual, and a lost dispute dominates whatever the refunds do before or after it (R2-3):
 
 ```
-required = roundHalfUp(accrual × min(refund_succeeded_minor_after, charged_minor) / charged_minor)   // lost dispute: accrual
-row      = −(required − already_reversed)                                                           // written when ≠ 0; total reversal never exceeds the accrual
+fraction_bp = CASE WHEN dispute_status = 'lost' THEN 10000
+              ELSE min(refund_succeeded_minor_after, charged_minor) × 10000 / charged_minor END   // integer, floored to a basis point
+required    = (accrual × fraction_bp + 5000) / 10000                                               // integer, half-up
+row         = −(required − already_reversed)                                                         // written when ≠ 0 (either sign); total reversal never exceeds the accrual
 ```
+
+Integer-only in SQL (R2-23): `R × 10000` and `A × 10000` stay far inside int64 for every total the checkout admits, where `A × R` would not. Flooring the fraction to a basis point under-reverses by at most `accrual / 10000` (a fraction of an öre on a normal commission, in the affiliate's favour), and a full refund or a lost dispute is exact.
 
 "Pro-rata" is against the CHARGED total [CX-C5]: the port's refund carries an amount, not a goods/shipping allocation, so a shipping-only refund also reverses its share. Deterministic, never over-reverses, never inferred from the free-text reason; a structured allocation (then: shipping-only ⇒ reverse nothing) is a later change to the refund input, not this scope. Stated in the admin's ledger copy: "Provisionen justeras i proportion till återbetalningen."
 
@@ -249,21 +264,25 @@ Decided at QUOTE time (the checkout parser owns the normalised buyer email) and 
 
 ### 4.4 Balances (the portal, the admin, the payout gate)
 
+All per `(affiliate_id, currency)` (R2-11):
+
 ```
 balance        = Σ amount_minor                                            (all kinds)
-held           = Σ accrual.amount_minor WHERE available_at > now
-                 + Σ accrual.amount_minor WHERE the order has an open dispute (payouts.ts isDisputeOpen),
-                   a refund operation in 'reserved'/'submitted', or cancelled_at set with refund_succeeded_minor < charged_minor
+held           = Σ over ORDERS of max(0, accrual + Σ reversals of that order)          (the order's NET, counted once, R2-10)
+                 WHERE available_at > now
+                    OR the order's dispute is open (SQL: dispute_status NOT NULL AND NOT IN ('lost','won','warning_closed','prevented'), the payouts.ts set)
+                    OR a refund operation of the order is in 'reserved'/'submitted'
+                    OR (cancelled_at IS NOT NULL AND refund_succeeded_minor < charged_minor AND cancelled_at > now − 44 days)
 payable        = max(0, balance − held)
 earned_total   = Σ accrual + Σ reversal
-paid_total     = −Σ payout (status paid) 
+paid_total     = −Σ payout (status paid)
 ```
 
-One SQL aggregate per read; nothing stored, nothing to reconcile (§2.2's "nothing reconciles the balance" cannot recur).
+A cancelled order that is never refunded is held for the withdrawal window plus 30 days and then released: the shop kept the money, the affiliate earns (§4.2). One SQL aggregate per read; nothing stored, nothing to reconcile (§2.2's "nothing reconciles the balance" cannot recur).
 
 ### 4.5 Add-on OFF (A12)
 
-No `?ref=` count, no discount (step 1–2 of §2.2 skipped, campaign codes still work — §4.2's unusable Rabattkod cannot recur), no accrual, no approvals, form page gone, admin menu item gone and `/v1/admin/affiliates/*` answers 404. Reversals and payouts keep working (they read nothing gated). The affiliate can still log in and see the ledger and request a payout (the portal is gated on the membership, not the add-on; copy: "Programmet är pausat av butiken").
+No `?ref=` count, no NEW affiliate quote (steps 1–2 of §2.2 skipped, campaign codes still work — §4.2's unusable Rabattkod cannot recur), no approvals or invites, the form page gone, the admin menu item and the list page gone. A quote accepted before the switch still accrues when it pays (§4.1: the webhook never re-checks the add-on; R2-18). Reversals keep working. **What stays reachable when OFF (R2-17):** `GET/PATCH /v1/admin/affiliates/:id`, `…/:id/ledger`, `…/:id/payouts` + `paid`/`void`/record, `…/:id/orders`; in the admin build the detail page and the payout page are NOT wrapped in the add-on gate (reachable by direct link and from the order detail's affiliate pill) and show a banner "Affiliateprogrammet är avstängt av plattformen. Utbetalningar och reskontra kan fortfarande hanteras." The affiliate can still log in, see the ledger and request a payout (the portal is gated on the membership, not the add-on; copy: "Programmet är pausat av butiken").
 
 ---
 
@@ -280,8 +299,8 @@ Route `POST /v1/affiliate/apply` (storefront, web allowlist). Rate limit 5 / hou
 Approve, one logical operation in this order (the batch shape of tenant-members.ts):
 1. `parseEmail`; the address is looked up in `"user"` + `identity_access`: an existing identity of another kind, or a suspended/revoked one → `not_addable` (A2). An existing ACTIVE `affiliate` identity (an affiliate of another shop, or re-approved here) → reuse the user row; it just gains this shop's membership.
 2. `createInvitedUser` (password-less, `account_type = 'affiliate'`) when the user is new.
-3. One batch: `tenant_memberships (role affiliate)` INSERT (or re-activate), `affiliates` INSERT with the code (vanity from the body or `NAME3 + 6 random base32`, upper-case; the trigger pair refuses a collision → `conflict`, the admin retries with another code), the application `pending → approved` guarded on `status = 'pending'`, the audit row `affiliate.approve`.
-4. `issueInvite` (surface `affiliate`) → the welcome mail with the link (§9.3). `mailConfigured: false` in the answer on staging, as the members route says it.
+3. One batch: `tenant_memberships (role affiliate)` INSERT (or re-activate), `affiliates` INSERT with the code (vanity from the body or `NAME3 + 6 random base32`, upper-case; the trigger pair refuses a collision → `conflict`, the admin retries with another code) — or, when this user already has an `affiliates` row in this shop (`UNIQUE (tenant_id, user_id)`), that row is RE-ACTIVATED with the new code/rates (R2-26) —, the application `pending → approved` guarded on `status = 'pending'`, the audit row `affiliate.approve`.
+4. If the person has not set a password: `issueInvite` (surface `admin`, the identity's type selects the `affiliate_invite` wording) → the welcome mail with the link (§9.3). If they have (an existing affiliate of another shop): the `affiliate_welcome` mail without a link ("du har lagts till hos {{shop_name}}"). `mailConfigured: false` in the answer on staging, as the members route says it. The approval is idempotent on retry (every statement guarded); a lost invite is re-sent from the detail page (CX-C12).
 
 Deny: `pending → denied` with `decided_by/at/reason` + the denial mail (outbox) in one batch. Nothing is deleted.
 
@@ -299,7 +318,7 @@ The manual rail is itself reserve-first [CX-B4]: the request RESERVES (the ledge
 
 ### 6.1 The affiliate's request (portal)
 
-`POST /v1/affiliate/payouts { amountMinor?, invoiceObjectId?, invoiceNumber? }` — amount defaults to `payable`; refused when `amountMinor > payable`, when an open request exists, or when the profile lacks name + address (the invoice's counterparty). The invoice PDF: the affiliate reserves a private `document` object (`/v1/affiliate/objects`, the admin object route's reserve→upload→activate shape re-used with the affiliate principal, PDF only, 10 MB). One batch: the `affiliate_payouts (requested)` row + the `ledger(payout, −amount)` row, both guarded on `payable >= amount` computed inside the batch (the SQL aggregate of §4.4 in the WHERE). The admin is notified (§9.6).
+`POST /v1/affiliate/payouts { amountMinor?, invoiceObjectId?, invoiceNumber? }` — amount defaults to `payable`; refused when `amountMinor > payable`, when an open request exists, or when the profile lacks name + address (the invoice's counterparty). The invoice PDF: the affiliate reserves a private `document` object (`/v1/affiliate/objects`, the admin object route's reserve→upload→activate shape re-used with the affiliate principal, PDF only, 10 MB). One batch: the `affiliate_payouts (requested)` row guarded on `payable >= amount` for that currency computed inside the batch (the SQL aggregate of §4.4 in the WHERE), and the `ledger(payout, −amount)` row guarded on `EXISTS (that payout row)` (R2-Q5: one decision, one guard); the partial unique index (one open request per affiliate) makes a racing second request fail with `conflict`, as does an admin "record payout" while a request is open. The admin is notified (§9.6).
 
 ### 6.2 The shop's side (admin)
 
@@ -317,19 +336,18 @@ Why not at launch [CX-B4, CX-C1]: the order's money sits on the SHOP's connected
 
 | Principal | Route | Notes |
 |---|---|---|
-| storefront | `POST /v1/affiliate/ref` | §2.1, 204 always |
-| storefront | `POST /v1/affiliate/apply` | §5.1 |
-| storefront | `GET /v1/affiliate/terms` | the rendered terms for the shop + version (the form page) |
+| storefront | `GET /v1/seo?…&ref=CODE` | §2.1: the existing internal SEO call carries the code; the count runs under the API's `ctx.waitUntil`; no new route |
+| storefront | `POST /v1/affiliate-applications` | §5.1 (flat, like `/v1/withdrawals`; the `/v1/affiliate/*` prefix is the PORTAL's, which needs `X-Shop-Id` and resolves no tenant by hostname, R2-20) |
+| storefront | `GET /v1/affiliate-terms` | the rendered terms for the shop + version (the form page); the portal reads the same text through `GET /v1/affiliate/terms` |
 | storefront | `POST /v1/checkout` (+`refCode`), `POST /v1/discount-codes/preview` (+`refCode`) | §2.2 |
 | tenant admin | `GET/POST /v1/admin/affiliates`, `GET/PATCH /v1/admin/affiliates/:id`, `POST …/:id/invite` (resend) | |
 | tenant admin | `GET …/applications`, `GET …/applications/:id`, `POST …/approve`, `POST …/deny` | |
 | tenant admin | `GET …/:id/ledger`, `GET …/:id/orders` (the shop's own orders attributed to this affiliate: number, date, total, commission, state), `GET …/:id/payouts`, `POST …/:id/payouts`, `POST …/payouts/:payoutId/paid`, `POST …/payouts/:payoutId/void` | |
 | tenant admin | `GET /v1/admin/affiliates/analytics?since=` | totals + ranking from the ledger and click days |
 | affiliate | `GET /v1/affiliate/me` (`X-Shop-Id`): rates, code, link, balances, terms state; `GET /v1/affiliate/orders`: the ALLOWLISTED projection (order number, paid date, base ex VAT, commission, state `held/payable/reversed`, currency); `GET /v1/affiliate/ledger`; `GET/POST /v1/affiliate/payouts`; `PATCH /v1/affiliate/profile`; `POST /v1/affiliate/terms/accept`; `POST/PUT /v1/affiliate/objects` (invoice: PDF only, ≤ 10 MB, checked server-side beyond the generic private upload's rules), `GET …/payouts/:id/invoice` (the affiliate's own, checked payout→affiliate, not tenant only) | never a buyer field (§8.9); built field by field from named columns; the suites walk the answer against the buyer-field denylist; the admin Worker's API allowlist (`cloudflare/admin/src/routing.ts`) gains the `/v1/affiliate/*` rows |
-| internal | `POST /v1/internal/affiliate/ref` | web Worker only (service binding); on no browser allowlist |
 | platform | `PUT /v1/platform/tenants/:id/features` | unchanged; `affiliate` is now a legal key |
 
-Every admin route is behind `isFeatureEnabled(tenantId, 'affiliate')` except the payout and ledger reads/writes (A12). All routes in `src/routes/affiliate-*.ts`, mounted in `app.ts` at `CP13-ROUTES-x` anchors. The storefront route table (`cloudflare/web/src/api-allowlist.ts`) gains `POST /v1/affiliate/apply` and `GET /v1/affiliate/terms` only. `GET /v1/storefront` reports `features.affiliate` (its body revision is bumped, as its header requires).
+Every admin route is behind `isFeatureEnabled(tenantId, 'affiliate')` except the payout and ledger reads/writes (A12). All routes in `src/routes/affiliate-*.ts`, mounted in `app.ts` at `CP13-ROUTES-x` anchors. The storefront route table (`cloudflare/web/src/api-allowlist.ts`) gains `POST /v1/affiliate-applications` and `GET /v1/affiliate-terms` only; the admin Worker's allowlist (`cloudflare/admin/src/allowlist.ts`, prefix-based) gains the `/v1/affiliate` prefix. `GET /v1/storefront` reports `features.affiliate` (its body revision constant lives in `src/storefront/public-routes.ts` and is bumped, as its header requires). The storefront page `/affiliate` is a reserved slug: a merchant content page cannot take it (the reserved list in `src/config/tenancy.js` gains it and loses `affiliate-login`).
 
 ### 7.1b Page parity — every Firebase surface follows through (Mikael 2026-10-22: "all Firebase pages also need to follow through")
 
@@ -396,7 +414,7 @@ The menu item "Affiliate" below the add-on divider, gated on the key (AppLayout.
 | `/affiliate/material` | the shop's marketing materials, only while the shop's `marketingMaterials` add-on is ON |
 | sign-in | the admin host's login; the invite link lands on the reset page then `/affiliate` |
 
-Not built from §6.2: the success guide (fishing copy), materials tab (the `marketingMaterials` add-on is a separate thing), campaigns tab, "30 dagar" mislabels, live stats.
+Not built from §6.2: the campaigns tab, the "30 dagar" mislabels, the live-stats stub. The guide and the materials tab are rebuilt as §7.1b says (the fishing copy and the add-on-blind materials read are not kept).
 
 ### 7.4 Storefront (NORD)
 
@@ -408,7 +426,7 @@ Not built from §6.2: the success guide (fishing copy), materials tab (the `mark
 
 ## 8. Terms and MFL (D28)
 
-- `src/config/affiliateTerms.js`: `AFFILIATE_TERMS_VERSION = '2026-10-22'` + the Swedish template: parties (affiliate ↔ the shop; the platform is the technical provider), the code and the link, the buyer discount, the commission base and rate, the 14-day hold and the reversal rule, the payout (invoice/underlag, the shop pays, private persons: "ersättningen kan vara skattepliktig inkomst; du ansvarar för din deklaration"), **marketing law: "Du måste tydligt märka inlägg, videor och länkar som reklam/annons (t.ex. 'Reklam' eller 'Annons') enligt marknadsföringslagen; vilseledande påståenden om produkterna är inte tillåtna"**, no self-purchase, no bidding on the shop's name, termination, data processing (what the shop sees, what the platform stores), changes (a new version must be accepted in the portal).
+- The canonical text is an API module, `cloudflare/src/affiliate/terms.ts` (`AFFILIATE_TERMS_VERSION = '2026-10-22'`, the template, its SHA-256 seeded by 0059; the storefront form and the portal read it through the routes, so no frontend copy can drift, R2-21). The Swedish template: parties (affiliate ↔ the shop; the platform is the technical provider), the code and the link, the buyer discount, the commission base and rate, the 14-day hold and the reversal rule, the payout (invoice/underlag, the shop pays, private persons: "ersättningen kan vara skattepliktig inkomst; du ansvarar för din deklaration"), **marketing law: "Du måste tydligt märka inlägg, videor och länkar som reklam/annons (t.ex. 'Reklam' eller 'Annons') enligt marknadsföringslagen; vilseledande påståenden om produkterna är inte tillåtna"**, no self-purchase, no bidding on the shop's name, termination, data processing (what the shop sees, what the platform stores), changes (a new version must be accepted in the portal).
 - Acceptance evidence: the application row (checkbox + version + time); `affiliates.terms_version/accepted_at` copied at approval; in the portal, `GET /v1/affiliate/me` answers `termsOutdated: true` when the current version is newer and the shell routes every page to `/affiliate/terms` until `POST /v1/affiliate/terms/accept` lands (an audit row per acceptance). A new version = a new row in `affiliate_terms_versions` by migration, as platform terms.
 - The shop's privacy policy template gains a sentence on affiliate links (the code in the cart, click counts without personal data) — a template text change under the de-brand direction, flagged for Mikael's legal read, not a code dependency.
 
@@ -421,15 +439,16 @@ All through the existing queue + `email_deliveries` ledger; kinds added to the 0
 | Kind | To | When | Body (Swedish, sv/en by preferred_lang where the recipient is known) |
 |---|---|---|---|
 | `affiliate_application_received` | applicant | the apply batch | "Tack för din ansökan till {{shop_name}}s affiliateprogram" + what happens next (1–3 arbetsdagar) |
-| `affiliate_application_notice` | the shop (support address, else active admins) | the apply batch | "Ny affiliate-ansökan: {{name}}" + the data + link to `/admin/affiliates/applications/:id` |
-| `password_reset` variant `affiliate_invite` | affiliate | approval / invite / resend | "Välkommen som affiliate hos {{shop_name}}" + set-password link (72 h) + code + `?ref=` link + rates + "Logga in på admin.flippinstuff.se" |
+| `affiliate_application_notice` | the shop's ONE notice address (`shopNoticeAddress`, D99) | the apply batch | "Ny affiliate-ansökan: {{name}}" + the data + link to `/admin/affiliates/applications/:id` |
+| `password_reset` variant `affiliate_invite` | affiliate (no password yet) | approval / invite / resend | "Välkommen som affiliate hos {{shop_name}}" + set-password link (72 h) + code + `?ref=` link + rates + the portal address built from the canonical admin origin (never a literal hostname, D65/CP14, R2-30) |
+| `affiliate_welcome` | affiliate (has a password: an affiliate of another shop) | approval / invite | "Du har lagts till som affiliate hos {{shop_name}}" + code + link + rates + the portal address |
 | `affiliate_application_denied` | applicant | deny batch | "Din ansökan till {{shop_name}}" + the reason |
 | `affiliate_conversion` | affiliate | the order batch (outbox email row beside the accrual) | "Ny provision: 54,00 kr" + order number + "betalas ut efter ångerfristen (14 dagar)" |
 | `affiliate_reversal` | affiliate | the reversal batch | "Provision justerad: −X kr" + why (återbetalning/tvist) |
 | `affiliate_payout` | affiliate | `paid` / `void` | "Utbetalning registrerad: X kr" / "Begäran avvisad: orsak" |
 | `affiliate_payout_requested` | the shop | the request batch | "{{name}} begär utbetalning: X kr" + link |
 
-Sender rule [CX-B8]: F05's shop-sender mechanism covers buyer mails today; this unit extends `shopSenderName` to the affiliate business kinds above (the tenant id on the job selects it). The invite keeps the configured auth sender, with the shop named in its body. Every job is built once, in its mutation batch, with the display data frozen then (the email-effect's rule), delivery id derived from the outbox dedupe key.
+Sender rule [CX-B8, R2-14/15]: `shopSenderName` (email-queue-consumer.ts) is synchronous and reads the shop name FROZEN in the job's content, never a tenant id; so every affiliate job freezes `shopName` and `supportEmail` in its content when it is first built (the email-effect's first-build rule), `shopSenderName` gains the affiliate kinds, and Reply-To = the frozen support address. The invite keeps the configured auth sender, with the shop named in its body. The new kinds need their own branches in `outbox/email-effect.ts` (the outbox `email` effect parses `{orderId, kind}` for the order kinds only), the effect registry `outbox/effects.ts`, `outbox/nudge.ts`, `parseAuthEmailJob`/`renderAuthEmail`/the redaction in `auth-email-job.ts`, and `fingerprintAuthEmailJob` in `email/email-delivery-store.ts` (the `affiliate_invite` variant's shop context joins the fingerprint). Delivery id derived from the outbox dedupe key.
 
 Staging: no Resend → every row sits `pending`; the smoke proves the ledger rows and their `kind`/recipient hash, as CP10 does; the invite answer carries `mailConfigured: false`.
 
@@ -455,7 +474,7 @@ Staging: no Resend → every row sits `pending`; the smoke proves the ledger row
 
 ## 11. Tests the units must write (spec §9.3 "test first" + the port's own)
 
-Lower-case `?ref=`; the feature-key pin in `test/tenant-features.test.ts` (its hard-coded `affiliate` refusal at ~L126 flips to acceptance) and the public-storefront feature expectations; an affiliate-only shop (Rabattkoder OFF) gets the discount; no hold row for an affiliate code and the burn touches no campaign row; the same code in two tenants (never crosses); link wins over typed; typed affiliate code earns with `attribution = 'code'`; a Rabattkod of the same string never resolves while the affiliate is active and DOES resolve when the affiliate is inactive or the add-on is OFF; the preview and the checkout answer identically; replay parity conflicts on a changed rate; the accrual lands in the order batch and a replayed delivery inserts nothing; the worked example in öre; a zero-rated tenant; self-referral (buyer = affiliate, buyer = shop admin); partial refund ×2 then full → reversals sum to the accrual; dashboard refund reverses; lost dispute reverses; cancel without refund reverses nothing; negative balance blocks a request; `payable` excludes held and disputed accruals; payout request race (two requests, one wins); void writes the compensating row; approval of an address held by a tenant admin / platform admin / print operator → `not_addable`; approval of an existing affiliate of another shop adds a membership and no second user; the invite token single-use; `/v1/me` for an affiliate lists only `affiliate` memberships; every affiliate projection walked against the buyer-field denylist; the admin routes 404 with the add-on OFF except ledger/payouts; feature allowlist pin; `identity_access` rebuild keeps every row and index; the ledger's no-UPDATE/no-DELETE triggers.
+Lower-case `?ref=`; `succeeded → failed` on an affiliate order restores the ledger and the refund batch commits; partial refund → dispute lost → late refund failure keeps the full reversal; a refund submitted before a lost dispute succeeds after it and reverses nothing more; `pending_outcome → lost` writes exactly one reversal; 0059 on a database holding a campaign-discounted checkout AND order (backfill proven); a 0 % affiliate earns; a discount discarded by viability keeps the attribution; an unaccepted affiliate address can be invited as a tenant admin and an accepted one cannot; the feature-key pin in `test/tenant-features.test.ts` (its hard-coded `affiliate` refusal at ~L126 flips to acceptance) and the public-storefront feature expectations; an affiliate-only shop (Rabattkoder OFF) gets the discount; no hold row for an affiliate code and the burn touches no campaign row; the same code in two tenants (never crosses); link wins over typed; typed affiliate code earns with `attribution = 'code'`; a Rabattkod of the same string never resolves while the affiliate is active and DOES resolve when the affiliate is inactive or the add-on is OFF; the preview and the checkout answer identically; replay parity conflicts on a changed rate; the accrual lands in the order batch and a replayed delivery inserts nothing; the worked example in öre; a zero-rated tenant; self-referral (buyer = affiliate, buyer = shop admin); partial refund ×2 then full → reversals sum to the accrual; dashboard refund reverses; lost dispute reverses; cancel without refund reverses nothing; negative balance blocks a request; `payable` excludes held and disputed accruals; payout request race (two requests, one wins); void writes the compensating row; approval of an address held by a tenant admin / platform admin / print operator → `not_addable`; approval of an existing affiliate of another shop adds a membership and no second user; the invite token single-use; `/v1/me` for an affiliate lists only `affiliate` memberships; every affiliate projection walked against the buyer-field denylist; the admin routes 404 with the add-on OFF except ledger/payouts; feature allowlist pin; `identity_access` rebuild keeps every row and index; the ledger's no-UPDATE/no-DELETE triggers.
 
 ---
 
@@ -463,10 +482,10 @@ Lower-case `?ref=`; the feature-key pin in `test/tenant-features.test.ts` (its h
 
 | Unit | Content | Size |
 |---|---|---|
-| A1 | Migration 0058 (+0059); identity: `affiliate` type end to end (§1); the seam (§2.2) + frozen columns (§2.3); the ledger: accrual in the webhook batch, reversal hooks, balances; applications/approve/deny/invite; payouts manual rail; all `/v1/admin/affiliates/*` and `/v1/affiliate/*` routes; mails' jobs + kinds; feature key; tests | ≈2 |
-| A2 | Shop-admin pages (§7.2) + order detail/dashboard additions; the admin build's swap table; design gate on every page rendered | ≈1 |
-| A3 | Storefront: `/affiliate` form page, the `?ref=` hook, cart/checkout wiring (`refCode`, labels); the affiliate shell + pages (§7.3); design gate (NORD / Admin-Neutral) | ≈1 |
-| A4 | Templates (§9) + `affiliateTerms.js` + privacy sentence; platform add-on toggle shows the key; a bounded sweep of `pending` object reservations older than 7 days (none exists today, CX-B7) that never touches an object a payout references; `seed-staging-slice.mjs --affiliate` (a test shop with the add-on ON, one affiliate invited, one application pending); the smoke script | ≈½ |
+| A1 | Migration 0058 (+0059); identity: `affiliate` type end to end (§1, incl. the unaccepted-affiliate conversion); the seam (§2.2) + frozen columns (§2.3) + the three labelling readers; the ledger: accrual in the webhook batch, reversal hooks, balances per currency; applications/approve/deny/invite + the denied-application retention cron; payouts manual rail + the affiliate invoice upload (object routes with an affiliate principal); all `/v1/admin/affiliates/*`, `/v1/affiliate/*`, `/v1/affiliate-applications`, `/v1/affiliate-terms` routes; the `ref` on `/v1/seo`; mails' kinds, jobs, outbox branches, fingerprints; the canonical terms module; feature key; tests | ≈2 |
+| A2 | Shop-admin pages (§7.2, incl. the new `AdminAffiliateApplication` and the OFF banner) + order detail/dashboard additions; the platform console's user list gains the Affiliates filter; the admin build's swap table; design gate on every page rendered | ≈1 |
+| A3 | Storefront: `/affiliate` form page, the `?ref=` hook, cart/checkout wiring (`refCode` + `source` survive `loadStoredCart`; `discountsOn` admits affiliate-only shops; labels); the affiliate PATH tree `/affiliate/*` in the admin build + `LoginPage`/`AdminRoute` sending affiliates there; the shell + pages (§7.3); design gate (NORD / Admin-Neutral) | ≈1 |
+| A4 | Final mail copy (§9) + the terms text in the API module + privacy sentence; the platform console: `affiliate` in the feature key lists AND in `OFF_AT_PROVISION` (the provision modal presets it `true` today, R2-16); a bounded sweep of `pending` object reservations older than 7 days (none exists today, CX-B7) that never touches an object `affiliate_invoice_objects` or a payout references; `seed-staging-slice.mjs --affiliate` (a test shop with the add-on ON, one affiliate with a PASSWORD SET through the staging reset-token recipe (memory `platform_users_and_superadmin`) so the portal can be opened and the smoke can request a payout, one application pending); the smoke script | ≈½ |
 | A5 (later) | Connect rail (§6.3) after the sandbox proof | ≈1–1½, on go |
 
 Order A1 → A4 (seed) → A2 ‖ A3. Parity check (kickoff §5.4) against spec §3 step by step on staging with the seeded shop, the fake printer and the Stripe sandbox.
@@ -480,3 +499,7 @@ Order A1 → A4 (seed) → A2 ‖ A3. Parity check (kickoff §5.4) against spec 
 3. A7 — a cancel with no refund keeps the commission (the ledger follows money): confirm.
 4. The terms text (§8) and the privacy sentence want your legal read before A4 ships them; the design does not wait for it.
 5. Kickoff §2.3's "15 % affiliate discount / 10 % commission" is the other way round (spec §2.2); the design uses 15 % commission / 10 % discount. Say if you meant to change them.
+6. D30 "per-shop logins" is built as ONE affiliate credential with a membership per shop (§1.2). Say if you meant separate logins per shop (that needs separate addresses).
+7. An affiliate who never set a password can be converted into a tenant admin by a seller's or the platform's invite (§1.3, against address squatting). Say if you prefer "never convert".
+8. Denied applications are purged after 12 months (§3.2): a D68 retention decision taken here by default.
+9. The affiliate portal is its own slim shell on the admin host (not the shop-admin sidebar `<AppLayout>`), by intent (§7.1c).
