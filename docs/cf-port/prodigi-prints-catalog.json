@@ -36,7 +36,8 @@
           "w": 3307,
           "h": 4192
         }
-      }
+      },
+      "frameRule": "smallest-fallback"
     },
     "BFP-12X16": {
       "brand": null,
@@ -66,7 +67,8 @@
           "w": 3543,
           "h": 4724
         }
-      }
+      },
+      "frameRule": "smallest-fallback"
     },
     "BFP-16X20": {
       "brand": null,
@@ -96,7 +98,8 @@
           "w": 4724,
           "h": 5905
         }
-      }
+      },
+      "frameRule": "smallest-fallback"
     },
     "BFP-18X24": {
       "brand": null,
@@ -126,7 +129,8 @@
           "w": 5314,
           "h": 7086
         }
-      }
+      },
+      "frameRule": "smallest-fallback"
     }
   },
   "skus": {
@@ -201,9 +205,13 @@
   },
   "unquoted": [],
   "warnings": [
+    "BFP-11X14: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)",
     "BFP-11X14: no black frame in the SE variants; \"white\" is the fixed frame colour",
+    "BFP-12X16: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)",
     "BFP-12X16: no black frame in the SE variants; \"white\" is the fixed frame colour",
+    "BFP-16X20: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)",
     "BFP-16X20: no black frame in the SE variants; \"white\" is the fixed frame colour",
+    "BFP-18X24: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)",
     "BFP-18X24: no black frame in the SE variants; \"white\" is the fixed frame colour"
   ],
   "pricingBasis": {

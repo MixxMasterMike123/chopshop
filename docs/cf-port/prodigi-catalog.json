@@ -41,7 +41,8 @@
           "3307x4606": 84
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "5000": {
       "brand": "Gildan",
@@ -84,7 +85,8 @@
           "4680x5790": 3
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "18500": {
       "brand": "Gildan",
@@ -119,7 +121,8 @@
           "3307x4606": 134
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "18600": {
       "brand": "Gildan",
@@ -154,7 +157,8 @@
           "5787x4606": 41
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "64000": {
       "brand": "Gildan",
@@ -193,7 +197,8 @@
           "4677x5881": 87
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "64200": {
       "brand": "Gildan",
@@ -230,7 +235,8 @@
           "4680x5790": 30
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "64V00": {
       "brand": "Gildan",
@@ -267,7 +273,8 @@
           "4680x5790": 21
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "smallest-fallback"
     },
     "STTU169": {
       "brand": "Stanley / Stella",
@@ -304,7 +311,8 @@
           "4677x5881": 178
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "JH001": {
       "brand": "AWDis",
@@ -343,7 +351,8 @@
           "3188x3188": 72
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "JH030": {
       "brand": "AWDis",
@@ -378,7 +387,8 @@
           "4606x5787": 108
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "BC3001": {
       "brand": "Bella + Canvas",
@@ -417,7 +427,8 @@
           "4677x5881": 57
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "64000L": {
       "brand": "Gildan",
@@ -456,7 +467,8 @@
           "4677x5881": 39
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "eu"
     },
     "JH001F": {
       "brand": "AWDis",
@@ -491,7 +503,8 @@
           "3070x3070": 107
         }
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "smallest-fallback"
     },
     "STAU773": {
       "brand": "Stanley / Stella",
@@ -515,7 +528,8 @@
         "front": {},
         "back": {}
       },
-      "framesMissing": false
+      "framesMissing": false,
+      "frameRule": "smallest-fallback"
     }
   },
   "skus": {
@@ -21168,6 +21182,9 @@
   },
   "unquoted": [],
   "warnings": [
+    "model 64V00: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)",
+    "model JH001F: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)",
+    "model STAU773: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)",
     "363 SKUs were quoted from a non-EU lab (au3, uk2, uk9): customs/duty and a different shipping charge apply; they are in the catalogue with their lab named"
   ],
   "pricingBasis": {

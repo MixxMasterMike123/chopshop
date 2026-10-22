@@ -35,7 +35,7 @@ Sources: prodigi.com product pages (SKU table; the SS SKU pattern from the Cruis
 
 `front`/`back` are the same size for every model. mm = round(px / 300 x 25.4), `offsetTopMm: 0` (Prodigi places the file with `sizing: "fitPrintArea"`; there is no collar offset). Garment vocabulary: `tee`, `hoodie`, `sweatshirt`.
 
-| Model | Prodigi SKU | garment | frame used (px, smallest SE-shipping variant) | mm w x h | other px sizes among SE variants |
+| Model | Prodigi SKU | garment | frame used (px, EU variant; see Resolved note below) | mm w x h | other px sizes among SE variants |
 |---|---|---|---|---|---|
 | 64000 | GLOBAL-TEE-GIL-64000 | tee | 2480x3507 | 210x297 | 4677x5881 (87), 4665x5844 (5) |
 | 5000 | GLOBAL-TEE-GIL-5000 | tee | 2480x3507 | 210x297 | 4677x5881, 4665x5844, 4680x5790, 3600x4800 |
@@ -48,6 +48,8 @@ Sources: prodigi.com product pages (SKU table; the SS SKU pattern from the Cruis
 | JH030 | GLOBAL-SWEAT-AWD-JH030 | sweatshirt | 4606x5787 | 390x490 | none |
 
 **OPEN QUESTION for the reviewer (the biggest risk in this unit).** Prodigi lists several regional *variants* per colour x size. The EU-region variant (shipsTo = 30 countries) carries an A4-sized area (2480x3507, identical to its sleeve and neck-label areas, which looks like a placeholder), the global variants carry 4665-4677 x 5844-5881. The handover's "64000 = 4665x5844 = 395x495 mm" is the global figure. The API does not say which variant a Swedish order is printed on, nor does a quote. I chose the **smallest** area (rule `modelFrame()`): a canvas built to it can never exceed any variant's area, so `fitPrintArea` only places it; the cost of being wrong is a smaller printable frame for 64000, 5000 and BC3001 than the lab may really allow. The alternative (largest) risks the lab shrinking the design relative to what the studio showed. `printAreaVariants` per model in the document lists every size and its variant count, so the reviewer can override with `frames` at apply time or change the rule in one function. To settle it: open sandbox order `ord_1186010` (64000 + 18500) in `sandbox-beta-dashboard.pwinty.com` and read the print-ready asset size, or ask Prodigi support.
+
+**Resolved 2026-10-22.** Prodigi support, 2026-10-21: "For orders shipping to Sweden, please use the EU product variant and its corresponding print-area dimensions when preparing your artwork. We recommend referring to the EU variant's printAreaSizes values returned by the API." `modelFrame()` now picks the EU variant (non-US `shipsTo`, smallest set) and falls back to the smallest SE area only when a model has none, flagged `frameRule: "smallest-fallback"` (64V00, JH001F, STAU773, BFP posters). Regenerated `--offline`: no frame changed.
 
 ## Quote table (sandbox, SE, Standard, 1 copy, EUR ex VAT, 2026-10-19)
 

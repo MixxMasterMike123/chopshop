@@ -45,16 +45,17 @@ The 25.00 is a few colours; most are 10-12. Pricing the whole model at the highe
 
 213 SKUs may be made in the UK or Australia. Suggestion: leave them out of the offer at launch (no customs data, different shipping), or accept them knowing the flat shipping figure is wrong for them (lab uk9: EUR 21.78 first item; AU: EUR 21.46 + 7.46 per extra). The importer keeps them with `lab` named; filtering is not built.
 
-### 2.6 Open question: which print area is the real one (MUST be decided)
+### 2.6 Print area: RESOLVED 2026-10-21 (the EU variant)
 
-Prodigi lists several regional variants per colour and size. The EU variant of Gildan 64000, 5000 and BC3001 reports an A4 area (2480x3507 px = 210x297 mm), the global variants 4665-4677 x 5844-5881 px (about 395x495 mm). The API does not say which variant a Swedish order is printed on, and a quote does not either. The importer chose the smallest area per model.
+Prodigi support, 2026-10-21: "For orders shipping to Sweden, please use the EU product variant and its corresponding print-area dimensions when preparing your artwork. We recommend referring to the EU variant's printAreaSizes values returned by the API."
 
-| Option | What the studio shows | If it is wrong |
-|---|---|---|
-| A. Smallest (current) | 210x297 mm for 64000, 5000, BC3001 | The real area is larger: designs are placed small, the lab's space is unused. Annoying and visible to sellers, but nothing prints wrong. |
-| B. Largest | about 395x495 mm | The real area is A4: `fitPrintArea` shrinks the design, so the shirt differs from the studio preview. That is a mismatch the buyer sees, a refund or reprint claim, and Prodigi is not at fault (their error cover does not apply). |
+Decision: the importer uses the EU variant's `printAreaSizes` (the variant whose `shipsTo` has no `US` and is the smallest set, the 30-country European list); a model without one falls back to the smallest SE-shipping area and is flagged `frameRule: "smallest-fallback"` in the catalogue (64V00, JH001F, STAU773 and the four BFP posters, all unchanged by the rule).
 
-Suggestion: keep A until checked, and check before launch: open sandbox order `ord_1186010` (64000 + 18500) in the Prodigi sandbox dashboard and read the print-ready asset size, or ask Prodigi support. If the answer is B, change the frames and re-apply the catalogue. This is a suggestion; the choice is yours.
+Consequence: a Gildan 64000 printed via Prodigi EU has a 210x297 mm front (2480x3507 px), far smaller than the 300x400 / 390x490 mm SnapWear frames. Every artist's design is placed in an A4-class area. The studio uses the routed printer's area, so it shows this automatically. No catalogue frame changed with this answer (the earlier "smallest" rule gave the same numbers for every model).
+
+Two more facts from the same support mail:
+- Prodigi has no hex/RGB colour codes for its colours. The studio's colour swatches need our own mapping.
+- Prodigi's blank product photos may be used only if presented as Prodigi products, so we use our own mockup templates, not theirs.
 
 ## 3. Standing facts recorded
 

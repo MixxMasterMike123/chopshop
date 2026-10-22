@@ -10,6 +10,8 @@ Severity: P1 means address before production orders can exercise the affected pa
 
 ### F1 · P1 · A model-wide minimum canvas does not guarantee the intended physical print size
 
+**RESOLVED 2026-10-21.** Prodigi support, 2026-10-21: "For orders shipping to Sweden, please use the EU product variant and its corresponding print-area dimensions when preparing your artwork. We recommend referring to the EU variant's printAreaSizes values returned by the API." The importer now uses the EU variant's area (`frameRule: "eu"`; `smallest-fallback` is flagged per model). The text below is the original finding.
+
 Locations: [catalogue modelFrame](../../scripts/cf-port/prodigi-catalog.mjs#L116), [canvas geometry](../../cloudflare/src/dispatch/print-canvas.ts#L245), [order sizing](../../cloudflare/src/dispatch/prodigi-wire.ts#L144).
 
 The importer chooses the smallest print area across all Swedish variants of a model. The renderer places the motif at its selected millimetre width inside that full-frame canvas, and the adapter sends it with `fitPrintArea`. Prodigi's documented behaviour is to fit the supplied image into the selected product's print area; this does not promise to preserve the image's configured DPI or millimetre dimensions. See [image resizing](https://www.prodigi.com/print-api/docs/reference/#order-object-image-resizing).

@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   FLAT_MODELS, MODELS, assertKey, buildFlatCatalog, flatChoice, flatQuoteRequest, matchQuoteItem, areaPx, buildCatalog, buildPricing, colourOfSlug, colourSizes, eurToMinor,
-  modelFrame, normSize, pickProbes, pxToMm, quoteJobs, readQuote, skuKey, slug, splitSkuKey, variantsFor,
+  euVariants, modelFrame, normSize, pickProbes, pxToMm, quoteJobs, readQuote, skuKey, slug, splitSkuKey, variantsFor,
 } from "../prodigi-catalog.mjs";
 
 const SAMPLES = resolve(dirname(fileURLToPath(import.meta.url)), "../../../docs/cf-port/prodigi-api-samples");
@@ -59,7 +59,7 @@ test("variantsFor / colourSizes keep only what ships to SE", () => {
   assert.equal(new Set(pairs.map((p) => `${p.color}|${p.size}`)).size, pairs.length);
 });
 
-test("modelFrame: smallest SE area, offsetTopMm 0, integer mm", () => {
+test("modelFrame: EU variant area, offsetTopMm 0, integer mm", () => {
   const f = modelFrame(variantsFor(tee), "front");
   assert.equal(f.mm.offsetTopMm, 0);
   assert.ok(Number.isInteger(f.mm.w) && Number.isInteger(f.mm.h));
@@ -314,4 +314,27 @@ test("the committed docs/cf-port/prodigi-prints-catalog.json agrees with the fix
   const committed = JSON.parse(readFileSync(join(SAMPLES, "../prodigi-prints-catalog.json"), "utf8"));
   const doc = buildFlatCatalog({ products: flatProducts(), quotes: flatQuotesOf(false), quoteDate: committed.source.quoteDate, generatedAt: committed.generatedAt });
   assert.deepEqual(committed, JSON.parse(JSON.stringify(doc)));
+});
+
+test("EU variant rule: the regional (non-US, smallest shipsTo) variant wins over global and US-only", () => {
+  const eu = Array.from({ length: 30 }, (_, i) => (i === 0 ? "SE" : `E${i}`));
+  const glob = ["SE", "US", ...Array.from({ length: 200 }, (_, i) => `G${i}`)];
+  const area = (w, h) => ({ front: { horizontalResolution: w, verticalResolution: h } });
+  const vs = [
+    { shipsTo: glob, printAreaSizes: area(4677, 5881) },
+    { shipsTo: eu, printAreaSizes: area(2480, 3507) },
+    { shipsTo: ["US"], printAreaSizes: area(2490, 3510) },
+  ];
+  const f = modelFrame(variantsFor({ variants: vs }), "front");
+  assert.equal(f.rule, "eu");
+  assert.deepEqual(f.px, { w: 2480, h: 3507 });
+  assert.deepEqual(f.mm, { w: 210, h: 297, offsetTopMm: 0 });
+  // EU larger than global would still win (not "smallest")
+  const big = [{ shipsTo: glob, printAreaSizes: area(1000, 1000) }, { shipsTo: eu, printAreaSizes: area(2480, 3507) }];
+  assert.deepEqual(modelFrame(big, "front").px, { w: 2480, h: 3507 });
+  // no regional variant: smallest-fallback
+  const g = modelFrame([vs[0], { shipsTo: glob, printAreaSizes: area(3000, 4000) }], "front");
+  assert.equal(g.rule, "smallest-fallback");
+  assert.deepEqual(g.px, { w: 3000, h: 4000 });
+  assert.equal(euVariants([vs[0]]).rule, "smallest-fallback");
 });

@@ -114,20 +114,31 @@ export function areaPx(variant, slot) {
 }
 
 /**
- * The frame (mm) of a slot for a model. Several variants of one colour x size
- * may differ (Prodigi lists regional variants); the model's frame is the
- * SMALLEST area over the variants that ship to the destination, so a canvas
- * built to it never exceeds any variant's print area (fitPrintArea then only
- * ever places it, never shrinks it). Ties on area take the smaller width.
+ * The EU variants of a model (Prodigi support, 2026-10-21: "for orders shipping to Sweden, use the EU product variant and
+ * its printAreaSizes"). Among the variants given (those that ship to SE) the EU variant is the one whose `shipsTo` does
+ * NOT include US and is the smallest set (the regional list; the global variants carry 200+ countries). Returns
+ * { variants, rule: "eu" } or, when the model has no such variant, { variants: all, rule: "smallest-fallback" }.
+ */
+export function euVariants(variants) {
+  const regional = variants.filter((v) => Array.isArray(v.shipsTo) && !v.shipsTo.includes("US"));
+  if (regional.length === 0) return { variants, rule: "smallest-fallback" };
+  const min = Math.min(...regional.map((v) => v.shipsTo.length));
+  return { variants: regional.filter((v) => v.shipsTo.length === min), rule: "eu" };
+}
+
+/**
+ * The frame (mm) of a slot for a model: the print area of the EU variant (see euVariants). Without an EU variant it falls
+ * back to the SMALLEST area over the SE-shipping variants and says so in `rule`. Ties on area take the smaller width.
  */
 export function modelFrame(variants, slot) {
+  const { variants: pool, rule } = euVariants(variants);
   let best = null;
-  for (const v of variants) {
+  for (const v of pool) {
     const a = areaPx(v, slot);
     if (a === null) continue;
     if (best === null || a.w * a.h < best.w * best.h || (a.w * a.h === best.w * best.h && a.w < best.w)) best = a;
   }
-  return best === null ? null : { px: best, mm: { h: pxToMm(best.h), offsetTopMm: 0, w: pxToMm(best.w) } };
+  return best === null ? null : { px: best, mm: { h: pxToMm(best.h), offsetTopMm: 0, w: pxToMm(best.w) }, rule };
 }
 
 /** Distinct print-area sizes (per slot) over the shipping variants, for the report. */
@@ -240,7 +251,9 @@ export function buildCatalog({ products, quotes, quoteDate, shipping, generatedA
       printAreaPx: { front: front?.px ?? null, back: back?.px ?? null },
       printAreaVariants: { front: areaVariants(vs, "front"), back: areaVariants(vs, "back") },
       framesMissing: front === null,
+      frameRule: front?.rule ?? euVariants(vs).rule,
     };
+    if (front?.rule === "smallest-fallback") warnings.push(`model ${def.model}: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)`);
     if (front === null) warnings.push(`model ${def.model}: no front print area for ${DESTINATION}`);
     for (const { color, size, sizeless, edge } of colourSizes(product)) {
       const key = skuKey(def.sku, color, size);
@@ -398,7 +411,9 @@ export function buildFlatCatalog({ products, quotes, quoteDate, generatedAt }) {
       requiredSlots: ["front"],
       front: frame.mm,
       printAreaPx: { front: frame.px },
+      frameRule: frame.rule,
     };
+    if (frame.rule === "smallest-fallback") warnings.push(`${def.model}: no EU variant (non-US regional shipsTo); frame = smallest SE-shipping area (frameRule smallest-fallback)`);
     const key = `${def.sku}.${slug(color)}-frame.${def.size}`;
     if (key.length > SKU_KEY_MAX) throw new Error(`sku key too long: ${key}`);
     const q = quotes[def.model];
