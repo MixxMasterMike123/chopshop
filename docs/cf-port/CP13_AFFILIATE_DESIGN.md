@@ -331,6 +331,43 @@ Why not at launch [CX-B4, CX-C1]: the order's money sits on the SHOP's connected
 
 Every admin route is behind `isFeatureEnabled(tenantId, 'affiliate')` except the payout and ledger reads/writes (A12). All routes in `src/routes/affiliate-*.ts`, mounted in `app.ts` at `CP13-ROUTES-x` anchors. The storefront route table (`cloudflare/web/src/api-allowlist.ts`) gains `POST /v1/affiliate/apply` and `GET /v1/affiliate/terms` only. `GET /v1/storefront` reports `features.affiliate` (its body revision is bumped, as its header requires).
 
+### 7.1b Page parity — every Firebase surface follows through (Mikael 2026-10-22: "all Firebase pages also need to follow through")
+
+| Firebase surface (spec §6) | Port surface | Status |
+|---|---|---|
+| `/admin/affiliates` (`AdminAffiliates.jsx`) | `/admin/affiliates` — KPIs, applications queue, affiliates table, test link, "Bjud in affiliate" | ported (A2) |
+| `/admin/affiliates/application/:id` (`AdminAffiliateEdit.jsx` application mode) | `/admin/affiliates/applications/:id` — approve (code, rates) / deny (reason) | ported (A2) |
+| `/admin/affiliates/manage/:id` (`AdminAffiliateEdit.jsx` affiliate mode) | `/admin/affiliates/:id` — stats, orders, ledger, payouts, edit, status, invite resend, adjustment | ported (A2); "send credentials" → "Skicka inbjudan igen"; "view portal as affiliate" → the same projection shown inline; delete → inaktivera (delete only without history) |
+| `/admin/affiliates/create` (`AdminAffiliateCreate.jsx`) | `/admin/affiliates/new` — invite by hand | ported as invite (A2, [DEV-2]) |
+| `/admin/affiliates/payout/:affiliateId` (`AdminAffiliatePayout.jsx`) | `/admin/affiliates/:id/payout` — open request, record, mark paid, void | ported (A2) |
+| `/admin/affiliates/analytics` (`AdminAffiliateAnalytics.jsx`) | `/admin/affiliates/analytics` — real period filter, totals, ranking | ported (A2); "verify" helpers dropped (§7.7) |
+| `/admin` dashboard tile "Affiliate Intäkt" | tile "Affiliate-provision (30 dagar)" + "Aktiva affiliates" | ported (A2), renamed (it is a cost) |
+| `/admin/orders/:id` pill + payment card label | pill + "Affiliate-provision" row + ledger state; the payment card labels a discount by its code only | ported (A2) |
+| `/admin/discount-codes` collision check | the trigger pair + `conflict` on both admins | ported (A1) |
+| CSV export columns Affiliatekod / Affiliatekommission | the admin order export gains `Affiliatekod`, `Affiliate-provision`; "Affiliaterabatt" becomes "Rabatt" (it is any discount) | ported (A2) if the export exists on the port, else noted in the report |
+| Platform `/addons` toggle | the platform's features editor shows `affiliate` (opt-in) | ported (A4) |
+| `/:shopId/affiliate-registration` (`AffiliateRegistration.jsx`) | `<shop>/affiliate` — the form with terms checkbox | ported (A3) |
+| `/affiliate-login` (`AffiliateLogin.jsx`) | the admin host's login; `/v1/me` routes an affiliate to `/affiliate` | ported (A3) — the storefront has no sessions (D81), so the login moves host; the storefront footer link "Logga in som affiliate" points at the admin host's login |
+| `/:shopId/affiliate-portal` overview (`AffiliatePortal.jsx`) | `/affiliate` — code, link + QR, rates, balances, last orders, "Begär utbetalning" | ported (A3); "30 dagar" mislabels fixed; live stats stub dropped |
+| portal analytics tab (`AffiliateAnalyticsTab.jsx`) | `/affiliate/orders` + the click-day graph on `/affiliate` | ported (A3) as projections (the Firebase tab was always empty, §6.2) |
+| portal campaigns tab | — | dropped (D30) |
+| portal success guide | `/affiliate/guide` — a short platform text (how the link works, how to mark posts as advertising, when money is paid), no fishing copy | ported (A3), rewritten |
+| portal materials tab (`AffiliateMarketingMaterials.jsx`) | `/affiliate/material` — the shop's marketing materials ONLY when the shop's `marketingMaterials` add-on is ON (read through a projection) | ported (A3) behind its own add-on, as §6.2 says it should have been |
+| portal profile tab | `/affiliate/profile` — real save | ported (A3) |
+| "Begär utbetalning" (dead link) | `/affiliate/payouts` | ported (A3) |
+| `AffiliateTracker.jsx` | the `?ref=` hook + the web Worker's count | ported (A3) [DEV-3] |
+| shop nav + footer links | footer "Bli affiliate" (feature ON) + "Logga in som affiliate" (admin host) | ported (A3) |
+| cart / checkout / confirmation labels | discount row "Rabatt (KOD)"; link-code notice; confirmation sentence dropped | ported (A3) |
+| password reset `userType:'AFFILIATE'` (dead branch) | the ordinary reset | n/a |
+| `DynamicPage.jsx` payout block (unreachable) | — | dropped |
+
+### 7.1c Design systems and the design gate (Mikael 2026-10-22: "use /impeccable for design, keep the language: NORD")
+
+- Storefront surfaces (`/affiliate` form, the `?ref=` notice in cart/checkout, labels): **NORD** (`DESIGN.md`, the storefront tokens).
+- Shop-admin pages: **Admin-Neutral** (`components/admin/ui`, wrapped in `<AppLayout>`).
+- The affiliate portal lives on the admin host: **Admin-Neutral** tokens, its own slim shell (no shop-admin sidebar), never the dark platform console.
+- Every UI unit runs the `impeccable` skill on its pages in the right system (and `ponytail` for restraint), then the design gate: every page opened rendered on staging (`/browse`) before the unit is called done.
+
 ### 7.2 Shop admin pages (admin build, Admin-Neutral, `<AppLayout>` — the design gate applies)
 
 | Route | Page | Content (Swedish copy) |
@@ -355,6 +392,8 @@ The menu item "Affiliate" below the add-on divider, gated on the key (AppLayout.
 | `/affiliate/payouts` | request form (Belopp (förifyllt), Fakturanummer, Faktura-PDF) + history with status pills "Begärd / Betald / Avvisad" |
 | `/affiliate/profile` | name, phone, address (required before payout), socials, language; "Byt lösenord" = the ordinary reset link |
 | `/affiliate/terms` | the current terms rendered for the shop; the acceptance gate (§8) lands here |
+| `/affiliate/guide` | the short success guide (§7.1b) |
+| `/affiliate/material` | the shop's marketing materials, only while the shop's `marketingMaterials` add-on is ON |
 | sign-in | the admin host's login; the invite link lands on the reset page then `/affiliate` |
 
 Not built from §6.2: the success guide (fishing copy), materials tab (the `marketingMaterials` add-on is a separate thing), campaigns tab, "30 dagar" mislabels, live stats.
