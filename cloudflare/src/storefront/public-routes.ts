@@ -52,10 +52,12 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
  * the seller's switch on. No body changes at the deploy (the add-on is
  * opt-in and no switch exists yet); the revision keeps a body of the code
  * before from ever matching a body of this one, across a rollback too.
+ * Revision 4: features.affiliate (CP13): the key is named in every body (an
+ * allowed key since 0058) and ported, true only with the platform's switch on.
  */
 
 /** Raise with any code change to the storefront body (PORTED_FEATURE_KEYS, ordersOpen). */
-export const STOREFRONT_BODY_REVISION = 3;
+export const STOREFRONT_BODY_REVISION = 4;
 
 function etagFor(catalogVersion: number, tenant: StorefrontTenant, revision: number, ordersClosed: boolean): string {
   const base = hidesStandInFrames(tenant) ? `${catalogVersion}-c` : `${catalogVersion}`;

@@ -19,10 +19,11 @@
  *
  * Sources of the rows: the routes that exist (src/app.ts: storefront,
  * products, pod previews, checkout, payment, receipt, orders, reports, the
- * withdrawal function, the two links of an abandoned-checkout reminder) and the
- * public routes of CP4 briefs A–C (collections, pages, legal). `GET /v1/seo`
- * and `GET /v1/sitemap` are NOT here: only this Worker calls them, never a
- * browser.
+ * withdrawal function, the two links of an abandoned-checkout reminder, CP13's
+ * affiliate application form and its terms) and the public routes of CP4
+ * briefs A–C (collections, pages, legal). `GET /v1/seo` and `GET /v1/sitemap`
+ * are NOT here: only this Worker calls them, never a browser (CP13's `?ref=`
+ * count rides on the SEO call this Worker makes, never on a browser route).
  */
 
 const ID = ":id";
@@ -54,6 +55,10 @@ export const STOREFRONT_API_ROUTES: readonly ApiRoute[] = [
   // mail's RFC 8058 one-click target). The token is unreserved characters only.
   { methods: ["POST"], segments: ["v1", "checkout-recovery", ID] },
   { methods: ["POST"], segments: ["v1", "checkout-recovery", ID, "unsubscribe"] },
+  // CP13: the affiliate application form and the terms it shows (design §5.1,
+  // §7.1). Flat paths: `/v1/affiliate/*` is the portal's, on the admin host.
+  { methods: ["POST"], segments: ["v1", "affiliate-applications"] },
+  { methods: ["GET"], segments: ["v1", "affiliate-terms"] },
 ];
 
 const RAW_ID_SEGMENT = /^(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+$/;

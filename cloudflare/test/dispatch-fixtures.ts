@@ -222,9 +222,9 @@ export async function seedOrder(
       `INSERT INTO checkouts (
          checkout_id, tenant_id, status, customer_email, currency,
          delivery_method, shipping_country, subtotal_minor, shipping_minor,
-         vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
+         vat_minor, vat_rate_bp, discount_minor, discount_code_id, discount_authority, total_minor,
          payment_intent_id, idempotency_key_hash, expires_at, created_at, updated_at
-       ) VALUES (?, ?, 'completed', ?, 'SEK', ?, ?, ?, ?, ?, 2500, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, 'completed', ?, 'SEK', ?, ?, ?, ?, ?, 2500, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       checkoutId,
       tenantId,
@@ -236,6 +236,8 @@ export async function seedOrder(
       vat,
       discount,
       discount > 0 ? "discount-cp2b" : null,
+      // CP13 (0059): a frozen campaign id names its authority.
+      discount > 0 ? "campaign" : null,
       total,
       intentId,
       `hash-${checkoutId}`,
@@ -248,10 +250,10 @@ export async function seedOrder(
          order_id, tenant_id, checkout_id, payment_intent_id, order_number,
          status, customer_email, currency, delivery_method, shipping_country,
          subtotal_minor, shipping_minor, vat_minor, vat_rate_bp,
-         discount_minor, discount_code_id, total_minor, captured_minor,
+         discount_minor, discount_code_id, discount_authority, total_minor, captured_minor,
          refunded_total_minor, stripe_event_id, paid_at, created_at, updated_at,
          production_snapshot_json
-       ) VALUES (?, ?, ?, ?, ?, 'paid', ?, 'SEK', ?, ?, ?, ?, ?, 2500, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, 'paid', ?, 'SEK', ?, ?, ?, ?, ?, 2500, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
     ).bind(
       orderId,
       tenantId,
@@ -266,6 +268,7 @@ export async function seedOrder(
       vat,
       discount,
       discount > 0 ? "discount-cp2b" : null,
+      discount > 0 ? "campaign" : null,
       total,
       total,
       `evt_cp2b_${counter}`,

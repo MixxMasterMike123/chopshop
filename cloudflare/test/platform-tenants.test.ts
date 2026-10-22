@@ -378,6 +378,8 @@ describe("GET /v1/platform/tenants/:tenantId — the detail", () => {
     expect(body.domainsTruncated).toBe(false);
     expect(body.features.map((feature) => feature.key)).toEqual([
       "abandonedCheckout",
+      // CP13: an allowed, opt-in key since migration 0058.
+      "affiliate",
       "contentStudio",
       "discountCodes",
       "marketingMaterials",

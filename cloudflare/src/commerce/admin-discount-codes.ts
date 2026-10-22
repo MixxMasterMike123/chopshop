@@ -596,9 +596,17 @@ function toAdminDiscountCode(row: DiscountCodeRow): AdminDiscountCode {
   };
 }
 
+/**
+ * The code is taken: by another Rabattkod of the shop (UNIQUE), or — CP13,
+ * D30 — by an affiliate's code of the shop (0059's collision trigger, on
+ * create AND on rename). One answer for both: `conflict`.
+ */
 function isUniqueConstraintFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("UNIQUE constraint failed");
+  return (
+    message.includes("UNIQUE constraint failed") ||
+    message.includes("discount code collides with an affiliate code")
+  );
 }
 
 /** 0055's backstop (discount_codes_code_frozen_once_used). */

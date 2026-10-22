@@ -1,9 +1,11 @@
 import {
+  canonicalAffiliateInviteContext,
   canonicalAlertDigestContent,
   canonicalOrderContent,
   hashEmailRecipient,
   type AuthEmailJob,
 } from "./auth-email-job";
+import { fingerprintAffiliateEmailJob, isAffiliateEmailJob } from "./affiliate-emails";
 import { fingerprintCheckoutReminderEmailJob, isCheckoutReminderEmailJob } from "./checkout-reminder-email";
 import { fingerprintOrderEmailJob, isOrderEmailJob } from "./order-emails";
 import { fingerprintWithdrawalEmailJob, isWithdrawalEmailJob } from "./withdrawal-email";
@@ -44,6 +46,10 @@ export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string
   if (isCheckoutReminderEmailJob(job)) {
     return fingerprintCheckoutReminderEmailJob(job);
   }
+  // And the affiliate mails of CP13 (their content, in its fixed order).
+  if (isAffiliateEmailJob(job)) {
+    return fingerprintAffiliateEmailJob(job);
+  }
 
   const canonical = JSON.stringify({
     actionUrl: job.actionUrl,
@@ -64,6 +70,12 @@ export async function fingerprintAuthEmailJob(job: AuthEmailJob): Promise<string
     // And the invite variant of a password reset (CP3-B): the wording is part
     // of the job, so a message whose variant changed in transit is a conflict.
     ...(job.kind === "password_reset" && job.variant === "invite" ? { variant: "invite" } : {}),
+    // CP13: the affiliate invite, with the shop context it renders (the
+    // shop's name, the code, the link, the rates, the portal). Absent for
+    // every other job, whose canonical string is byte-identical to before.
+    ...(job.kind === "password_reset" && job.variant === "affiliate_invite" && job.affiliate !== undefined
+      ? { affiliate: canonicalAffiliateInviteContext(job.affiliate), variant: "affiliate_invite" }
+      : {}),
   });
   return bytesToHex(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)),

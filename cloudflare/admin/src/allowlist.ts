@@ -11,6 +11,9 @@
  *   - `/v1/platform/<one or more segments>` the same, EXCEPT `/v1/platform/bootstrap`:
  *     the one-time operator call authenticated by `X-Bootstrap-Token` (src/platform/bootstrap.ts)
  *     is never a browser's, and that header is not forwarded anyway;
+ *   - `/v1/affiliate/<one or more segments>` the same methods (CP13: the
+ *     affiliate portal's API; its routes authorize the affiliate principal
+ *     and answer everyone else the opaque 404);
  *   - `GET /v1/me` exactly (unit WA);
  *   - the Better Auth routes the API mounts, method and path exactly as
  *     src/auth/auth-routes.ts lists them (sign-up and every other endpoint stay
@@ -32,6 +35,8 @@ const PREFIX_METHODS: ReadonlySet<string> = new Set(["DELETE", "GET", "HEAD", "P
 const PREFIX_FAMILIES: readonly (readonly string[])[] = [
   ["v1", "admin"],
   ["v1", "platform"],
+  // CP13: the affiliate portal (design §7.1).
+  ["v1", "affiliate"],
 ];
 
 /** Exact `METHOD /path` rows (raw path after `/_api`). */

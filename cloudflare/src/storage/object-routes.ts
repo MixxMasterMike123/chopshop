@@ -23,7 +23,7 @@ import {
   reservePendingObject,
 } from "./object-store";
 import { publicObjectBase, publicObjectUrl } from "./public-objects";
-import type { TenantAdminPrincipal } from "../auth/live-authorization";
+import type { AffiliatePrincipal, TenantAdminPrincipal } from "../auth/live-authorization";
 import type { TenantContext } from "../tenancy/resolve-tenant";
 
 export interface ReserveObjectRequest {
@@ -56,7 +56,9 @@ export interface PublicObjectMetadata extends ObjectMetadata {
 
 export type ReserveRouteResult =
   | { object: { objectId: string; objectKey: string }; status: "ok" }
-  | { status: "conflict" | "invalid" };
+  | { status: "conflict" | "invalid" }
+  /** CP13: the affiliate already has AFFILIATE_INVOICE_MAX_LOOSE loose invoices. */
+  | { status: "too_many_pending_invoices" };
 
 // Why a public upload was refused, for the admin who sent it and for the
 // importer's report (D92). `bytes_not_as_declared` covers what R2 itself
@@ -539,7 +541,10 @@ export async function reserveAdminObject(
         },
         status: "ok",
       }
-    : reserved;
+    : // No guard is passed here, so "refused" cannot happen; it reads as a conflict.
+      reserved.status === "refused"
+      ? { status: "conflict" }
+      : reserved;
 }
 
 /**
@@ -825,4 +830,254 @@ export async function deleteAdminObject(
   }
 
   return { status: "ok" };
+}
+
+// ── CP13: the affiliate's invoice (design §3.6b, §6.1, R2-12) ───────────────
+//
+// The admin route's reserve → upload → activate shape, re-used with the
+// AFFILIATE principal and narrowed to what an invoice is:
+//   - kind `document` only (private bucket); the caller never names the kind;
+//   - `application/pdf` only, at most AFFILIATE_INVOICE_MAX_BYTES (10 MB, the
+//     Firebase rule), checked at reserve AND at upload, beyond the generic
+//     private upload's rules;
+//   - the bytes must START as a PDF (`%PDF-`): the head is read before the
+//     first byte is stored (the public leg's discipline), then the head and
+//     the rest go to R2 as one body of the declared length with the declared
+//     hash as R2's own checksum;
+//   - the reservation lists the object as THIS affiliate's
+//     (affiliate_invoice_objects) in the reservation's own batch, and the
+//     upload accepts only an object so listed for the uploading affiliate:
+//     another affiliate of the same shop cannot upload into, attach, or read
+//     it. Tenant ownership alone is not enough (audit §8.8).
+// A reserved invoice whose request never lands stays `pending`: it is never
+// served, and unit A4's sweep removes it (an object a payout or the listing
+// references is never swept).
+
+/** The Firebase invoice rule: a PDF of at most 10 MB. */
+export const AFFILIATE_INVOICE_MAX_BYTES = 10 * 1024 * 1024;
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
+
+export interface AffiliateInvoiceReserveRequest {
+  fileName?: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+const INVOICE_RESERVE_KEYS = ["contentType", "fileName", "sha256", "sizeBytes"] as const;
+
+/** `{ contentType: "application/pdf", sha256, sizeBytes (1..10 MB), fileName? }`. */
+export function parseAffiliateInvoiceReserveInput(body: unknown): AffiliateInvoiceReserveRequest | null {
+  if (!isPlainObject(body) || !hasOnlyKeys(body, INVOICE_RESERVE_KEYS)) {
+    return null;
+  }
+  const sha256 = parseSha256(body.sha256);
+  const sizeBytes = parseSizeBytes(body.sizeBytes);
+  if (
+    body.contentType !== "application/pdf" ||
+    sha256 === null ||
+    sizeBytes === null ||
+    sizeBytes > AFFILIATE_INVOICE_MAX_BYTES
+  ) {
+    return null;
+  }
+  if (body.fileName === undefined) {
+    return { sha256, sizeBytes };
+  }
+  const fileName = parseFileName(body.fileName);
+  return fileName === null ? null : { fileName, sha256, sizeBytes };
+}
+
+function affiliateTenantOf(principal: AffiliatePrincipal): ObjectTenant {
+  return {
+    actor: { actingAsGrantId: null, userId: principal.userId },
+    domainKind: "admin",
+    hostname: "",
+    tenantId: principal.tenantId,
+  };
+}
+
+/** Reserves the invoice and lists it as the affiliate's, in one batch. */
+export async function reserveAffiliateInvoice(
+  db: D1Database,
+  principal: AffiliatePrincipal,
+  input: AffiliateInvoiceReserveRequest,
+  now: number,
+): Promise<ReserveRouteResult> {
+  const reserved = await reservePendingObject(
+    db,
+    affiliateTenantOf(principal),
+    {
+      bucket: bucketForKind("document"),
+      contentType: "application/pdf",
+      declaredSha256: input.sha256,
+      declaredSizeBytes: input.sizeBytes,
+      fileName: input.fileName,
+      kind: "document",
+    },
+    now,
+    (objectId) => [
+      db
+        .prepare(
+          `INSERT INTO affiliate_invoice_objects (object_id, tenant_id, affiliate_id, created_at)
+           SELECT ?, ?, ?, ?
+           WHERE EXISTS (SELECT 1 FROM stored_objects WHERE object_id = ? AND tenant_id = ?)`,
+        )
+        .bind(objectId, principal.tenantId, principal.affiliateId, new Date(now).toISOString(), objectId, principal.tenantId),
+    ],
+    looseInvoicesBelowLimit(principal),
+  );
+  if (reserved.status === "refused") {
+    return { status: "too_many_pending_invoices" };
+  }
+  return reserved.status === "ok"
+    ? { object: { objectId: reserved.object.objectId, objectKey: reserved.object.objectKey }, status: "ok" }
+    : reserved;
+}
+
+/**
+ * At most this many LOOSE invoices per affiliate (A1 round 1): an object
+ * listed as the affiliate's that is still pending, or that no payout
+ * references. Reserved storage is otherwise unbounded (the A4 sweep removes
+ * loose ones later); the cap is decided inside the reservation's batch.
+ */
+export const AFFILIATE_INVOICE_MAX_LOOSE = 5;
+
+function looseInvoicesBelowLimit(principal: AffiliatePrincipal): { binds: unknown[]; sql: string } {
+  return {
+    binds: [principal.tenantId, principal.affiliateId, AFFILIATE_INVOICE_MAX_LOOSE],
+    sql: `(SELECT COUNT(*)
+            FROM affiliate_invoice_objects AS l
+            INNER JOIN stored_objects AS o ON o.object_id = l.object_id AND o.tenant_id = l.tenant_id
+            WHERE l.tenant_id = ? AND l.affiliate_id = ? AND o.status <> 'deleted'
+              AND (o.status = 'pending' OR NOT EXISTS (
+                SELECT 1 FROM affiliate_payouts AS p
+                WHERE p.tenant_id = l.tenant_id AND p.invoice_object_id = l.object_id
+              ))) < ?`,
+  };
+}
+
+/** Is `objectId` listed as THIS affiliate's invoice (of its tenant)? */
+export async function isAffiliateInvoice(
+  db: D1Database,
+  principal: AffiliatePrincipal,
+  objectId: string,
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      "SELECT 1 AS listed FROM affiliate_invoice_objects WHERE object_id = ? AND tenant_id = ? AND affiliate_id = ? LIMIT 1",
+    )
+    .bind(objectId, principal.tenantId, principal.affiliateId)
+    .first<{ listed: number }>();
+  return row !== null;
+}
+
+/**
+ * The upload of an affiliate's invoice: listed for this affiliate, pending,
+ * private, a declared PDF of at most 10 MB whose bytes begin `%PDF-`. Refused
+ * uploads store nothing and leave the row `pending`.
+ */
+export async function uploadAffiliateInvoice(
+  env: Env,
+  db: D1Database,
+  principal: AffiliatePrincipal,
+  objectId: string,
+  request: Request,
+  now: number,
+): Promise<UploadRouteResult> {
+  const tenant = affiliateTenantOf(principal);
+  if (!(await isAffiliateInvoice(db, principal, objectId))) {
+    return { status: "not_found" };
+  }
+  const existing = await getUploadTargetObject(db, tenant, objectId);
+  if (existing === null || existing.bucket !== "private" || existing.kind !== "document") {
+    return { status: "not_found" };
+  }
+  if (existing.status !== "pending") {
+    return { status: "conflict" };
+  }
+  const declaredSha256 = existing.sha256;
+  const declaredSizeBytes = existing.sizeBytes;
+  const bucket = env.PRIVATE_BUCKET;
+  if (declaredSha256 === null || declaredSizeBytes === null || bucket === undefined) {
+    return { status: "not_found" };
+  }
+  const length = checkContentLength(request, declaredSizeBytes, AFFILIATE_INVOICE_MAX_BYTES);
+  if (length !== "ok") {
+    return { status: length };
+  }
+  const body = request.body;
+  if (body === null) {
+    return { status: "invalid" };
+  }
+
+  const reader = body.getReader();
+  const head = await readAtLeast(reader, Math.min(PDF_MAGIC.length, declaredSizeBytes));
+  if (!PDF_MAGIC.every((byte, index) => head[index] === byte)) {
+    await reader.cancel();
+    return { reason: "type_not_as_stated", status: "invalid" };
+  }
+  const { readable, writable } = new FixedLengthStream(declaredSizeBytes);
+  const piped = replayed(head, reader).pipeTo(writable);
+  piped.catch(() => undefined);
+  try {
+    await bucket.put(existing.objectKey, readable, {
+      httpMetadata: { contentType: "application/pdf" },
+      sha256: declaredSha256,
+    });
+  } catch {
+    return { reason: "bytes_not_as_declared", status: "invalid" };
+  }
+  try {
+    await piped;
+  } catch {
+    await bucket.delete(existing.objectKey);
+    return { reason: "bytes_not_as_declared", status: "invalid" };
+  }
+
+  const activated = await activateObject(
+    db,
+    tenant,
+    objectId,
+    { sha256: declaredSha256, sizeBytes: declaredSizeBytes },
+    now,
+  );
+  return activated.status === "ok"
+    ? { object: toMetadata(activated.object, null, null), status: "ok" }
+    : activated;
+}
+
+/**
+ * The bytes of a payout's invoice for its affiliate: the payout must be THIS
+ * affiliate's (payout → affiliate), and the object is the one that payout
+ * names, active and private. A download, never inline
+ * (privateDeliveryHeaders).
+ *
+ * Round 1 (item 8): the payout → affiliate check IS the ownership here. A
+ * payout the SHOP recorded with its own document (recordPayout) names an
+ * object that is not listed as the affiliate's, and the affiliate still reads
+ * it (it shows `hasInvoice: true`). The affiliate → object listing still
+ * governs what an affiliate may UPLOAD into and ATTACH to a request.
+ */
+export async function deliverAffiliateInvoice(
+  env: Env,
+  db: D1Database,
+  principal: AffiliatePrincipal,
+  payoutId: string,
+): Promise<Response | null> {
+  const payout = await db
+    .prepare(
+      `SELECT p.invoice_object_id FROM affiliate_payouts AS p
+       WHERE p.payout_id = ? AND p.tenant_id = ? AND p.affiliate_id = ?
+         AND p.invoice_object_id IS NOT NULL
+       LIMIT 1`,
+    )
+    .bind(payoutId, principal.tenantId, principal.affiliateId)
+    .first<{ invoice_object_id: string }>();
+  if (payout === null) {
+    return null;
+  }
+  const delivered = await deliverPrivateObject(env, db, affiliateTenantOf(principal), payout.invoice_object_id);
+  return delivered === null
+    ? null
+    : new Response(delivered.body, { headers: privateDeliveryHeaders(delivered.contentType, delivered.fileName) });
 }

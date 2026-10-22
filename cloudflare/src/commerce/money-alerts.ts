@@ -14,6 +14,8 @@
  */
 
 export type MoneyAlertKind =
+  // CP13 (round 1): an affiliate commission the formula could not compute.
+  | "affiliate_accrual_failed"
   | "connect_account_resync_failed"
   | "dispute_recovery_failed"
   | "dispatch_stranded_30m"

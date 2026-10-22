@@ -1,3 +1,4 @@
+import { countReferralLanding, parseRefParam } from "../affiliate/clicks";
 import { jsonResponse } from "../lib/http";
 import { invalidRequestResponse, notFoundResponse } from "../lib/responses";
 import { isPublicShop } from "../storefront/public-storefront";
@@ -37,6 +38,13 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  * terms), and the web Worker, their only caller, never revalidates. It caches
  * the sitemap's XML itself for an hour.
  *
+ * CP13 (design §2.1, CX-B9): `GET /v1/seo?path=…&ref=CODE`. The web Worker
+ * carries a landing's `?ref=` code on this call (GET page landings only); the
+ * code is handed to the affiliate landing count (src/affiliate/clicks.ts)
+ * under the API's own `waitUntil`, and the answer is EXACTLY the answer
+ * without it — a `ref` that is malformed, unknown or not counted changes
+ * nothing a caller can see. At most one `ref`.
+ *
  * PREVIEW (D57). `GET /v1/seo` honours a valid grant (src/storefront/preview.ts):
  * an unpublished shop's page answers with `robots: "noindex"` and the header
  * `X-Robots-Tag: noindex`. The web Worker cannot hold a grant (it lives in the
@@ -63,16 +71,33 @@ function onlyParams(params: URLSearchParams, allowed: readonly string[]): boolea
   return true;
 }
 
-export async function handlePublicSeoRequest(env: Env, request: Request): Promise<Response> {
+export async function handlePublicSeoRequest(
+  env: Env,
+  request: Request,
+  // CP13: the API's own ExecutionContext.waitUntil; absent (a test, a caller
+  // without a context) the count runs before the answer instead.
+  options: { now?: number; waitUntil?: (promise: Promise<unknown>) => void } = {},
+): Promise<Response> {
   const params = new URL(request.url).searchParams;
   const path = singleParam(params, "path");
-  if (path === null || !onlyParams(params, ["path"])) {
+  if (path === null || !onlyParams(params, ["path", "ref"]) || params.getAll("ref").length > 1) {
     return invalidRequestResponse();
   }
 
   const tenant = await resolveStorefrontTenant(env, request);
   const answer =
     tenant === null ? null : await resolveSeoAnswer(env, env.DB, tenant, path, Date.now());
+  // A forward is not a landing: the web Worker keeps `ref` on its Location,
+  // and the page it leads to is the landing that counts (once).
+  const ref = parseRefParam(params.get("ref"));
+  if (tenant !== null && ref !== null && (answer === null || !("redirect" in answer))) {
+    const counting = countReferralLanding(env, request, tenant.tenantId, ref, options.now ?? Date.now());
+    if (options.waitUntil === undefined) {
+      await counting;
+    } else {
+      options.waitUntil(counting);
+    }
+  }
   if (answer === null) {
     return notFoundResponse("Page not found");
   }

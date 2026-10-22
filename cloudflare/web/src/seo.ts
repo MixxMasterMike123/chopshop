@@ -138,10 +138,42 @@ export function shopUrl(origin: string, site: Site, relative: string): URL | nul
   return url.origin === origin && underRoot ? url : null;
 }
 
-/** The `Location` of a forward: always a path under the shop's own root. */
-export function redirectLocation(origin: string, site: Site, to: string): string | null {
+/**
+ * The `Location` of a forward: always a path under the shop's own root.
+ * CP13 (design §2.1, R2-25): a landing that carried `?ref=CODE` keeps it on
+ * the forward's Location, so an affiliate's link survives a redirect.
+ */
+export function redirectLocation(origin: string, site: Site, to: string, ref: string | null = null): string | null {
   const url = shopUrl(origin, site, to);
-  return url === null ? null : `${url.pathname}${url.search}${url.hash}`;
+  if (url === null) {
+    return null;
+  }
+  if (ref !== null) {
+    url.searchParams.set("ref", ref);
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/** The affiliate code grammar (the API's 0059 affiliates.code). */
+const REF_CODE = /^[A-Z0-9-]{3,20}$/;
+
+/**
+ * CP13 (design §2.1): the `?ref=` code of a page LANDING, normalized as the
+ * storefront and the API normalize a code (trim, upper case), or null — a
+ * HEAD request, no `ref`, two of them, or a value outside the affiliate code
+ * grammar carries nothing. Only this Worker's own SEO call carries it on;
+ * nothing is stored here.
+ */
+export function landingRef(method: string, url: URL): string | null {
+  if (method !== "GET") {
+    return null;
+  }
+  const values = url.searchParams.getAll("ref");
+  if (values.length !== 1) {
+    return null;
+  }
+  const code = (values[0] ?? "").trim().toUpperCase();
+  return REF_CODE.test(code) ? code : null;
 }
 
 const MAX_JSON_LD_DEPTH = 32;

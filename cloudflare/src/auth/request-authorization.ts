@@ -1,9 +1,11 @@
 import type {
+  AffiliatePrincipal,
   PlatformPrincipal,
   PrintPrincipal,
   TenantAdminPrincipal,
 } from "./live-authorization";
 import {
+  authorizeAffiliate,
   authorizePlatformAdmin,
   authorizePrintOperator,
   authorizeTenantAdmin,
@@ -126,6 +128,33 @@ export async function authorizeTenantAdminRequest(
     tenantId: shopId,
     userId: identity.userId,
   };
+}
+
+/**
+ * CP13 (design §1.1): the affiliate guard of the portal routes
+ * (`/v1/affiliate/*`, on the admin host). The shop is the one the request
+ * NAMES in `X-Shop-Id`, exactly as for a tenant admin, and the claim is worth
+ * nothing on its own: it is accepted only when the session's user is an
+ * active affiliate identity with an active affiliate membership of that
+ * active shop (authorizeAffiliate). There is NO acting-as fallback: a
+ * platform user never becomes an affiliate.
+ *
+ * Every failure is the same null, which every caller turns into the same
+ * opaque 404 (a tenant admin's session gets it too: its identity is not an
+ * affiliate's, and the admin routes refuse an affiliate's for the mirror
+ * reason).
+ */
+export async function authorizeAffiliateRequest(
+  env: Env,
+  request: Request,
+): Promise<AffiliatePrincipal | null> {
+  const shopId = parseShopIdHeader(request.headers.get(SHOP_ID_HEADER));
+  if (shopId === null) {
+    return null;
+  }
+
+  const identity = await resolveSessionIdentity(env, request);
+  return identity === null ? null : authorizeAffiliate(env.DB, identity.userId, shopId);
 }
 
 export async function authorizePrintRequest(

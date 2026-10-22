@@ -23,10 +23,13 @@ import { parseTenantIdPathSegment } from "./provision-tenants";
  * operator can find them.
  */
 
-export type AccountType = "ordinary" | "platform_admin" | "print_operator" | "tenant_admin";
+export type AccountType = "affiliate" | "ordinary" | "platform_admin" | "print_operator" | "tenant_admin";
 export type IdentityStatus = "active" | "revoked" | "suspended";
 
+// CP13 (design §1.1): an affiliate is listed and filterable like any kind
+// (its memberships carry role 'affiliate').
 const ACCOUNT_TYPES: readonly AccountType[] = [
+  "affiliate",
   "ordinary",
   "platform_admin",
   "print_operator",

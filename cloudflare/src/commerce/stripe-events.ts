@@ -1,3 +1,4 @@
+import { reversalMailStatement, reversalStatement } from "../affiliate/ledger";
 import { disabledReasonFrom, requirementsFrom } from "./connect-gateway";
 import { holdDispatchStatement, releaseDispatchHolds } from "./dispatch-hold";
 import { raiseAlertStatement } from "./money-alerts";
@@ -552,6 +553,17 @@ type DisputeFactResult =
  * same fact twice lands on the same row values — and guarded on the recovery
  * state it read, so a concurrent cron transition makes the UPDATE a no-op and
  * the fact is re-applied on top of it rather than overwriting it.
+ *
+ * CP13 (design §4.2, R2-5): the UPDATE is the first statement of a batch whose
+ * second is the affiliate's LOST-dispute reversal (and the third its mail).
+ * That row is guarded on the STORED post-state — this order's dispute IS
+ * this dispute and its status IS 'lost' — and on no row with this ref (the
+ * dispute id) existing, never on the recovery value the UPDATE just changed
+ * (which would be false exactly when it applied). A lost dispute reverses the
+ * whole accrual whatever the refunds did before it, capped at what is left
+ * (ledger.ts: the cumulative rule's `lost` branch); an open dispute or a
+ * favourable close reverses nothing. Applying the same lost fact twice — or a
+ * redelivery after the cron moved the recovery — writes it once.
  */
 async function applyDisputeFact(
   db: D1Database,
@@ -610,34 +622,47 @@ async function applyDisputeFact(
       order.stripe_payouts_enabled === 1,
     );
 
-    const result = await db
-      .prepare(
-        `UPDATE orders
-         SET dispute_id = COALESCE(dispute_id, ?),
-             dispute_status = ?,
-             dispute_amount_minor = ?,
-             dispute_recovery = ?,
-             dispute_updated_at = ?,
-             payout_state = CASE WHEN payout_state = 'paid' THEN 'paid' ELSE ? END,
-             stripe_charge_id = COALESCE(stripe_charge_id, ?),
-             updated_at = MAX(updated_at, ?)
-         WHERE order_id = ?
-           AND dispute_recovery IS ?`,
-      )
-      .bind(
-        fact.disputeId,
-        status,
-        fact.amount,
-        recovery,
+    const reversalEntryId = crypto.randomUUID();
+    const [result] = await db.batch([
+      db
+        .prepare(
+          `UPDATE orders
+           SET dispute_id = COALESCE(dispute_id, ?),
+               dispute_status = ?,
+               dispute_amount_minor = ?,
+               dispute_recovery = ?,
+               dispute_updated_at = ?,
+               payout_state = CASE WHEN payout_state = 'paid' THEN 'paid' ELSE ? END,
+               stripe_charge_id = COALESCE(stripe_charge_id, ?),
+               updated_at = MAX(updated_at, ?)
+           WHERE order_id = ?
+             AND dispute_recovery IS ?`,
+        )
+        .bind(
+          fact.disputeId,
+          status,
+          fact.amount,
+          recovery,
+          now,
+          payoutState,
+          fact.chargeId,
+          now,
+          order.order_id,
+          currentRecovery,
+        ),
+      reversalStatement(db, {
+        entryId: reversalEntryId,
+        guard: {
+          binds: [order.order_id, fact.disputeId],
+          sql: "EXISTS (SELECT 1 FROM orders WHERE order_id = ? AND dispute_id = ? AND dispute_status = 'lost')",
+        },
         now,
-        payoutState,
-        fact.chargeId,
-        now,
-        order.order_id,
-        currentRecovery,
-      )
-      .run();
-    if (result.meta.changes === 1) {
+        orderId: order.order_id,
+        ref: fact.disputeId,
+      }),
+      reversalMailStatement(db, reversalEntryId, now),
+    ]);
+    if (result?.meta.changes === 1) {
       return { result: "applied", tenantId: order.tenant_id };
     }
   }

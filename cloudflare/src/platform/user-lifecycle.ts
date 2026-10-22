@@ -1,8 +1,14 @@
-import type { PlatformPrincipal } from "../auth/live-authorization";
+import type { PlatformPrincipal, TenantAdminPrincipal } from "../auth/live-authorization";
+import { auditMetadataJson } from "../auth/live-authorization";
+import { ownPasswordSql } from "./user-directory";
 
 /**
  * Identity lifecycle for platform operators (CP3-B): deactivate, reactivate,
- * and revoke one tenant-admin membership.
+ * and revoke one tenant-admin membership. CP13: deactivate and reactivate
+ * admit an `affiliate` identity like any non-platform kind (a deactivated
+ * affiliate's sessions and invite are revoked); a shop's removal of its
+ * affiliate (revokeAffiliateMembership) and the conversion of an unaccepted
+ * affiliate identity (convertUnacceptedAffiliate) are below.
  *
  * THERE IS NO DELETE. Every foreign key onto "user" and identity_access is
  * ON DELETE RESTRICT (orders, audit rows, acceptances and memberships all point
@@ -382,4 +388,193 @@ export async function revokeTenantAdmin(
   return existing === null
     ? { status: "not_found" }
     : { reason: "already_revoked", status: "refused" };
+}
+
+// ── CP13: the affiliate identity (design §1.3) ──────────────────────────────
+
+export interface ConversionActor {
+  /** The shop the conversion was made for (the audit row's tenant), or null (the platform). */
+  auditTenantId: string | null;
+  /** Merged into the audit row's metadata (e.g. an acting-as grant id). */
+  metadata: Record<string, unknown>;
+  userId: string;
+}
+
+/**
+ * ADDRESS SQUATTING (R2-6): a shop admin may "bjud in" any address as an
+ * affiliate, which would otherwise block that address from ever becoming a
+ * tenant admin (one "user" row per address, one kind per identity). So an
+ * affiliate identity that has NEVER set a password of its own
+ * (user-directory.ts ownPasswordSql) and holds no ledger row in any shop is
+ * CONVERTED into a tenant admin by the tenant-admin invite path
+ * (tenant-members.ts) and the platform's provisioning (provision-users.ts).
+ *
+ * ONE GUARDED WRITE DECIDES (this module's pattern): the identity UPDATE
+ * carries every guard and stamps a fresh `status_change_id`; in the same
+ * batch, keyed on that stamp, every `affiliate` membership is revoked, every
+ * affiliates row of the person is made `inactive` (so no code of theirs is
+ * ever quoted again; the rows stay as tombstones), the open invite is
+ * superseded with its token deleted, and the audit row
+ * `identity.convert_unaccepted_affiliate` is written. A refused conversion
+ * writes nothing. An affiliate who HAS set a password is a real account and
+ * stays `not_addable`; the reverse conversion is never offered.
+ *
+ * Returns true when THIS call converted the identity.
+ */
+export async function convertUnacceptedAffiliate(
+  db: D1Database,
+  actor: ConversionActor,
+  userId: string,
+  now: number,
+): Promise<boolean> {
+  const changeId = crypto.randomUUID();
+  const nowIso = new Date(now).toISOString();
+  const guard = stamped(userId, changeId);
+
+  const [decision] = await db.batch([
+    db
+      .prepare(
+        `UPDATE identity_access
+         SET account_type = 'tenant_admin',
+             updated_at = MAX(updated_at, ?),
+             status_change_id = ?
+         WHERE user_id = ?
+           AND account_type = 'affiliate'
+           AND status = 'active'
+           AND NOT ${ownPasswordSql("?")}
+           AND NOT EXISTS (
+             SELECT 1 FROM affiliate_ledger AS l
+             INNER JOIN affiliates AS a ON a.affiliate_id = l.affiliate_id AND a.tenant_id = l.tenant_id
+             WHERE a.user_id = ?
+           )`,
+      )
+      .bind(now, changeId, userId, userId, userId),
+    db
+      .prepare(
+        `INSERT INTO audit_events (
+          event_id, tenant_id, actor_user_id, action, resource_type,
+          resource_id, reason, request_id, metadata_json, created_at
+        )
+        SELECT ?, ?, ?, 'identity.convert_unaccepted_affiliate', 'identity_access',
+          user_id, NULL, ?,
+          json_patch(json_object(
+            'changeId', ?,
+            'membershipsRevoked', (
+              SELECT COUNT(*) FROM tenant_memberships
+              WHERE user_id = ? AND role = 'affiliate' AND status <> 'revoked'
+            ),
+            'to', 'tenant_admin'
+          ), ?),
+          ?
+        FROM identity_access
+        WHERE user_id = ? AND status_change_id = ?`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        actor.auditTenantId,
+        actor.userId,
+        crypto.randomUUID(),
+        changeId,
+        userId,
+        JSON.stringify(actor.metadata),
+        now,
+        userId,
+        changeId,
+      ),
+    db
+      .prepare(
+        `UPDATE tenant_memberships
+         SET status = 'revoked', updated_at = MAX(updated_at, ?), status_change_id = ?
+         WHERE user_id = ? AND role = 'affiliate' AND status <> 'revoked' AND ${guard.sql}`,
+      )
+      .bind(now, changeId, userId, ...guard.binds),
+    db
+      .prepare(
+        `UPDATE affiliates
+         SET status = 'inactive', updated_at = MAX(updated_at, ?)
+         WHERE user_id = ? AND status <> 'inactive' AND ${guard.sql}`,
+      )
+      .bind(nowIso, userId, ...guard.binds),
+    db
+      .prepare(
+        `DELETE FROM "verification"
+         WHERE "id" IN (
+           SELECT verification_id FROM identity_invites
+           WHERE user_id = ? AND status = 'issued'
+         )
+           AND ${guard.sql}`,
+      )
+      .bind(userId, ...guard.binds),
+    db
+      .prepare(
+        `UPDATE identity_invites
+         SET status = 'superseded', updated_at = MAX(updated_at, ?)
+         WHERE user_id = ? AND status = 'issued' AND ${guard.sql}`,
+      )
+      .bind(nowIso, userId, ...guard.binds),
+  ]);
+
+  return matched(decision);
+}
+
+export type RevokeAffiliateResult = { status: "not_found" | "ok" };
+
+/**
+ * CP13 (design §3.1, "Ta bort"): the shop's own removal of ONE affiliate —
+ * tenant-scoped, unlike revokeTenantAdmin (which this does not reuse): the
+ * affiliates row becomes `inactive` (its code is quoted no more; the row and
+ * the code stay, a tombstone for every checkout and order that froze its id)
+ * and the person's `affiliate` membership of THIS shop is revoked (the portal
+ * of this shop answers the opaque 404 from the next request). The identity,
+ * its sessions and its other shops are untouched. Idempotent: an already
+ * removed affiliate is `ok` with nothing written but the status.
+ *
+ * Keyed on the membership's stamp where one is revoked; the affiliate row
+ * and the audit row land in the same batch.
+ */
+export async function revokeAffiliateMembership(
+  db: D1Database,
+  principal: TenantAdminPrincipal,
+  affiliateId: string,
+  now: number,
+): Promise<RevokeAffiliateResult> {
+  const changeId = crypto.randomUUID();
+  const nowIso = new Date(now).toISOString();
+  const [, , audit] = await db.batch([
+    db
+      .prepare(
+        `UPDATE tenant_memberships
+         SET status = 'revoked', updated_at = MAX(updated_at, ?), status_change_id = ?
+         WHERE tenant_id = ? AND role = 'affiliate' AND status <> 'revoked'
+           AND user_id = (SELECT user_id FROM affiliates WHERE affiliate_id = ? AND tenant_id = ?)`,
+      )
+      .bind(now, changeId, principal.tenantId, affiliateId, principal.tenantId),
+    db
+      .prepare(
+        `UPDATE affiliates
+         SET status = 'inactive', updated_at = MAX(updated_at, ?)
+         WHERE affiliate_id = ? AND tenant_id = ? AND status <> 'inactive'`,
+      )
+      .bind(nowIso, affiliateId, principal.tenantId),
+    db
+      .prepare(
+        `INSERT INTO audit_events (
+          event_id, tenant_id, actor_user_id, action, resource_type,
+          resource_id, reason, request_id, metadata_json, created_at
+        )
+        SELECT ?, tenant_id, ?, 'affiliate.revoke', 'affiliate', affiliate_id, NULL, ?, ?, ?
+        FROM affiliates
+        WHERE affiliate_id = ? AND tenant_id = ?`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        principal.userId,
+        crypto.randomUUID(),
+        auditMetadataJson(principal, { changeId }),
+        now,
+        affiliateId,
+        principal.tenantId,
+      ),
+  ]);
+  return (audit?.meta.changes ?? 0) > 0 ? { status: "ok" } : { status: "not_found" };
 }

@@ -570,7 +570,7 @@ describe("GET /ready", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       database: "ready",
-      migration: "0057_printer_provider.sql",
+      migration: "0059_affiliate.sql",
       status: "ok",
     });
   });

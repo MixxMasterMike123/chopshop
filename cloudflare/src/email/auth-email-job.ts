@@ -1,5 +1,12 @@
 import { isValidDiscountCode } from "../commerce/discount-codes";
 import {
+  type AffiliateEmailJob,
+  isAffiliateEmailJob,
+  isAffiliateEmailKind,
+  parseAffiliateEmailJob,
+  renderAffiliateEmail,
+} from "./affiliate-emails";
+import {
   type CheckoutReminderEmailJob,
   isCheckoutReminderEmailJob,
   isCheckoutReminderEmailKind,
@@ -23,6 +30,15 @@ import {
 } from "./withdrawal-email";
 
 export type AuthEmailKind =
+  // CP13: the affiliate mails (./affiliate-emails.ts, migration 0058).
+  | "affiliate_application_denied"
+  | "affiliate_application_notice"
+  | "affiliate_application_received"
+  | "affiliate_conversion"
+  | "affiliate_payout"
+  | "affiliate_payout_requested"
+  | "affiliate_reversal"
+  | "affiliate_welcome"
   | "alert_digest"
   // CP9-AC: the abandoned-checkout reminder (./checkout-reminder-email.ts).
   | "checkout_reminder"
@@ -59,8 +75,34 @@ export const INVITE_LINK_VALID_HOURS = 72;
  * `password_reset` job: the link and the mechanism are the reset's, the words
  * are an invitation (src/platform/invites.ts). The ledger kind stays
  * `password_reset`.
+ *
+ * CP13 (design §9.3): `affiliate_invite` is the invite of an affiliate who has
+ * not set a password: the same reset link and mechanism, the words of a
+ * shop's welcome — the shop's name, the affiliate's code, the `?ref=` link,
+ * the rates and the portal's address — carried as validated `affiliate`
+ * context (AffiliateInviteContext), which the fingerprint covers. The plain
+ * invite names only the platform and is not reused for an affiliate. The
+ * sender stays the configured auth sender (a credential mail); the shop is
+ * named in the body.
  */
-export type AuthActionEmailVariant = "invite";
+export type AuthActionEmailVariant = "affiliate_invite" | "invite";
+
+/**
+ * The shop context of an `affiliate_invite` (CP13). Every address in it is
+ * built by the server from the canonical origins (src/affiliate/approval.ts),
+ * never from a request, and checked here again: https, no credentials, no
+ * fragment.
+ */
+export interface AffiliateInviteContext {
+  code: string;
+  commissionBp: number;
+  discountBp: number;
+  /** The affiliate portal on the admin origin. */
+  portalUrl: string;
+  /** The shop's storefront link carrying `?ref=<code>`. */
+  refLink: string;
+  shopName: string | null;
+}
 
 interface EmailJobBase {
   createdAt: number;
@@ -74,6 +116,8 @@ interface EmailJobBase {
 
 export interface AuthActionEmailJob extends EmailJobBase {
   actionUrl: string;
+  /** CP13: present exactly on an `affiliate_invite` job. */
+  affiliate?: AffiliateInviteContext;
   kind: AuthActionEmailKind;
   order?: undefined;
   /** Absent on every ordinary reset and verification job (their shape is unchanged). */
@@ -172,6 +216,7 @@ export interface AlertDigestEmailJob extends EmailJobBase {
 }
 
 export type AuthEmailJob =
+  | AffiliateEmailJob
   | AuthActionEmailJob
   | AlertDigestEmailJob
   | CheckoutReminderEmailJob
@@ -223,11 +268,77 @@ function validatedActionUrl(
   return url.href;
 }
 
-/** A variant is either absent or `invite` on a `password_reset` job. */
+const AFFILIATE_CODE = /^[A-Z0-9-]{3,20}$/;
+const MAX_CONTEXT_URL_LENGTH = 500;
+const CONTEXT_CONTROL = /[\u0000-\u001f\u007f]/;
+
+function isContextUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > MAX_CONTEXT_URL_LENGTH || CONTEXT_CONTROL.test(value)) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === "" && url.hash === "" && url.href === value;
+  } catch {
+    return false;
+  }
+}
+
+function isBasisPoints(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 10_000;
+}
+
+/** The `affiliate` context of an `affiliate_invite` job, validated, or a throw. */
+function validatedAffiliateContext(value: unknown): AffiliateInviteContext {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    throw new Error("Invalid affiliate invite context");
+  }
+  const context = value as Record<string, unknown>;
+  const shopName = context.shopName;
+  if (
+    typeof context.code !== "string" ||
+    !AFFILIATE_CODE.test(context.code) ||
+    !isBasisPoints(context.commissionBp) ||
+    !isBasisPoints(context.discountBp) ||
+    !isContextUrl(context.portalUrl) ||
+    !isContextUrl(context.refLink) ||
+    !(
+      shopName === null ||
+      (typeof shopName === "string" && shopName.length > 0 && shopName.length <= 200 && !CONTEXT_CONTROL.test(shopName))
+    )
+  ) {
+    throw new Error("Invalid affiliate invite context");
+  }
+  return {
+    code: context.code,
+    commissionBp: context.commissionBp,
+    discountBp: context.discountBp,
+    portalUrl: context.portalUrl,
+    refLink: context.refLink,
+    shopName: shopName as string | null,
+  };
+}
+
+/**
+ * A variant is either absent, `invite`, or (CP13) `affiliate_invite` with its
+ * shop context — each only on a `password_reset` job. A context without its
+ * variant, or the variant without its context, is refused.
+ */
 function validatedVariant(
   value: unknown,
   kind: AuthActionEmailKind,
-): { variant?: AuthActionEmailVariant } {
+  affiliate: unknown,
+): { affiliate?: AffiliateInviteContext; variant?: AuthActionEmailVariant } {
+  if (value === "affiliate_invite" && kind === "password_reset") {
+    return { affiliate: validatedAffiliateContext(affiliate), variant: "affiliate_invite" };
+  }
+  if (affiliate !== undefined) {
+    throw new Error("Invalid auth email variant");
+  }
   if (value === undefined) {
     return {};
   }
@@ -268,7 +379,7 @@ export function createAuthEmailJob(
     locale: input.locale,
     recipient: normalizedEmail(input.recipient),
     ...(input.tenantId === undefined ? {} : { tenantId: input.tenantId }),
-    ...validatedVariant(input.variant, input.kind),
+    ...validatedVariant(input.variant, input.kind, input.affiliate),
     version: 1,
   };
 }
@@ -283,6 +394,10 @@ export function parseAuthEmailJob(
 
   if (isWithdrawalEmailKind((value as { kind?: unknown }).kind)) {
     return parseWithdrawalEmailJob(value);
+  }
+
+  if (isAffiliateEmailKind((value as { kind?: unknown }).kind)) {
+    return parseAffiliateEmailJob(value);
   }
 
   if (isOrderEmailKind((value as { kind?: unknown }).kind)) {
@@ -332,7 +447,7 @@ export function parseAuthEmailJob(
     locale: job.locale,
     recipient: normalizedEmail(String(job.recipient ?? "")),
     ...(job.tenantId === undefined ? {} : { tenantId: job.tenantId }),
-    ...validatedVariant(job.variant, job.kind),
+    ...validatedVariant(job.variant, job.kind, job.affiliate),
     version: 1,
   };
 }
@@ -373,6 +488,10 @@ export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
     return renderWithdrawalEmail(job);
   }
 
+  if (isAffiliateEmailJob(job)) {
+    return renderAffiliateEmail(job);
+  }
+
   if (isOrderEmailJob(job)) {
     return renderOrderEmail(job);
   }
@@ -391,6 +510,10 @@ export function renderAuthEmail(job: AuthEmailJob): AuthEmailMessage {
 
   if (job.variant === "invite") {
     return renderInviteEmail(job);
+  }
+
+  if (job.variant === "affiliate_invite" && job.affiliate !== undefined) {
+    return renderAffiliateInviteEmail(job, job.affiliate);
   }
 
   const copy =
@@ -488,6 +611,95 @@ function renderInviteEmail(job: AuthActionEmailJob): AuthEmailMessage {
       "",
       ...copy.lines.after,
     ].join("\n"),
+  };
+}
+
+// ── the affiliate invite (CP13, design §9.3) ────────────────────────────────
+
+/** Basis points as a percent in the locale's form: 1500 → "15", 1250 → "12,5" / "12.5". */
+function percentOf(bp: number, locale: AuthEmailLocale): string {
+  const whole = Math.trunc(bp / 100);
+  const rest = bp % 100;
+  if (rest === 0) {
+    return String(whole);
+  }
+  const decimals = String(rest).padStart(2, "0").replace(/0$/, "");
+  return `${whole}${locale === "sv" ? "," : "."}${decimals}`;
+}
+
+/**
+ * The welcome of an affiliate who sets a password with this link: the shop,
+ * the code, the link to share, the rates, the portal. Minimal copy; unit A4
+ * writes the final words (CP13_BRIEFS.md). Every value is escaped in HTML.
+ */
+export function affiliateInviteCopy(
+  context: AffiliateInviteContext,
+  locale: AuthEmailLocale,
+): { action: string; after: string[]; before: string[]; subject: string } {
+  const shop = context.shopName ?? (locale === "sv" ? "butiken" : "the shop");
+  const commission = percentOf(context.commissionBp, locale);
+  const discount = percentOf(context.discountBp, locale);
+  return locale === "sv"
+    ? {
+        action: "Välj lösenord",
+        after: [
+          `Din kod: ${context.code}`,
+          `Din länk: ${context.refLink}`,
+          `Kundrabatt ${discount} % · Din provision ${commission} % av nettovärdet (exkl. moms och frakt).`,
+          `Portalen: ${context.portalUrl}`,
+          `Länken för lösenordet gäller i ${INVITE_LINK_VALID_HOURS} timmar och kan bara användas en gång.`,
+          "Om du inte väntade dig det här mejlet kan du bortse från det.",
+        ],
+        before: [
+          `Välkommen som affiliate hos ${shop}!`,
+          "Välj ett lösenord för att logga in i affiliateportalen.",
+        ],
+        subject: `Välkommen som affiliate hos ${shop}`,
+      }
+    : {
+        action: "Choose password",
+        after: [
+          `Your code: ${context.code}`,
+          `Your link: ${context.refLink}`,
+          `Customer discount ${discount} % · Your commission ${commission} % of the net value (excl. VAT and shipping).`,
+          `The portal: ${context.portalUrl}`,
+          `The password link works for ${INVITE_LINK_VALID_HOURS} hours and can be used once.`,
+          "If you did not expect this email, you can ignore it.",
+        ],
+        before: [
+          `Welcome as an affiliate of ${shop}!`,
+          "Choose a password to sign in to the affiliate portal.",
+        ],
+        subject: `Welcome as an affiliate of ${shop}`,
+      };
+}
+
+function renderAffiliateInviteEmail(
+  job: AuthActionEmailJob,
+  context: AffiliateInviteContext,
+): AuthEmailMessage {
+  const copy = affiliateInviteCopy(context, job.locale);
+  const paragraph = (line: string) => `<p>${escapeHtml(line)}</p>`;
+  return {
+    html: [
+      ...copy.before.map(paragraph),
+      `<p><a href="${escapeHtml(job.actionUrl)}">${escapeHtml(copy.action)}</a></p>`,
+      ...copy.after.map(paragraph),
+    ].join(""),
+    subject: copy.subject,
+    text: [...copy.before, "", `${copy.action}: ${job.actionUrl}`, "", ...copy.after].join("\n"),
+  };
+}
+
+/** The context in a FIXED key order, for the ledger's fingerprint. */
+export function canonicalAffiliateInviteContext(context: AffiliateInviteContext) {
+  return {
+    code: context.code,
+    commissionBp: context.commissionBp,
+    discountBp: context.discountBp,
+    portalUrl: context.portalUrl,
+    refLink: context.refLink,
+    shopName: context.shopName,
   };
 }
 

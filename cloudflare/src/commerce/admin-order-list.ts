@@ -1,3 +1,4 @@
+import { type OrderAffiliateView, readOrderAffiliates } from "../affiliate/projections";
 import { readOrderRecipients } from "./recipient";
 import type { FulfilmentState } from "./fulfilment";
 import { isFulfilmentState } from "./fulfilment";
@@ -183,6 +184,8 @@ export function parseAdminOrderListQuery(url: URL): AdminOrderListQuery | null {
 }
 
 export interface AdminOrderListRow {
+  /** CP13 (A14): the affiliate member, as the detail's; null without one. */
+  affiliate: OrderAffiliateView | null;
   cancelledAt: string | null;
   createdAt: string;
   currency: string;
@@ -279,6 +282,7 @@ export async function listAdminOrders(
   db: D1Database,
   tenantId: string,
   query: AdminOrderListQuery,
+  now: number = Date.now(),
 ): Promise<AdminOrderList> {
   const window = windowWhere(tenantId, query);
   const pageWhere = [window.sql];
@@ -318,6 +322,12 @@ export async function listAdminOrders(
     tenantId,
     page.map((row) => row.order_id),
   );
+  const affiliates = await readOrderAffiliates(
+    db,
+    tenantId,
+    page.map((row) => row.order_id),
+    now,
+  );
   const aggregate = (totals?.results?.[0] ?? { count: 0, total_minor: 0 }) as {
     count: number;
     total_minor: number;
@@ -331,6 +341,7 @@ export async function listAdminOrders(
     orders: page.map((row) => {
       const recipient = recipients.get(row.order_id) ?? null;
       return {
+        affiliate: affiliates.get(row.order_id) ?? null,
         cancelledAt: row.cancelled_at,
         createdAt: new Date(row.created_at).toISOString(),
         currency: row.currency,

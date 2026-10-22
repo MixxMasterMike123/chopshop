@@ -19,7 +19,7 @@ import { PORTED_FEATURE_KEYS } from "../storefront/public-storefront";
  *
  *   GET /v1/me            (no X-Shop-Id)
  *       200 { user: { id, email, name },
- *             accountType: "tenant_admin" | "platform_admin",
+ *             accountType: "tenant_admin" | "platform_admin" | "affiliate" (CP13),
  *             platform: boolean,
  *             memberships: [{ tenantId, shopName, status, published, role: "admin" }],
  *             actingAs:    [{ tenantId, shopName, expiresAt }] }

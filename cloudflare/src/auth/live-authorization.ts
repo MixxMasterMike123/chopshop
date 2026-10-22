@@ -140,3 +140,62 @@ export async function authorizePrintOperator(
         userId: row.user_id,
       };
 }
+
+/**
+ * CP13 (design §1.1, A1): an affiliate of ONE shop. `affiliateId` is the
+ * `affiliates` row of (tenant, user) — the program row the portal reads and
+ * writes. There is no acting-as: a platform user never acts as an affiliate
+ * (the shop admin's detail page shows the same projection instead).
+ */
+export interface AffiliatePrincipal {
+  accountType: "affiliate";
+  affiliateId: string;
+  tenantId: string;
+  userId: string;
+}
+
+/**
+ * The affiliate guard's decision, live on every request like the others: an
+ * ACTIVE identity of kind 'affiliate', an ACTIVE membership of role
+ * 'affiliate' in this shop, the shop active, and the shop's affiliates row of
+ * this person. The program status (active/inactive/suspended) is NOT read:
+ * it gates the money paths, never the login (design §3.1: reversals, the
+ * ledger and payouts ignore it; "Ta bort" revokes the membership instead).
+ */
+export async function authorizeAffiliate(
+  db: D1Database,
+  userId: string,
+  tenantId: string,
+): Promise<AffiliatePrincipal | null> {
+  const row = await db
+    .prepare(
+      `SELECT access.user_id, affiliate.affiliate_id, membership.tenant_id
+       FROM identity_access AS access
+       INNER JOIN tenant_memberships AS membership
+         ON membership.user_id = access.user_id
+       INNER JOIN tenants AS tenant
+         ON tenant.tenant_id = membership.tenant_id
+       INNER JOIN affiliates AS affiliate
+         ON affiliate.tenant_id = membership.tenant_id
+        AND affiliate.user_id = access.user_id
+       WHERE access.user_id = ?
+         AND access.account_type = 'affiliate'
+         AND access.status = 'active'
+         AND membership.tenant_id = ?
+         AND membership.role = 'affiliate'
+         AND membership.status = 'active'
+         AND tenant.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(userId, tenantId)
+    .first<{ affiliate_id: string; tenant_id: string; user_id: string }>();
+
+  return row === null
+    ? null
+    : {
+        accountType: "affiliate",
+        affiliateId: row.affiliate_id,
+        tenantId: row.tenant_id,
+        userId: row.user_id,
+      };
+}

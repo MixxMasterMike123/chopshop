@@ -18,6 +18,13 @@ import {
   type StatusMailStep,
 } from "../email/order-emails";
 import { readCanonicalOrigins } from "../lib/origins";
+import { affiliatePortalUrl, affiliateRefLink } from "../affiliate/affiliates";
+import { type AffiliateEmailKind, isAffiliateEmailKind } from "../affiliate/mail";
+import {
+  type AffiliateEmailContent,
+  createAffiliateEmailJob,
+  isShopFacingAffiliateKind,
+} from "../email/affiliate-emails";
 import {
   alertStatement,
   complete,
@@ -74,6 +81,16 @@ import {
  *
  * TENANCY: every read is by (id, tenant of the row). A row of shop A can only
  * ever name shop A's order, history row, refund and address.
+ *
+ * CP13 (design §9): the `email` effect also carries the AFFILIATE mails —
+ * payload `{ kind: 'affiliate_…', <its id> }` (src/affiliate/mail.ts lists
+ * them with their aggregates) — through the same frame, ledger record,
+ * first-build freeze and delivery as the order mails (`buildAffiliateMail`
+ * below). What is frozen: the whole content (the shop's name and support
+ * address, the code, the rates, the links built from the canonical origins,
+ * the amounts) and, for the two mails to the shop, the shop's notice address.
+ * The affiliate's or the applicant's own address is read again on a retry,
+ * as a buyer's is.
  */
 
 const JOB_LIFETIME_MS = 24 * 60 * 60 * 1_000;
@@ -125,6 +142,43 @@ function parseJson(text: string | null | undefined): unknown {
 type EmailPayload =
   | { kind: "order_confirmation" | "order_notice_shop"; orderId: string }
   | { full: boolean; kind: "refund_notice"; operationId: string; orderId: string };
+
+/** CP13: an affiliate mail's payload: its kind and the id of its aggregate (+ the ledger entry of a reversal). */
+interface AffiliatePayload {
+  entryId?: string;
+  id: string;
+  idKey: "affiliateId" | "applicationId" | "orderId" | "payoutId";
+  kind: AffiliateEmailKind;
+}
+
+const AFFILIATE_AGGREGATE: Record<AffiliateEmailKind, { aggregateType: string; idKey: AffiliatePayload["idKey"] }> = {
+  affiliate_application_denied: { aggregateType: "affiliate_application", idKey: "applicationId" },
+  affiliate_application_notice: { aggregateType: "affiliate_application", idKey: "applicationId" },
+  affiliate_application_received: { aggregateType: "affiliate_application", idKey: "applicationId" },
+  affiliate_conversion: { aggregateType: "order", idKey: "orderId" },
+  affiliate_payout: { aggregateType: "affiliate_payout", idKey: "payoutId" },
+  affiliate_payout_requested: { aggregateType: "affiliate_payout", idKey: "payoutId" },
+  affiliate_reversal: { aggregateType: "order", idKey: "orderId" },
+  affiliate_welcome: { aggregateType: "affiliate", idKey: "affiliateId" },
+};
+
+function parseAffiliatePayload(payloadJson: string): AffiliatePayload | null {
+  const payload = parseJson(payloadJson);
+  if (!isRecord(payload) || !isAffiliateEmailKind(payload.kind)) {
+    return null;
+  }
+  const kind = payload.kind;
+  const { idKey } = AFFILIATE_AGGREGATE[kind];
+  const keys = kind === "affiliate_reversal" ? ["entryId", "kind", idKey] : ["kind", idKey];
+  const id = payload[idKey];
+  if (!hasExactly(payload, keys) || typeof id !== "string") {
+    return null;
+  }
+  if (kind === "affiliate_reversal") {
+    return typeof payload.entryId === "string" ? { entryId: payload.entryId, id, idKey, kind } : null;
+  }
+  return { id, idKey, kind };
+}
 
 function parseEmailPayload(payloadJson: string): EmailPayload | null {
   const payload = parseJson(payloadJson);
@@ -181,9 +235,18 @@ function readOrder(env: Env, orderId: string, tenantId: string): Promise<OrderFa
     `SELECT o.order_number, o.customer_email, o.currency, o.delivery_method,
             o.shipping_country, o.subtotal_minor, o.shipping_minor,
             o.discount_minor, o.vat_minor, o.total_minor, t.shop_name, t.support_email,
-            (SELECT dc.code FROM discount_codes AS dc
-             WHERE dc.discount_code_id = o.discount_code_id
-               AND dc.tenant_id = o.tenant_id) AS discount_code
+            -- CP13 (R2-7): the code STRING that discounted, whichever family
+            -- authorized it — a campaign code by its current name, an
+            -- affiliate's code as frozen on the order. Never the affiliate.
+            -- Round 1: a label only when money was taken off (an affiliate's
+            -- 0-öre attribution shows no "Rabatt (KOD)" row).
+            CASE WHEN o.discount_minor > 0 THEN COALESCE(
+              (SELECT dc.code FROM discount_codes AS dc
+               WHERE dc.discount_code_id = o.discount_code_id
+                 AND dc.tenant_id = o.tenant_id
+                 AND o.discount_authority IS NOT 'affiliate'),
+              o.affiliate_code
+            ) END AS discount_code
      FROM orders AS o JOIN tenants AS t ON t.tenant_id = o.tenant_id
      WHERE o.order_id = ? AND o.tenant_id = ?
      LIMIT 1`,
@@ -657,9 +720,18 @@ export async function deliver(ctx: EffectContext, built: Built, options: Deliver
   );
 }
 
-/** The `email` effect: the confirmation, the shop's notice, the refund notice. */
+/** The `email` effect: the confirmation, the shop's notice, the refund notice (CP13: and the affiliate mails). */
 export async function runEmailEffect(ctx: EffectContext): Promise<OutboxRunOutcome> {
   const { row } = ctx;
+  const affiliate = parseAffiliatePayload(row.payload_json);
+  if (affiliate !== null) {
+    if (row.tenant_id === null || row.aggregate_type !== AFFILIATE_AGGREGATE[affiliate.kind].aggregateType || row.aggregate_id !== affiliate.id) {
+      return failEmail(ctx, "invalid_payload", true);
+    }
+    return deliver(ctx, await buildAffiliateMail(ctx, affiliate, row.tenant_id), {
+      subject: `${affiliate.kind} ${affiliate.id}`,
+    });
+  }
   const payload = parseEmailPayload(row.payload_json);
   if (payload === null || row.tenant_id === null || payload.orderId !== row.aggregate_id) {
     return failEmail(ctx, "invalid_payload", true);
@@ -688,4 +760,356 @@ export async function runOrderStatusEmailEffect(ctx: EffectContext): Promise<Out
     return failEmail(ctx, "invalid_payload", true);
   }
   return deliver(ctx, await buildStatusUpdate(ctx, payload, row.tenant_id));
+}
+
+// ── the affiliate mails (CP13, design §9) ───────────────────────────────────
+
+interface AffiliateMailFacts {
+  content: AffiliateEmailContent;
+  locale: "en" | "sv";
+  /** The address it goes to; FROZEN only for the shop's own mails. */
+  recipient: string;
+}
+
+interface ShopFacts {
+  shop_name: string | null;
+  support_email: string | null;
+}
+
+function readShopFacts(env: Env, tenantId: string): Promise<ShopFacts | null> {
+  return env.DB.prepare("SELECT shop_name, support_email FROM tenants WHERE tenant_id = ? LIMIT 1")
+    .bind(tenantId)
+    .first<ShopFacts>();
+}
+
+/** An admin page of this shop: `<admin origin><path>?shopId=<tenant>`, or null without one. */
+function adminPageUrl(env: Env, path: string, tenantId: string): string | null {
+  const admin = readCanonicalOrigins(env)?.admin;
+  if (admin === undefined || !ADMIN_SHOP_ID_PATTERN.test(tenantId)) {
+    return null;
+  }
+  const url = new URL(path, admin);
+  url.searchParams.set("shopId", tenantId);
+  return url.href;
+}
+
+interface ApplicationFacts {
+  decision_reason: string | null;
+  email: string;
+  name: string;
+  preferred_lang: "en" | "sv";
+  promotion_method: string;
+  status: string;
+}
+
+interface AffiliateFacts {
+  affiliate_id: string;
+  code: string;
+  commission_bp: number;
+  discount_bp: number;
+  email: string;
+  name: string;
+  preferred_lang: "en" | "sv";
+}
+
+function readApplicationFacts(env: Env, applicationId: string, tenantId: string): Promise<ApplicationFacts | null> {
+  return env.DB.prepare(
+    `SELECT name, email, promotion_method, preferred_lang, status, decision_reason
+     FROM affiliate_applications WHERE application_id = ? AND tenant_id = ? LIMIT 1`,
+  )
+    .bind(applicationId, tenantId)
+    .first<ApplicationFacts>();
+}
+
+function readAffiliateFacts(env: Env, affiliateId: string, tenantId: string): Promise<AffiliateFacts | null> {
+  return env.DB.prepare(
+    `SELECT a.affiliate_id, a.name, a.code, a.commission_bp, a.discount_bp, a.preferred_lang, u."email" AS email
+     FROM affiliates AS a INNER JOIN "user" AS u ON u."id" = a.user_id
+     WHERE a.affiliate_id = ? AND a.tenant_id = ? LIMIT 1`,
+  )
+    .bind(affiliateId, tenantId)
+    .first<AffiliateFacts>();
+}
+
+/** The fresh content of an affiliate mail, or why there is none. */
+async function freshAffiliateMail(
+  ctx: EffectContext,
+  payload: AffiliatePayload,
+  tenantId: string,
+): Promise<AffiliateMailFacts | Built> {
+  const { env } = ctx;
+  const shop = await readShopFacts(env, tenantId);
+  if (shop === null) {
+    return NOT_FOUND;
+  }
+  const shopName = mailText(shop.shop_name);
+  const supportEmail = realShopAddress(shop.support_email);
+
+  switch (payload.kind) {
+    case "affiliate_application_received":
+    case "affiliate_application_notice":
+    case "affiliate_application_denied": {
+      const application = await readApplicationFacts(env, payload.id, tenantId);
+      if (application === null) {
+        return NOT_FOUND;
+      }
+      const applicantName = mailText(application.name, 100) ?? "–";
+      if (payload.kind === "affiliate_application_received") {
+        // Nothing the applicant typed goes back to the address they typed (A1 round 1).
+        return { content: { shopName, supportEmail }, locale: application.preferred_lang, recipient: application.email };
+      }
+      if (payload.kind === "affiliate_application_denied") {
+        if (application.status !== "denied") {
+          return { kind: "no_mail" };
+        }
+        return {
+          content: { reason: mailText(application.decision_reason, 500) ?? "–", shopName, supportEmail },
+          locale: application.preferred_lang,
+          recipient: application.email,
+        };
+      }
+      const recipient = await shopNoticeAddress(env, tenantId, shop.support_email);
+      if (recipient === null) {
+        return { error: "no_shop_address", kind: "fail" };
+      }
+      return {
+        content: {
+          adminUrl: adminPageUrl(env, `/admin/affiliates/applications/${payload.id}`, tenantId),
+          applicantEmail: realShopAddress(application.email),
+          applicantName,
+          promotionMethod: application.promotion_method,
+          shopName,
+        },
+        locale: "sv",
+        recipient,
+      };
+    }
+    case "affiliate_welcome": {
+      const affiliate = await readAffiliateFacts(env, payload.id, tenantId);
+      if (affiliate === null) {
+        return NOT_FOUND;
+      }
+      const refLink = affiliateRefLink(env, tenantId, affiliate.code);
+      const portalUrl = affiliatePortalUrl(env, tenantId);
+      if (refLink === null || portalUrl === null) {
+        return { error: "no_canonical_origin", kind: "fail" };
+      }
+      return {
+        content: {
+          affiliateName: mailText(affiliate.name, 100) ?? "–",
+          code: affiliate.code,
+          commissionBp: affiliate.commission_bp,
+          discountBp: affiliate.discount_bp,
+          portalUrl,
+          refLink,
+          shopName,
+          supportEmail,
+        },
+        locale: affiliate.preferred_lang,
+        recipient: affiliate.email,
+      };
+    }
+    case "affiliate_conversion":
+    case "affiliate_reversal": {
+      const entry = await env.DB.prepare(
+        `SELECT l.affiliate_id, l.amount_minor, l.currency, l.available_at, l.ref, o.order_number, o.dispute_id
+         FROM affiliate_ledger AS l
+         INNER JOIN orders AS o ON o.order_id = l.order_id AND o.tenant_id = l.tenant_id
+         WHERE l.tenant_id = ? AND l.order_id = ?
+           AND ${payload.kind === "affiliate_conversion" ? "l.kind = 'accrual'" : "l.kind = 'reversal' AND l.entry_id = ?"}
+         LIMIT 1`,
+      )
+        .bind(tenantId, payload.id, ...(payload.kind === "affiliate_reversal" ? [payload.entryId] : []))
+        .first<{
+          affiliate_id: string;
+          amount_minor: number;
+          available_at: string | null;
+          currency: string;
+          dispute_id: string | null;
+          order_number: string;
+          ref: string;
+        }>();
+      if (entry === null) {
+        return NOT_FOUND;
+      }
+      const affiliate = await readAffiliateFacts(env, entry.affiliate_id, tenantId);
+      if (affiliate === null) {
+        return NOT_FOUND;
+      }
+      if (payload.kind === "affiliate_conversion") {
+        return {
+          content: {
+            availableAt: entry.available_at ?? new Date(ctx.row.created_at).toISOString(),
+            commissionMinor: entry.amount_minor,
+            currency: entry.currency,
+            orderNumber: entry.order_number,
+            shopName,
+            supportEmail,
+          },
+          locale: affiliate.preferred_lang,
+          recipient: affiliate.email,
+        };
+      }
+      return {
+        content: {
+          amountMinor: Math.abs(entry.amount_minor),
+          cause: entry.dispute_id !== null && entry.ref === entry.dispute_id ? "dispute" : "refund",
+          currency: entry.currency,
+          direction: entry.amount_minor > 0 ? "restored" : "reversed",
+          orderNumber: entry.order_number,
+          shopName,
+          supportEmail,
+        },
+        locale: affiliate.preferred_lang,
+        recipient: affiliate.email,
+      };
+    }
+    case "affiliate_payout":
+    case "affiliate_payout_requested": {
+      const payout = await env.DB.prepare(
+        `SELECT affiliate_id, amount_minor, currency, status, paid_reference, void_reason
+         FROM affiliate_payouts WHERE payout_id = ? AND tenant_id = ? LIMIT 1`,
+      )
+        .bind(payload.id, tenantId)
+        .first<{
+          affiliate_id: string;
+          amount_minor: number;
+          currency: string;
+          paid_reference: string | null;
+          status: string;
+          void_reason: string | null;
+        }>();
+      if (payout === null) {
+        return NOT_FOUND;
+      }
+      const affiliate = await readAffiliateFacts(env, payout.affiliate_id, tenantId);
+      if (affiliate === null) {
+        return NOT_FOUND;
+      }
+      if (payload.kind === "affiliate_payout_requested") {
+        const recipient = await shopNoticeAddress(env, tenantId, shop.support_email);
+        if (recipient === null) {
+          return { error: "no_shop_address", kind: "fail" };
+        }
+        return {
+          content: {
+            adminUrl: adminPageUrl(env, `/admin/affiliates/${payout.affiliate_id}/payout`, tenantId),
+            affiliateName: mailText(affiliate.name, 100) ?? "–",
+            amountMinor: payout.amount_minor,
+            currency: payout.currency,
+            shopName,
+          },
+          locale: "sv",
+          recipient,
+        };
+      }
+      if (payout.status === "requested") {
+        return { kind: "no_mail" };
+      }
+      return {
+        content: {
+          amountMinor: payout.amount_minor,
+          currency: payout.currency,
+          outcome: payout.status === "paid" ? "paid" : "void",
+          reason: payout.status === "void" ? mailText(payout.void_reason, 500) : null,
+          reference: payout.status === "paid" ? mailText(payout.paid_reference, 100) : null,
+          shopName,
+          supportEmail,
+        },
+        locale: affiliate.preferred_lang,
+        recipient: affiliate.email,
+      };
+    }
+  }
+}
+
+/** The affiliate's or applicant's address, read again on a retry (never frozen). */
+async function liveAffiliateRecipient(ctx: EffectContext, payload: AffiliatePayload, tenantId: string): Promise<string | null> {
+  const { env } = ctx;
+  switch (payload.idKey) {
+    case "applicationId":
+      return (await readApplicationFacts(env, payload.id, tenantId))?.email ?? null;
+    case "affiliateId":
+      return (await readAffiliateFacts(env, payload.id, tenantId))?.email ?? null;
+    case "orderId": {
+      const row = await env.DB.prepare(
+        `SELECT u."email" AS email FROM affiliate_ledger AS l
+         INNER JOIN affiliates AS a ON a.affiliate_id = l.affiliate_id AND a.tenant_id = l.tenant_id
+         INNER JOIN "user" AS u ON u."id" = a.user_id
+         WHERE l.tenant_id = ? AND l.order_id = ? AND l.kind = 'accrual' LIMIT 1`,
+      )
+        .bind(tenantId, payload.id)
+        .first<{ email: string }>();
+      return row?.email ?? null;
+    }
+    case "payoutId": {
+      const row = await env.DB.prepare(
+        `SELECT u."email" AS email FROM affiliate_payouts AS p
+         INNER JOIN affiliates AS a ON a.affiliate_id = p.affiliate_id AND a.tenant_id = p.tenant_id
+         INNER JOIN "user" AS u ON u."id" = a.user_id
+         WHERE p.payout_id = ? AND p.tenant_id = ? LIMIT 1`,
+      )
+        .bind(payload.id, tenantId)
+        .first<{ email: string }>();
+      return row?.email ?? null;
+    }
+  }
+}
+
+/**
+ * One affiliate mail: from its frozen part (a retry) or fresh (frozen on this
+ * attempt — the whole content, the locale, and the shop's notice address for
+ * a mail to the shop).
+ */
+async function buildAffiliateMail(ctx: EffectContext, payload: AffiliatePayload, tenantId: string): Promise<Built> {
+  const frozen = frozenPart(ctx.row.frozen_json, "affiliateMail");
+  let facts: AffiliateMailFacts;
+  if (frozen !== undefined) {
+    if (
+      !isRecord(frozen) ||
+      !isRecord(frozen.content) ||
+      (frozen.locale !== "sv" && frozen.locale !== "en")
+    ) {
+      return INVALID;
+    }
+    const recipient = isShopFacingAffiliateKind(payload.kind)
+      ? frozen.recipient
+      : await liveAffiliateRecipient(ctx, payload, tenantId);
+    if (typeof recipient !== "string") {
+      return recipient === null ? NOT_FOUND : INVALID;
+    }
+    facts = { content: frozen.content as AffiliateEmailContent, locale: frozen.locale, recipient };
+  } else {
+    const fresh = await freshAffiliateMail(ctx, payload, tenantId);
+    if ("kind" in fresh) {
+      return fresh;
+    }
+    facts = fresh;
+  }
+
+  let job;
+  try {
+    job = createAffiliateEmailJob({
+      ...(await frameOf(ctx)),
+      content: facts.content,
+      kind: payload.kind,
+      locale: facts.locale,
+      recipient: facts.recipient,
+      tenantId,
+    });
+  } catch {
+    return INVALID;
+  }
+  return {
+    freeze:
+      frozen !== undefined
+        ? null
+        : JSON.stringify({
+            affiliateMail: isShopFacingAffiliateKind(payload.kind)
+              ? { content: job.content, locale: job.locale, recipient: job.recipient }
+              : { content: job.content, locale: job.locale },
+          }),
+    job,
+    kind: "built",
+  };
 }

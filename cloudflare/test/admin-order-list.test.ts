@@ -172,6 +172,8 @@ describe("the list", () => {
     expect(body.nextCursor).toBeNull();
 
     expect(body.orders[0]).toEqual({
+      // CP13 (A14): no affiliate on this order.
+      affiliate: null,
       cancelledAt: null,
       createdAt: new Date(T0 + 2 * DAY).toISOString(),
       currency: "SEK",
@@ -261,7 +263,7 @@ describe("the list", () => {
     expect(window.totalMinor).toBe(29_900);
     // The answer carries what the list always carried, nothing more of the recipient.
     expect(Object.keys(window.orders[0] ?? {}).sort()).toEqual([
-      "cancelledAt", "createdAt", "currency", "customerEmail", "deliveryMethod", "fulfilment",
+      "affiliate", "cancelledAt", "createdAt", "currency", "customerEmail", "deliveryMethod", "fulfilment",
       "itemCount", "orderId", "orderNumber", "paidAt", "pickupPlace", "recipientName",
       "refundedMinor", "status", "totalMinor",
     ]);

@@ -111,6 +111,8 @@ export const TENANT_OPEN_GUARD =
  */
 export const FEATURE_KEYS = [
   "abandonedCheckout",
+  // CP13: the affiliate program (migration 0058 replaced the two triggers).
+  "affiliate",
   "contentStudio",
   "discountCodes",
   "marketingMaterials",
@@ -137,7 +139,7 @@ export const DELETED_FEATURE_KEYS = [
  * triggers, in the checkpoint that ports its feature. Their Firebase values
  * stay in the archived raw map until then.
  */
-export const NOT_PORTED_FEATURE_KEYS = ["affiliate", "b2b"] as const;
+export const NOT_PORTED_FEATURE_KEYS = ["b2b"] as const;
 
 /**
  * Firebase OPT_IN_KEYS (addons.js, shopFeatures.ts): enabled only by an
@@ -148,9 +150,12 @@ export const NOT_PORTED_FEATURE_KEYS = ["affiliate", "b2b"] as const;
  * (D62): the code box appears, and a code applies, only on a shop the
  * platform turned it on for. CP9-AC (AC2): `abandonedCheckout` likewise: no
  * reminder is ever sent for a shop the platform did not turn it on for.
+ * CP13 (design A12): `affiliate` likewise, OFF by default and OFF at
+ * provisioning: no application form, no `?ref=` count, no affiliate quote.
  */
 const OPT_IN_KEYS: ReadonlySet<FeatureKey> = new Set<FeatureKey>([
   "abandonedCheckout",
+  "affiliate",
   "contentStudio",
   "discountCodes",
   "marketingMaterials",

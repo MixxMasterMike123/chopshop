@@ -14,6 +14,7 @@ import { classifyRequest } from "./routing";
 import type { SeoAnswer, SeoPage } from "./seo";
 import {
   absolutizeJsonLd,
+  landingRef,
   parseSeoAnswer,
   redirectLocation,
   SEO_DEADLINE_MS,
@@ -92,6 +93,10 @@ async function readJson(env: WebEnv, site: Site, request: Request): Promise<{ bo
  * The SEO answer; "none" when the API answered 404 (no public page at this
  * address — every address of an unpublished shop), null when there is no
  * answer to go by (slow, failing, malformed).
+ *
+ * CP13 (design §2.1, CX-B9): a landing's `?ref=` code rides on this same call
+ * (`&ref=CODE`); the API counts it under its own waitUntil. The page is
+ * served whatever the count does — the answer is the same with or without it.
  */
 async function seoAnswer(
   env: WebEnv,
@@ -100,8 +105,11 @@ async function seoAnswer(
   relativePath: string,
   visitor: string | null,
   deadlineMs: number,
+  ref: string | null,
 ): Promise<SeoAnswer | "none" | null> {
-  const target = `${origin}/v1/seo?path=${encodeURIComponent(relativePath)}`;
+  const target = `${origin}/v1/seo?path=${encodeURIComponent(relativePath)}${
+    ref === null ? "" : `&ref=${encodeURIComponent(ref)}`
+  }`;
   const call = readJson(env, site, workerApiRequest(target, visitor)).then((result) =>
     result.status === 200 ? parseSeoAnswer(result.body) : result.status === 404 ? ("none" as const) : null,
   );
@@ -167,6 +175,8 @@ async function servePage(
   const origin = siteOrigin(config, url, site);
   // Fetched while the head is asked for, not after.
   const shell = env.ASSETS.fetch(new Request(new URL(SHELL_PATH, url))).catch(() => null);
+  // CP13: a GET page landing's affiliate code (never a HEAD, never an asset).
+  const ref = landingRef(request.method, url);
   const answer = await seoAnswer(
     env,
     site,
@@ -174,10 +184,11 @@ async function servePage(
     relativePath,
     request.headers.get("cf-connecting-ip"),
     options.seoDeadlineMs ?? SEO_DEADLINE_MS,
+    ref,
   );
 
   if (answer !== "none" && answer?.kind === "redirect") {
-    const location = redirectLocation(origin, site, answer.to);
+    const location = redirectLocation(origin, site, answer.to, ref);
     if (location !== null) {
       void shell.then((unused) => unused?.body?.cancel());
       return new Response(null, {

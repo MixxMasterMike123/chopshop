@@ -1,3 +1,4 @@
+import { type OrderAffiliateView, readOrderAffiliates } from "../affiliate/projections";
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import type { Payout, PayoutFacts } from "./payouts";
 import { computePayout, disputeBlocksRefund, netFeeMinor, PAYOUT_FACT_COLUMNS } from "./payouts";
@@ -26,6 +27,13 @@ import type { FulfilmentState } from "./fulfilment";
  * and, for a print-on-demand line, ONE seller-safe word of where the print is
  * (`podState`, see POD_STATE_SQL) — never the line's production snapshot, the
  * printer, its job reference, its cost or its error text.
+ *
+ * CP13 (design A14, §2.3): `affiliate` — the affiliate code that discounted
+ * the order, how it arrived (link or typed), and the commission the shop owes
+ * its OWN affiliate for it (`affiliateCommissionMinor`, after reversals) with
+ * its ledger state; null without an affiliate. A shop's own cost to its own
+ * affiliate, named so — never a platform figure: the platform's deduction
+ * stays the ONE `feeMinor`.
  */
 
 /**
@@ -67,6 +75,8 @@ export interface AdminOrderItem {
 }
 
 export interface AdminOrderView {
+  /** CP13: the affiliate member (A14), or null. */
+  affiliate: OrderAffiliateView | null;
   cancelledAt: string | null;
   createdAt: string;
   currency: string;
@@ -101,6 +111,7 @@ export interface AdminOrderView {
      * CP8-DC: the campaign code that paid for the discount, by its current
      * name (a used code keeps its name and is never deleted, DC12/DC13), or
      * null without one. The seller's own campaign, not a platform figure.
+     * CP13: an affiliate's code as frozen on the order (R2-7).
      */
     discountCode: string | null;
     discountMinor: number;
@@ -153,9 +164,15 @@ export async function readAdminOrder(
               o.delivery_method, o.shipping_country, o.fulfilment_status,
               o.cancelled_at, ${PAYOUT_FACT_COLUMNS},
               t.stripe_payouts_enabled,
-              (SELECT dc.code FROM discount_codes AS dc
-               WHERE dc.discount_code_id = o.discount_code_id
-                 AND dc.tenant_id = o.tenant_id) AS discount_code
+              -- Round 1: a label only when money was taken off (an affiliate's
+              -- 0-öre attribution shows no "Rabatt (KOD)" row).
+              CASE WHEN o.discount_minor > 0 THEN COALESCE(
+                (SELECT dc.code FROM discount_codes AS dc
+                 WHERE dc.discount_code_id = o.discount_code_id
+                   AND dc.tenant_id = o.tenant_id
+                   AND o.discount_authority IS NOT 'affiliate'),
+                o.affiliate_code
+              ) END AS discount_code
        FROM orders AS o
        JOIN tenants AS t ON t.tenant_id = o.tenant_id
        WHERE o.order_id = ? AND o.tenant_id = ?
@@ -215,7 +232,10 @@ export async function readAdminOrder(
     order.refund_succeeded_minor -
     order.refund_reserved_minor;
 
+  const affiliate = (await readOrderAffiliates(db, principal.tenantId, [order.order_id], now)).get(order.order_id) ?? null;
+
   return {
+    affiliate,
     cancelledAt: order.cancelled_at,
     createdAt: new Date(order.created_at).toISOString(),
     currency: order.currency,

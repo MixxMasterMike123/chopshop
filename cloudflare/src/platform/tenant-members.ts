@@ -4,6 +4,7 @@ import type { IssuedInvite } from "./invites";
 import { issueInvite } from "./invites";
 import { createInvitedUser, parseEmail } from "./provision-users";
 import { ownPasswordSql } from "./user-directory";
+import { convertUnacceptedAffiliate } from "./user-lifecycle";
 
 /**
  * A shop's own admins (CP5-WC, decision D100): the list, the invite and the
@@ -56,6 +57,14 @@ import { ownPasswordSql } from "./user-directory";
  * account (a platform admin, a print operator, a customer, a suspended
  * identity, a user without an identity) is one refusal, `not_addable`, which
  * says nothing about which.
+ *
+ * CP13 (design §1.3, R2-6): ONE exception. An `affiliate` identity that has
+ * never set a password and holds no ledger row (a shop's "bjud in affiliate"
+ * nobody took up) is CONVERTED into a tenant admin first
+ * (user-lifecycle.ts convertUnacceptedAffiliate: its affiliate memberships
+ * revoked, its affiliate rows inactive, its open invite superseded, audited),
+ * so no shop can squat an address. An affiliate who has set a password stays
+ * `not_addable`, as every other kind.
  *
  * ── THE RESEND (CP5-WK) ─────────────────────────────────────────────────────
  * Re-adding an active member who is still `invited` answers `already_member`,
@@ -421,6 +430,30 @@ export async function inviteTenantMember(
   now: number,
 ): Promise<InviteMemberResult> {
   let known = await readKnownAddress(env.DB, principal.tenantId, input.email);
+  if (
+    known !== null &&
+    known.account_type === "affiliate" &&
+    known.identity_status === "active" &&
+    known.own_password !== 1
+  ) {
+    // Not for a shop with no room: a converted identity this request could
+    // not then grant would be an inert tenant admin with no shop.
+    if ((await countingAdmins(env.DB, principal.tenantId)) >= TENANT_ADMIN_CAP) {
+      return { reason: "member_limit", status: "refused" };
+    }
+    // The guards are the conversion's own WHERE; this read only chose to try.
+    await convertUnacceptedAffiliate(
+      env.DB,
+      {
+        auditTenantId: principal.tenantId,
+        metadata: principal.actingAs === undefined ? {} : { actingAsGrantId: principal.actingAs.grantId },
+        userId: principal.userId,
+      },
+      known.user_id,
+      now,
+    );
+    known = await readKnownAddress(env.DB, principal.tenantId, input.email);
+  }
   if (known !== null) {
     const refusal = refusalFor(known);
     if (refusal !== null) {

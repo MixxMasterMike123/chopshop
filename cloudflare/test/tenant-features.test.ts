@@ -24,8 +24,9 @@ import {
  * CP3-A — per-shop add-on flags (0032 tenant_features, src/platform/
  * tenant-config.ts). D22: effective values are stored; two groups of Firebase
  * keys are refused — DELETED from the product (the four CRM add-ons) and NOT
- * PORTED YET (affiliate, b2b). The authorization matrix for the two routes is
- * in platform-tenants.test.ts.
+ * PORTED YET (b2b; `affiliate` came back as an allowed, opt-in key in CP13,
+ * migration 0058). The authorization matrix for the two routes is in
+ * platform-tenants.test.ts.
  */
 
 /** Both refused groups, named apart as in the code. */
@@ -46,6 +47,8 @@ let shopB: Tenant;
 const EXPECTED_DEFAULTS = {
   // CP9-AC (AC2): opt-in.
   abandonedCheckout: false,
+  // CP13 (design A12): opt-in.
+  affiliate: false,
   contentStudio: false,
   // CP8-DC (DC2): opt-in.
   discountCodes: false,
@@ -83,7 +86,7 @@ describe("the allowlist", () => {
     expect([...FEATURE_KEYS]).toEqual(Object.keys(EXPECTED_DEFAULTS));
     expect(FEATURE_DEFAULTS).toEqual(EXPECTED_DEFAULTS);
     expect([...DELETED_FEATURE_KEYS]).toEqual(["ambassador", "campaigns", "dining", "writers"]);
-    expect([...NOT_PORTED_FEATURE_KEYS]).toEqual(["affiliate", "b2b"]);
+    expect([...NOT_PORTED_FEATURE_KEYS]).toEqual(["b2b"]);
     for (const [group, key] of REFUSED_KEYS) {
       expect(FEATURE_KEYS as readonly string[], `${key} (${group})`).not.toContain(key);
     }
@@ -123,7 +126,7 @@ describe("the allowlist", () => {
     )
       .bind(shopB.tenantId)
       .run();
-    for (const key of ["dining", "affiliate"]) {
+    for (const key of ["dining", "b2b"]) {
       await expect(
         env.DB.prepare("UPDATE tenant_features SET feature_key = ? WHERE tenant_id = ?")
           .bind(key, shopB.tenantId)
@@ -137,6 +140,30 @@ describe("the allowlist", () => {
         .run(),
     ).rejects.toThrow(/tenant_id is immutable/);
     await env.DB.prepare("DELETE FROM tenant_features WHERE tenant_id = ?").bind(shopB.tenantId).run();
+  });
+
+  it("CP13: the database admits `affiliate` on INSERT and on UPDATE (it was refused before 0058)", async () => {
+    await env.DB.prepare(
+      `INSERT INTO tenant_features (tenant_id, feature_key, enabled, updated_at, updated_by)
+       VALUES (?, 'productReviews', 1, '2026-09-27T00:00:00.000Z', 'test')`,
+    )
+      .bind(shopB.tenantId)
+      .run();
+    await env.DB.prepare("UPDATE tenant_features SET feature_key = 'affiliate' WHERE tenant_id = ?")
+      .bind(shopB.tenantId)
+      .run();
+    expect(await isFeatureEnabled(env.DB, shopB.tenantId, "affiliate")).toBe(true);
+    await env.DB.prepare("DELETE FROM tenant_features WHERE tenant_id = ?").bind(shopB.tenantId).run();
+    await env.DB.prepare(
+      `INSERT INTO tenant_features (tenant_id, feature_key, enabled, updated_at, updated_by)
+       VALUES (?, 'affiliate', 0, '2026-09-27T00:00:00.000Z', 'test')`,
+    )
+      .bind(shopB.tenantId)
+      .run();
+    expect(await isFeatureEnabled(env.DB, shopB.tenantId, "affiliate")).toBe(false);
+    await env.DB.prepare("DELETE FROM tenant_features WHERE tenant_id = ?").bind(shopB.tenantId).run();
+    // No row: the opt-in default.
+    expect(await isFeatureEnabled(env.DB, shopB.tenantId, "affiliate")).toBe(false);
   });
 });
 
@@ -222,16 +249,40 @@ describe("PUT /v1/platform/tenants/:tenantId/features", () => {
     expect(byKey.get("pod")).toMatchObject({ enabled: true, source: "explicit" });
   });
 
+  it("CP13: switches `affiliate` like any allowed key (it was refused as not ported before 0058)", async () => {
+    const on = await expectJson<FeaturesBody>(
+      await platform(world, "PUT", `/v1/platform/tenants/${shopA.tenantId}/features`, {
+        body: { features: { affiliate: true } },
+      }),
+      200,
+      "on",
+    );
+    expect(on.features.find((feature) => feature.key === "affiliate")).toEqual({
+      defaultEnabled: false,
+      enabled: true,
+      key: "affiliate",
+      source: "explicit",
+    });
+    await expect(isFeatureEnabled(env.DB, shopA.tenantId, "affiliate")).resolves.toBe(true);
+    await expectJson(
+      await platform(world, "PUT", `/v1/platform/tenants/${shopA.tenantId}/features`, {
+        body: { features: { affiliate: false } },
+      }),
+      200,
+      "off",
+    );
+    await expect(isFeatureEnabled(env.DB, shopA.tenantId, "affiliate")).resolves.toBe(false);
+  });
+
   it.each([
     ["an unknown key", { features: { notAFeature: true } }],
     ["a deleted CRM key (dining)", { features: { dining: false } }],
     ["a deleted CRM key (writers)", { features: { writers: true } }],
     ["a deleted CRM key (campaigns)", { features: { campaigns: true } }],
     ["a deleted CRM key (ambassador)", { features: { ambassador: true } }],
-    ["a not-ported key (affiliate)", { features: { affiliate: true } }],
     ["a not-ported key (b2b)", { features: { b2b: false } }],
     ["a valid key beside a deleted one", { features: { pod: false, dining: true } }],
-    ["a valid key beside a not-ported one", { features: { discountCodes: false, affiliate: true } }],
+    ["a valid key beside a not-ported one", { features: { discountCodes: false, b2b: true } }],
     ["a non-boolean value", { features: { pod: "true" } }],
     ["a null value", { features: { pod: null } }],
     ["an empty map", { features: {} }],
@@ -272,8 +323,8 @@ describe("isFeatureEnabled", () => {
     for (const key of FEATURE_KEYS) {
       await expect(isFeatureEnabled(env.DB, shopB.tenantId, key), key).resolves.toBe(EXPECTED_DEFAULTS[key]);
     }
-    // A refused key is never enabled — including the two that Firebase treated
-    // as default-ON (affiliate, b2b).
+    // A refused key is never enabled — including b2b, which Firebase treated
+    // as default-ON (affiliate was too; since CP13 it is an opt-in key).
     for (const [group, key] of REFUSED_KEYS) {
       await expect(
         isFeatureEnabled(env.DB, shopB.tenantId, key as unknown as (typeof FEATURE_KEYS)[number]),

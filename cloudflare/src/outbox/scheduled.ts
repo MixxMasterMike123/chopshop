@@ -1,3 +1,4 @@
+import { purgeDeniedApplications } from "../affiliate/applications";
 import { rescreenStaleScreenings } from "../catalog/screening";
 import { runCheckoutReminders } from "../commerce/checkout-reminders";
 import { raiseStuckOnboardingAlerts } from "../commerce/connect-onboarding";
@@ -11,7 +12,8 @@ import { runOutboxSweep } from "./sweeper";
  *                      runReconciliation and runRetentionSweep (§2.2, §2.3) —
  *                      same 15-minute cadence, so the 30-minute alert SLA holds
  *                      — THEN the CP3 steps (CP3_STEPS below), THEN CP9-AC's
- *                      abandoned-checkout reminders, THEN the digest
+ *                      abandoned-checkout reminders, THEN CP13's retention of
+ *                      denied affiliate applications, THEN the digest
  *   anything else    → logged and ignored (a cron this build does not know)
  *
  * Each step is isolated: one failing never skips the next. If any failed, the
@@ -90,6 +92,15 @@ export const CP9_STEPS: ReadonlyArray<readonly [string, CronStep]> = [
   ["checkout_reminders", (env, now) => runCheckoutReminders(env, now)],
 ];
 
+/**
+ * CP13 (design §3.2, a D68 default): denied affiliate applications decided
+ * more than 12 months ago are deleted, at most 100 per tick, with one audit
+ * row naming how many (src/affiliate/applications.ts). Approved ones are kept.
+ */
+export const CP13_STEPS: ReadonlyArray<readonly [string, CronStep]> = [
+  ["affiliate_application_retention", (env, now) => purgeDeniedApplications(env.DB, now)],
+];
+
 export async function handleScheduled(
   controller: Pick<ScheduledController, "cron" | "scheduledTime">,
   env: Env,
@@ -138,7 +149,7 @@ export async function handleScheduled(
   //   connect_stuck    one warning alert per Connect onboarding operation that
   //                    has stayed `reserved` for more than 24 hours
   //                    (src/commerce/connect-onboarding.ts).
-  for (const [name, step] of [...CP3_STEPS, ...CP9_STEPS]) {
+  for (const [name, step] of [...CP3_STEPS, ...CP9_STEPS, ...CP13_STEPS]) {
     if (!(await runStep(name, () => step(env, now())))) {
       failures.push(name);
     }

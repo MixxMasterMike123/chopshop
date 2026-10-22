@@ -32,11 +32,24 @@ import {
  * stand-in switch the checkout route passes, so the preview prices exactly the
  * lines a checkout would accept; a line that cannot be bought is the
  * checkout's own 422.
+ *
+ * CP13 (design §2.2): the body may carry the link's `refCode` beside (or
+ * instead of) the typed `code`, and the SAME seam the checkout runs
+ * (resolveDiscount, both switches, each gating its own family) decides: an
+ * active affiliate's link code, then a typed affiliate code, then a campaign
+ * code. An affiliate hit answers exactly as a campaign hit does —
+ * `{ applies, code, discountMinor }` — and nothing of the affiliate (no id,
+ * no rate, no reason, no `overriddenBy`) leaves the preview. `code` echoes
+ * the code that applied (the link's when it won), else the typed code, else
+ * the link's. The display-only rule is unchanged: no hold, no write.
  */
 
 export interface DiscountPreviewInput {
-  code: string;
+  /** The typed code, normalized; null when only a link code was sent. */
+  code: string | null;
   items: CheckoutItemInput[];
+  /** CP13: the link's code, normalized, or null. */
+  refCode: string | null;
 }
 
 export interface DiscountPreview {
@@ -50,31 +63,42 @@ export type DiscountPreviewResult =
   | { status: "invalid_items" }
   | { status: "not_found" };
 
-const PREVIEW_KEYS = ["code", "items"] as const;
+const PREVIEW_KEYS = ["code", "items", "refCode"] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A code field: absent → null; a string that normalizes to a valid code → it; else undefined (400). */
+function parseCodeField(value: unknown): string | null | undefined {
+  if (value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const code = normalizeDiscountCode(value);
+  return isValidDiscountCode(code) ? code : undefined;
+}
+
 /**
- * `{ code, items }`, strict keys. The code is normalized (trimmed, upper
- * case) and its shape decided here, without the database: a malformed one is
- * a 400 that leaks nothing. The items are parsed exactly as the checkout
- * parses them.
+ * `{ code?, refCode?, items }`, strict keys, at least one of the two codes
+ * (CP13: `refCode` is the link's code; a body with neither is a 400 as a
+ * missing `code` was). Each code is normalized (trimmed, upper case) and its
+ * shape decided here, without the database: a malformed one is a 400 that
+ * leaks nothing. The items are parsed exactly as the checkout parses them.
  */
 export function parseDiscountPreviewInput(body: unknown): DiscountPreviewInput | null {
   if (!isPlainObject(body) || !Object.keys(body).every((key) => (PREVIEW_KEYS as readonly string[]).includes(key))) {
     return null;
   }
-  if (typeof body.code !== "string") {
-    return null;
-  }
-  const code = normalizeDiscountCode(body.code);
-  if (!isValidDiscountCode(code)) {
+  const code = parseCodeField(body.code);
+  const refCode = parseCodeField(body.refCode);
+  if (code === undefined || refCode === undefined || (code === null && refCode === null)) {
     return null;
   }
   const items = parseCheckoutItems(body.items);
-  return items === null ? null : { code, items };
+  return items === null ? null : { code, items, refCode };
 }
 
 export async function previewDiscount(
@@ -95,17 +119,38 @@ export async function previewDiscount(
     return { status: "invalid_items" };
   }
 
-  const none: DiscountPreview = { applies: false, code: input.code, discountMinor: 0 };
-  if (!(await isFeatureEnabled(db, tenant.tenantId, "discountCodes"))) {
+  // The echo of a code that does not apply: the typed code, else the link's.
+  const none: DiscountPreview = {
+    applies: false,
+    code: input.code ?? input.refCode ?? "",
+    discountMinor: 0,
+  };
+  // Each family under its own switch, as the checkout reads them (CP13: an
+  // affiliate-only shop previews its affiliate codes).
+  const gates = {
+    affiliate: await isFeatureEnabled(db, tenant.tenantId, "affiliate"),
+    discountCodes:
+      input.code !== null && (await isFeatureEnabled(db, tenant.tenantId, "discountCodes")),
+  };
+  if (!gates.affiliate && !gates.discountCodes) {
     return { discount: none, status: "ok" };
   }
 
   const subtotalMinor = lines.reduce((total, line) => total + line.lineTotalMinor, 0);
-  const resolved = await resolveDiscount(db, tenant.tenantId, input.code, lines, subtotalMinor, now, null);
+  const resolved = await resolveDiscount(
+    db,
+    tenant.tenantId,
+    { ref: input.refCode, typed: input.code },
+    lines,
+    subtotalMinor,
+    now,
+    null,
+    gates,
+  );
   return {
     discount:
       resolved.discountMinor > 0
-        ? { applies: true, code: input.code, discountMinor: resolved.discountMinor }
+        ? { applies: true, code: resolved.code, discountMinor: resolved.discountMinor }
         : none,
     status: "ok",
   };

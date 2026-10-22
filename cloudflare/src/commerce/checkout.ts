@@ -26,12 +26,14 @@ import {
 } from "./recipient";
 import { withholdMinorFor } from "../pod/pod-quote";
 import { isFeatureEnabled } from "../platform/tenant-config";
-import type { ResolvedDiscount } from "./discount-codes";
+import type { DiscountAuthority, ResolvedDiscount } from "./discount-codes";
 import {
   DISCOUNT_HOLD_TTL_MS,
+  isAffiliateSelfReferral,
   isDiscountExhausted,
   isValidDiscountCode,
   MIN_CHARGE_MINOR,
+  noDiscount,
   normalizeDiscountCode,
   resolveDiscount,
 } from "./discount-codes";
@@ -73,6 +75,14 @@ export interface CreateCheckoutInput {
   email: string;
   idempotencyKey: string;
   items: CheckoutItemInput[];
+  /**
+   * CP13 (design §2.1–§2.2): the normalized `?ref=` code the storefront
+   * carried from a landing (the cart's `refCode`), or null. Same grammar as
+   * `discountCode`. An active affiliate's link code wins over a typed code;
+   * anything else is worth nothing, silently, as an unknown typed code is.
+   * Optional for engine-level callers (absent = none).
+   */
+  refCode?: string | null;
   /**
    * Who gets the order and where (src/commerce/recipient.ts, D98). The HTTP
    * parser always sets it and a body without a valid one is a 400; it is
@@ -133,6 +143,13 @@ export interface Checkout {
   discountMinor: number;
   expiresAt: number;
   items: CheckoutLine[];
+  /**
+   * CP13 (design §2.2): present, and "link", only when the buyer typed a code
+   * and the link's affiliate code was used instead, so the storefront can say
+   * "Länkkoden ANNA10 används". `discountCode` then echoes the link's code.
+   * Nothing else about an affiliate leaves this answer (no id, no rate).
+   */
+  overriddenBy?: "link";
   shippingCountry: string | null;
   shippingMinor: number;
   subtotalMinor: number;
@@ -175,11 +192,18 @@ interface VariantRow {
 }
 
 interface CheckoutRow {
+  affiliate_attribution: string | null;
+  affiliate_code: string | null;
+  affiliate_commission_bp: number | null;
+  affiliate_discount_bp: number | null;
+  affiliate_id: string | null;
+  affiliate_self_referral: number | null;
   checkout_id: string;
   consent_json: string | null;
   currency: string;
   customer_email: string;
   delivery_method: DeliveryMethod;
+  discount_authority: DiscountAuthority | null;
   discount_code_id: string | null;
   discount_minor: number;
   expires_at: number;
@@ -227,6 +251,8 @@ const CHECKOUT_KEYS = [
   "idempotencyKey",
   "items",
   "recipient",
+  // CP13: the link's code (design §2.2).
+  "refCode",
   "shippingCountry",
 ] as const;
 const ITEM_KEYS = ["productId", "quantity", "variantId"] as const;
@@ -427,6 +453,19 @@ export function parseCreateCheckoutInput(
     }
   }
 
+  // CP13: the link's code, the same grammar and normalisation as a typed one
+  // (one normaliser on both sides, so §7.6's case bug cannot recur).
+  let refCode: string | null = null;
+  if (body.refCode !== undefined) {
+    if (typeof body.refCode !== "string") {
+      return null;
+    }
+    refCode = normalizeDiscountCode(body.refCode);
+    if (!isValidDiscountCode(refCode)) {
+      return null;
+    }
+  }
+
   let shippingCountry: string | null = null;
   if (deliveryMethod === "shipping") {
     shippingCountry = parseShippingCountry(body.shippingCountry);
@@ -458,6 +497,7 @@ export function parseCreateCheckoutInput(
     idempotencyKey,
     items,
     recipient,
+    refCode,
     shippingCountry,
   };
 }
@@ -814,6 +854,7 @@ function toCheckout(
   row: CheckoutRow,
   lines: CheckoutLine[],
   discountCode: string | null,
+  overriddenBy: "link" | undefined,
 ): Checkout {
   return {
     checkoutId: row.checkout_id,
@@ -823,6 +864,7 @@ function toCheckout(
     discountMinor: row.discount_minor,
     expiresAt: row.expires_at,
     items: lines,
+    ...(overriddenBy === undefined ? {} : { overriddenBy }),
     shippingCountry: row.shipping_country,
     shippingMinor: row.shipping_minor,
     subtotalMinor: row.subtotal_minor,
@@ -830,6 +872,36 @@ function toCheckout(
     vatMinor: row.vat_minor,
     vatRateBp: row.vat_rate_bp,
   };
+}
+
+/**
+ * CP13 (migration 0059): the six affiliate columns a checkout freezes beside
+ * `discount_authority`, all null unless an affiliate authorized the discount.
+ * The INSERT and the replay comparison read them from here, so the two cannot
+ * disagree about what was frozen.
+ */
+interface AffiliateFacts {
+  affiliateId: string | null;
+  attribution: string | null;
+  code: string | null;
+  commissionBp: number | null;
+  discountBp: number | null;
+  /** 0 | 1, decided at quote time from the buyer's address (design §4.3). */
+  selfReferral: number | null;
+}
+
+function affiliateFactsOf(discount: ResolvedDiscount, selfReferral: boolean): AffiliateFacts {
+  const affiliate = discount.authority === "affiliate" ? discount.affiliate : null;
+  return affiliate === null
+    ? { affiliateId: null, attribution: null, code: null, commissionBp: null, discountBp: null, selfReferral: null }
+    : {
+        affiliateId: affiliate.affiliateId,
+        attribution: affiliate.attribution,
+        code: affiliate.code,
+        commissionBp: affiliate.commissionBp,
+        discountBp: affiliate.discountBp,
+        selfReferral: selfReferral ? 1 : 0,
+      };
 }
 
 /**
@@ -864,6 +936,9 @@ function matchesExisting(
     /** The freshly frozen consent: a replay that changed a box conflicts. */
     consentJson: string | null;
     deliveryMethod: DeliveryMethod;
+    /** CP13: the frozen affiliate facts, freshly resolved (affiliateFacts). */
+    affiliate: AffiliateFacts;
+    discountAuthority: DiscountAuthority | null;
     discountCodeId: string | null;
     discountMinor: number;
     shippingCountry: string | null;
@@ -892,6 +967,21 @@ function matchesExisting(
     // a real usage count.
     existing.discount_minor !== quote.discountMinor ||
     existing.discount_code_id !== quote.discountCodeId ||
+    // CP13 (design §2.2): WHAT authorized the discount, and on which terms.
+    // Two affiliates with the same buyer discount are never interchangeable
+    // under one key (the id), a re-rated affiliate is a different quote (the
+    // rates, which the accrual is computed from), and so is a changed
+    // self-referral verdict or a code that reached the checkout another way.
+    // A NULL authority beside an id is a legacy campaign id (a checkout the
+    // pre-0059 Worker wrote in the deploy window, 0059's coherence note).
+    (existing.discount_authority ?? (existing.discount_code_id === null ? null : "campaign")) !==
+      quote.discountAuthority ||
+    existing.affiliate_id !== quote.affiliate.affiliateId ||
+    existing.affiliate_code !== quote.affiliate.code ||
+    existing.affiliate_attribution !== quote.affiliate.attribution ||
+    existing.affiliate_commission_bp !== quote.affiliate.commissionBp ||
+    existing.affiliate_discount_bp !== quote.affiliate.discountBp ||
+    existing.affiliate_self_referral !== quote.affiliate.selfReferral ||
     // The delivery decision is priced, so it is part of the fingerprint. A
     // replay that switched from pickup to shipping (or the reverse) is a
     // different purchase at a different price under a reused key, and answering
@@ -953,7 +1043,9 @@ async function loadExisting(
          checkout_id, currency, customer_email, delivery_method,
          shipping_country, expires_at, subtotal_minor, shipping_minor,
          vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
-         consent_json
+         consent_json, discount_authority, affiliate_id, affiliate_code,
+         affiliate_attribution, affiliate_commission_bp, affiliate_discount_bp,
+         affiliate_self_referral
        FROM checkouts
        WHERE tenant_id = ?
          AND idempotency_key_hash = ?
@@ -1344,31 +1436,43 @@ async function attemptCheckout(
     return { status: "invalid_items" };
   }
 
-  // The discount, only when a code was presented: the shop's switch (F1: the
-  // add-on is opt-in, DC2; off means the code is worth nothing), then ONE read
-  // of the code with the other buyers' live holds (resolveDiscount). The base
-  // is computed from the line snapshots already resolved above, so no product
-  // is queried a second time. A code that does not apply is echoed beside a
-  // discount of 0, whatever the reason (the oracle note on resolveDiscount).
+  // The discount, only when a code was presented: each family under the
+  // shop's own switch (F1: both add-ons are opt-in, DC2 and design A12; off
+  // means that family's code is worth nothing), then the seam's reads
+  // (resolveDiscount: the link's affiliate, a typed affiliate, then the
+  // campaign with the other buyers' live holds). CP13: an affiliate-only shop
+  // (Rabattkoder off) resolves too — the old early return on the campaign
+  // switch alone is gone (design §2.2). The base is computed from the line
+  // snapshots already resolved above, so no product is queried a second
+  // time. A code that does not apply is echoed beside a discount of 0,
+  // whatever the reason (the oracle note on resolveDiscount).
+  const refCode = input.refCode ?? null;
   const buyerKey =
     input.discountCode === null
       ? null
       : await discountBuyerKey(tenant.tenantId, input.email);
   const resolved: ResolvedDiscount =
-    input.discountCode === null
-      ? { code: "", discountCodeId: null, discountMinor: 0 }
-      : discountForcedOff ||
-          !(await isFeatureEnabled(db, tenant.tenantId, "discountCodes"))
-        ? { code: input.discountCode, discountCodeId: null, discountMinor: 0 }
-        : await resolveDiscount(
-            db,
-            tenant.tenantId,
-            input.discountCode,
-            lines,
-            carriage.subtotalMinor,
-            now,
-            buyerKey === null ? null : { buyerKey },
-          );
+    input.discountCode === null && refCode === null
+      ? noDiscount("")
+      : await resolveDiscount(
+          db,
+          tenant.tenantId,
+          { ref: refCode, typed: input.discountCode },
+          lines,
+          carriage.subtotalMinor,
+          now,
+          buyerKey === null ? null : { buyerKey },
+          {
+            affiliate: await isFeatureEnabled(db, tenant.tenantId, "affiliate"),
+            // The second attempt after a lost race for a campaign's last use
+            // (createCheckout) runs with the campaign branch off. An affiliate
+            // holds nothing, so it can never have lost that race.
+            discountCodes:
+              !discountForcedOff &&
+              input.discountCode !== null &&
+              (await isFeatureEnabled(db, tenant.tenantId, "discountCodes")),
+          },
+        );
 
   // Refused with the same opaque answer as any other unresolvable line: naming
   // which POD line cannot be produced would be an oracle for a tenant's
@@ -1403,6 +1507,12 @@ async function attemptCheckout(
   // above what the buyer pays, does not apply. The buyer pays the full price
   // and is told the code could not be used; the seller never gets a partial
   // discount they did not offer, and the payment never meets its opaque 404.
+  //
+  // CP13 (R2-8): an AFFILIATE discount that does not apply leaves its
+  // attribution frozen (the affiliate still earns, on the undiscounted base):
+  // the id, the authority and the facts stay, the amount becomes 0 (0010's
+  // CHECK admits an id beside a zero discount). A campaign code keeps today's
+  // rule (checkpoint 22): worth nothing here, it stores no id.
   const discount: ResolvedDiscount =
     resolved.discountMinor > 0 &&
     !(await discountStillApplies(
@@ -1412,8 +1522,20 @@ async function attemptCheckout(
       resolved.discountMinor,
       snapshot.json,
     ))
-      ? { code: resolved.code, discountCodeId: null, discountMinor: 0 }
+      ? resolved.authority === "affiliate"
+        ? { ...resolved, discountMinor: 0 }
+        : noDiscount(resolved.code)
       : resolved;
+
+  // CP13 (design §4.3, CX-B2): the self-referral verdict, decided NOW from
+  // the address this checkout freezes and frozen with it; the webhook never
+  // decides it again.
+  const affiliate = affiliateFactsOf(
+    discount,
+    discount.authority === "affiliate" && discount.affiliate !== null
+      ? await isAffiliateSelfReferral(db, tenant.tenantId, discount.affiliate.affiliateId, input.email)
+      : false,
+  );
 
   const quote = closeQuote(
     carriage.subtotalMinor,
@@ -1452,8 +1574,11 @@ async function attemptCheckout(
           delivery_method, shipping_country, subtotal_minor, shipping_minor,
           vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
           payment_intent_id, idempotency_key_hash, production_snapshot_json,
-          expires_at, created_at, updated_at, consent_json
-        ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+          expires_at, created_at, updated_at, consent_json,
+          discount_authority, affiliate_id, affiliate_code, affiliate_attribution,
+          affiliate_commission_bp, affiliate_discount_bp, affiliate_self_referral
+        ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         checkoutId,
@@ -1480,6 +1605,15 @@ async function attemptCheckout(
         now,
         now,
         consent.json,
+        // CP13 (0059): which family authorized `discount_code_id`, and the
+        // affiliate's frozen facts. Frozen by trigger from this INSERT on.
+        discount.discountCodeId === null ? null : discount.authority,
+        affiliate.affiliateId,
+        affiliate.code,
+        affiliate.attribution,
+        affiliate.commissionBp,
+        affiliate.discountBp,
+        affiliate.selfReferral,
       ),
   ];
 
@@ -1524,7 +1658,10 @@ async function attemptCheckout(
   // whole batch rolls back and createCheckout runs once more without the
   // discount. An hour (DC3), never longer than the checkout. A code without a
   // cap is held too (the seller's "i kassan"), and its trigger never refuses.
-  const holdsUse = discount.discountCodeId !== null && buyerKey !== null;
+  // CP13: ONLY for the campaign authority. An affiliate code is uncapped and
+  // holds nothing (the hold's FK names discount_codes, design §2.2).
+  const holdsUse =
+    discount.authority === "campaign" && discount.discountCodeId !== null && buyerKey !== null;
   if (holdsUse) {
     statements.push(
       db
@@ -1591,8 +1728,10 @@ async function attemptCheckout(
         currency,
         lines,
         {
+          affiliate,
           consentJson: consent.json,
           deliveryMethod: input.deliveryMethod,
+          discountAuthority: discount.discountCodeId === null ? null : discount.authority,
           discountCodeId: discount.discountCodeId,
           discountMinor: discount.discountMinor,
           shippingCountry: input.shippingCountry,
@@ -1608,7 +1747,8 @@ async function attemptCheckout(
       checkout: toCheckout(
         existing.row,
         existing.lines.map(storedLine),
-        input.discountCode,
+        echoedCode(input.discountCode, refCode, discount),
+        discount.overriddenBy,
       ),
       replayed: true,
       status: "ok",
@@ -1620,7 +1760,7 @@ async function attemptCheckout(
       checkoutId,
       currency,
       deliveryMethod: input.deliveryMethod,
-      discountCode: input.discountCode,
+      discountCode: echoedCode(input.discountCode, refCode, discount),
       discountMinor: discount.discountMinor,
       expiresAt,
       // Projected field by field rather than spread: currency is a
@@ -1637,6 +1777,7 @@ async function attemptCheckout(
         unitPriceMinor: line.unitPriceMinor,
         variantId: line.variantId,
       })),
+      ...(discount.overriddenBy === undefined ? {} : { overriddenBy: discount.overriddenBy }),
       shippingCountry: input.shippingCountry,
       shippingMinor: quote.shippingMinor,
       subtotalMinor: quote.subtotalMinor,
@@ -1647,4 +1788,22 @@ async function attemptCheckout(
     replayed: false,
     status: "ok",
   };
+}
+
+/**
+ * The code the answer echoes (`Checkout.discountCode`): the typed code, as
+ * before — except that an affiliate the LINK authorized is named by the
+ * link's code (its own string, which the client sent). A request without a
+ * typed code echoes the link's code when an affiliate applied, else null, so
+ * a body with no code at all answers exactly as before.
+ */
+function echoedCode(
+  typed: string | null,
+  ref: string | null,
+  discount: ResolvedDiscount,
+): string | null {
+  if (discount.authority === "affiliate" && discount.affiliate?.attribution === "link") {
+    return discount.affiliate.code;
+  }
+  return typed ?? (discount.authority === "affiliate" ? ref : null);
 }

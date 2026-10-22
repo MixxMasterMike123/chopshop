@@ -19,7 +19,7 @@ import { resolveRequestTenant } from "../tenancy/resolve-tenant";
  * verified hostname as the checkout resolves it, and nothing else.
  *
  *   POST /v1/discount-codes/preview
- *     { code, items: [{ productId, quantity, variantId? }] }
+ *     { code?, refCode?, items: [{ productId, quantity, variantId? }] }  (CP13: at least one code)
  *     200 { discount: { applies: true,  code, discountMinor } }   it applies
  *     200 { discount: { applies: false, code, discountMinor: 0 } } every other
  *                                  case, one body (discount-preview.ts)

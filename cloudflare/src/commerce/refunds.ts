@@ -1,3 +1,4 @@
+import { reversalMailStatement, reversalStatement } from "../affiliate/ledger";
 import type { TenantAdminPrincipal } from "../auth/live-authorization";
 import { auditMetadataJson } from "../auth/live-authorization";
 import { raiseAlertStatement } from "./money-alerts";
@@ -128,9 +129,10 @@ const STATUS_AFTER_REFUND_SQL = `CASE
 
 /**
  * The statements that apply one operation transition to its order, in batch
- * order: the money; then — if the order is now refunded to the charge by THIS
- * transition — the dispatch cancellation, while the status is still the one
- * the return-case guard must see; then the status history and the status.
+ * order: the money; then (CP13) the affiliate's commission follows it; then —
+ * if the order is now refunded to the charge by THIS transition — the
+ * dispatch cancellation, while the status is still the one the return-case
+ * guard must see; then the status history and the status.
  */
 function orderEffectStatements(
   db: D1Database,
@@ -138,6 +140,7 @@ function orderEffectStatements(
   actorUserId: string | null,
   now: number,
 ): D1PreparedStatement[] {
+  const reversalEntryId = crypto.randomUUID();
   const holding = HOLDING.map((state) => `'${state}'`).join(", ");
   const transitioned = `EXISTS (
       SELECT 1 FROM refund_operations
@@ -169,6 +172,26 @@ function orderEffectStatements(
          WHERE order_id = ?3 AND ${transitioned}`,
       )
       .bind(op.id, op.transitionId, op.orderId, now),
+    // CP13 (design §4.2): the affiliate commission follows the money THIS
+    // batch moved. Guarded by the same transition stamp as the money UPDATE
+    // above (it fires exactly when this batch performed the transition), read
+    // AFTER it (the updated refund_succeeded_minor and the stored dispute
+    // status), keyed on the TRANSITION id (one row per state change: a
+    // restoration after succeeded → failed is its own, POSITIVE row). An
+    // order without an accrual writes nothing; a transition that moved no
+    // settled money writes nothing (its delta is 0). Never keyed on
+    // orders.status. With the row, its mail (§9).
+    reversalStatement(db, {
+      entryId: reversalEntryId,
+      guard: {
+        binds: [op.id, op.transitionId],
+        sql: "EXISTS (SELECT 1 FROM refund_operations WHERE id = ? AND transition_id = ?)",
+      },
+      now,
+      orderId: op.orderId,
+      ref: op.transitionId,
+    }),
+    reversalMailStatement(db, reversalEntryId, now),
     // A full refund stops production — decided in THIS batch, from the money
     // the UPDATE above just wrote (refund-dispatch-stop.ts).
     ...fullRefundStopStatements(db, {

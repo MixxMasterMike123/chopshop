@@ -2187,6 +2187,31 @@ describe("POST /v1/checkout rate limiting", () => {
     ).resolves.toEqual({ total: 1 });
   });
 
+  it("counts a link-code-only checkout (refCode, no typed code) against the discount-attempt limit (CP13)", async () => {
+    const attempts = () =>
+      env.DB.prepare("SELECT COALESCE(SUM(count), 0) AS n FROM rate_limit_windows WHERE scope = 'discount-attempt-ip'")
+        .first<{ n: number }>()
+        .then((row) => row?.n ?? 0);
+    const before = await attempts();
+    // No code at all: the attempt limiter is not consulted.
+    const plain = await post(HOST_A, {
+      email: "ref-plain@example.test",
+      idempotencyKey: nextKey(),
+      items: [{ productId: "ck-a-live", quantity: 1 }],
+    });
+    expect(plain.status).toBe(201);
+    expect(await attempts()).toBe(before);
+    // A link code only (unknown here, so worth nothing): it costs an attempt.
+    const linked = await post(HOST_A, {
+      email: "ref-only@example.test",
+      idempotencyKey: nextKey(),
+      items: [{ productId: "ck-a-live", quantity: 1 }],
+      refCode: "NOBODY10",
+    });
+    expect(linked.status).toBe(201);
+    expect(await attempts()).toBe(before + 1);
+  });
+
   it("stores no raw address for a throttled caller", async () => {
     const ip = "198.51.100.205";
     const email = "traceable-buyer@example.test";
@@ -2244,8 +2269,10 @@ describe("checkout database invariants", () => {
         checkout_id, tenant_id, status, customer_email, currency,
         delivery_method, shipping_country, subtotal_minor, shipping_minor,
         vat_minor, vat_rate_bp, discount_minor, discount_code_id,
-        total_minor, idempotency_key_hash, expires_at, created_at, updated_at
-      ) VALUES (?, ?, 'open', 'invariant@example.test', 'SEK', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        total_minor, idempotency_key_hash, expires_at, created_at, updated_at,
+        discount_authority
+      ) VALUES (?, ?, 'open', 'invariant@example.test', 'SEK', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        CASE WHEN ?10 IS NULL THEN NULL ELSE 'campaign' END)`,
     )
       .bind(
         checkoutId,

@@ -780,6 +780,8 @@ describe("GET /v1/admin/orders/:orderId", () => {
     const paidAt = body.order.paidAt as string;
     expect(body).toEqual({
       order: {
+        // CP13 (A14): no affiliate on this order.
+        affiliate: null,
         // CP2-E: the buyer's consent facts (none on a seeded checkout).
         consent: null,
         // D98: no recipient on a seeded checkout (as before 0045).

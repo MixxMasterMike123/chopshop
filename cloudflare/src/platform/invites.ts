@@ -6,7 +6,11 @@ import {
   isPasswordResetConfigured,
   passwordResetActionUrl,
 } from "../auth/password-reset";
-import type { AuthActionEmailJob } from "../email/auth-email-job";
+import type {
+  AffiliateInviteContext,
+  AuthActionEmailJob,
+  AuthEmailLocale,
+} from "../email/auth-email-job";
 import { createAuthEmailJob, INVITE_LINK_VALID_HOURS } from "../email/auth-email-job";
 import {
   abandonAuthEmailDelivery,
@@ -70,12 +74,17 @@ const INVITE_TOKEN_LENGTH = 32;
 
 export type InviteSurface = "admin" | "platform";
 
-/** Which surface an account type's link lands on; null ⇒ not invitable. */
+/**
+ * Which surface an account type's link lands on; null ⇒ not invitable.
+ * CP13 (design §1.1): an affiliate lands on the EXISTING admin surface — the
+ * admin host's reset page serves affiliates, and its login sends them on to
+ * the portal. No new surface, origin or reset route exists for them.
+ */
 export function inviteSurfaceFor(accountType: string | null): InviteSurface | null {
   if (accountType === "platform_admin") {
     return "platform";
   }
-  return accountType === "tenant_admin" ? "admin" : null;
+  return accountType === "tenant_admin" || accountType === "affiliate" ? "admin" : null;
 }
 
 export interface IssuedInvite {
@@ -113,11 +122,12 @@ interface TargetRow {
   user_id: string;
 }
 
+// CP13: the affiliate kind too (inviteSurfaceFor), re-checked in the batch.
 const INVITABLE_TARGET_SQL = `EXISTS (
   SELECT 1 FROM identity_access
   WHERE user_id = ?
     AND status = 'active'
-    AND account_type IN ('platform_admin', 'tenant_admin')
+    AND account_type IN ('platform_admin', 'tenant_admin', 'affiliate')
 )`;
 
 function logInviteFailure(reason: string, error?: unknown): void {
@@ -147,6 +157,11 @@ function logInviteFailure(reason: string, error?: unknown): void {
  *              longer holds;
  *   audit      the shop the invite is sent for (the audit row's tenant) and
  *              JSON merged into its metadata (e.g. an acting-as grant id).
+ *   affiliate  (CP13) the shop context of an AFFILIATE's welcome: the job is
+ *              an `affiliate_invite` (auth-email-job.ts) and the identity must
+ *              be an affiliate; the link is the same reset link.
+ *   locale     the mail's language (CP13: an affiliate's preferred_lang);
+ *              Swedish when absent, as before.
  */
 export async function issueInvite(
   env: Env,
@@ -154,11 +169,13 @@ export async function issueInvite(
   userId: string,
   now: number,
   options: {
+    affiliate?: AffiliateInviteContext;
     audit?: { metadataJson: string; tenantId: string };
     condition?: { binds: unknown[]; sql: string };
+    locale?: AuthEmailLocale;
   } = {},
 ): Promise<InviteResult> {
-  const { audit, condition } = options;
+  const { affiliate, audit, condition } = options;
   const origins = readCanonicalOrigins(env);
   const queue = env.EMAIL_QUEUE;
   if (origins === null || queue === undefined) {
@@ -182,7 +199,12 @@ export async function issueInvite(
   }
 
   const surface = inviteSurfaceFor(target.account_type);
-  if (surface === null || target.status !== "active") {
+  if (
+    surface === null ||
+    target.status !== "active" ||
+    // The affiliate wording is for an affiliate identity only.
+    (affiliate !== undefined && target.account_type !== "affiliate")
+  ) {
     return { status: "not_invitable" };
   }
 
@@ -196,11 +218,12 @@ export async function issueInvite(
     job = createAuthEmailJob(
       {
         actionUrl: passwordResetActionUrl(env, origins, token, surface),
+        ...(affiliate === undefined ? {} : { affiliate }),
         expiresAt: Date.now() + INVITE_EMAIL_WINDOW_MS,
         kind: "password_reset",
-        locale: "sv",
+        locale: options.locale ?? "sv",
         recipient: target.email,
-        variant: "invite",
+        variant: affiliate === undefined ? "invite" : "affiliate_invite",
       },
       env.AUTH_BASE_URL,
     );

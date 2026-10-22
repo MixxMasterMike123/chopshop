@@ -185,10 +185,10 @@ export async function seedDiscountedCheckout(seed: DiscountedCheckoutSeed): Prom
       `INSERT INTO checkouts (
         checkout_id, tenant_id, status, customer_email, currency,
         delivery_method, shipping_country, subtotal_minor, shipping_minor,
-        vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
+        vat_minor, vat_rate_bp, discount_minor, discount_code_id, discount_authority, total_minor,
         payment_intent_id, idempotency_key_hash, expires_at, created_at, updated_at,
         payment_intent_status, payment_intent_status_at
-      ) VALUES (?, ?, 'open', ?, 'SEK', 'pickup', NULL, ?, 0, 0, 2500, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, 'open', ?, 'SEK', 'pickup', NULL, ?, 0, 0, 2500, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       checkoutId,
       seed.tenantId,
@@ -196,6 +196,8 @@ export async function seedDiscountedCheckout(seed: DiscountedCheckoutSeed): Prom
       subtotal,
       discount,
       seed.discountCodeId,
+      // CP13 (0059): a frozen campaign id names its authority.
+      seed.discountCodeId === null ? null : "campaign",
       subtotal - discount,
       seed.paymentIntentId ?? null,
       `hash-${checkoutId}`,

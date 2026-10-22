@@ -280,9 +280,17 @@ export async function readBuyerOrder(
          o.order_id, o.order_number, o.status, o.customer_email, o.currency,
          o.delivery_method, o.shipping_country, o.subtotal_minor, o.shipping_minor,
          o.vat_minor, o.discount_minor, o.total_minor, o.created_at, o.is_personalized,
-         (SELECT dc.code FROM discount_codes AS dc
-          WHERE dc.discount_code_id = o.discount_code_id
-            AND dc.tenant_id = o.tenant_id) AS discount_code
+         -- CP13 (R2-7): the code STRING only, whichever family authorized it;
+         -- the guest page learns nothing of the affiliate (§8.7).
+         -- Round 1: a label only when money was taken off (an affiliate's
+         -- 0-öre attribution shows no "Rabatt (KOD)" row).
+         CASE WHEN o.discount_minor > 0 THEN COALESCE(
+           (SELECT dc.code FROM discount_codes AS dc
+            WHERE dc.discount_code_id = o.discount_code_id
+              AND dc.tenant_id = o.tenant_id
+              AND o.discount_authority IS NOT 'affiliate'),
+           o.affiliate_code
+         ) END AS discount_code
        FROM orders AS o
        WHERE o.tenant_id = ?
          AND o.order_id = ?

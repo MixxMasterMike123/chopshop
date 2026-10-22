@@ -515,7 +515,8 @@ describe("GET /v1/admin/shop", () => {
     ]);
     expect(features.pod).toBe(true);
     expect(features.discountCodes).toBe(true);
-    expect(features.affiliate).toBe(false);
+    // CP13: affiliate is ported (an opt-in key since 0058).
+    expect(features.affiliate).toBe(true);
     expect(features.pickup).toBe(true);
   });
 });

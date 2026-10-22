@@ -4,6 +4,45 @@ import { z } from "zod";
 import type { PlatformPrincipal, TenantAdminPrincipal } from "../auth/live-authorization";
 import { createAuth } from "../auth/create-auth";
 import { inviteSurfaceFor } from "./invites";
+import { convertUnacceptedAffiliate } from "./user-lifecycle";
+
+/**
+ * The user id of `email` when it is an active affiliate identity that was
+ * just converted into a tenant admin (convertUnacceptedAffiliate's guards),
+ * else null — nothing changed.
+ */
+async function convertUnacceptedAffiliateByEmail(
+  db: D1Database,
+  principal: PlatformPrincipal | TenantAdminPrincipal,
+  email: string,
+  now: number,
+): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `SELECT u."id" AS user_id FROM "user" AS u
+       INNER JOIN identity_access AS a ON a.user_id = u."id"
+       WHERE u."email" = ? AND a.account_type = 'affiliate' AND a.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(email)
+    .first<{ user_id: string }>();
+  if (row === null) {
+    return null;
+  }
+  const converted = await convertUnacceptedAffiliate(
+    db,
+    {
+      auditTenantId: principal.accountType === "tenant_admin" ? principal.tenantId : null,
+      metadata: principal.accountType === "tenant_admin" && principal.actingAs !== undefined
+        ? { actingAsGrantId: principal.actingAs.grantId }
+        : {},
+      userId: principal.userId,
+    },
+    row.user_id,
+    now,
+  );
+  return converted ? row.user_id : null;
+}
 
 /**
  * Platform-operator user provisioning.
@@ -70,6 +109,15 @@ import { inviteSurfaceFor } from "./invites";
 
 export type ProvisionableAccountType = "print_operator" | "tenant_admin";
 
+/**
+ * CP13 (design §1.1): what createInvitedUser may create — a provisionable
+ * kind, or an AFFILIATE (the shop's approval and "Bjud in affiliate",
+ * src/affiliate/approval.ts). The platform's create-user route keeps
+ * refusing `affiliate` (PROVISIONABLE_ACCOUNT_TYPES below is unchanged): an
+ * affiliate exists only as some shop's affiliate.
+ */
+export type InvitableAccountType = ProvisionableAccountType | "affiliate";
+
 export interface CreateUserInput {
   accountType: ProvisionableAccountType;
   email: string;
@@ -78,13 +126,13 @@ export interface CreateUserInput {
 }
 
 export interface CreateInvitedUserInput {
-  accountType: ProvisionableAccountType;
+  accountType: InvitableAccountType;
   email: string;
   name: string;
 }
 
 export interface ProvisionedUser {
-  accountType: ProvisionableAccountType;
+  accountType: InvitableAccountType;
   email: string;
   userId: string;
 }
@@ -267,6 +315,20 @@ export async function createPlatformUser(
   now: number,
 ): Promise<CreateUserResult> {
   if (input.password === null) {
+    // CP13 (design §1.3, R2-6): an address held by an affiliate identity that
+    // has never set a password and holds no ledger row is CONVERTED into the
+    // tenant admin asked for, instead of answering conflict — a shop's "bjud
+    // in affiliate" must not block an address from ever being provisioned.
+    // Any other existing identity is the conflict it always was.
+    if (input.accountType === "tenant_admin") {
+      const converted = await convertUnacceptedAffiliateByEmail(env.DB, principal, input.email, now);
+      if (converted !== null) {
+        return {
+          status: "ok",
+          user: { accountType: "tenant_admin", email: input.email, userId: converted },
+        };
+      }
+    }
     return createInvitedUser(
       env,
       principal,
@@ -403,7 +465,7 @@ function accessStatements(
   db: D1Database,
   principal: PlatformPrincipal | TenantAdminPrincipal,
   userId: string,
-  accountType: ProvisionableAccountType,
+  accountType: InvitableAccountType,
   now: number,
 ): D1PreparedStatement[] {
   return [

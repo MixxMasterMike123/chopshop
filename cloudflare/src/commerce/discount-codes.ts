@@ -7,8 +7,15 @@
  * money). Every eligibility predicate and rounding decision below is taken from
  * that function, and each divergence is named at the point it occurs.
  *
- * Everything here is pure integer arithmetic. `resolveDiscount` performs one D1
- * read, and only when the request actually carried a code.
+ * Everything here is pure integer arithmetic. `resolveDiscount` performs at
+ * most one D1 read per code the request actually carried (CP13: an affiliate
+ * lookup per code while the add-on is on, then the campaign read), and none
+ * when it carried no code.
+ *
+ * CP13 (docs/cf-port/CP13_AFFILIATE_DESIGN.md §2.2): the affiliate branch of
+ * the seam below. An affiliate hit freezes the affiliate's id in the same
+ * `discountCodeId` with `authority` 'affiliate'; holds and burns run only for
+ * the campaign authority (checkout.ts, webhook.ts).
  *
  * CP8-DC (docs/cf-port/CP8_DC_REPORT.md): a use is HELD while a buyer pays
  * (migration 0055) and counted when the payment succeeds; the read below
@@ -117,16 +124,73 @@ export interface DiscountableLine {
   productId: string;
 }
 
+/**
+ * CP13: which family authorized a frozen discount id (migration 0059
+ * `discount_authority`). A campaign id names a `discount_codes` row; an
+ * affiliate id names an `affiliates` row. Every reader of the frozen id
+ * branches on this, never on the id's shape.
+ */
+export type DiscountAuthority = "affiliate" | "campaign";
+
+/** How an affiliate code reached the checkout (design §2.2). */
+export type AffiliateAttribution = "code" | "link";
+
+/** The affiliate facts a checkout freezes beside its discount (0059). */
+export interface ResolvedAffiliate {
+  affiliateId: string;
+  attribution: AffiliateAttribution;
+  /** The code as stored (upper case). */
+  code: string;
+  commissionBp: number;
+  discountBp: number;
+}
+
 export interface ResolvedDiscount {
+  /** CP13: the affiliate that authorized the discount, or null. */
+  affiliate: ResolvedAffiliate | null;
+  /** CP13: which family `discountCodeId` belongs to; null when it is null. */
+  authority: DiscountAuthority | null;
   /** The normalized code string, echoed so the client can display what applied. */
   code: string;
   /**
    * The resolved row id, or null when nothing eligible matched. Frozen onto the
    * checkout so the PAYMENT checkpoint can increment used_count atomically —
-   * see the increment note on `used_count` below.
+   * see the increment note on `used_count` below. CP13: for an affiliate hit
+   * it is the AFFILIATE's id (`authority` says so), and nothing increments.
    */
   discountCodeId: string | null;
   discountMinor: number;
+  /**
+   * CP13: present (and "link") only when the buyer typed a code and the
+   * link's affiliate code was used instead (design §2.2 step 1).
+   */
+  overriddenBy?: "link";
+}
+
+/** The two code strings a request may carry, each normalized or null. */
+export interface DiscountCodes {
+  /** The `?ref=` code the storefront carried from a landing (design §2.1). */
+  ref: string | null;
+  /** The code the buyer typed. */
+  typed: string | null;
+}
+
+/** The shop's two switches, each gating its own branch (design §2.2). */
+export interface DiscountGates {
+  affiliate: boolean;
+  discountCodes: boolean;
+}
+
+/** The grammar of an affiliate code (0059 affiliates.code). */
+export const AFFILIATE_CODE_PATTERN = /^[A-Z0-9-]{3,20}$/;
+
+export function isAffiliateCode(normalized: string): boolean {
+  return AFFILIATE_CODE_PATTERN.test(normalized);
+}
+
+/** A resolution that applies nothing, echoing `code`. */
+export function noDiscount(code: string): ResolvedDiscount {
+  return { affiliate: null, authority: null, code, discountCodeId: null, discountMinor: 0 };
 }
 
 /**
@@ -309,17 +373,146 @@ export function discountAmountMinor(
 }
 
 /**
- * Resolves a buyer-supplied code against a priced basket.
+ * Resolves the codes a request carries against a priced basket (CP13: design
+ * §2.2, the seam this function's header promised).
  *
- * AFFILIATE SEAM. Production resolves an AFFILIATE code first and lets it win a
- * collision (functions/src/affiliate/callable/validateDiscountCode.ts step 1,
- * and the `discountSource === null` guard in computeOrderTotalsSek). The
- * affiliate domain is not migrated yet, so this function currently has one
- * branch. When affiliates land, the affiliate lookup goes HERE — above the
- * campaign lookup below, returning early on a hit so a campaign code of the same
- * name is never consulted. The return shape is already the shape an affiliate
- * hit needs (a code string, an amount, and the id of whatever authorized it), so
- * the seam is a new branch rather than a new signature.
+ * THE ORDER, each branch under its own switch (`gates`):
+ *   1. `ref` (the link's code) names an ACTIVE affiliate of this shop → that
+ *      affiliate wins, attribution 'link'. A typed code is set aside, and the
+ *      answer says so (`overriddenBy: 'link'`).
+ *   2. `typed` names an active affiliate → it wins, attribution 'code'
+ *      (D24: a typed affiliate code earns).
+ *   3. `typed` names an eligible campaign code → the campaign, as before
+ *      (resolveCampaignDiscount). Never `ref`: a `?ref=<campaign>` link
+ *      applies nothing (R2-24).
+ *   4. nothing applies.
+ * Production resolves an AFFILIATE code first and lets it win a collision
+ * (functions/src/affiliate/callable/validateDiscountCode.ts step 1); D30's
+ * collision triggers (0059) keep the two families from sharing a string, and
+ * this order is the defensive precedence if they ever did.
+ *
+ * AN AFFILIATE HIT: `discountMinor = ceil(subtotal × discount_bp / 10 000)`
+ * (percentDiscountMinor, the whole subtotal, never carriage; no cap, window or
+ * minimum spend), `discountCodeId` = the affiliate's id and `authority`
+ * 'affiliate' — the seam's "id of whatever authorized it", which satisfies
+ * 0010/0011's "discounted money was authorized by something". It is a hit
+ * even when the discount is 0 (`discount_bp` 0, a commission-only affiliate,
+ * R2-8): attribution never depends on the amount.
+ *
+ * IT IS NEVER AN ERROR to present a code that does not resolve, for either
+ * family (see resolveCampaignDiscount). An inactive or suspended affiliate,
+ * another shop's, or the add-on off falls through to the campaign branch, on
+ * the preview and the checkout alike: one function serves both.
+ */
+export async function resolveDiscount(
+  db: D1Database,
+  tenantId: string,
+  codes: DiscountCodes,
+  lines: readonly DiscountableLine[],
+  subtotalMinor: number,
+  now: number,
+  holds: { buyerKey: string } | null,
+  gates: DiscountGates,
+): Promise<ResolvedDiscount> {
+  if (gates.affiliate) {
+    for (const [code, attribution] of [
+      [codes.ref, "link"],
+      [codes.typed, "code"],
+    ] as const) {
+      if (code === null || !isAffiliateCode(code)) {
+        continue;
+      }
+      const affiliate = await findActiveAffiliate(db, tenantId, code);
+      if (affiliate === null) {
+        continue;
+      }
+      const resolved: ResolvedDiscount = {
+        affiliate: {
+          affiliateId: affiliate.affiliate_id,
+          attribution,
+          code: affiliate.code,
+          commissionBp: affiliate.commission_bp,
+          discountBp: affiliate.discount_bp,
+        },
+        authority: "affiliate",
+        code: affiliate.code,
+        discountCodeId: affiliate.affiliate_id,
+        discountMinor: Math.min(percentDiscountMinor(subtotalMinor, affiliate.discount_bp), subtotalMinor),
+      };
+      return attribution === "link" && codes.typed !== null && codes.typed !== affiliate.code
+        ? { ...resolved, overriddenBy: "link" }
+        : resolved;
+    }
+  }
+
+  if (gates.discountCodes && codes.typed !== null) {
+    return resolveCampaignDiscount(db, tenantId, codes.typed, lines, subtotalMinor, now, holds);
+  }
+
+  return noDiscount(codes.typed ?? codes.ref ?? "");
+}
+
+interface AffiliateCodeRow {
+  affiliate_id: string;
+  code: string;
+  commission_bp: number;
+  discount_bp: number;
+}
+
+/** (tenant, code) exact, ACTIVE only: the one read of an affiliate code. */
+async function findActiveAffiliate(
+  db: D1Database,
+  tenantId: string,
+  code: string,
+): Promise<AffiliateCodeRow | null> {
+  return db
+    .prepare(
+      `SELECT affiliate_id, code, commission_bp, discount_bp
+       FROM affiliates
+       WHERE tenant_id = ? AND code = ? AND status = 'active'
+       LIMIT 1`,
+    )
+    .bind(tenantId, code)
+    .first<AffiliateCodeRow>();
+}
+
+/**
+ * CP13 (design §4.3): is this checkout a self-referral? The buyer's address
+ * (as the checkout parser lowercased it) is the affiliate's own login
+ * address, or the address of an ACTIVE admin of the shop. Decided at quote
+ * time and frozen (`affiliate_self_referral`): a profile change between quote
+ * and payment cannot change the award. A cheap guard, not a proof: two
+ * addresses of one person cannot be told apart; the terms forbid
+ * self-purchase and the shop can correct by adjustment.
+ */
+export async function isAffiliateSelfReferral(
+  db: D1Database,
+  tenantId: string,
+  affiliateId: string,
+  buyerEmail: string,
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS hit FROM affiliates AS a
+       INNER JOIN "user" AS u ON u."id" = a.user_id
+       WHERE a.affiliate_id = ?1 AND a.tenant_id = ?2 AND lower(u."email") = ?3
+       UNION ALL
+       SELECT 1 AS hit FROM tenant_memberships AS m
+       INNER JOIN identity_access AS ia ON ia.user_id = m.user_id
+       INNER JOIN "user" AS u ON u."id" = m.user_id
+       WHERE m.tenant_id = ?2 AND m.role = 'admin' AND m.status = 'active'
+         AND ia.account_type = 'tenant_admin' AND ia.status = 'active'
+         AND lower(u."email") = ?3
+       LIMIT 1`,
+    )
+    .bind(affiliateId, tenantId, buyerEmail)
+    .first<{ hit: number }>();
+  return row !== null;
+}
+
+/**
+ * Resolves a buyer-typed CAMPAIGN code against a priced basket (the CP8-DC
+ * branch, step 3 of resolveDiscount).
  *
  * IT IS NEVER AN ERROR to present a code that does not resolve or is not
  * eligible. Production answers 0 in exactly these cases and the client displays
@@ -334,7 +527,7 @@ export function discountAmountMinor(
  * against them, so a reloaded payment page or a ticked box (a new checkout)
  * still gets the code. The preview passes null: it counts paid uses only.
  */
-export async function resolveDiscount(
+export async function resolveCampaignDiscount(
   db: D1Database,
   tenantId: string,
   code: string,
@@ -343,13 +536,7 @@ export async function resolveDiscount(
   now: number,
   holds: { buyerKey: string } | null,
 ): Promise<ResolvedDiscount> {
-  const none: ResolvedDiscount = {
-    code,
-    discountCodeId: null,
-    discountMinor: 0,
-  };
-
-  // --- AFFILIATE BRANCH BELONGS HERE (see the seam note above) ---
+  const none = noDiscount(code);
 
   // The hold count is the capacity trigger's predicate (0055), word for word.
   const heldByOthers =
@@ -399,6 +586,8 @@ export async function resolveDiscount(
   }
 
   return {
+    affiliate: null,
+    authority: "campaign",
     code,
     discountCodeId: row.discount_code_id,
     discountMinor: bounded,

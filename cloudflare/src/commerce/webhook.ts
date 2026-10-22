@@ -1,3 +1,4 @@
+import { type AccrualFacts, accrualStatement } from "../affiliate/ledger";
 import { printerJobId } from "../dispatch/snapwear-wire";
 import { orderConsentOf } from "../legal/consent";
 import { nudgeOutbox } from "../outbox/nudge";
@@ -74,6 +75,18 @@ export {
 
 /** The `checkouts` columns this handler needs to build an order. */
 interface CheckoutOrderRow {
+  /**
+   * CP13 (0059): the affiliate facts frozen at quote time, copied onto the
+   * order verbatim and NEVER re-resolved here (design §4.1: a quote accepted
+   * before the add-on was switched off, or the affiliate suspended, still
+   * settles). All null unless `discount_authority` is 'affiliate'.
+   */
+  affiliate_attribution: string | null;
+  affiliate_code: string | null;
+  affiliate_commission_bp: number | null;
+  affiliate_discount_bp: number | null;
+  affiliate_id: string | null;
+  affiliate_self_referral: number | null;
   /** Frozen by the payment route (0019); NULL on a row that predates it. */
   application_fee_minor: number | null;
   checkout_id: string;
@@ -83,6 +96,12 @@ interface CheckoutOrderRow {
   currency: string;
   customer_email: string;
   delivery_method: string;
+  /**
+   * CP13 (0059): which family `discount_code_id` belongs to. NULL exactly
+   * when no id is frozen; a checkout quoted before 0059 was backfilled
+   * 'campaign'. The burn reads it (`IS NOT 'affiliate'`).
+   */
+  discount_authority: "affiliate" | "campaign" | null;
   discount_code_id: string | null;
   discount_minor: number;
   /** Owned by the POD checkout (CP2-C); copied opaquely onto the order. */
@@ -208,7 +227,9 @@ async function loadCheckoutByIntent(
          delivery_method, shipping_country, subtotal_minor, shipping_minor,
          vat_minor, vat_rate_bp, discount_minor, discount_code_id, total_minor,
          connect_account_id, application_fee_minor, withheld_minor,
-         production_snapshot_json, consent_json
+         production_snapshot_json, consent_json,
+         discount_authority, affiliate_id, affiliate_code, affiliate_attribution,
+         affiliate_commission_bp, affiliate_discount_bp, affiliate_self_referral
        FROM checkouts
        WHERE payment_intent_id = ?
        LIMIT 1`,
@@ -512,8 +533,8 @@ export async function handleStripeWebhookEvent(
 
   // ── ONE BATCH, OR NOTHING ────────────────────────────────────────────────
   // Order, receipt hand-off, lines, status history, the checkout transition,
-  // the discount burn, the audit row and the event ledger row all commit
-  // together.
+  // the discount burn, the affiliate accrual and its mail (CP13), the audit
+  // row and the event ledger row all commit together.
   //
   // This is the checkpoint's central correctness claim and the one place it
   // beats production outright. There, `orderRef.create()` is followed by four
@@ -534,9 +555,12 @@ export async function handleStripeWebhookEvent(
           receipt_token_hash, receipt_token_expires_at,
           charged_minor, application_fee_minor, withheld_minor,
           connect_account_id, stripe_charge_id, production_snapshot_json,
-          payout_state, consent_json, is_personalized
+          payout_state, consent_json, is_personalized,
+          discount_authority, affiliate_id, affiliate_code, affiliate_attribution,
+          affiliate_commission_bp, affiliate_discount_bp, affiliate_self_referral
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+                  ?, ?, ?, ?, ?, ?, 'pending', ?, ?,
+                  ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         orderId,
@@ -580,6 +604,15 @@ export async function handleStripeWebhookEvent(
         production.status === "ok" ? production.json : null,
         consent.consentJson,
         consent.isPersonalized,
+        // CP13 (0059): the checkout's frozen affiliate facts, verbatim. The
+        // order's own coherence and freeze triggers re-police them.
+        checkout.discount_authority,
+        checkout.affiliate_id,
+        checkout.affiliate_code,
+        checkout.affiliate_attribution,
+        checkout.affiliate_commission_bp,
+        checkout.affiliate_discount_bp,
+        checkout.affiliate_self_referral,
       ),
     db
       .prepare(
@@ -777,7 +810,14 @@ export async function handleStripeWebhookEvent(
   // succeeded after its hold was released or expired still counts, so a paid
   // order is never refused), (2) moves only held to released. A checkout
   // made before 0055 has no hold, and both match nothing.
-  if (checkout.discount_code_id !== null) {
+  //
+  // CP13 (design §2.2, R2-2): only an id a CAMPAIGN authorized is burned or
+  // has holds. An affiliate's id (authority 'affiliate') names an
+  // `affiliates` row: nothing is counted against it, and it never held a
+  // use. The gate is `IS NOT 'affiliate'`, never `= 'campaign'`, so a frozen
+  // id without an authority burns as it always did (0059 backfilled every
+  // pre-existing one 'campaign', and its triggers forbid new ones).
+  if (checkout.discount_code_id !== null && checkout.discount_authority !== "affiliate") {
     statements.push(
       db
         .prepare(
@@ -818,6 +858,54 @@ export async function handleStripeWebhookEvent(
         )
         .bind(now, checkout.discount_code_id, checkout.tenant_id),
     );
+  }
+
+  // ── THE AFFILIATE ACCRUAL (CP13, design §4.1) ────────────────────────────
+  // From the checkout's FROZEN facts and nothing else (CX-B2): an affiliate
+  // authority, not a self-referral, its frozen commission rate and the
+  // order's frozen totals and VAT rate. The add-on, the affiliate's status
+  // and its code are NOT read here — a quote accepted before the add-on was
+  // switched off, or the affiliate suspended, settles as quoted, exactly as a
+  // lapsed quote is honoured above. INSERT … SELECT … WHERE NOT EXISTS, after
+  // the order INSERT it reads its currency from; with it, ONE outbox row for
+  // the affiliate's conversion mail (§9), ids only. A commission of 0 öre (a
+  // 0 % affiliate) writes neither.
+  if (
+    checkout.discount_authority === "affiliate" &&
+    checkout.affiliate_id !== null &&
+    checkout.affiliate_commission_bp !== null &&
+    checkout.affiliate_self_referral === 0
+  ) {
+    const { accrual, alert } = guardedAccrual(
+      db,
+      {
+        affiliateId: checkout.affiliate_id,
+        commissionBp: checkout.affiliate_commission_bp,
+        orderId,
+        paidAt: now,
+        shippingMinor: checkout.shipping_minor,
+        tenantId: checkout.tenant_id,
+        totalMinor: checkout.total_minor,
+        vatRateBp: checkout.vat_rate_bp,
+      },
+      now,
+    );
+    if (alert !== null) {
+      statements.push(alert);
+    }
+    if (accrual !== null) {
+      statements.push(
+        accrual.statement,
+        outboxStatement(db, outboxIds, {
+          aggregateId: orderId,
+          dedupeKey: `email:affiliate_conversion:${orderId}`,
+          eventType: "email",
+          now,
+          payload: { kind: "affiliate_conversion", orderId },
+          tenantId: checkout.tenant_id,
+        }),
+      );
+    }
   }
 
   statements.push(
@@ -988,6 +1076,42 @@ function readProductionSnapshot(
  * One `outbox_events` row, in the shared column contract (0001 + 0021): the
  * consumer owns everything after `pending`.
  */
+/**
+ * CP13 round 1 (item 9): the accrual, or — when the formula refuses its input
+ * (commissionMinor's RangeError outside the exact-arithmetic range; no order
+ * the caps admit reaches it) — NO accrual and a critical money alert in the
+ * order batch instead. A commission is never worth aborting the order for:
+ * the payment happened, and the alert puts the missing row before a human.
+ */
+export function guardedAccrual(
+  db: D1Database,
+  facts: AccrualFacts,
+  now: number,
+): { accrual: ReturnType<typeof accrualStatement>; alert: D1PreparedStatement | null } {
+  try {
+    return { accrual: accrualStatement(db, facts, now), alert: null };
+  } catch (error) {
+    if (!(error instanceof RangeError)) {
+      throw error;
+    }
+    return {
+      accrual: null,
+      alert: raiseAlertStatement(
+        db,
+        {
+          kind: "affiliate_accrual_failed",
+          message: `order ${facts.orderId}: the affiliate commission could not be computed (out of range); no accrual was written`,
+          resourceId: facts.orderId,
+          resourceType: "order",
+          severity: "critical",
+          tenantId: facts.tenantId,
+        },
+        now,
+      ),
+    };
+  }
+}
+
 function outboxStatement(
   db: D1Database,
   /** Collects the new row's id (for the post-commit nudge). */

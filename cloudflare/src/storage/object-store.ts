@@ -36,7 +36,9 @@ export interface ReservedObject {
 
 export type ReserveObjectResult =
   | { object: ReservedObject; status: "ok" }
-  | { status: "conflict" | "invalid" };
+  | { status: "conflict" | "invalid" }
+  /** CP13: the caller's `guard` did not hold; nothing was written. */
+  | { status: "refused" };
 
 export type ObjectMutationResult =
   | { object: StoredObject; status: "ok" }
@@ -275,12 +277,24 @@ async function loadObject(
 /**
  * Reserve a versioned key and record a `pending` row before the bytes exist.
  * The key encodes ownership for operability only; the row is the authority.
+ *
+ * `extra` (CP13): statements to commit in the SAME batch as the reservation,
+ * given the new object's id — the affiliate invoice route lists the object
+ * as the affiliate's own (0059 affiliate_invoice_objects) there, so no
+ * reservation exists that is not listed.
  */
 export async function reservePendingObject(
   db: D1Database,
   tenant: ObjectTenant,
   input: ReserveObjectInput,
   now: number,
+  extra?: (objectId: string) => D1PreparedStatement[],
+  // CP13 (A1 round 1): a caller's own condition on the reservation, decided
+  // INSIDE the batch (the affiliate invoice's "at most 5 loose invoices").
+  // With it, the object INSERT is `INSERT … SELECT … WHERE guard`, the audit
+  // row follows it only when it wrote (`changes() > 0`), and `extra`'s
+  // statements must guard themselves on the object row existing.
+  guard?: { binds: unknown[]; sql: string },
 ): Promise<ReserveObjectResult> {
   const declaredSha256 = input.declaredSha256 ?? null;
   const declaredSizeBytes = input.declaredSizeBytes ?? null;
@@ -300,14 +314,19 @@ export async function reservePendingObject(
   const objectId = crypto.randomUUID();
   const objectKey = `shops/${tenant.tenantId}/${input.kind}/${objectId}/v1/${safeFileName(input.fileName)}`;
 
+  let written = true;
   try {
-    await db.batch([
+    const [insert] = await db.batch([
       db
         .prepare(
           `INSERT INTO stored_objects (
             object_id, tenant_id, bucket, object_key, kind, content_type,
             size_bytes, sha256, status, immutable, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+          ) ${
+            guard === undefined
+              ? "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)"
+              : `SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ? WHERE ${guard.sql}`
+          }`,
         )
         .bind(
           objectId,
@@ -320,16 +339,30 @@ export async function reservePendingObject(
           declaredSha256,
           now,
           now,
+          ...(guard === undefined ? [] : guard.binds),
         ),
-      auditStatement(db, tenant, "object.reserve", objectId, now, {
-        kind: input.kind,
-      }),
+      auditStatement(
+        db,
+        tenant,
+        "object.reserve",
+        objectId,
+        now,
+        {
+          kind: input.kind,
+        },
+        guard !== undefined,
+      ),
+      ...(extra === undefined ? [] : extra(objectId)),
     ]);
+    written = (insert?.meta.changes ?? 0) > 0;
   } catch (error) {
     if (isUniqueConstraintFailure(error)) {
       return { status: "conflict" };
     }
     throw error;
+  }
+  if (!written) {
+    return { status: "refused" };
   }
 
   return {
@@ -448,6 +481,34 @@ export async function markObjectImmutable(
     object: toStoredObject({ ...existing, immutable: 1 }),
     status: "ok",
   };
+}
+
+/**
+ * CP13 (design §3.6b, R2-12): markObjectImmutable as statements for a
+ * caller's own batch — the payout request freezes its invoice IN the batch
+ * that records the request, conditioned on that batch's guard, so the
+ * evidence of a payout can never be tombstoned by the shop's object DELETE
+ * (mutable objects only). The freeze is idempotent (an already frozen object
+ * matches nothing and records nothing).
+ */
+export function markObjectImmutableStatements(
+  db: D1Database,
+  tenant: ObjectTenant,
+  objectId: string,
+  now: number,
+  guard: { binds: unknown[]; sql: string },
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `UPDATE stored_objects
+         SET immutable = 1, updated_at = MAX(updated_at, ?)
+         WHERE tenant_id = ? AND object_id = ? AND status = 'active' AND immutable = 0
+           AND ${guard.sql}`,
+      )
+      .bind(now, tenant.tenantId, objectId, ...guard.binds),
+    auditStatement(db, tenant, "object.freeze", objectId, now, { kind: "document" }, true),
+  ];
 }
 
 /**

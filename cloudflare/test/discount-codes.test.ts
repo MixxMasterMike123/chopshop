@@ -1291,10 +1291,10 @@ describe("discount_codes schema", () => {
         `INSERT INTO checkouts (
           checkout_id, tenant_id, status, customer_email, currency,
           delivery_method, shipping_country, subtotal_minor, shipping_minor,
-          vat_minor, vat_rate_bp, discount_minor, discount_code_id,
+          vat_minor, vat_rate_bp, discount_minor, discount_code_id, discount_authority,
           total_minor, idempotency_key_hash, expires_at, created_at, updated_at
         ) VALUES ('dc-over-subtotal', ?, 'open', 'x@example.test', 'SEK',
-          'shipping', 'SE', 1000, 500, 0, 2500, 1200, 'some-code', 300,
+          'shipping', 'SE', 1000, 500, 0, 2500, 1200, 'some-code', 'campaign', 300,
           'hash-dc-over', ?, ?, ?)`,
       )
         .bind(TENANT_A, NOW + DAY_MS, NOW, NOW)

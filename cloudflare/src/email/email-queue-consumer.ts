@@ -13,6 +13,7 @@ import {
   retryAuthEmailDelivery,
 } from "./email-delivery-store";
 import { isOrderEmailJob, orderEmailReplyTo } from "./order-emails";
+import { affiliateReplyTo, affiliateSenderName, isAffiliateEmailJob } from "./affiliate-emails";
 
 /**
  * The `-email` queue consumer: auth email jobs → Resend.
@@ -35,6 +36,12 @@ import { isOrderEmailJob, orderEmailReplyTo } from "./order-emails";
  * (shopSenderName below): the buyer bought from the shop, not from the
  * platform. The address stays the platform's configured one. The shop's own
  * new-order notice, the auth mails and the digest keep the configured sender.
+ * CP13 (design §9, CX-B8): every affiliate mail to an affiliate or an
+ * applicant likewise goes out under the shop's name, with the shop's support
+ * address as Reply-To, both FROZEN in the job's content; the two affiliate
+ * mails to the shop (the new application, the payout request) keep the
+ * configured sender, as the shop's new-order notice does. The affiliate's
+ * invite is an auth mail (configured sender), its wording naming the shop.
  *
  * ── EXACTLY-ONCE ON TOP OF AT-LEAST-ONCE ─────────────────────────────────────
  * Queues deliver at least once, so every message first CLAIMS its ledger row
@@ -152,6 +159,9 @@ export function shopSenderName(job: AuthEmailJob): string | null {
   if (isCheckoutReminderEmailJob(job)) {
     return job.content.shopName;
   }
+  if (isAffiliateEmailJob(job)) {
+    return affiliateSenderName(job);
+  }
   if (job.kind === "order_confirmation") {
     return job.order.shopName;
   }
@@ -179,9 +189,11 @@ async function sendThroughResend(
   const reminder = isCheckoutReminderEmailJob(job) ? job : null;
   const replyTo = isOrderEmailJob(job)
     ? orderEmailReplyTo(job)
-    : reminder === null
-      ? null
-      : reminder.content.supportEmail;
+    : isAffiliateEmailJob(job)
+      ? affiliateReplyTo(job)
+      : reminder === null
+        ? null
+        : reminder.content.supportEmail;
 
   let response: Response;
   try {

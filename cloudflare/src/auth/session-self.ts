@@ -14,13 +14,20 @@
  * Nothing here is a capability: the list is for the picker and the banner.
  * Each admin request is still authorized on its own (`X-Shop-Id` against the
  * same live rows, request-authorization.ts).
+ *
+ * CP13 (design §1.1, §1.2): the admin host serves a THIRD account type,
+ * `affiliate`. Its `memberships` are its ACTIVE `affiliate` memberships (role
+ * 'affiliate', the same predicate with the role as the parameter, so an
+ * affiliate never sees an admin membership nor the reverse), each of a shop
+ * where it holds an affiliates row; it holds no grant. The admin build reads
+ * `accountType` and mounts the affiliate shell.
  */
 
-export type ServedAccountType = "platform_admin" | "tenant_admin";
+export type ServedAccountType = "affiliate" | "platform_admin" | "tenant_admin";
 
 export interface SessionMembership {
   published: boolean;
-  role: "admin";
+  role: "admin" | "affiliate";
   shopName: string | null;
   status: string;
   tenantId: string;
@@ -71,7 +78,7 @@ export async function readSessionSelf(
        INNER JOIN identity_access AS access ON access.user_id = u."id"
        WHERE u."id" = ?
          AND access.status = 'active'
-         AND access.account_type IN ('tenant_admin', 'platform_admin')
+         AND access.account_type IN ('tenant_admin', 'platform_admin', 'affiliate')
        LIMIT 1`,
     )
     .bind(userId)
@@ -89,7 +96,13 @@ export async function readSessionSelf(
     // (authorizeTenantAdmin requires a tenant_admin identity). Each list is
     // therefore read only for the account type it can admit.
     actingAs: platform ? await readOpenGrants(db, identity.user_id, now) : [],
-    memberships: platform ? [] : await readMemberships(db, identity.user_id),
+    memberships: platform
+      ? []
+      : await readMemberships(
+          db,
+          identity.user_id,
+          identity.account_type === "affiliate" ? "affiliate" : "admin",
+        ),
     platform,
     user: { email: identity.email, id: identity.user_id, name: identity.name },
   };
@@ -97,29 +110,37 @@ export async function readSessionSelf(
 
 /**
  * authorizeTenantAdmin's membership predicate (an active `admin` membership)
- * WITHOUT its shop-status term: every shop is listed with its status.
+ * WITHOUT its shop-status term: every shop is listed with its status. CP13:
+ * the role is the parameter — `affiliate` lists authorizeAffiliate's
+ * memberships (an active `affiliate` membership of a shop where the person
+ * holds an affiliates row), again without the shop-status term.
  */
 async function readMemberships(
   db: D1Database,
   userId: string,
+  role: "admin" | "affiliate",
 ): Promise<SessionMembership[]> {
   const rows = await db
     .prepare(
       `SELECT membership.tenant_id, tenant.shop_name, tenant.status, tenant.published
        FROM tenant_memberships AS membership
        INNER JOIN tenants AS tenant ON tenant.tenant_id = membership.tenant_id
-       WHERE membership.user_id = ?
-         AND membership.role = 'admin'
+       WHERE membership.user_id = ?1
+         AND membership.role = ?2
          AND membership.status = 'active'
+         AND (?2 = 'admin' OR EXISTS (
+           SELECT 1 FROM affiliates AS affiliate
+           WHERE affiliate.tenant_id = membership.tenant_id AND affiliate.user_id = membership.user_id
+         ))
        ORDER BY membership.tenant_id
-       LIMIT ?`,
+       LIMIT ?3`,
     )
-    .bind(userId, SESSION_LIST_LIMIT)
+    .bind(userId, role, SESSION_LIST_LIMIT)
     .all<{ published: number; shop_name: string | null; status: string; tenant_id: string }>();
 
   return rows.results.map((row) => ({
     published: row.published === 1,
-    role: "admin",
+    role,
     shopName: row.shop_name,
     status: row.status,
     tenantId: row.tenant_id,

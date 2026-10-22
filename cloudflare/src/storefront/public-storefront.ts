@@ -48,11 +48,13 @@ export interface PublicStorefront {
  * Cloudflare reads `false` in the public response whatever the shop's row or
  * default says, so no button of it appears and fails. Porting a feature is
  * adding its key here (CP8-DC: `discountCodes`, opt-in per shop, DC1/DC2;
- * CP9-AC: `abandonedCheckout`, opt-in per shop, AC1/AC2).
+ * CP9-AC: `abandonedCheckout`, opt-in per shop, AC1/AC2; CP13: `affiliate`,
+ * opt-in per shop, design A12 — the storefront's form, footer link and
+ * `?ref=` hook follow it).
  * A change here changes the storefront body without a catalog bump: raise
  * STOREFRONT_BODY_REVISION (public-routes.ts) with it.
  */
-export const PORTED_FEATURE_KEYS: readonly FeatureKey[] = ["pod", "discountCodes", "abandonedCheckout"];
+export const PORTED_FEATURE_KEYS: readonly FeatureKey[] = ["pod", "discountCodes", "abandonedCheckout", "affiliate"];
 
 /**
  * `GET /v1/storefront` → `{ storefront: PublicStorefrontResponse }`: one read

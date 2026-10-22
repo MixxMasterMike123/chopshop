@@ -475,6 +475,37 @@ import {
 // CP11-IMPORTS-U3 — start
 import { handleProdigiWebhookRoute, PRODIGI_WEBHOOK_PATH } from "./dispatch/prodigi-intake";
 // CP11-IMPORTS-U3 — end
+// CP13-IMPORTS-A1 — begin
+import { AFFILIATE_ADMIN_ROUTES } from "./routes/affiliate-admin";
+import {
+  AFFILIATE_PORTAL_LEDGER_PATH,
+  AFFILIATE_PORTAL_ME_PATH,
+  AFFILIATE_PORTAL_OBJECT_CONTENT_ROUTE,
+  AFFILIATE_PORTAL_OBJECTS_PATH,
+  AFFILIATE_PORTAL_ORDERS_PATH,
+  AFFILIATE_PORTAL_PAYOUT_INVOICE_ROUTE,
+  AFFILIATE_PORTAL_PAYOUTS_PATH,
+  AFFILIATE_PORTAL_PROFILE_PATH,
+  AFFILIATE_PORTAL_TERMS_ACCEPT_PATH,
+  AFFILIATE_PORTAL_TERMS_PATH,
+  handleAffiliatePortalLedgerRoute,
+  handleAffiliatePortalMeRoute,
+  handleAffiliatePortalObjectContentRoute,
+  handleAffiliatePortalObjectsRoute,
+  handleAffiliatePortalOrdersRoute,
+  handleAffiliatePortalPayoutInvoiceRoute,
+  handleAffiliatePortalPayoutsRoute,
+  handleAffiliatePortalProfileRoute,
+  handleAffiliatePortalTermsAcceptRoute,
+  handleAffiliatePortalTermsRoute,
+} from "./routes/affiliate-portal";
+import {
+  handleStorefrontAffiliateApplicationRoute,
+  handleStorefrontAffiliateTermsRoute,
+  STOREFRONT_AFFILIATE_APPLICATIONS_PATH,
+  STOREFRONT_AFFILIATE_TERMS_PATH,
+} from "./routes/affiliate-storefront";
+// CP13-IMPORTS-A1 — end
 
 const HEALTH_PATH = "/health";
 const READINESS_PATH = "/ready";
@@ -510,7 +541,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0057_printer_provider.sql";
+const REQUIRED_MIGRATION = "0059_affiliate.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -1265,7 +1296,9 @@ async function handleCheckoutRoute(
     return rateLimitedResponse(byEmail.retryAfterSeconds);
   }
 
-  if (input.discountCode !== null) {
+  // CP13: a link code (`refCode`) counts as an attempt too, so the checkout is
+  // no faster an oracle for affiliate codes than the preview is.
+  if (input.discountCode !== null || (input.refCode ?? null) !== null) {
     const byAttempt = await enforceRateLimit(env.DB, {
       key: visitorRateKey(clientIp(request)),
       limit: DISCOUNT_ATTEMPT_LIMIT,
@@ -2326,6 +2359,79 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // route is wrapped in `storefront(...)` as well. Id segments come from the
   // RAW pathname and are decoded once by the handler (see ACTING_AS_ROUTE).
   // The reviewer consolidates after merge. ─────────────────────────────────
+  // CP13-ROUTES-A1 (the affiliate program) — begin
+  // Before every older route, for one reason: GET /v1/seo is re-registered
+  // here (CP4-ROUTES-D's registration below is then unreachable and can go at
+  // consolidation) so its handler receives the API's own waitUntil for the
+  // `?ref=` landing count (src/affiliate/clicks.ts). Everything else is an
+  // exact path or pattern no earlier or later route claims; each claims only
+  // its own methods (onMethods), so another method falls through to the
+  // opaque 404. Id segments are taken from the RAW pathname and decoded once
+  // by the handlers.
+  //   storefront  POST /v1/affiliate-applications, GET /v1/affiliate-terms
+  //               (storefront(...): the Internal entrypoint only)
+  //   admin       /v1/admin/affiliates/* (AFFILIATE_ADMIN_ROUTES, literal
+  //               paths before the `:affiliateId` pattern)
+  //   portal      /v1/affiliate/* (the affiliate principal, admin host)
+  const waitUntilOf = (c: Context<AppEnv>): ((promise: Promise<unknown>) => void) | undefined => {
+    try {
+      const context = c.executionCtx;
+      return (promise) => context.waitUntil(promise);
+    } catch {
+      // No ExecutionContext (a caller without one): the count runs inline.
+      return undefined;
+    }
+  };
+  app.all(
+    SEO_PATH,
+    onMethods(["GET"], storefront((c) => {
+      const waitUntil = waitUntilOf(c);
+      return handlePublicSeoRequest(c.env, c.req.raw, waitUntil === undefined ? {} : { waitUntil });
+    })),
+  );
+  app.all(
+    STOREFRONT_AFFILIATE_APPLICATIONS_PATH,
+    onMethods(["POST"], storefront((c) => handleStorefrontAffiliateApplicationRoute(c.env, c.req.raw))),
+  );
+  app.all(
+    STOREFRONT_AFFILIATE_TERMS_PATH,
+    onMethods(["GET"], storefront((c) => handleStorefrontAffiliateTermsRoute(c.env, c.req.raw))),
+  );
+  for (const route of AFFILIATE_ADMIN_ROUTES) {
+    app.all(
+      route.path,
+      onMethods(route.methods, (c) =>
+        route.handler(c.env, c.req.raw, new URL(c.req.url).pathname.split("/")[route.segment] ?? ""),
+      ),
+    );
+  }
+  app.all(AFFILIATE_PORTAL_ME_PATH, onMethods(["GET"], (c) => handleAffiliatePortalMeRoute(c.env, c.req.raw)));
+  app.all(AFFILIATE_PORTAL_ORDERS_PATH, onMethods(["GET"], (c) => handleAffiliatePortalOrdersRoute(c.env, c.req.raw)));
+  app.all(AFFILIATE_PORTAL_LEDGER_PATH, onMethods(["GET"], (c) => handleAffiliatePortalLedgerRoute(c.env, c.req.raw)));
+  app.all(
+    AFFILIATE_PORTAL_PAYOUTS_PATH,
+    onMethods(["GET", "POST"], (c) => handleAffiliatePortalPayoutsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    AFFILIATE_PORTAL_PAYOUT_INVOICE_ROUTE,
+    onMethods(["GET"], (c) =>
+      handleAffiliatePortalPayoutInvoiceRoute(c.env, c.req.raw, new URL(c.req.url).pathname.split("/")[4] ?? ""),
+    ),
+  );
+  app.all(AFFILIATE_PORTAL_PROFILE_PATH, onMethods(["PATCH"], (c) => handleAffiliatePortalProfileRoute(c.env, c.req.raw)));
+  app.all(AFFILIATE_PORTAL_TERMS_PATH, onMethods(["GET"], (c) => handleAffiliatePortalTermsRoute(c.env, c.req.raw)));
+  app.all(
+    AFFILIATE_PORTAL_TERMS_ACCEPT_PATH,
+    onMethods(["POST"], (c) => handleAffiliatePortalTermsAcceptRoute(c.env, c.req.raw)),
+  );
+  app.all(AFFILIATE_PORTAL_OBJECTS_PATH, onMethods(["POST"], (c) => handleAffiliatePortalObjectsRoute(c.env, c.req.raw)));
+  app.all(
+    AFFILIATE_PORTAL_OBJECT_CONTENT_ROUTE,
+    onMethods(["PUT"], (c) =>
+      handleAffiliatePortalObjectContentRoute(c.env, c.req.raw, new URL(c.req.url).pathname.split("/")[4] ?? ""),
+    ),
+  );
+  // CP13-ROUTES-A1 — end
   // CP4-ROUTES-A (products: admin list and read, variants, images) — begin
   // Exact paths, each claiming only its own methods: POST on the list path and
   // PATCH on the product path still reach handleAdminProductRoute below, as do
@@ -2432,10 +2538,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // CP4-ROUTES-C — end
   // CP4-ROUTES-D (sitemap, robots, product feed, preview, forwarding) — begin
   // The two reads of the web Worker (D88): exact paths, GET only, public.
-  app.all(
-    SEO_PATH,
-    onMethods(["GET"], storefront((c) => handlePublicSeoRequest(c.env, c.req.raw))),
-  );
+  // GET /v1/seo is registered in CP13-ROUTES-A1 above (it carries the `?ref=`
+  // landing count and needs the API's waitUntil); only the sitemap stays here.
   app.all(
     SITEMAP_PATH,
     onMethods(["GET"], storefront((c) => handlePublicSitemapRequest(c.env, c.req.raw))),
