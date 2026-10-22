@@ -30,9 +30,9 @@ This file is the starting point for a NEW context window. Read it whole, then th
 6. **Mails.** Application received (applicant), application notification (shop admin), welcome with the password-set link (the invite mechanism of `invites.ts`, never a plaintext password: §8.2), conversion / payout / denial notifications (D30).
 7. **Not ported, by decision:** campaigns layer, campaign revenue share, ambassador CRM (D30, spec §7); the "send credentials" manual path (§7.4, §8.2); `approveAffiliate`'s takeover shape (§8.1).
 
-## 3. Decisions to confirm (proposal: take every recommended default of D24–D30)
+## 3. Decisions — CONFIRMED 2026-10-22 (Mikael)
 
-Mikael says yes or amends; the design is written against the answers.
+**The rule:** keep the Firebase behaviour (`specs/AFFILIATE.md`) as close as possible; deviate only where the spec shows a gap (§7 dead/half-built, §8 security) or where a clearly better solution exists, and say so in the design, per deviation. The D24–D30 defaults below are such deviations and are TAKEN; where a default and the Firebase behaviour differ, the design names both and keeps the default.
 
 | # | Proposal (= DECISIONS.md default) |
 |---|---|
@@ -46,7 +46,8 @@ Mikael says yes or amends; the design is written against the answers.
 
 ## 4. Open questions the design must answer (new, not in DECISIONS.md)
 
-- **Q1 — where does an affiliate log in?** The storefront has no sessions (D81) and the web Worker holds none. Options: (a) the admin host (`admin.flippinstuff.se/affiliate/…`) with a new `identity_access.account_type = 'affiliate'` (migration; the enum is CHECKed) and Better Auth sessions as for tenant admins, the portal being a third surface of the admin Worker beside shop admin and platform; (b) a token link per mail with no password. **Recommend (a)**: real sessions, the invite/password-set machinery exists, "per-shop logins" (D30) maps to one membership row per shop. The shop's storefront keeps only the public application form and the `?ref=` landing.
+- **Q1 — DECIDED 2026-10-22 (Mikael: "I trust your decision on this and auth") → option (a): the admin host, a new `identity_access.account_type = 'affiliate'`, Better Auth sessions, the invite/password-set machinery, one membership row per shop. The storefront keeps the public application form and the `?ref=` landing only.** Original question kept for the record:
+- **Q1 (as asked) — where does an affiliate log in?** The storefront has no sessions (D81) and the web Worker holds none. Options: (a) the admin host (`admin.flippinstuff.se/affiliate/…`) with a new `identity_access.account_type = 'affiliate'` (migration; the enum is CHECKed) and Better Auth sessions as for tenant admins, the portal being a third surface of the admin Worker beside shop admin and platform; (b) a token link per mail with no password. **Recommend (a)**: real sessions, the invite/password-set machinery exists, "per-shop logins" (D30) maps to one membership row per shop. The shop's storefront keeps only the public application form and the `?ref=` landing.
 - **Q2 — the order's attribution columns.** Spec §2.5 lists what Firebase wrote on `orders`; the port freezes money on `checkouts` and copies to `orders`. Decide the columns (affiliate id, code, commission base/amount/status, ledger id) and which table owns them; the tenant projections must not leak another affiliate's data.
 - **Q3 — the storefront `?ref=` landing** on `<shop>.flippinstuff.se` (CP14's URL shape): the web Worker sets the session code without a cookie unless consent (D27) — define the storage (URL-carried into the checkout vs a first-party cookie behind consent).
 - **Q4 — staging mail.** The application and welcome mails cannot be sent on staging; the smoke must read the queue ledger instead, as CP10 does.
@@ -62,4 +63,4 @@ Total ≈ 4–5 units plus reviews. Depends on nothing else, but Q1 touches the 
 
 ## 6. Prompt to open the new window with
 
-> Read `docs/cf-port/CP13_AFFILIATE_KICKOFF.md`, then `docs/cf-port/specs/AFFILIATE.md` and DECISIONS.md D24–D30. Mikael has confirmed the D24–D30 defaults [or: amended as follows …]. Start with step 1 of §5: a Codex audit of the spec against the port's money and identity seams, then write the design.
+> Read `docs/cf-port/CP13_AFFILIATE_KICKOFF.md`, then `docs/cf-port/specs/AFFILIATE.md` and DECISIONS.md D24–D30. Mikael's answers are in the kickoff §3 (Firebase parity as the baseline, the D24–D30 defaults taken, deviate only for gaps or clearly better solutions) and §4 Q1 (admin host + `affiliate` account type). Start with step 1 of §5: a Codex audit of the spec against the port's money and identity seams, then write the design.
