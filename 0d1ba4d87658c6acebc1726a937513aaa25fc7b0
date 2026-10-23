@@ -1,0 +1,3 @@
+codex: PASS (gpt-6-astra, medium, 2026-10-23: no actionable regressions)
+
+fable: PASS (brand swap + logo; rendered at 1280/390 + sidebar mock; 3 test files 35/35; full suite 5165 before the name edits)
