@@ -40,7 +40,7 @@ export const PLATFORM_TERMS_TEMPLATE = `> **UTKAST – ej granskat av jurist.** 
 > den används mot kund.
 
 Dessa villkor gäller mellan {{platform_legal_name}}{{platform_org_suffix}} ("Plattformen", "vi") och
-den näringsidkare som öppnar och driver en webbshop på plattformen Flippin Stuff ("Säljaren", "du").
+den näringsidkare som öppnar och driver en webbshop på plattformen ChopShop ("Säljaren", "du").
 
 ## 1. Parter och tillämpning
 
