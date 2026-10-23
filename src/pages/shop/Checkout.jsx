@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getProduct } from '../../api/products';
-import { toCheckoutTotals } from '../../storefront/adapters/checkout';
+import { toCheckoutTotals, discountNotAppliedOf } from '../../storefront/adapters/checkout';
 import { useCart } from '../../contexts/CartContext';
 import { useTranslation } from '../../contexts/TranslationContext';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
@@ -35,7 +35,7 @@ const COUNTRY_OPTIONS = [
 
 const Checkout = () => {
   const {
-    cart, clearCart, updateShippingCountry, reconcileCart, removeDiscount,
+    cart, clearCart, updateShippingCountry, reconcileCart, removeDiscount, linkCode,
     deliveryMethod, pickupLocation, pickupDate, setPickupDate, selectHomeDelivery, selectPickup,
     cartAllowsHome, cartAllowsPickup, hasDeliveryConflict, cartShipsTo,
   } = useCart();
@@ -172,12 +172,13 @@ const Checkout = () => {
   // The summary's figures are the SERVER's (the priced checkout of the payment
   // step); before it has priced the order there are none. Nothing here adds,
   // taxes or ships anything.
-  const { subtotal, vat, shipping, total, vatRate, discountAmount, discountCode, discountPercentage, discountSource } =
+  const { subtotal, vat, shipping, total, vatRate, discountAmount, discountCode, overriddenBy } =
     toCheckoutTotals(step === 'payment' ? quote : null, store.vatRate);
   // CP8-DC: the cart sent a code and the server did not apply it (a race for
   // the last use, the fee rule, the minimum charge, the shop's switch). The
   // buyer is told, and may take it away: that is a new checkout without it.
-  const discountNotApplied = step === 'payment' && quote !== null && typeof quote?.discountCode === 'string' && quote.discountMinor === 0;
+  // CP13: the link's code echoed with 0 is attribution only, never "not applied".
+  const discountNotApplied = step === 'payment' && discountNotAppliedOf(quote, linkCode);
   // A quote belongs to the visit of the payment step that asked for it: the
   // buyer may change the delivery before coming back.
   useEffect(() => {
@@ -977,12 +978,11 @@ const Checkout = () => {
                   </div>
                   {discountAmount > 0 && (
                     <div className="flex justify-between text-xs sm:text-sm">
+                      {/* CP13: one label for every code, "Rabatt (KOD)". */}
                       <span className="text-accent text-xs bg-accent/10 px-2 py-1 rounded-full font-semibold">
-                        {discountSource === 'campaign'
-                          ? (discountPercentage > 0
-                              ? t('checkout_discount_percent', 'Rabatt, {{discountPercentage}}%', { discountPercentage })
-                              : t('checkout_discount', 'Rabatt'))
-                          : t('checkout_affiliate_discount', 'Affiliate rabatt, {{discountPercentage}}%', { discountPercentage })}
+                        {discountCode
+                          ? t('checkout_discount_code_label', 'Rabatt ({{code}})', { code: discountCode })
+                          : t('checkout_discount', 'Rabatt')}
                       </span>
                       <span className="inline-flex items-baseline gap-1 whitespace-nowrap font-medium text-green-600">
                         - <SmartPrice 
@@ -1040,35 +1040,20 @@ const Checkout = () => {
                   </div>
                 )}
 
-                {/* Applied-discount confirmation. Source-aware: a campaign
-                    ("Rabattkoder") code shows a generic "Rabatt aktiverad"
-                    message (a fixed-amount code has no percentage); an affiliate
-                    code keeps the affiliate wording. Driven by discountSource +
-                    an applied code (calculateTotals now returns discountSource;
-                    the old appliedAffiliate field was never populated). */}
+                {/* Applied-discount confirmation: the code the server applied,
+                    whatever kind it is (CP13, design §7.4: the buyer does not
+                    need to know which family a code belongs to). When the
+                    buyer typed a code and the link's code was used instead,
+                    the server says so (`overriddenBy: 'link'`). */}
                 {discountAmount > 0 && discountCode && (
                   <div className="mt-3 sm:mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
                     <div className="text-xs sm:text-sm text-green-800">
-                      {discountSource === 'campaign' ? (
-                        <>
-                          <div className="font-medium">{t('checkout_discount_activated', '🎉 Rabatt aktiverad!')}</div>
-                          <div className="text-xs mt-1">
-                            {discountPercentage > 0
-                              ? t('checkout_discount_code_percent', 'Kod: {{code}} • {{discountPercentage}}% rabatt', { code: discountCode, discountPercentage })
-                              : t('checkout_discount_code', 'Kod: {{code}}', { code: discountCode })}
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="font-medium">{t('checkout_affiliate_activated', '🎉 Affiliate-rabatt aktiverad!')}</div>
-                          <div className="text-xs mt-1">
-                            {t('checkout_affiliate_code', 'Kod: {{code}} • {{discountPercentage}}% rabatt', {
-                              code: discountCode,
-                              discountPercentage
-                            })}
-                          </div>
-                        </>
-                      )}
+                      <div className="font-medium">{t('checkout_discount_activated', '🎉 Rabatt aktiverad!')}</div>
+                      <div className="text-xs mt-1">
+                        {overriddenBy === 'link'
+                          ? t('discount_link_overridden', 'Länkkoden {{code}} används i stället', { code: discountCode })
+                          : t('checkout_discount_code', 'Kod: {{code}}', { code: discountCode })}
+                      </div>
                     </div>
                   </div>
                 )}

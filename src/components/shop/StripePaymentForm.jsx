@@ -262,7 +262,9 @@ const PaymentForm = ({ customerInfo, shippingInfo, onPaymentSuccess, onPaymentEr
 
 const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, withdrawalGate, onCheckout, onPaymentSuccess, onPaymentError }) => {
   const { t } = useTranslation();
-  const { cart, checkoutItems } = useCart();
+  // CP13: `linkCode` is the cart's live link code (`?ref=`); the older
+  // build's cart has none, and nothing is sent then.
+  const { cart, checkoutItems, linkCode } = useCart();
   const shopId = useShopId();
   // Block confirm until the no-withdrawal notice is accepted (when required).
   const gateBlocked = withdrawalGate?.required === true && withdrawalGate?.accepted !== true;
@@ -301,6 +303,8 @@ const StripePaymentForm = ({ customerInfo, shippingInfo, deliveryInfo, withdrawa
     withdrawal: withdrawalGate,
     // CP8-DC: the code the cart holds, never the field's text.
     discountCode: cart.discountCode,
+    // CP13: the link's code beside it; the server decides which one counts.
+    refCode: linkCode,
   });
 
   // Recreation fingerprint (2026-08-15 verifier + 07-25 audit fixes).

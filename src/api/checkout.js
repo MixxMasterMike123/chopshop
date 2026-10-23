@@ -16,8 +16,11 @@ export function newIdempotencyKey() {
  * withdrawalWaiver?, disclosureVersion? }` (disclosureVersion only with a
  * ticked waiver). `recipient` (D98): who gets the order and where, as
  * storefront/adapters/checkout.js toApiRecipient builds it. `discountCode`
- * (CP8-DC): the cart's campaign code, sent only when there is one; a code
- * that does not apply is echoed back with `discountMinor` 0.
+ * (CP8-DC): the cart's typed code, sent only when there is one; a code
+ * that does not apply is echoed back with `discountMinor` 0. `refCode`
+ * (CP13): the link's code (`?ref=`), sent only when there is one; when it
+ * won over a typed code the answer carries `overriddenBy: 'link'` and
+ * `discountCode` echoes the link's code.
  *
  * Resolves `{ checkout, replayed }`: the priced checkout (`checkoutId`,
  * `items`, `subtotalMinor`, `shippingMinor`, `vatMinor`, `vatRateBp`,
@@ -29,7 +32,7 @@ export function newIdempotencyKey() {
  * `unprocessable` (a line cannot be bought), 429 `rate_limited`.
  */
 export async function createCheckout(
-  { items, email, deliveryMethod, shippingCountry, consent, idempotencyKey, recipient, discountCode },
+  { items, email, deliveryMethod, shippingCountry, consent, idempotencyKey, recipient, discountCode, refCode },
   { signal } = {},
 ) {
   const body = {
@@ -46,6 +49,7 @@ export async function createCheckout(
   // toApiRecipient). The server refuses a checkout without one.
   if (recipient !== undefined) body.recipient = recipient;
   if (typeof discountCode === 'string' && discountCode !== '') body.discountCode = discountCode;
+  if (typeof refCode === 'string' && refCode !== '') body.refCode = refCode;
 
   const { status, data } = await request('/v1/checkout', { method: 'POST', body, signal });
   return { checkout: data.checkout, replayed: status === 200 };

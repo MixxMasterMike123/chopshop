@@ -1,14 +1,21 @@
 // The cart of the Cloudflare storefront. `useCart()` returns the same value as
 // CartContext.jsx, with two changes:
 //
-//  1. CAMPAIGN CODES ONLY (CP8-DC; the affiliate program is not ported, D81).
-//     `applyDiscountCode(raw)` asks the API's preview (POST
+//  1. TWO CODES (CP8-DC campaign codes; CP13 the affiliate link, design §2.1,
+//     §2.2, §7.4). `applyDiscountCode(raw)` asks the API's preview (POST
 //     /v1/discount-codes/preview) once per call and answers `{ success,
-//     message }`, the contract the shared pages read. An applying code is
-//     kept with the cart (`cart.discountCode`) and sent with the checkout;
-//     the preview's amount is what the cart shows, and it is asked again
-//     500 ms after the lines change. The payment step shows the server's
-//     checkout, whose answer counts. A shop with the add-on off keeps no code.
+//     message, notice? }`, the contract the shared pages read. An applying
+//     typed code is kept with the cart (`cart.discountCode`). A landing with
+//     `?ref=CODE` (shop with the `affiliate` add-on on) keeps the link's code
+//     as `cart.refCode` + `source: 'link'` + `refAt` (the landing's time),
+//     dropped after 30 days and by a completed checkout (clearCart); the
+//     parameter leaves the address. Both codes go to the preview and to the
+//     checkout (`refCode` beside `discountCode`); the server decides (the
+//     link wins over a typed code and says so). The preview's amount is what
+//     the cart shows, asked again 500 ms after the lines change. The payment
+//     step shows the server's checkout, whose answer counts. A typed code is
+//     dropped when neither add-on is on; with `affiliate` off the link's code
+//     is kept but not sent (the hook is inert).
 //  2. A line carries the API's ids: `productId` and `variantId` (money is keyed
 //     on the variant's sku, the line id stays `productId::variantSku`).
 //     `checkoutItems()` gives the lines as POST /v1/checkout takes them.
@@ -27,11 +34,19 @@ import { cartDeliveryOf, sameDelivery } from '../adapters/products.js';
 import { previewDiscountCode } from '../../api/discountCodes.js';
 import {
   DISCOUNT_MESSAGES,
+  LINK_MESSAGES,
+  currentDiscountMinor,
+  currentPreview,
+  discountNoticeOf,
+  hasRefParameter,
   isDiscountCodeShape,
   normalizeDiscountCode,
-  previewedDiscountMinor,
+  previewCodes,
   previewOutcome,
+  refCodeFromSearch,
+  searchWithoutRef,
   storedDiscountCode,
+  storedRef,
 } from '../adapters/discount.js';
 import { useShopFeatures } from './ShopFeatures.jsx';
 import { useStorefront } from './Storefront.jsx';
@@ -58,9 +73,12 @@ const REPREVIEW_DELAY_MS = 500;
 
 export const cartStorageKey = (root) => `storefront-cart:${root ?? ''}`;
 
-const emptyCart = () => ({ items: [], shippingCountry: 'SE', discountCode: null });
+const emptyCart = () => ({ items: [], shippingCountry: 'SE', discountCode: null, refCode: null, source: null, refAt: null });
 
-export const loadStoredCart = (root) => {
+// The stored shape (CP13): { items, shippingCountry, discountCode, refCode,
+// source: 'link' | null, refAt: <ms> | null }. A link stamp older than 30 days
+// is dropped here.
+export const loadStoredCart = (root, now = Date.now()) => {
   try {
     const saved = JSON.parse(localStorage.getItem(cartStorageKey(root)) || 'null');
     return saved && Array.isArray(saved.items)
@@ -68,6 +86,7 @@ export const loadStoredCart = (root) => {
           items: saved.items,
           shippingCountry: saved.shippingCountry || 'SE',
           discountCode: storedDiscountCode(saved.discountCode),
+          ...storedRef(saved, now),
         }
       : emptyCart();
   } catch {
@@ -117,15 +136,51 @@ export const CartProvider = ({ children }) => {
   const { t } = useTranslation();
   const { status: storefrontStatus } = useStorefront();
   const { isEnabled } = useShopFeatures();
-  const discountsOn = isEnabled('discountCodes');
+  // CP13: the code box serves both families; each is decided by the server
+  // under its own switch.
+  const affiliateOn = isEnabled('affiliate');
+  const discountsOn = affiliateOn || isEnabled('discountCodes');
   const [cart, setCart] = useState(() => loadStoredCart(root));
+  // The `ref` of the address the page was opened with, read before any
+  // client-side move can change the address; acted on once the storefront has
+  // said whether the program is on.
+  const landingRef = useRef(
+    typeof window === 'undefined'
+      ? { code: null, present: false }
+      : { code: refCodeFromSearch(window.location.search), present: hasRefParameter(window.location.search) },
+  );
+  // The link's code that is LIVE: stamped within 30 days, the program on.
+  const linkCode = affiliateOn ? storedRef(cart).refCode : null;
   const cartRootRef = useRef(root);
-  // The last preview of the stored code: { code, applies, discountMinor }, or
-  // null while there is none (no code, not asked yet, or no answer).
+  // The last preview of the cart's codes: { applies, code, discountMinor,
+  // typed, ref } (`code`: the code the server answered for), or null while
+  // there is none (no code, not asked yet, or no answer).
   const [discountPreview, setDiscountPreview] = useState(null);
-  // The code and lines the last preview answered for, so a press of
+  // The codes and lines the last preview answered for, so a press of
   // "Applicera" is not asked a second time by the effect below.
   const previewedFor = useRef(null);
+
+  // The `?ref=` landing (design §2.1): once the storefront answered with the
+  // program on, the code is stamped into this shop's cart and the parameter
+  // leaves the address (history.replaceState; the router's own state is
+  // kept). With the program off nothing happens.
+  useEffect(() => {
+    if (storefrontStatus !== 'ready' || !affiliateOn) return;
+    const landing = landingRef.current;
+    if (!landing.present) return;
+    landingRef.current = { code: null, present: false };
+    if (landing.code !== null) {
+      setCart((prev) => ({ ...prev, refCode: landing.code, source: 'link', refAt: Date.now() }));
+    }
+    try {
+      const { pathname, search, hash } = window.location;
+      if (hasRefParameter(search)) {
+        window.history.replaceState(window.history.state, '', `${pathname}${searchWithoutRef(search)}${hash}`);
+      }
+    } catch {
+      // An address that cannot be rewritten keeps its parameter; the code is stored.
+    }
+  }, [storefrontStatus, affiliateOn]);
 
   const [isAddedToCartModalVisible, setIsAddedToCartModalVisible] = useState(false);
   const [lastAddedItem, setLastAddedItem] = useState(null);
@@ -237,8 +292,9 @@ export const CartProvider = ({ children }) => {
   const calculateTotals = () => {
     const subtotal = cart.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const shipping = deliveryMethod === 'pickup' ? 0 : getShippingCost(cart.shippingCountry);
-    // The preview's amount for the code the cart holds; the server prices the order.
-    const discountAmount = previewedDiscountMinor(discountPreview, cart.discountCode) / 100;
+    // The preview's amount for the codes the cart holds; the server prices the order.
+    const preview = currentPreview(discountPreview, cart.discountCode, linkCode);
+    const discountAmount = currentDiscountMinor(preview) / 100;
     const total = subtotal + shipping - discountAmount;
     const vat = total - total / (1 + STORE.vatRate);
     return {
@@ -248,10 +304,25 @@ export const CartProvider = ({ children }) => {
       total,
       discountAmount,
       discountCode: cart.discountCode,
-      // A preview names no percentage: the label is "Rabatt".
+      // CP13: the code the discount row names ("Rabatt (KOD)"): the one the
+      // server applied, the link's when it won.
+      appliedCode: discountAmount > 0 ? preview.code : null,
+      // A preview names no percentage: the label is "Rabatt (KOD)".
       discountPercentage: 0,
       discountSource: discountAmount > 0 ? 'campaign' : null,
     };
+  };
+
+  // What the code box says (CP13): the link's code added or used instead of
+  // the typed one, or the typed code not applying.
+  const discountNotice = discountNoticeOf(currentPreview(discountPreview, cart.discountCode, linkCode), {
+    typed: cart.discountCode,
+    ref: linkCode,
+  });
+  const linkMessage = (notice) => {
+    if (!notice || notice.kind === 'not_applicable') return null;
+    const [key, fallback] = notice.kind === 'link_overridden' ? LINK_MESSAGES.link_overridden : LINK_MESSAGES.link_added;
+    return t(key, fallback, { code: notice.code });
   };
 
   const messageOf = (outcome) => {
@@ -266,7 +337,10 @@ export const CartProvider = ({ children }) => {
     );
 
   // One preview per press of "Applicera", never per keystroke: the page keeps
-  // the field's text and hands only the pressed value here.
+  // the field's text and hands only the pressed value here. With a live link
+  // code both are asked for; the typed code is kept when anything applies
+  // (CP13: also when the link wins, so the checkout sends both and the
+  // server's answer names the winner).
   const applyDiscountCode = async (raw) => {
     const code = normalizeDiscountCode(raw);
     if (!discountsOn || cart.items.length === 0) {
@@ -275,58 +349,80 @@ export const CartProvider = ({ children }) => {
     if (!isDiscountCodeShape(code)) {
       return { success: false, message: messageOf('invalid_format') };
     }
+    // The link's own code typed again: nothing new to keep.
+    const typed = code === linkCode ? null : code;
     let outcome;
     let discount = null;
     try {
-      discount = await previewDiscountCode({ code, items: checkoutItems() });
+      discount = await previewDiscountCode({ ...previewCodes(typed, linkCode), items: checkoutItems() });
       outcome = previewOutcome({ discount });
     } catch (error) {
       if (error?.name === 'AbortError') return { success: false };
       outcome = previewOutcome({ error });
     }
     if (outcome === 'applies') {
-      previewedFor.current = `${discount.code}\n${JSON.stringify(checkoutItems())}`;
-      setCart((prev) => ({ ...prev, discountCode: discount.code }));
-      setDiscountPreview({ applies: true, code: discount.code, discountMinor: discount.discountMinor });
+      previewedFor.current = `${typed}\n${linkCode}\n${JSON.stringify(checkoutItems())}`;
+      setCart((prev) => ({ ...prev, discountCode: typed }));
+      setDiscountPreview({ applies: true, code: discount.code, discountMinor: discount.discountMinor, typed, ref: linkCode });
+      if (linkCode && discount.code === linkCode) {
+        const notice = typed ? { kind: 'link_overridden', code: linkCode } : { kind: 'link_added', code: linkCode };
+        return { success: true, notice: true, message: linkMessage(notice) };
+      }
       return { success: true, message: messageOf('applies') };
     }
     return { success: false, message: messageOf(outcome) };
   };
 
+  // Takes away the typed code only; the link stamp is never touched here
+  // (a notice about a typed code must not cost the affiliate its attribution).
   const removeDiscount = useCallback(() => {
     previewedFor.current = null;
     setCart((prev) => (prev.discountCode === null ? prev : { ...prev, discountCode: null }));
     setDiscountPreview(null);
   }, []);
 
-  // A shop with the add-on off keeps no code, once its storefront has said so.
-  useEffect(() => {
-    if (storefrontStatus === 'ready' && !discountsOn && cart.discountCode !== null) removeDiscount();
-  }, [storefrontStatus, discountsOn, cart.discountCode, removeDiscount]);
+  // CP13: the buyer's own choice to drop the link's code ("Ta bort" beside it).
+  const removeLinkCode = useCallback(() => {
+    previewedFor.current = null;
+    setCart((prev) => (prev.refCode === null ? prev : { ...prev, refCode: null, source: null, refAt: null }));
+    setDiscountPreview(null);
+  }, []);
 
-  // The stored code against the lines as they are now: asked again once the
-  // lines (or the code) have stayed the same for REPREVIEW_DELAY_MS. A code
+  // A shop with neither add-on on keeps no typed code, once its storefront has said so.
+  useEffect(() => {
+    if (storefrontStatus === 'ready' && !discountsOn && cart.discountCode !== null) {
+      previewedFor.current = null;
+      setCart((prev) => ({ ...prev, discountCode: null }));
+      setDiscountPreview(null);
+    }
+  }, [storefrontStatus, discountsOn, cart.discountCode]);
+
+  // The stored codes against the lines as they are now: asked again once the
+  // lines (or a code) have stayed the same for REPREVIEW_DELAY_MS. A code
   // that stops applying stays stored (the buyer may add to reach a minimum);
   // the cart then shows no discount and says so.
   const linesKey = JSON.stringify(checkoutItems());
   useEffect(() => {
-    const code = cart.discountCode;
-    if (code === null || !discountsOn || cart.items.length === 0) {
+    const typed = cart.discountCode;
+    const codes = previewCodes(typed, linkCode);
+    if (codes === null || !discountsOn || cart.items.length === 0) {
       previewedFor.current = null;
       setDiscountPreview(null);
       return undefined;
     }
-    const askedFor = `${code}\n${linesKey}`;
+    const askedFor = `${typed}\n${linkCode}\n${linesKey}`;
     if (previewedFor.current === askedFor) return undefined;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const discount = await previewDiscountCode({ code, items: JSON.parse(linesKey) }, { signal: controller.signal });
+        const discount = await previewDiscountCode({ ...codes, items: JSON.parse(linesKey) }, { signal: controller.signal });
         previewedFor.current = askedFor;
         setDiscountPreview({
           applies: previewOutcome({ discount }) === 'applies',
-          code,
+          code: discount.code,
           discountMinor: discount.discountMinor,
+          typed,
+          ref: linkCode,
         });
       } catch (error) {
         if (error?.name !== 'AbortError') setDiscountPreview(null);
@@ -337,7 +433,7 @@ export const CartProvider = ({ children }) => {
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linesKey, cart.discountCode, discountsOn]);
+  }, [linesKey, cart.discountCode, linkCode, discountsOn]);
 
   // `quiet` (CP9-AC): no "added to cart" modal, for the reminder link that
   // rebuilds a whole cart at once (pages/shop/CheckoutRecoveryPage.jsx).
@@ -458,8 +554,12 @@ export const CartProvider = ({ children }) => {
     setCart((prevCart) => ({ ...prevCart, shippingCountry: country }));
   };
 
-  const clearCart = () => {
-    setCart(emptyCart());
+  // `keepRef` (CP13): rebuilding a cart that is not a completed checkout (the
+  // reminder's resume link) keeps the link stamp; a completed checkout drops it.
+  const clearCart = ({ keepRef = false } = {}) => {
+    setCart((prev) =>
+      keepRef ? { ...emptyCart(), refCode: prev.refCode, source: prev.source, refAt: prev.refAt } : emptyCart(),
+    );
     setDeliveryMethod('home');
     setPickupLocation(null);
     setPickupDate('');
@@ -478,6 +578,12 @@ export const CartProvider = ({ children }) => {
     applyDiscountCode,
     removeDiscount,
     discountPreview,
+    // CP13: the live link code (sent as the checkout's `refCode`), what the
+    // code box says, and its words.
+    linkCode,
+    removeLinkCode,
+    discountNotice,
+    discountNoticeMessage: linkMessage(discountNotice),
     getTotalItems,
     getShippingRegion,
     getShippingTierInfo,

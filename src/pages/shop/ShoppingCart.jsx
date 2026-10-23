@@ -16,7 +16,7 @@ import { Helmet } from 'react-helmet-async';
 import { STORE } from '../../config/store';
 
 const ShoppingCart = () => {
-  const { cart, updateQuantity, removeFromCart, updateShippingCountry, calculateTotals, applyDiscountCode, removeDiscount, discountPreview } = useCart();
+  const { cart, updateQuantity, removeFromCart, updateShippingCountry, calculateTotals, applyDiscountCode, removeDiscount, discountPreview, linkCode, removeLinkCode, discountNotice, discountNoticeMessage } = useCart();
   const { isEnabled } = useShopFeatures();
   const { t } = useTranslation();
   const store = useStoreSettings();
@@ -33,18 +33,25 @@ const ShoppingCart = () => {
   // weight, which no public read carries (the cart's estimate could differ
   // from what the server charges). A discount code (CP8-DC) shows the
   // preview's amount; the payment step shows what the server applied.
-  const { subtotal, discountAmount, discountCode, discountPercentage, discountSource } = calculateTotals();
-  // The stored code no longer applies to these lines (the last preview said so).
-  const discountNotApplying = Boolean(discountCode) && discountPreview?.code === discountCode && discountPreview?.applies === false;
+  const { subtotal, discountAmount, discountCode, appliedCode } = calculateTotals();
+  // The stored code no longer applies to these lines (the last preview said
+  // so). CP13: the Cloudflare cart says it in `discountNotice`.
+  const discountNotApplying = discountNotice
+    ? discountNotice.kind === 'not_applicable'
+    : Boolean(discountCode) && discountPreview?.code === discountCode && discountPreview?.applies === false;
+  // CP13: what the box says about the link's code (`?ref=`): added, or used
+  // instead of the typed one.
+  const linkLine = discountNotice && discountNotice.kind !== 'not_applicable' ? discountNoticeMessage : null;
+  // The code the discount row names: the one the server applied.
+  const discountLabelCode = appliedCode || discountCode || null;
 
-  // Pre-fill discount input if a code is applied to the cart from context
+  // Pre-fill the field with the cart's code: the typed one, else the link's
+  // once the server says it gives a discount (CP13). A link code that gives
+  // none (a commission-only affiliate) is attribution only: nothing is shown.
+  const linkApplies = discountNotice?.kind === 'link_added';
   useEffect(() => {
-    if (discountCode) {
-      setDiscountCodeInput(discountCode);
-    } else {
-      setDiscountCodeInput('');
-    }
-  }, [discountCode]);
+    setDiscountCodeInput(discountCode || (linkApplies ? linkCode : '') || '');
+  }, [discountCode, linkCode, linkApplies]);
 
   const getCountryName = (countryCode) => {
     switch(countryCode) {
@@ -82,9 +89,10 @@ const ShoppingCart = () => {
     setIsApplyingDiscount(true);
     try {
       const result = await applyDiscountCode(discountCodeInput.trim());
-      if (result?.success) {
+      if (result?.success && result.notice) {
+        toast(result.message);
+      } else if (result?.success) {
         toast.success(result.message || t('discount_code_added', 'Rabattkoden är tillagd.'));
-        setDiscountCodeInput('');
       } else if (result?.message) {
         toast.error(result.message);
       }
@@ -252,8 +260,8 @@ const ShoppingCart = () => {
                   </select>
                 </div>
 
-                {/* Discount Code Section (CP8-DC: only while the shop's add-on is on) */}
-                {isEnabled('discountCodes') && (
+                {/* Discount Code Section (CP8-DC / CP13: while either add-on is on) */}
+                {(isEnabled('discountCodes') || isEnabled('affiliate')) && (
                   <div className="bg-white rounded-tile p-4 sm:p-6 shadow-tile">
                     <h3 className="font-display text-base sm:text-lg font-bold text-ink mb-3 sm:mb-4">{t('discount_code', 'Rabattkod')}</h3>
                     <div className="flex flex-col sm:flex-row gap-2">
@@ -277,10 +285,23 @@ const ShoppingCart = () => {
                         {t('apply_button', 'Applicera')}
                       </button>
                     </div>
+                    {linkLine && !discountCode && (
+                      <div className="mt-3 flex items-start justify-between gap-3">
+                        <p role="status" className="text-sm text-ink-muted">{linkLine}</p>
+                        {/* The buyer's own choice: drops the link's code from the cart. */}
+                        <button
+                          type="button"
+                          onClick={removeLinkCode}
+                          className="shrink-0 text-sm text-ink-muted hover:text-ink underline underline-offset-4 transition-colors"
+                        >
+                          {t('discount_code_remove', 'Ta bort')}
+                        </button>
+                      </div>
+                    )}
                     {discountCode && (
                       <div className="mt-3 flex items-start justify-between gap-3">
                         <p role="status" className="text-sm text-ink-muted">
-                          {discountNotApplying ? t('discount_code_not_applicable', 'Koden kan inte användas för den här varukorgen.') : null}
+                          {linkLine || (discountNotApplying ? t('discount_code_not_applicable', 'Koden kan inte användas för den här varukorgen.') : null)}
                         </p>
                         <button
                           type="button"
@@ -310,12 +331,12 @@ const ShoppingCart = () => {
 
                     {discountAmount > 0 && (
                        <div className="flex justify-between items-center">
+                         {/* CP13: one label for every code, "Rabatt (KOD)" (the
+                             buyer need not know which kind of code it is). */}
                          <span className="bg-accent/10 text-accent text-xs font-semibold px-2.5 py-1 rounded-full">
-                           {discountSource === 'campaign'
-                             ? (discountPercentage > 0
-                                 ? t('discount_label_percent', 'Rabatt, {{percentage}}%', { percentage: discountPercentage })
-                                 : t('discount_label', 'Rabatt'))
-                             : t('affiliate_discount_label', 'Affiliate rabatt, {{percentage}}%', { percentage: discountPercentage })}
+                           {discountLabelCode
+                             ? t('discount_label_code', 'Rabatt ({{code}})', { code: discountLabelCode })
+                             : t('discount_label', 'Rabatt')}
                          </span>
                          <span className="inline-flex items-baseline gap-1 whitespace-nowrap text-green-600 font-semibold text-sm sm:text-base">
                            - <SmartPrice 

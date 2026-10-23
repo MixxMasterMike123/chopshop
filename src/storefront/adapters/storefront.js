@@ -29,3 +29,22 @@ export function toGateState(storefront) {
       return { status: 'ok', shop: null };
   }
 }
+
+/**
+ * CP13: where "Logga in som affiliate" leads — the ADMIN host's sign-in page,
+ * `<adminOrigin>/login`, from the storefront body's `adminOrigin` (the
+ * canonical admin origin the API reports, or null). Never a hostname of its
+ * own: no origin (or one that is not an http(s) origin) gives no link.
+ */
+export function affiliateLoginUrl(storefront) {
+  const origin = storefront?.adminOrigin;
+  if (typeof origin !== 'string' || origin === '') return null;
+  let url;
+  try {
+    url = new URL(origin);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  return `${url.origin}/login`;
+}

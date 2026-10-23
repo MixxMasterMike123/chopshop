@@ -58,10 +58,15 @@ export const COUNTRY_PREFIXES = ['se', 'gb', 'us'];
 // the UNRESOLVED sentinel, which the admin surface answers with a shop picker
 // (a shop admin's own shopId still wins via activeShop). 'platform' is reserved
 // for the same reason (its surface is a separate host, but defensive).
+// CP13: 'affiliate' is the affiliate portal's tree on the admin host
+// (/affiliate/*, beside /admin and /platform), so no shop may take that id.
+// 'affiliate-login' stays while the older build routes /affiliate-login.
+// cloudflare/web/src/shop-segment.ts mirrors this list verbatim (a test pins
+// the two together).
 export const NON_SHOP_FIRST_SEGMENTS = new Set([
   ...COUNTRY_PREFIXES,
   'login', 'register', 'forgot-password', 'reset-password',
-  'affiliate-login', '__', 'account', 'admin', 'platform',
+  'affiliate-login', '__', 'account', 'admin', 'platform', 'affiliate',
 ]);
 
 /**

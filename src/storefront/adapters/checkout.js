@@ -79,7 +79,8 @@ export function toApiRecipient({ deliveryMethod, shippingCountry, shippingInfo, 
  * `discountCode` (CP8-DC): the code the CART holds (`cart.discountCode`), never
  * the text of a field; sent only when it is a non-empty string, so a request
  * without one is the same request as before, and the payment is made again
- * only when a code is added or removed.
+ * only when a code is added or removed. `refCode` (CP13): the cart's LIVE
+ * link code (`useCart().linkCode`), by the same rule.
  *
  * `reminder` (CP9-AC): the box "Påminn mig via e-post om jag inte slutför
  * köpet", shown only while the shop sends reminders. `consent.reminder: true`
@@ -100,6 +101,7 @@ export function buildCheckoutRequest({
   reminder,
   withdrawal,
   discountCode,
+  refCode,
 }) {
   const method = toApiDeliveryMethod(deliveryMethod);
   const consent = { terms: true, marketing: marketing === true };
@@ -124,6 +126,9 @@ export function buildCheckoutRequest({
   if (typeof discountCode === 'string' && discountCode.trim() !== '') {
     request.discountCode = discountCode.trim();
   }
+  if (typeof refCode === 'string' && refCode.trim() !== '') {
+    request.refCode = refCode.trim();
+  }
   return request;
 }
 
@@ -141,7 +146,8 @@ export function minorToKronor(minor) {
  *
  * The discount keys keep the names the page reads. The server echoes the code
  * the request sent (`discountCode`) and answers 0 when it did not apply
- * (CP8-DC); the discount rows open only for an amount above 0.
+ * (CP8-DC); the discount rows open only for an amount above 0. CP13: the
+ * echo is the link's code when the link authorised the discount.
  */
 export function toCheckoutTotals(checkout, fallbackVatRate) {
   if (!checkout || typeof checkout !== 'object') {
@@ -155,6 +161,7 @@ export function toCheckoutTotals(checkout, fallbackVatRate) {
       discountCode: null,
       discountPercentage: 0,
       discountSource: null,
+      overriddenBy: null,
     };
   }
   const discountAmount = minorToKronor(checkout.discountMinor) ?? 0;
@@ -168,6 +175,9 @@ export function toCheckoutTotals(checkout, fallbackVatRate) {
     discountCode: typeof checkout.discountCode === 'string' ? checkout.discountCode : null,
     discountPercentage: 0,
     discountSource: discountAmount > 0 ? 'campaign' : null,
+    // CP13: 'link' when a typed code was set aside for the link's code
+    // (`discountCode` then names the link's code).
+    overriddenBy: checkout.overriddenBy === 'link' ? 'link' : null,
   };
 }
 
@@ -196,4 +206,17 @@ export function checkoutRefusal(error) {
   if (status === 409) return 'conflict';
   if (status === 429) return 'rate_limited';
   return 'other';
+}
+
+/**
+ * Whether the payment step tells the buyer that a code was NOT applied
+ * (CP8-DC: the server echoed a code with `discountMinor` 0). CP13: the echo of
+ * the cart's LINK code with 0 is no failed code but an attribution without a
+ * discount (a commission-only affiliate, or a discount the minimum-charge
+ * rule set aside): nothing is said, and nothing offers to drop the link.
+ */
+export function discountNotAppliedOf(quote, linkCode = null) {
+  if (!quote || typeof quote !== 'object') return false;
+  if (typeof quote.discountCode !== 'string' || quote.discountMinor !== 0) return false;
+  return !(typeof linkCode === 'string' && linkCode !== '' && quote.discountCode === linkCode);
 }

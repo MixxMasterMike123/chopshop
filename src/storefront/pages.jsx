@@ -15,6 +15,8 @@
 
 import NotFoundPage from './NotFound.jsx';
 import { pending, pendingGate } from './Pending.jsx';
+import { useShopFeatures } from './providers/ShopFeatures.jsx';
+import AffiliateApplyPage from '../pages/shop/AffiliateApply.jsx';
 
 // The shop's not-found page (no Firebase page exists for it).
 export const NotFound = NotFoundPage;
@@ -49,6 +51,14 @@ export { default as Checkout } from '../pages/shop/Checkout.jsx';
 export { default as OrderReturn } from '../pages/shop/OrderReturn.jsx';
 export { default as OrderConfirmation } from '../pages/shop/OrderConfirmation.jsx';
 export { default as WithdrawalPage } from '../pages/shop/WithdrawalPage.jsx';
+// CP13: the affiliate application form, only while the shop's `affiliate`
+// add-on is on; otherwise the address is what any one-segment address is (a
+// content page of that slug, else the shop's not-found page).
+export const AffiliateApply = () => {
+  const { isEnabled } = useShopFeatures();
+  return isEnabled('affiliate') ? <AffiliateApplyPage /> : <DynamicRouteHandler />;
+};
+
 // CP9-AC: Övergiven kassa, the reminder's resume and unsubscribe links.
 export { default as CheckoutRecoveryPage } from '../pages/shop/CheckoutRecoveryPage.jsx';
 export { default as CheckoutUnsubscribePage } from '../pages/shop/CheckoutUnsubscribePage.jsx';

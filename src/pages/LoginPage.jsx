@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import CredentialLanguageSwitcher from '../components/CredentialLanguageSwitcher';
 import credentialTranslations from '../utils/credentialTranslations';
+import { affiliateReturnPath } from '../admin-app/adapters/affiliatePortal.js';
 
 const LoginPage = () => {
   const { login } = useAuth();
@@ -54,7 +55,15 @@ const LoginPage = () => {
     try {
       setError('');
       setLoading(true);
-      await login(email, password);
+      const user = await login(email, password);
+      // CP13: an affiliate's portal is its own tree of the admin build
+      // (/affiliate/*), reached by a full load; never the shop admin.
+      if (user?.accountType === 'affiliate') {
+        // Back to the portal address the sign-in was asked from (`?next=`,
+        // a portal address only), else the overview.
+        window.location.assign(affiliateReturnPath(new URLSearchParams(location.search).get('next')) ?? '/affiliate');
+        return;
+      }
       navigate(from, { replace: true });
     } catch (error) {
       setError(t('login.errors.invalid_credentials', 'Failed to log in. Please check your credentials.'));

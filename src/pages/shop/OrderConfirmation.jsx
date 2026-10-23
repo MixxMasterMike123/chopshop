@@ -326,12 +326,9 @@ const OrderConfirmation = () => {
                         </div>
                       )}
                     </div>
-                    <div className="mt-4 p-3 bg-white rounded-lg border border-green-200">
-                      <p className="text-sm text-green-800">
-                        <strong>{t('order_confirmation_tracking_status', 'Spårningsstatus:')}</strong> {' '}
-                        {t('order_confirmation_affiliate_tracking_description', 'Denna beställning har registrerats för affiliate-provision. Affiliate-partnern kommer att få kredit för denna försäljning.')}
-                      </p>
-                    </div>
+                    {/* CP13 (design §7.4): the sentence on the affiliate's
+                        commission is dropped; it names a third party's money
+                        and tells the buyer nothing. */}
                   </div>
                 );
               })()}

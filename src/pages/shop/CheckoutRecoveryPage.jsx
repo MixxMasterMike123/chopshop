@@ -61,7 +61,8 @@ const CheckoutRecoveryPage = () => {
           return;
         }
 
-        clearCart();
+        // CP13: a rebuilt cart is no completed checkout; the link stamp stays.
+        clearCart({ keepRef: true });
         for (const line of lines) {
           addToCart(line.product, line.quantity, line.variant, { quiet: true });
         }

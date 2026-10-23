@@ -8,6 +8,11 @@ import { toFooterPages } from '../../storefront/adapters/pages.js';
 // import LanguageCurrencySelector from './LanguageCurrencySelector';
 import { useStoreSettings } from '../../contexts/StoreSettingsContext';
 import { useShopId } from '../../contexts/ShopContext';
+import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
+// CP13: the storefront body (`adminOrigin`); the older build has no provider
+// and reads the context's default (no body, no link).
+import { useStorefront } from '../../storefront/providers/Storefront.jsx';
+import { affiliateLoginUrl } from '../../storefront/adapters/storefront.js';
 import DOMPurify from 'dompurify';
 import { PLATFORM_TERMS_SLUG } from '../../config/legalTemplates';
 
@@ -28,6 +33,9 @@ const ShopFooter = () => {
   const store = useStoreSettings();
   const shopId = useShopId();
   const location = useLocation();
+  const { isEnabled } = useShopFeatures();
+  const { storefront } = useStorefront();
+  const affiliateLogin = isEnabled('affiliate') ? affiliateLoginUrl(storefront) : null;
   const [cmsPages, setCmsPages] = useState([]);
   const currentYear = new Date().getFullYear();
 
@@ -53,8 +61,10 @@ const ShopFooter = () => {
     return () => { cancelled = true; };
   }, [shopId]);
 
-  // D81: no customer accounts and no affiliate program on the storefront; the
-  // account link and the two affiliate links of the columns below are gone.
+  // D81: no customer accounts on the storefront; the account link is gone.
+  // CP13: "Bli affiliate" while the shop's `affiliate` add-on is on, and
+  // "Logga in som affiliate" to the ADMIN host's sign-in page, from the
+  // storefront body's `adminOrigin` (no origin, no link).
 
   return (
     <footer className="bg-ink text-white font-body">
@@ -102,6 +112,20 @@ const ShopFooter = () => {
                 <li>
                   <a href={`mailto:${store.supportEmail}`} className="text-white/70 hover:text-white transition-colors">
                     {t('footer_contact', 'Kontakt')}
+                  </a>
+                </li>
+              )}
+              {isEnabled('affiliate') && (
+                <li>
+                  <Link to={getCountryAwareUrl('affiliate')} className="text-white/70 hover:text-white transition-colors">
+                    {t('footer_affiliate_apply', 'Bli affiliate')}
+                  </Link>
+                </li>
+              )}
+              {affiliateLogin && (
+                <li>
+                  <a href={affiliateLogin} className="text-white/70 hover:text-white transition-colors">
+                    {t('footer_affiliate_sign_in', 'Logga in som affiliate')}
                   </a>
                 </li>
               )}

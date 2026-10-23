@@ -17,7 +17,13 @@
 //
 // When the client finds the session gone (a 404 whose /v1/me re-read is a
 // 401), the user is sent to /login, keeping where they were in the admin tree
-// (LoginPage returns there); from the platform tree it is a full load of /login.
+// (LoginPage returns there); from the platform tree and the affiliate
+// portal's tree (CP13) it is a full load of /login.
+//
+// CP13: `/v1/me` serves a third account type, `affiliate` (its memberships
+// carry role 'affiliate'). `isAdmin` stays false for it; `login()` resolves
+// the user with `accountType` beside it, so the login page can send an
+// affiliate to /affiliate (the portal's tree).
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -34,6 +40,7 @@ import {
   signOut,
 } from '../../api/admin/session.js';
 import { setChosenShopId } from './activeShopStore.js';
+import { signInUrlFor } from '../adapters/affiliatePortal.js';
 
 const AuthContext = createContext(null);
 
@@ -60,7 +67,7 @@ const NOT_PORTED = Object.freeze({
   deleteCustomerAccount: unavailable('Radera ett konto'),
 });
 
-/** `tree`: 'admin' (the default) or 'platform' — where /login is reached from. */
+/** `tree`: 'admin' (the default), 'platform' or 'affiliate' — where /login is reached from. */
 export function AuthProvider({ children, tree = 'admin' }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -102,7 +109,10 @@ export function AuthProvider({ children, tree = 'admin' }) {
     () =>
       onSessionLost(() => {
         setMe(null);
-        if (tree === 'platform') {
+        if (tree === 'affiliate') {
+          // CP13: back to the portal address after signing in.
+          window.location.assign(signInUrlFor(window.location.pathname));
+        } else if (tree === 'platform') {
           window.location.assign('/login');
         } else if (location.pathname !== '/login') {
           navigate('/login', { replace: true, state: { from: location } });
@@ -122,7 +132,7 @@ export function AuthProvider({ children, tree = 'admin' }) {
         throw new AdminApiError({ status: 401, code: 'unauthenticated', message: 'Kontot har inte åtkomst till admin.' });
       }
       setMe(next);
-      return authStateFromMe(next).currentUser;
+      return { ...authStateFromMe(next).currentUser, accountType: next.accountType ?? null };
     } catch (err) {
       setError(err?.message || 'login_failed');
       throw err;

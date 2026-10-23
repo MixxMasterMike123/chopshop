@@ -29,6 +29,8 @@ export const STOREFRONT_ROUTES = [
   { path: '/order-confirmation/:orderId', page: 'OrderConfirmation' },
   { path: '/angra', page: 'WithdrawalPage' },
   { path: '/rapportera-intrang', page: 'InfringementReportPage' },
+  // CP13: the affiliate application form (behind `features.affiliate`).
+  { path: '/affiliate', page: 'AffiliateApply' },
   // CP9-AC: the two links of an abandoned-checkout reminder.
   { path: '/aterta/:token', page: 'CheckoutRecoveryPage' },
   { path: '/avregistrera/:token', page: 'CheckoutUnsubscribePage' },

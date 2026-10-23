@@ -47,6 +47,16 @@ describe('previewDiscountCode', () => {
     });
   });
 
+  it("CP13: sends the link's code as refCode, beside a typed code or alone", async () => {
+    stubFetch(200, { discount: { applies: true, code: 'ANNA10', discountMinor: 2_990 } });
+    await previewDiscountCode({ code: 'SOMMAR20', refCode: 'ANNA10', items: [{ productId: 'p1', quantity: 1 }] });
+    await previewDiscountCode({ refCode: 'ANNA10', items: [{ productId: 'p1', quantity: 1 }] });
+    await previewDiscountCode({ code: null, refCode: '', items: [{ productId: 'p1', quantity: 1 }] });
+    assert.deepEqual(JSON.parse(calls[0].init.body), { code: 'SOMMAR20', refCode: 'ANNA10', items: [{ productId: 'p1', quantity: 1 }] });
+    assert.deepEqual(JSON.parse(calls[1].init.body), { refCode: 'ANNA10', items: [{ productId: 'p1', quantity: 1 }] });
+    assert.deepEqual(JSON.parse(calls[2].init.body), { items: [{ productId: 'p1', quantity: 1 }] });
+  });
+
   it('a code that does not apply is an answer, not an error', async () => {
     stubFetch(200, { discount: { applies: false, code: 'NOPE', discountMinor: 0 } });
     assert.deepEqual(await previewDiscountCode({ code: 'NOPE', items: [{ productId: 'p1', quantity: 1 }] }), {

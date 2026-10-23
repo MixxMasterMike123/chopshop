@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import {
+  discountNotAppliedOf,
   buildCheckoutRequest,
   checkoutRefusal,
   minorToKronor,
@@ -20,7 +21,7 @@ import { createCheckout, createPayment } from '../../api/checkout.js';
 // CHECKOUT_KEYS and ITEM_KEYS, cloudflare/src/legal/consent.ts CONSENT_KEYS,
 // cloudflare/src/commerce/recipient.ts SHIPPING_KEYS and PICKUP_KEYS).
 // Any other key is a 400 there; a price key would be one.
-const CHECKOUT_KEYS = ['consent', 'deliveryMethod', 'discountCode', 'email', 'idempotencyKey', 'items', 'recipient', 'shippingCountry'];
+const CHECKOUT_KEYS = ['consent', 'deliveryMethod', 'discountCode', 'email', 'idempotencyKey', 'items', 'recipient', 'refCode', 'shippingCountry'];
 const SHIPPING_RECIPIENT_KEYS = ['addressLine1', 'addressLine2', 'city', 'country', 'name', 'phone', 'postalCode'];
 const PICKUP_RECIPIENT_KEYS = ['name', 'phone', 'pickupDate', 'pickupLocationId'];
 
@@ -207,6 +208,47 @@ describe('buildCheckoutRequest: the cart\'s discount code (CP8-DC)', () => {
   });
 });
 
+describe("buildCheckoutRequest: the link's code (CP13)", () => {
+  const base = { items: LINES, email: 'kund@example.test', deliveryMethod: 'pickup', shippingCountry: 'SE' };
+
+  it('sends the live link code as refCode, beside a typed code', () => {
+    const request = buildCheckoutRequest({ ...base, discountCode: 'SOMMAR20', refCode: ' ANNA10 ' });
+    assert.equal(request.refCode, 'ANNA10');
+    assert.equal(request.discountCode, 'SOMMAR20');
+    for (const key of Object.keys(request)) assert.ok(CHECKOUT_KEYS.includes(key), key);
+  });
+
+  it('sends no refCode, and the same request as before, without one', () => {
+    const without = buildCheckoutRequest(base);
+    for (const refCode of [undefined, null, '', '  ', 10, ['ANNA10']]) {
+      const request = buildCheckoutRequest({ ...base, refCode });
+      assert.equal('refCode' in request, false, String(refCode));
+      assert.equal(JSON.stringify(request), JSON.stringify(without));
+    }
+  });
+
+  it('the client sends refCode only when there is one', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.location = { pathname: '/testbutik/checkout' };
+    const bodies = [];
+    globalThis.fetch = async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ checkout: { ...PRICED, discountCode: 'ANNA10', overriddenBy: 'link' } }), { status: 201 });
+    };
+    try {
+      const { checkout } = await createCheckout({ ...buildCheckoutRequest({ ...base, refCode: 'ANNA10', discountCode: 'SOMMAR20' }), idempotencyKey: 'key-0010' });
+      await createCheckout({ ...buildCheckoutRequest(base), idempotencyKey: 'key-0011', refCode: '' });
+      assert.equal(bodies[0].refCode, 'ANNA10');
+      assert.equal(bodies[0].discountCode, 'SOMMAR20');
+      assert.equal('refCode' in bodies[1], false);
+      assert.equal(checkout.overriddenBy, 'link');
+    } finally {
+      globalThis.fetch = realFetch;
+      delete globalThis.location;
+    }
+  });
+});
+
 describe('buildCheckoutRequest: the reminder box (CP9-AC)', () => {
   const base = { items: LINES, email: 'kund@example.test', deliveryMethod: 'pickup', shippingCountry: 'SE', marketing: false };
 
@@ -302,7 +344,18 @@ describe('toCheckoutTotals', () => {
       discountCode: null,
       discountPercentage: 0,
       discountSource: null,
+      overriddenBy: null,
     });
+  });
+
+  it("CP13: names the code the server applied, and says when the link's code was used instead", () => {
+    const linked = toCheckoutTotals({ ...PRICED, discountMinor: 4_975, discountCode: 'ANNA10', overriddenBy: 'link' }, 0.25);
+    assert.equal(linked.discountAmount, 49.75);
+    assert.equal(linked.discountCode, 'ANNA10');
+    assert.equal(linked.overriddenBy, 'link');
+    assert.equal(toCheckoutTotals({ ...PRICED, discountMinor: 4_975, discountCode: 'ANNA10' }, 0.25).overriddenBy, null);
+    assert.equal(toCheckoutTotals({ ...PRICED, overriddenBy: 'something' }, 0.25).overriddenBy, null);
+    assert.equal(toCheckoutTotals(null, 0.25).overriddenBy, null);
   });
 
   it('takes the rate from the server, not from the page', () => {
@@ -326,6 +379,23 @@ describe('toCheckoutTotals', () => {
     assert.equal(totals.vat, null);
     assert.equal(minorToKronor(undefined), null);
     assert.equal(minorToKronor(0), 0);
+  });
+});
+
+describe('discountNotAppliedOf (CP8-DC, CP13 round 1)', () => {
+  it('a typed code echoed with 0 is "not applied"', () => {
+    assert.equal(discountNotAppliedOf({ ...PRICED, discountCode: 'SOMMAR20', discountMinor: 0 }, 'ANNA10'), true);
+    assert.equal(discountNotAppliedOf({ ...PRICED, discountCode: 'SOMMAR20', discountMinor: 0 }, null), true);
+  });
+
+  it("the LINK's code echoed with 0 is attribution only: nothing is said (a 0 % affiliate)", () => {
+    assert.equal(discountNotAppliedOf({ ...PRICED, discountCode: 'ANNA10', discountMinor: 0 }, 'ANNA10'), false);
+  });
+
+  it('an applied code, no code, or no quote says nothing', () => {
+    assert.equal(discountNotAppliedOf({ ...PRICED, discountCode: 'ANNA10', discountMinor: 2_990 }, 'ANNA10'), false);
+    assert.equal(discountNotAppliedOf({ ...PRICED, discountCode: null, discountMinor: 0 }, 'ANNA10'), false);
+    assert.equal(discountNotAppliedOf(null, 'ANNA10'), false);
   });
 });
 
