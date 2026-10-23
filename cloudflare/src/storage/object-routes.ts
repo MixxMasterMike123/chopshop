@@ -1041,9 +1041,72 @@ export async function uploadAffiliateInvoice(
     { sha256: declaredSha256, sizeBytes: declaredSizeBytes },
     now,
   );
-  return activated.status === "ok"
-    ? { object: toMetadata(activated.object, null, null), status: "ok" }
-    : activated;
+  if (activated.status === "ok") {
+    return { object: toMetadata(activated.object, null, null), status: "ok" };
+  }
+  await releaseLateInvoiceBytes(db, bucket, tenant, objectId, existing.objectKey, now);
+  return activated;
+}
+
+/**
+ * Codex round 4 (finding 5): an upload that read `pending`, then lost a race
+ * with the object sweep (object-sweep.ts: the row tombstoned, its key
+ * deleted, `object.bytes_deleted` audited), has just written its bytes to a
+ * key nothing will ever serve, and the sweep will never visit again (its
+ * retry needs an `object.sweep` row WITHOUT a `object.bytes_deleted` one).
+ * So the refused activation decides from the row's FINAL state:
+ *   - deleted, or gone: the late bytes are deleted here;
+ *   - active (another upload of the same reservation activated it — same
+ *     key, same declared hash, so the same bytes), or still pending: the
+ *     bytes are left alone. Never delete what another uploader activated.
+ * If THAT delete fails, an `object.bytes_orphaned` audit row names the
+ * object (ids only) and the failure is logged by name; the sweep's retry
+ * must learn to take a tombstone whose newest orphan marker is newer than its
+ * `object.bytes_deleted` one (reported for A4: object-sweep.ts is theirs).
+ */
+async function releaseLateInvoiceBytes(
+  db: D1Database,
+  bucket: R2Bucket,
+  tenant: ObjectTenant,
+  objectId: string,
+  objectKey: string,
+  now: number,
+): Promise<void> {
+  const row = await db
+    .prepare("SELECT status FROM stored_objects WHERE object_id = ? AND tenant_id = ? LIMIT 1")
+    .bind(objectId, tenant.tenantId)
+    .first<{ status: string }>();
+  if (row !== null && row.status !== "deleted") {
+    return;
+  }
+  try {
+    await bucket.delete(objectKey);
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        error: error instanceof Error ? error.name : "unknown",
+        message: "late invoice bytes could not be deleted",
+      }),
+    );
+    await db
+      .prepare(
+        `INSERT INTO audit_events (
+           event_id, tenant_id, actor_user_id, action, resource_type,
+           resource_id, request_id, metadata_json, created_at
+         ) VALUES (?, ?, ?, 'object.bytes_orphaned', 'stored_object', ?, ?, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        tenant.tenantId,
+        tenant.actor?.userId ?? null,
+        objectId,
+        crypto.randomUUID(),
+        JSON.stringify({ kind: "document", reason: "late_upload" }),
+        now,
+      )
+      .run()
+      .catch(() => undefined);
+  }
 }
 
 /**

@@ -478,11 +478,16 @@ async function admitBatch(
            )`,
       )
       .bind(crypto.randomUUID(), tenantId, input.userId, now, now, changeId, ...admitted.binds, tenantId, input.userId),
+    // Codex round 4 (finding 2): only a membership "Ta bort" REVOKED comes
+    // back with an admission (approval or "Bjud in"); one the platform
+    // SUSPENDED stays suspended, exactly as on the PATCH path (round 1). The
+    // affiliate row itself is still (re-)activated; the admin sees the
+    // membership as "suspended" on the affiliate's page (account.membership).
     db
       .prepare(
         `UPDATE tenant_memberships
          SET status = 'active', updated_at = MAX(updated_at, ?), status_change_id = ?
-         WHERE tenant_id = ? AND user_id = ? AND role = 'affiliate' AND status <> 'active'
+         WHERE tenant_id = ? AND user_id = ? AND role = 'affiliate' AND status = 'revoked'
            AND ${admitted.sql}`,
       )
       .bind(now, changeId, tenantId, input.userId, ...admitted.binds),

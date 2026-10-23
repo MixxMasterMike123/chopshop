@@ -442,7 +442,11 @@ export interface AdminAffiliateListRow {
   createdAt: string;
   currency: string;
   discountBp: number;
-  /** Σ accruals + Σ reversals, all time. */
+  /**
+   * Σ accruals + Σ reversals, all time, in `currency` (the affiliate's own)
+   * only (Codex round 4, finding 3): one figure, one currency. Other
+   * currencies are in the detail's `balances[]`.
+   */
   earnedMinor: number;
   name: string;
   /** What a payout request could take now. */
@@ -511,6 +515,7 @@ export async function adminAffiliateList(
                  AND v.created_at >= ?) AS conversions,
               COALESCE((SELECT SUM(e.amount_minor) FROM affiliate_ledger AS e
                         WHERE e.tenant_id = x.tenant_id AND e.affiliate_id = x.affiliate_id
+                          AND e.currency = x.currency
                           AND e.kind IN ('accrual', 'reversal')), 0) AS earned,
               COALESCE((SELECT SUM(b.amount_minor) FROM affiliate_ledger AS b
                         WHERE b.tenant_id = x.tenant_id AND b.affiliate_id = x.affiliate_id
@@ -633,7 +638,11 @@ export interface AdminAffiliateDetail {
   /** The shop's add-on: false shows the OFF banner (design §4.5). */
   programOn: boolean;
   promotionMethod: string | null;
-  /** −Σ reversals, all time (shown as "återfört"). */
+  /**
+   * −Σ reversals, all time (shown as "återfört"), in `currency` (the
+   * affiliate's own) only (Codex round 4); per-currency figures are in
+   * `balances[]`.
+   */
   reversedMinor: number;
   socials: Record<string, string>;
   status: string;
@@ -660,7 +669,8 @@ export async function adminAffiliateDetail(
               (SELECT COUNT(*) FROM affiliate_ledger AS l
                WHERE l.tenant_id = a.tenant_id AND l.affiliate_id = a.affiliate_id AND l.kind = 'accrual') AS conversions,
               COALESCE((SELECT -SUM(l.amount_minor) FROM affiliate_ledger AS l
-                        WHERE l.tenant_id = a.tenant_id AND l.affiliate_id = a.affiliate_id AND l.kind = 'reversal'), 0) AS reversed
+                        WHERE l.tenant_id = a.tenant_id AND l.affiliate_id = a.affiliate_id
+                          AND l.currency = a.currency AND l.kind = 'reversal'), 0) AS reversed
        FROM affiliates AS a INNER JOIN "user" AS u ON u."id" = a.user_id
        WHERE a.affiliate_id = ? AND a.tenant_id = ?`,
     )

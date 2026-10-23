@@ -107,6 +107,88 @@ describe("0058 on a database holding identities", () => {
   });
 });
 
+describe("0058 on a database holding email deliveries (Codex round 4)", () => {
+  it("keeps every email_deliveries row column for column (fingerprint, lease, terminal states), its triggers and indexes; admits the affiliate kinds after", async () => {
+    const touches = (q: string) => q.includes("email_deliveries");
+    // 1. Back to 0056's shape (the kind list without the affiliate kinds):
+    //    0056's own §5 statements, which copy the table through.
+    await exec(migration("0056_checkout_reminders.sql").queries.filter(touches));
+    const hash = (c: string) => c.repeat(64);
+    const t0 = 1_787_000_000_000;
+    const rows: Array<Record<string, unknown>> = [
+      // pending, never tried
+      { attempts: 0, delivery_id: "mig-ed-pending", kind: "order_confirmation", lease_token: null, lease_until: null, last_error_code: null, provider_message_id: null, resolved_at: null, status: "pending" },
+      // processing: a live lease
+      { attempts: 1, delivery_id: "mig-ed-processing", kind: "password_reset", lease_token: "lease-1", lease_until: t0 + 60_000, last_error_code: null, provider_message_id: null, resolved_at: null, status: "processing" },
+      // terminal: sent, with the provider's id
+      { attempts: 1, delivery_id: "mig-ed-sent", kind: "checkout_reminder", lease_token: null, lease_until: null, last_error_code: null, provider_message_id: "re_mig_1", resolved_at: t0 + 1_000, status: "sent" },
+      // terminal: failed after retries, with its error
+      { attempts: 8, delivery_id: "mig-ed-failed", kind: "refund_notice", lease_token: null, lease_until: null, last_error_code: "E_PROVIDER", provider_message_id: null, resolved_at: t0 + 2_000, status: "failed" },
+      // terminal: expired, platform-wide (no tenant)
+      { attempts: 2, delivery_id: "mig-ed-expired", kind: "alert_digest", lease_token: null, lease_until: null, last_error_code: "E_EXPIRED", provider_message_id: null, resolved_at: t0 + 3_000, status: "expired", tenant_id: null },
+    ];
+    for (const [index, row] of rows.entries()) {
+      await env.DB.prepare(
+        `INSERT INTO email_deliveries (
+           delivery_id, tenant_id, kind, recipient_hash, status, attempts, max_attempts, next_attempt_at,
+           lease_token, lease_until, provider_message_id, expires_at, last_error_code, resolved_at,
+           created_at, updated_at, job_fingerprint
+         ) VALUES (?, ?, ?, ?, ?, ?, 8, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+        .bind(
+          row.delivery_id,
+          "tenant_id" in row ? row.tenant_id : TENANT,
+          row.kind,
+          hash(String(index)),
+          row.status,
+          row.attempts,
+          t0 + index,
+          row.lease_token,
+          row.lease_until,
+          row.provider_message_id,
+          t0 + 86_400_000,
+          row.last_error_code,
+          row.resolved_at,
+          t0,
+          t0 + 5_000,
+          hash("f"),
+        )
+        .run();
+    }
+    // The old shape refuses an affiliate kind: this really is the pre-0058 table.
+    const affiliateKind = () =>
+      env.DB.prepare(
+        `INSERT INTO email_deliveries (delivery_id, tenant_id, kind, recipient_hash, next_attempt_at, expires_at,
+           created_at, updated_at, job_fingerprint)
+         VALUES ('mig-ed-affiliate', ?, 'affiliate_conversion', ?, 1, 2, 1, 1, ?)`,
+      ).bind(TENANT, hash("a"), hash("b"));
+    expect(await refusal(affiliateKind())).toMatch(/CHECK/);
+
+    const read = () => env.DB.prepare("SELECT * FROM email_deliveries WHERE delivery_id LIKE 'mig-ed-%' ORDER BY delivery_id").all();
+    const objects = () =>
+      env.DB.prepare(
+        "SELECT type, name FROM sqlite_master WHERE tbl_name = 'email_deliveries' AND type IN ('index', 'trigger') AND name NOT LIKE 'sqlite_%' ORDER BY name",
+      ).all();
+    const before = (await read()).results;
+    expect(before).toHaveLength(rows.length);
+    const objectsBefore = (await objects()).results;
+
+    // 2. 0058's email_deliveries statements, as wrangler applies them.
+    await exec(migration("0058_affiliate_identity.sql").queries.filter(touches));
+
+    expect((await read()).results).toEqual(before);
+    expect((await objects()).results).toEqual(objectsBefore);
+    expect(await count("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'email_deliveries_migration_%'")).toBe(0);
+    expect(await refusal(affiliateKind())).toBeNull();
+    // The provider id is still unique, the fingerprint still required.
+    expect(
+      await refusal(
+        env.DB.prepare("UPDATE email_deliveries SET provider_message_id = 're_mig_1' WHERE delivery_id = 'mig-ed-pending'"),
+      ),
+    ).toMatch(/UNIQUE/);
+  });
+});
+
 describe("0059 on a database holding a campaign-discounted checkout and order", () => {
   const OWN = /\b(ALTER TABLE|UPDATE|ON) (checkouts|orders)\b/;
   const COLUMNS = [

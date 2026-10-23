@@ -2,6 +2,8 @@ import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/auth/create-auth";
+import { parseTenantIdPathSegment, SHARED_HOST_RESERVED_TENANT_IDS } from "../src/platform/provision-tenants";
+import { TENANCY_RESERVED_SEGMENTS, WORKER_RESERVED_SEGMENTS } from "../web/src/shop-segment";
 
 const AUTH_ORIGIN = "https://meteorshop-stg-api.micke-ohlen.workers.dev";
 const PLATFORM_HOST = "https://console.platformshop.test";
@@ -853,6 +855,10 @@ describe("platform provisioning validation", () => {
         tenantId: "bad-unknown-key",
       },
     ],
+    // Codex round 4: a first segment the shared host reserves (CP13: affiliate).
+    ["reserved tenant id affiliate", { hostname: "bad12.deny.test", shopName: "Bad", tenantId: "affiliate" }],
+    ["reserved tenant id admin", { hostname: "bad13.deny.test", shopName: "Bad", tenantId: "admin" }],
+    ["reserved tenant id assets", { hostname: "bad14.deny.test", shopName: "Bad", tenantId: "assets" }],
     ["missing hostname", { shopName: "Bad", tenantId: "bad-missing-host" }],
     ["missing shop name", { hostname: "bad11.deny.test", tenantId: "bad-missing-name" }],
   ])("rejects provisioning with %s", async (_label, body) => {
@@ -865,6 +871,14 @@ describe("platform provisioning validation", () => {
     expect(JSON.stringify(responseBody)).not.toContain("deny.test");
     expect(JSON.stringify(responseBody)).not.toContain("Bad");
     await expect(countTenants()).resolves.toBe(before);
+  });
+
+  it("reserves exactly the web Worker's non-shop first segments, at create only (Codex round 4)", () => {
+    expect([...SHARED_HOST_RESERVED_TENANT_IDS].sort()).toEqual(
+      [...TENANCY_RESERVED_SEGMENTS, ...WORKER_RESERVED_SEGMENTS].sort(),
+    );
+    // An id already in the table still parses on the read paths.
+    expect(parseTenantIdPathSegment("affiliate")).toBe("affiliate");
   });
 
   it("rejects a malformed JSON body", async () => {

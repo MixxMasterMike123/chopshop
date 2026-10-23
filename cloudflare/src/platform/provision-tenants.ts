@@ -101,6 +101,40 @@ function hasOnlyKeys(
   return Object.keys(body).every((key) => allowed.includes(key));
 }
 
+/**
+ * First path segments the shared storefront host never reads as a shop (the
+ * web Worker's TENANCY_RESERVED_SEGMENTS + WORKER_RESERVED_SEGMENTS,
+ * web/src/shop-segment.ts; test/provision-tenants.test.ts keeps the lists
+ * equal). A NEW tenant may not take one: its `<web>/<tenant>/` storefront
+ * and `/_api/<tenant>/` API would be unreachable (Codex round 4, finding 4:
+ * CP13 reserved `affiliate`). Refused at CREATE only, with the answer every
+ * other unusable id gets (400 invalid_request); an id already in the table
+ * still parses on every read path (parseTenantIdPathSegment), so an existing
+ * tenant stays manageable — the deploy preflight checks staging for one.
+ */
+export const SHARED_HOST_RESERVED_TENANT_IDS: readonly string[] = [
+  "se",
+  "gb",
+  "us",
+  "login",
+  "register",
+  "forgot-password",
+  "reset-password",
+  "affiliate-login",
+  "affiliate",
+  "__",
+  "account",
+  "admin",
+  "platform",
+  "assets",
+  "images",
+];
+
+function parseNewTenantId(value: unknown): string | null {
+  const tenantId = parseTenantId(value);
+  return tenantId === null || SHARED_HOST_RESERVED_TENANT_IDS.includes(tenantId) ? null : tenantId;
+}
+
 function parseTenantId(value: unknown): string | null {
   return typeof value === "string" &&
     value.length <= TENANT_ID_MAX_LENGTH &&
@@ -179,7 +213,7 @@ export function parseCreateTenantInput(body: unknown): CreateTenantInput | null 
     return null;
   }
 
-  const tenantId = parseTenantId(body.tenantId);
+  const tenantId = parseNewTenantId(body.tenantId);
   const shopName = parseShopName(body.shopName);
   const hostname = parseHostname(body.hostname);
   const defaultLocale = parseLocale(body.defaultLocale);

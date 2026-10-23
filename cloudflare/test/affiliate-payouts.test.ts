@@ -510,6 +510,48 @@ describe("the projections (design §7.1, §8.9)", () => {
     expect(JSON.stringify(me)).not.toContain("@buyer.test");
   });
 
+  it("mixed currencies: the list's earnedMinor and the detail's reversedMinor count the affiliate's own currency only (Codex round 4)", async () => {
+    const person = await payableAffiliate("MIXED");
+    const orderId = await paidOrder({ refCode: "MIXED" });
+    // A second order carries the EUR accrual (an accrual's ref is its order).
+    const eurOrderId = await paidOrder({});
+    const ledgerRow = (kind: string, amount: number, currency: string, ref: string, order = orderId) =>
+      env.DB.prepare(
+        `INSERT INTO affiliate_ledger (entry_id, tenant_id, affiliate_id, kind, amount_minor, currency, order_id, ref,
+           formula_version, available_at, reason, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'test', ?)`,
+      ).bind(
+        crypto.randomUUID(),
+        SHOP,
+        person.affiliateId,
+        kind,
+        amount,
+        currency,
+        order,
+        ref,
+        kind === "accrual" ? 1 : null,
+        kind === "accrual" ? new Date().toISOString() : null,
+        new Date().toISOString(),
+      );
+    await env.DB.batch([
+      ledgerRow("accrual", 10_000, "EUR", eurOrderId, eurOrderId),
+      ledgerRow("reversal", -2_000, "EUR", `eur-rev-${eurOrderId}`, eurOrderId),
+      ledgerRow("reversal", -400, "SEK", `sek-rev-${orderId}`),
+    ]);
+    const list = await (await asAdmin("GET", "/v1/admin/affiliates?limit=100")).json<{
+      affiliates: Array<{ affiliateId: string; currency: string; earnedMinor: number }>;
+    }>();
+    const row = list.affiliates.find((entry) => entry.affiliateId === person.affiliateId);
+    expect(row).toMatchObject({ currency: "SEK", earnedMinor: 5_400 - 400 });
+    const detail = await (await asAdmin("GET", `/v1/admin/affiliates/${person.affiliateId}`)).json<{
+      affiliate: { balances: Array<{ currency: string; earnedMinor: number }>; currency: string; reversedMinor: number };
+    }>();
+    expect(detail.affiliate).toMatchObject({ currency: "SEK", reversedMinor: 400 });
+    // The other currency is where it belongs: its own balance row.
+    expect(detail.affiliate.balances.find((balance) => balance.currency === "EUR")).toMatchObject({ earnedMinor: 8_000 });
+    expect(detail.affiliate.balances.find((balance) => balance.currency === "SEK")).toMatchObject({ earnedMinor: 5_000 });
+  });
+
   it("a 0-öre affiliate attribution shows no discount label on the receipt or the admin order (round 1)", async () => {
     await portalAffiliateOf(SHOP, "ZEROOFF", { discountBp: 0 });
     const zeroId = await paidOrder({ refCode: "ZEROOFF" });

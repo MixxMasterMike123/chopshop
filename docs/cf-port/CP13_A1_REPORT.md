@@ -415,3 +415,58 @@ None with the findings as stated. Item 4 goes slightly further than asked (the d
 - `npx vitest run` → Test Files 154 passed (154) · Tests 5378 passed (5378). The counts include suites other units added to the tree.
 - **Transient failures:** one earlier run caught three failures in `affiliate-emails` (A4's "final copy" tests) and in `affiliate-schema`'s terms-hash test, while A4 was editing `terms.ts` and `affiliate-emails.ts` mid-run. The immediate re-run on the settled tree was fully green. Nothing in round 3 touches those files.
 
+### Round 4 (Codex, `docs/cf-port/CP13_CODEX_REVIEW.md`: findings 2–5 and two test items)
+
+**2 (blocking): an admission never lifts the platform's suspension.**
+- **Change:** in `src/affiliate/approval.ts`, the admission batch (shared by approval and "Bjud in") re-activates a membership only when it is `'revoked'` (it used to fire on anything `<> 'active'`). This is the same rule as the PATCH path since round 1.
+- **What the admin sees after approving or inviting a person whose membership the platform suspended:**
+  - The approval succeeds (201) and the affiliate ROW is active again, with its code and rates.
+  - The affiliate page shows `account.membership: "suspended"`.
+  - The person cannot log in to this shop's portal (the opaque 404).
+  - Because the row is active, the code resolves and earns at checkout. To stop the code as well, the admin sets the affiliate to Inactive or Suspended.
+  - Only the platform lifts the membership suspension.
+- **Tests:** `affiliate-routes` "Codex round 4 (finding 2)", both with an existing portal session:
+  - Approval of a suspended member: the membership stays suspended and the session gets a 404.
+  - "Bjud in" of a suspended member: the same. "Bjud in" of a revoked member: the membership becomes active and the session gets a 200.
+  - Each assertion fails on the old `<> 'active'` rule.
+
+**3: one figure, one currency.**
+- **Change:** in `src/affiliate/projections.ts`, `adminAffiliateList.earnedMinor` and `adminAffiliateDetail.reversedMinor` now sum only rows in `affiliates.currency`. The doc comments say so. Per-currency figures remain where the detail already has them, in `balances[]`.
+- **Test:** `affiliate-payouts` "mixed currencies …". A SEK accrual of 5 400 and a SEK reversal of −400 sit beside an EUR accrual of 10 000 and an EUR reversal of −2 000. The list shows `earnedMinor` 5 000 (SEK), and the detail shows `reversedMinor` 400. The detail's `balances[]` shows EUR earned 8 000 and SEK earned 5 000.
+
+**4: a new tenant cannot take a shared-host reserved id.**
+- **Change:** `src/platform/provision-tenants.ts` adds `SHARED_HOST_RESERVED_TENANT_IDS`, which equals the web Worker's `TENANCY_RESERVED_SEGMENTS` plus `WORKER_RESERVED_SEGMENTS` (so `affiliate`, `admin`, `login`, `assets` …). `parseCreateTenantInput` refuses those with the answer every unusable id gets: 400 `invalid_request`, nothing written.
+- **Why the whole list, not just `affiliate`:** every one of those ids would be equally unreachable on the shared host. The provisioning code had no reserved list before, so I made it match the web Worker's.
+- **Reads still accept the ids:** read paths (`parseTenantIdPathSegment`) still parse such an id, so an existing tenant stays manageable.
+- **No import validator** exists in the Cloudflare tree. The cf-port export scripts are not mine.
+- **Tests:** in `test/provision-tenants.test.ts`, three new refusal rows (`affiliate`, `admin`, `assets`). A list-equality test checks against `web/src/shop-segment.ts` and that the read parse still accepts `affiliate`.
+- **For you:** checking staging for an existing tenant with that id before deploying remains your step.
+
+**5: late invoice bytes after the sweep.**
+- **Change:** in `src/storage/object-routes.ts`, when `uploadAffiliateInvoice`'s activation is refused, `releaseLateInvoiceBytes` re-reads the row:
+  - **Deleted or absent:** the bytes just written are deleted.
+  - **Active** (another upload of the same reservation won; same key and declared hash) **or still pending:** the bytes are left alone.
+  - **If that delete fails:** an `object.bytes_orphaned` audit row (ids only) names the object, and the failure is logged by error name.
+- **Tests:** a new file, `test/affiliate-invoice-race.test.ts`. A bucket proxy runs a hook before the upload's `put` lands. Four cases:
+  1. The real sweep runs inside that window: the answer is 409, the row is deleted, `object.bytes_deleted` is audited, and the late bytes are gone.
+  2. The late delete fails: the bytes remain and the orphan marker is written.
+  3. Another upload activates first: its bytes are kept and no marker is written.
+  4. No race: the upload activates as before.
+- **For A4 (`object-sweep.ts`, which I read but did not edit):** the sweep's step-0 retry selects `object.sweep` without `object.bytes_deleted`. It never revisits a tombstone whose late-byte delete failed. To finish the retry, step 0 should also take a `deleted` row that has an `object.bytes_orphaned` audit row newer than its latest `object.bytes_deleted` row, delete its key, and write a fresh `object.bytes_deleted`.
+- **Same race elsewhere:** the generic private and admin upload legs have the same shape. They are outside CP13 and unchanged.
+
+**Test (a): the vacuous host test is replaced.** `affiliate-routes` "the hosts (Codex round 4: real host routing)" now has three tests:
+- **Admin Worker end to end** (`admin/src/index.ts` `handleRequest` over the real API's internal surface): `/_api/v1/affiliate/me` with the affiliate's cookie gives 200 with its own profile; with a shop admin's cookie it gives the opaque 404. The admin Worker's allowlist admits the portal prefix and refuses `/v1/affiliate-applications`.
+- **Web Worker routing:** `classifyRequest` sends the form and the terms to the shop's API and refuses `/_api/<shop>/v1/affiliate/me`.
+- **API:** the form on the admin host is the opaque 404, and the terms answer on the storefront host.
+
+**Test (b): the 0058 replay now covers `email_deliveries`.** `affiliate-migration` "0058 on a database holding email deliveries":
+- **Setup:** the table is put back to 0056's shape (0056's own statements), then filled with five rows: pending, processing with a live lease, sent with a provider id, failed with an error code after 8 attempts, and expired with no tenant. Every row has a fingerprint.
+- **Checks:** every row survives 0058 column for column, as do the trigger and index set. No copy table remains. The affiliate kinds are admitted after, and the provider id is still unique.
+
+**Gate after round 4:**
+- `cd cloudflare && npx tsc --noEmit`, `-p web`, `-p admin` → all clean.
+- `npx vitest run` → Test Files 155 passed (155) · Tests 5392 passed (5392).
+- `node guard/guards.test.mjs` → PASS.
+- **Transient failures:** two earlier full runs each had ONE different failure in a suite this round does not touch (`money-followups` "51 releases …", then `admin-catalog` "keeps the carriage inputs …"). The `web/dist` and `admin/dist` builds were being rewritten by other units in the meantime. Both suites pass alone, and the third full run (above) was fully green.
+

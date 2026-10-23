@@ -1,7 +1,12 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { handleRequest as handleAdminRequest } from "../admin/src/index";
+import { isAllowedAdminApiRequest } from "../admin/src/allowlist";
+import { createApp } from "../src/app";
 import worker from "../src/index";
+import { stripTenantHeaders } from "../src/lib/tenant-headers";
+import { classifyRequest } from "../web/src/routing";
 import { purgeDeniedApplications } from "../src/affiliate/applications";
 import { AFFILIATE_TERMS_VERSION } from "../src/affiliate/terms";
 import { parseAuthEmailJob } from "../src/email/auth-email-job";
@@ -473,6 +478,65 @@ describe("round 1: a committed admission, the edit's audit, the suspended member
   });
 });
 
+describe("Codex round 4 (finding 2): an admission never lifts the platform's suspension", () => {
+  async function suspendedHere(code: string) {
+    const person = await portalAffiliateOf(SHOP, code);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE affiliates SET status = 'inactive' WHERE affiliate_id = ?").bind(person.affiliateId),
+      env.DB.prepare("UPDATE tenant_memberships SET status = 'suspended' WHERE user_id = ? AND tenant_id = ? AND role = 'affiliate'").bind(
+        person.userId,
+        SHOP,
+      ),
+    ]);
+    return person;
+  }
+
+  async function membershipOf(userId: string): Promise<string | null> {
+    const row = await env.DB.prepare("SELECT status FROM tenant_memberships WHERE user_id = ? AND tenant_id = ? AND role = 'affiliate'")
+      .bind(userId, SHOP)
+      .first<{ status: string }>();
+    return row?.status ?? null;
+  }
+
+  it("approval of a suspended member: the affiliate row is active again, the membership stays suspended, the session stays out", async () => {
+    const person = await suspendedHere("SUSPAPP");
+    await apply({ email: person.email });
+    const applicationId = await applicationIdFor(person.email);
+    const response = await call(
+      asAdmin("POST", `/v1/admin/affiliates/applications/${applicationId}/approve`, {}),
+      envWith({ EMAIL_QUEUE: captureQueue().queue }),
+    );
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ affiliate: { account: { membership: "suspended" }, status: "active" } });
+    expect(await membershipOf(person.userId)).toBe("suspended");
+    expect((await call(hostRequest("GET", "/v1/affiliate/me", { cookie: person.cookie, shopId: SHOP }))).status).toBe(404);
+  });
+
+  it("'Bjud in' of a suspended member: the same; of a revoked one: the membership is active again", async () => {
+    // The shop's invite limit (20 an hour) is its own test; this one starts from an empty window.
+    await env.DB.prepare("DELETE FROM rate_limit_windows WHERE scope LIKE 'affiliate-invite-%'").run();
+    const suspended = await suspendedHere("SUSPINV");
+    const invited = await call(
+      asAdmin("POST", "/v1/admin/affiliates", { email: suspended.email, name: "Sven" }),
+      envWith({ EMAIL_QUEUE: captureQueue().queue }),
+    );
+    expect(invited.status).toBe(201);
+    expect(await membershipOf(suspended.userId)).toBe("suspended");
+    expect((await call(hostRequest("GET", "/v1/affiliate/me", { cookie: suspended.cookie, shopId: SHOP }))).status).toBe(404);
+
+    const removed = await portalAffiliateOf(SHOP, "REVINV");
+    await call(asAdmin("POST", `/v1/admin/affiliates/${removed.affiliateId}/revoke`));
+    expect(await membershipOf(removed.userId)).toBe("revoked");
+    const again = await call(
+      asAdmin("POST", "/v1/admin/affiliates", { email: removed.email, name: "Rut" }),
+      envWith({ EMAIL_QUEUE: captureQueue().queue }),
+    );
+    expect(again.status).toBe(201);
+    expect(await membershipOf(removed.userId)).toBe("active");
+    expect((await call(hostRequest("GET", "/v1/affiliate/me", { cookie: removed.cookie, shopId: SHOP }))).status).toBe(200);
+  });
+});
+
 describe("the add-on gate (A12, R2-17)", () => {
   it("OFF: the list, the queue, approvals, invites and analytics are the opaque 404; an affiliate's detail, ledger and payouts stay", async () => {
     const { affiliateId } = await seedAffiliate({ code: "OFFAFF", tenantId: OFF });
@@ -605,8 +669,53 @@ describe("who may call what", () => {
   });
 });
 
-describe("the hosts", () => {
-  it("the admin Worker's host is where the portal answers (an admin-host request); ADMIN_HOST is the suites' admin host", () => {
-    expect(ADMIN_HOST.startsWith("https://")).toBe(true);
+describe("the hosts (Codex round 4: real host routing)", () => {
+  const ADMIN_WORKER_ORIGIN = "https://admin.aff-routes.test.invalid";
+  const internal = createApp({ surface: "internal" });
+  const realApi = { fetch: async (request: Request) => internal.fetch(stripTenantHeaders(request), env) };
+  const noAssets = { fetch: async () => new Response("missing", { status: 404 }) };
+
+  function throughAdminWorker(path: string, cookie: string, method = "GET"): Promise<Response> {
+    return handleAdminRequest(
+      new Request(`${ADMIN_WORKER_ORIGIN}${path}`, {
+        headers: { "cf-connecting-ip": "203.0.113.77", cookie, "x-shop-id": SHOP },
+        method,
+      }),
+      { ADMIN_ORIGIN: ADMIN_WORKER_ORIGIN, API: realApi, ASSETS: noAssets, PUBLIC_OBJECT_BASE_URL: "https://pub.test.invalid" },
+    );
+  }
+
+  it("the admin Worker forwards /_api/v1/affiliate/* to the API: the affiliate's session reads its portal, an admin's gets the opaque 404", async () => {
+    const mine = await throughAdminWorker("/_api/v1/affiliate/me", affiliate.cookie);
+    expect(mine.status).toBe(200);
+    expect(await mine.json()).toMatchObject({ affiliate: { affiliateId: affiliate.affiliateId, code: "PORTAL1" } });
+    expect((await throughAdminWorker("/_api/v1/affiliate/me", admin.cookie)).status).toBe(404);
+    // The admin Worker's allowlist: the portal prefix yes, the storefront's form no.
+    expect(isAllowedAdminApiRequest("GET", "/v1/affiliate/me")).toBe(true);
+    expect(isAllowedAdminApiRequest("PATCH", "/v1/affiliate/profile")).toBe(true);
+    expect(isAllowedAdminApiRequest("POST", "/v1/affiliate-applications")).toBe(false);
+    expect((await throughAdminWorker("/_api/v1/affiliate-applications", affiliate.cookie, "POST")).status).toBe(404);
+  });
+
+  it("the web Worker routes the form and the terms to the shop's API, never the portal", () => {
+    expect(classifyRequest("POST", `/_api/${SHOP}/v1/affiliate-applications`, true)).toMatchObject({
+      apiPath: "/v1/affiliate-applications",
+      kind: "api",
+    });
+    expect(classifyRequest("GET", `/_api/${SHOP}/v1/affiliate-terms`, true)).toMatchObject({ kind: "api" });
+    expect(classifyRequest("GET", `/_api/${SHOP}/v1/affiliate/me`, true)).toEqual({ kind: "api_refused" });
+    expect(classifyRequest("GET", "/_api/v1/affiliate/me", false)).toEqual({ kind: "api_refused" });
+  });
+
+  it("the API answers the storefront's form only on a storefront host: on the admin host it is the opaque 404", async () => {
+    const onAdminHost = await call(
+      new Request(`${ADMIN_HOST}/v1/affiliate-applications`, {
+        body: JSON.stringify(application()),
+        headers: { "cf-connecting-ip": "203.0.113.78", "content-type": "application/json", "x-shop-id": SHOP },
+        method: "POST",
+      }),
+    );
+    expect(onAdminHost.status).toBe(404);
+    expect((await call(storefront("GET", "/v1/affiliate-terms"))).status).toBe(200);
   });
 });
