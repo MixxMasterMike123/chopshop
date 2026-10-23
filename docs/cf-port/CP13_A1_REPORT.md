@@ -124,6 +124,20 @@ affiliate-migration.test.ts replays 0058 and 0059 on a database that already hol
 
 **I could not count staging's rows** (no network). The affected sets are "every `identity_access` row", "every `email_deliveries` row" (copied), and "every checkout/order with `discount_code_id`" (backfilled).
 
+### 0060_reserved_slug_affiliate.sql (round 3)
+
+**Change:** 0042's `pages_reserved_slug_insert` and `pages_reserved_slug_update` are dropped and re-created under the same names and message, with `'affiliate'` added to the list. The list equals `RESERVED_PAGE_SLUGS` in `src/content/pages.ts`.
+
+**The update trigger now fires only when the slug changes** (`NEW.slug IS NOT OLD.slug AND NEW.slug IN (…)`). For every row 0042 admitted this is the same rule, since none could already hold a reserved slug. It keeps a legacy `affiliate` row writable without letting any row move into the list.
+
+**Existing rows are not touched.** A trigger never re-checks rows already in the table, so the migration cannot fail on them. A page a shop already named `affiliate` behaves like this:
+- **It survives as it is** and stays listed in the admin.
+- **Editing it works** as long as the body sends no slug, or sends the same one.
+- **The API refuses only a body that names `affiliate` as the slug** (400 `slug_reserved`). Renaming it to any free slug works, and it can never be renamed back.
+- **On the storefront:** while the shop's affiliate add-on is ON, the storefront's own `/affiliate` page answers that address, so the merchant's page is shadowed until renamed. With the add-on OFF it is served as before.
+
+**Test:** `affiliate-migration` "0060 on a database holding a page a shop already named 'affiliate'" replays 0042's triggers, inserts such a page, and applies 0060. It then checks that the row is unchanged, title and same-slug updates pass, renaming away passes, and renaming back, a new `affiliate` page and `checkout` are all refused.
+
 ## 4. Route table
 
 All money is integer öre and all rates are basis points in answers. The opaque 404 is `{ error: { code: "not_found", message: "Route not found" } }`. Every list is bounded (`limit` 1–100, default 50) and paged with an opaque `cursor`; a malformed query is a 400. Every answer is `Cache-Control: no-store`.
@@ -283,6 +297,8 @@ Rates go IN as whole percent (`commissionPercent`, `discountPercent`, 0–100) a
 
 ## 9. Reviewer wiring
 
+**Round 3:** `REQUIRED_MIGRATION` is now **`0060_reserved_slug_affiliate.sql`** in `src/app.ts`, with `test/health.test.ts` and `test/public-catalog.test.ts` pinned to it. I made this change myself because the round-3 brief named these files.
+
 **Applied by the reviewer in round 1:**
 - `REQUIRED_MIGRATION` = `0059_affiliate.sql`, with `health` and `public-catalog` pinned to it.
 - `handleCheckoutRoute` counts a `refCode` against `DISCOUNT_ATTEMPT_*`. My test for it is in `checkout.test.ts`, "counts a link-code-only checkout…".
@@ -381,4 +397,21 @@ None with the findings as stated. Item 4 goes slightly further than asked (the d
 **Gate after round 2:**
 - `cd cloudflare && npx tsc --noEmit` → clean.
 - `npx vitest run` → Test Files 153 passed (153) · Tests 5367 passed (5367). The file count includes suites other units added to the tree.
+
+### Round 3 (reserved slug `affiliate`, design §7.1)
+
+**Change:**
+- `src/content/pages.ts`: `RESERVED_PAGE_SLUGS` gains `"affiliate"`.
+- New migration `migrations/0060_reserved_slug_affiliate.sql` replaces the triggers **`pages_reserved_slug_insert`** and **`pages_reserved_slug_update`** with `'affiliate'` added (behaviour on existing rows: §3).
+- `REQUIRED_MIGRATION` and the `health` / `public-catalog` pins move to 0060.
+
+**Tests:**
+- `test/pages.test.ts` needed no edit. It enumerates `RESERVED_PAGE_SLUGS`, so the schema test (insert and update refused, trigger list read back from `sqlite_master` equal to the code's) and the route test (400 `slug_reserved`) now cover `affiliate` automatically.
+- `test/affiliate-schema` lists no migrations.
+- One new replay test is in `affiliate-migration` (§3).
+
+**Gate after round 3:**
+- `cd cloudflare && npx tsc --noEmit` → clean.
+- `npx vitest run` → Test Files 154 passed (154) · Tests 5378 passed (5378). The counts include suites other units added to the tree.
+- **Transient failures:** one earlier run caught three failures in `affiliate-emails` (A4's "final copy" tests) and in `affiliate-schema`'s terms-hash test, while A4 was editing `terms.ts` and `affiliate-emails.ts` mid-run. The immediate re-run on the settled tree was fully green. Nothing in round 3 touches those files.
 

@@ -289,3 +289,40 @@ describe("0059 on a database holding a campaign-discounted checkout and order", 
     // whose id is not the affiliate's: affiliate-schema.test.ts.)
   });
 });
+
+describe("0060 on a database holding a page a shop already named 'affiliate' (round 3)", () => {
+  it("does not fail, leaves the row as it is and editable; no new or renamed page can take the slug", async () => {
+    const iso = new Date().toISOString();
+    const page = (id: string, slug: string) =>
+      env.DB.prepare(
+        `INSERT INTO pages (page_id, tenant_id, slug, title_json, content_json, created_at, updated_at)
+         VALUES (?, ?, ?, '{"sv-SE":"Rubrik"}', '{"sv-SE":"<p>x</p>"}', ?, ?)`,
+      ).bind(id, TENANT, slug, iso, iso);
+
+    // Back to 0042's triggers (the list without 'affiliate'), then the row.
+    await exec(["DROP TRIGGER pages_reserved_slug_insert", "DROP TRIGGER pages_reserved_slug_update"]);
+    await exec(migration("0042_pages.sql").queries.filter((q) => q.includes("pages_reserved_slug_")));
+    expect(await refusal(page("legacy-affiliate", "affiliate"))).toBeNull();
+    const before = await env.DB.prepare("SELECT * FROM pages WHERE page_id = 'legacy-affiliate'").first();
+
+    // 0060, as wrangler applies it.
+    await exec(migration("0060_reserved_slug_affiliate.sql").queries);
+    expect(await env.DB.prepare("SELECT * FROM pages WHERE page_id = 'legacy-affiliate'").first()).toEqual(before);
+
+    // Still editable, its slug unchanged (even when the UPDATE names it) …
+    expect(
+      await refusal(env.DB.prepare(`UPDATE pages SET title_json = '{"sv-SE":"Ny"}' WHERE page_id = 'legacy-affiliate'`)),
+    ).toBeNull();
+    expect(await refusal(env.DB.prepare("UPDATE pages SET slug = 'affiliate' WHERE page_id = 'legacy-affiliate'"))).toBeNull();
+    // … and renamed away freely; it cannot come back, and nothing new takes it.
+    expect(
+      await refusal(env.DB.prepare("UPDATE pages SET slug = 'affiliate-gammal' WHERE page_id = 'legacy-affiliate'")),
+    ).toBeNull();
+    expect(await refusal(env.DB.prepare("UPDATE pages SET slug = 'affiliate' WHERE page_id = 'legacy-affiliate'"))).toMatch(
+      /reserved by the storefront/,
+    );
+    expect(await refusal(page("new-affiliate", "affiliate"))).toMatch(/reserved by the storefront/);
+    expect(await refusal(page("still-checkout", "checkout"))).toMatch(/reserved by the storefront/);
+  });
+});
+

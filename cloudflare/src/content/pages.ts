@@ -34,11 +34,14 @@ export type PageStatus = (typeof PAGE_STATUSES)[number];
 /**
  * First path segments the storefront owns (CP4_BRIEFS.md, "The address
  * grammar"), `legal` (the legal pages live at `<root>/legal/<…>`) and the four
- * legal keys. MUST equal the list in 0042's two `pages_reserved_slug_*`
- * triggers (test/pages.test.ts pins the two together).
+ * legal keys, and `affiliate` (CP13). MUST equal the list in the two
+ * `pages_reserved_slug_*` triggers (0042, replaced by 0060; test/pages.test.ts
+ * pins the two together).
  */
 export const RESERVED_PAGE_SLUGS = [
   "_api",
+  // CP13 (design §7.1): the storefront's affiliate page (0060).
+  "affiliate",
   "angerratt",
   "angra",
   "assets",
