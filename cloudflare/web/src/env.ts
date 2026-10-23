@@ -10,6 +10,13 @@
 export interface ApiBinding {
   fetch(request: Request): Promise<Response>;
   fetchForShop(shop: string, request: Request): Promise<Response>;
+  /**
+   * CP14 — where a storefront page should 301 to, or null: `{ shop }` on the
+   * shared host, `{ hostname }` for a platform hostname (src/index.ts of the
+   * API, `Internal.canonicalShopHost`). Optional so a fake without it is a
+   * binding that never redirects.
+   */
+  canonicalShopHost?(target: { hostname: string } | { shop: string }): Promise<string | null>;
 }
 
 /** The static assets of the storefront build (`cloudflare/web/dist`). */
@@ -33,9 +40,19 @@ export interface WebEnv {
    * request answers 503: the Worker cannot tell which shop a request is for.
    */
   WEB_ORIGIN: string | undefined;
+  /**
+   * CP14: the base domain of the shops' platform subdomains (the API's var of
+   * the same name). Set ⇒ `/<shop>/…` on the shared host 301s to
+   * `https://<label>.<base>/…` when the shop has a label, and a platform
+   * hostname the shop moved away from 301s to its current one. Absent or not
+   * a hostname ⇒ nothing redirects.
+   */
+  PLATFORM_SHOP_DOMAIN?: string | undefined;
 }
 
 export interface WebConfig {
+  /** PLATFORM_SHOP_DOMAIN when it is a lowercase hostname; null = no subdomain redirects. */
+  platformShopDomain: string | null;
   publicObjectOrigin: string | null;
   webHost: string;
   webOrigin: string;
@@ -59,6 +76,18 @@ export function bareHttpsOrigin(value: unknown): string | null {
   return url.protocol === "https:" && url.origin === value ? url.origin : null;
 }
 
+/** One hostname label: the API's rule (src/tenancy/subdomain.ts SUBDOMAIN_LABEL_PATTERN). */
+export const HOST_LABEL_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** A lowercase hostname of at least two labels, or null (the API's parsePlatformShopDomain). */
+export function platformShopDomain(value: unknown): string | null {
+  if (typeof value !== "string" || value.length < 3 || value.length > 200) {
+    return null;
+  }
+  const labels = value.split(".");
+  return labels.length >= 2 && labels.every((label) => HOST_LABEL_PATTERN.test(label)) ? value : null;
+}
+
 export function readWebConfig(env: WebEnv): WebConfig | null {
   const webOrigin = bareHttpsOrigin(env.WEB_ORIGIN);
   if (webOrigin === null) {
@@ -66,6 +95,7 @@ export function readWebConfig(env: WebEnv): WebConfig | null {
   }
 
   return {
+    platformShopDomain: platformShopDomain(env.PLATFORM_SHOP_DOMAIN),
     publicObjectOrigin: bareHttpsOrigin(env.PUBLIC_OBJECT_BASE_URL),
     webHost: new URL(webOrigin).host,
     webOrigin,

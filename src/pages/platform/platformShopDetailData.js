@@ -73,6 +73,17 @@ export async function setShopSupportEmail() {
   throw new Error('setShopSupportEmail: the shop sets its support address in its own settings in this build');
 }
 
+/** CP14: shop subdomains exist only in the admin build (the API's platform address). */
+export const SUBDOMAIN_EDITABLE = false;
+
+export async function loadShopSubdomain() {
+  return null;
+}
+
+export async function setShopSubdomain() {
+  throw new Error('setShopSubdomain: shop subdomains do not exist in this build');
+}
+
 /** The shop's storefront address. */
 export function storefrontUrlOf(shop) {
   return `${APP_URLS.B2C_SHOP}/${shop.id}`;

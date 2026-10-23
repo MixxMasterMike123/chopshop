@@ -42,9 +42,12 @@ export async function resolveRequestTenant(
        WHERE domain.hostname = ?
          AND domain.status = 'verified'
          AND tenant.status = 'active'
+         AND (domain.redirect_until IS NULL OR domain.redirect_until > ?)
        LIMIT 1`,
     )
-    .bind(hostname)
+    // CP14: a platform hostname the shop moved away from resolves until its
+    // grace ends (src/tenancy/subdomain.ts), then to nothing.
+    .bind(hostname, Date.now())
     .first<TenantRow>();
 
   if (row === null) {

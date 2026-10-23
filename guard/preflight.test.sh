@@ -730,6 +730,21 @@ expect_refused "web vars with an extra var → refused" "env.staging.vars are ['
 new_tree; pin "$T" staging "$PIN_STG"; write_web_jsonc "$T" "$GOOD" "$(web_section staging "del e['vars']")"; run staging --web -- deploy
 expect_refused "web vars missing → refused" "env.staging.vars are null, expected exactly"
 
+# --- --web / API: PLATFORM_SHOP_DOMAIN (CP14) is optional; when set, a lowercase hostname ------------
+web_tree staging "$(web_section staging "e['vars']['PLATFORM_SHOP_DOMAIN'] = 'stg-shop.invalid'")"; run_stg --web -- deploy
+expect_exec_line "web PLATFORM_SHOP_DOMAIN a hostname → execs (the optional var)" "$WEB_EXEC_STG"
+for bad in "'Flippinstuff.se'" "'flippinstuff'" "'https://flippinstuff.se'" "'*.flippinstuff.se'" "''" "True"; do
+  new_tree; pin "$T" staging "$PIN_STG"; write_web_jsonc "$T" "$GOOD" "$(web_section staging "e['vars']['PLATFORM_SHOP_DOMAIN'] = $bad")"; run staging --web -- deploy
+  expect_refused "web PLATFORM_SHOP_DOMAIN = $bad → refused" "env.staging.vars.PLATFORM_SHOP_DOMAIN is"
+done
+new_tree; pin "$T" staging "$PIN_STG"; write_web_jsonc "$T" "$GOOD" "$(web_section staging "e['vars']['PLATFORM_SHOP_DOMAIN'] = 'a.test'; del e['vars']['PUBLIC_OBJECT_BASE_URL']")"; run staging --web -- deploy
+expect_refused "web PLATFORM_SHOP_DOMAIN never stands in for a required var → refused" "env.staging.vars are ['PLATFORM_SHOP_DOMAIN', 'WEB_ORIGIN'], expected exactly ['PUBLIC_OBJECT_BASE_URL', 'WEB_ORIGIN'] (and optionally ['PLATFORM_SHOP_DOMAIN'])"
+new_tree; pin "$T" staging "$PIN_STG"; write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['PLATFORM_SHOP_DOMAIN'] = 'stg-shop.invalid'")"; stripe_file "$T" staging "$SKEY_TEST"; run_stg -- deploy
+expect_exec_line "API PLATFORM_SHOP_DOMAIN a hostname → execs (the optional var)" \
+  "FAKE-WRANGLER EXEC: --env staging deploy | account=$GOOD token=ok cwd=cloudflare"
+new_tree; pin "$T" staging "$PIN_STG"; write_jsonc "$T" "$GOOD" "$(env_section staging stg "e['vars']['PLATFORM_SHOP_DOMAIN'] = 'stg_shop.invalid'")"; run staging -- deploy
+expect_refused "API PLATFORM_SHOP_DOMAIN not a hostname → refused" "env.staging.vars.PLATFORM_SHOP_DOMAIN is \"stg_shop.invalid\", expected a lowercase hostname"
+
 new_tree; pin "$T" staging "$PIN_STG; p['r2']['publicBaseUrl'] = None"; write_web_jsonc "$T" "$GOOD" "$WEB_STAGING"; stripe_file "$T" staging "$SKEY_TEST"
 run_stg --web -- deploy
 expect_refused "web deploy while pinned r2.publicBaseUrl is null (D95) → refused" "still has null (not yet created) values: r2.publicBaseUrl - create them"

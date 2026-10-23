@@ -95,6 +95,10 @@ export default defineConfig({
             // where they test it (test/print-canvas*.test.ts), so every older
             // dispatch suite still proves the artwork path byte for byte.
             PRINT_CANVAS_ENABLED: "false",
+            // CP14: staging's wrangler.jsonc sets PLATFORM_SHOP_DOMAIN; the suites keep the
+            // feature OFF (empty = absent) so no older suite sees an extra hostname row, and
+            // turn it on where they test it (test/shop-subdomains.test.ts).
+            PLATFORM_SHOP_DOMAIN: "",
             RENDER_FARM_URL:
               "https://render-farm.test.invalid/renderFarmProcessArtwork",
             TEST_MIGRATIONS: migrations,

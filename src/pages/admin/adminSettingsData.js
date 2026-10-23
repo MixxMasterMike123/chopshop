@@ -24,6 +24,9 @@ export const LEGAL_TEXTS_IN_SETTINGS = false;
 /** The identity fields the seller may not edit here: none in this build. */
 export const PLATFORM_OWNED_FIELDS = [];
 
+/** CP14: the shop's platform address ("Butikens adress") exists only in the admin build. */
+export const SHOP_ADDRESS = null;
+
 // Read the content of a multilingual-or-plain CMS field. Mirrors
 // useContentTranslation().getContentValue / DynamicPage, but standalone: the
 // acceptance snapshot must capture the SWEDISH consumer text regardless of

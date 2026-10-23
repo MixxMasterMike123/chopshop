@@ -9,6 +9,7 @@
 // `pages`.
 
 import { getLegalPagesAcceptance, getLegalPagesStatus } from '../../api/admin/legal.js';
+import { getShopAddress, setShopAddress } from '../../api/admin/settings.js';
 import { LEGAL_TEMPLATE_VERSION } from '../../config/legalTemplates.js';
 import {
   LEGAL_KEYS,
@@ -26,6 +27,17 @@ export const LEGAL_TEXTS_IN_SETTINGS = true;
  * tenant-config.ts). Shown read-only; saveShopConfig never sends them.
  */
 export const PLATFORM_OWNED_FIELDS = ['shopName', 'supportEmail', 'currency', 'vatRate'];
+
+/**
+ * CP14: the shop's platform address, "Butikens adress" (ShopAddressCard):
+ * GET /v1/admin/settings `subdomain`, PATCH /v1/admin/settings
+ * { subdomainLabel }. `load` resolves the view ({ baseDomain, label, hostname,
+ * previous }); the card shows nothing while `baseDomain` is null.
+ */
+export const SHOP_ADDRESS = {
+  load: (shopId) => getShopAddress(shopId ? { shopId } : {}),
+  save: (shopId, label) => setShopAddress(label, shopId ? { shopId } : {}),
+};
 
 /**
  * The server's view of the shop's legal state: `readiness` (the checkout's

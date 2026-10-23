@@ -544,6 +544,7 @@ describe("configuration and headers", () => {
     expect(
       readWebConfig(env({ PUBLIC_OBJECT_BASE_URL: "https://pub.test.invalid", WEB_ORIGIN: ORIGIN })),
     ).toEqual({
+      platformShopDomain: null,
       publicObjectOrigin: "https://pub.test.invalid",
       webHost: "web.test.invalid",
       webOrigin: ORIGIN,

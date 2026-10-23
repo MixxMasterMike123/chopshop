@@ -105,7 +105,14 @@
         // print slot goes to the printer as a frame-sized PNG made by the render container. STAGING
         // ONLY: it reaches the fake printer alone. Production gets no such var until SnapWear has
         // answered C1–C3 (docs/cf-port/CP6_PS2_REPORT.md).
-        "PRINT_CANVAS_ENABLED": "true"
+        "PRINT_CANVAS_ENABLED": "true",
+        // CP14: the base domain of the shops' platform subdomains, `<label>.<this>`
+        // (src/tenancy/subdomain.ts). Staging's shops already hold `<id>.stg-shop.invalid`
+        // (migration 0061 makes those their platform hostnames). .invalid never resolves: on
+        // staging the label rows are keys only, so the web Worker's staging config leaves its
+        // copy of this var OUT (with it, every /<shop>/ page would 301 to an unreachable host).
+        // Absent ⇒ the feature is off.
+        "PLATFORM_SHOP_DOMAIN": "stg-shop.invalid"
       },
       "d1_databases": [
         {
@@ -184,6 +191,10 @@
         "DISPATCH_TARGET": "snapwear",
         // Recipient of the 15-minute alert digest (D40). A var, not a secret: an address. Absent ⇒ no digest.
         "PLATFORM_ALERT_EMAIL": "micke.ohlen@gmail.com"
+        // CP7 replaces: "PLATFORM_SHOP_DOMAIN": "flippinstuff.se" goes here (CP14, Mikael
+        // 2026-10-23: shops at <label>.flippinstuff.se), and the same value into
+        // cloudflare/web/wrangler.jsonc env.production.vars, with the wildcard route for
+        // *.flippinstuff.se. Absent ⇒ shop subdomains are off.
       },
       "d1_databases": [
         {

@@ -13,7 +13,8 @@
  * Answers a hostname only when ALL of these hold, else null:
  *   - the segment is a well-formed shop id (checked before any query);
  *   - the tenant exists and is `active`;
- *   - it has a domain of kind `storefront` with status `verified`.
+ *   - it has a domain of kind `storefront` with status `verified` that is not
+ *     a retired platform hostname (CP14: `redirect_until` set).
  * Several such domains: the lowest hostname, so the answer is stable.
  */
 
@@ -41,6 +42,7 @@ export async function shopStorefrontHostname(
        WHERE domain.tenant_id = ?
          AND domain.kind = 'storefront'
          AND domain.status = 'verified'
+         AND domain.redirect_until IS NULL
          AND tenant.status = 'active'
        ORDER BY domain.hostname ASC
        LIMIT 1`,

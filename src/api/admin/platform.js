@@ -194,6 +194,23 @@ export async function patchTenant(tenantId, patch) {
   return data ?? null;
 }
 
+/** CP14: the shop's platform address. → the subdomain view, or null for an unknown shop. */
+export async function getTenantSubdomain(tenantId, { signal } = {}) {
+  try {
+    const { data } = await platformRequest('GET', `/v1/platform/tenants/${segment(tenantId)}/subdomain`, { signal });
+    return data?.subdomain ?? null;
+  } catch (error) {
+    if (error instanceof AdminApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+/** CP14: sets the shop's label. → the subdomain view. Rejects with the AdminApiError (its `code`). */
+export async function setTenantSubdomain(tenantId, label) {
+  const { data } = await platformRequest('PUT', `/v1/platform/tenants/${segment(tenantId)}/subdomain`, { json: { label } });
+  return data?.subdomain ?? null;
+}
+
 /** The go-live gate: true → publish, false → unpublish. → the detail. */
 export async function setTenantPublished(tenantId, published) {
   const action = published ? 'publish' : 'unpublish';

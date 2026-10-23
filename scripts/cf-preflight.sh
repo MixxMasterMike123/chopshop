@@ -42,13 +42,15 @@
 #      AUTH_TRUSTED_ORIGINS == exactly the set {origins.api, origins.web} plus origins.admin when
 #      that is not null, SERVICE_NAME == pinned workerName, R2_PRIVATE_BUCKET_NAME
 #      == pinned r2.private, R2_JURISDICTION == "eu", DISPATCH_TARGET == pinned dispatchTarget
-#      and PUBLIC_OBJECT_BASE_URL == pinned r2.publicBaseUrl (without that section wrangler silently deploys the top-level config);
+#      and PUBLIC_OBJECT_BASE_URL == pinned r2.publicBaseUrl, and PLATFORM_SHOP_DOMAIN (optional, CP14) a
+#      lowercase hostname when set (without that section wrangler silently deploys the top-level config);
 #      web (--web, cloudflare/web/wrangler.jsonc): env.<env> whose name (or `<top>-<env>`) ==
 #      pinned webWorkerName; assets EXACTLY { directory "./dist", binding ASSETS,
 #      run_worker_first true, html_handling "none", not_found_handling "none" }; services EXACTLY
 #      one entry { binding API, service == pinned workerName (the API of the SAME env),
 #      entrypoint Internal }; vars EXACTLY WEB_ORIGIN == pinned origins.web and
-#      PUBLIC_OBJECT_BASE_URL == pinned r2.publicBaseUrl; NO other key in env.<env> (only name,
+#      PUBLIC_OBJECT_BASE_URL == pinned r2.publicBaseUrl, plus optionally PLATFORM_SHOP_DOMAIN (CP14,
+#      a lowercase hostname); NO other key in env.<env> (only name,
 #      account_id, workers_dev, preview_urls, assets, services, vars, and in production routes,
 #      see "addresses" below) nor at the top level (only
 #      $schema, name, account_id, main, compatibility_date, compatibility_flags, observability,
@@ -436,6 +438,7 @@ def cmd_jsonc(jsonc, pinned_path, env, bootstrap):
     if v.get("PUBLIC_OBJECT_BASE_URL") != p["r2"]["publicBaseUrl"]:
         refuse(f"{jsonc} env.{env}.vars.PUBLIC_OBJECT_BASE_URL is {v.get('PUBLIC_OBJECT_BASE_URL')!r}, pinned r2.publicBaseUrl is {p['r2']['publicBaseUrl']!r}")
     check_trusted(jsonc, env, v, origins)
+    check_platform_shop_domain(jsonc, env, v)
     # Every binding the Worker code reads must exist and point at exactly its pinned resource:
     # a missing binding fails closed at runtime (bad), a binding on the wrong resource does not
     # (worse — PRIVATE_BUCKET on the public bucket would publish private uploads).
@@ -508,6 +511,18 @@ WEB_ENV_KEYS = {"name", "account_id", "workers_dev", "preview_urls", "assets", "
 WEB_ASSETS = {"directory": "./dist", "binding": "ASSETS", "run_worker_first": True,
               "html_handling": "none", "not_found_handling": "none"}
 
+def check_platform_shop_domain(jsonc, env, v):
+    """CP14: PLATFORM_SHOP_DOMAIN is optional on the API and the web Worker (absent = shop subdomains
+    off). When set it must be a lowercase hostname of at least two labels: the Workers read anything
+    else as off, so a typo would switch the feature off without a word."""
+    if "PLATFORM_SHOP_DOMAIN" not in v:
+        return
+    value = v["PLATFORM_SHOP_DOMAIN"]
+    label = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+    if not (isinstance(value, str) and 3 <= len(value) <= 200 and len(value.split(".")) >= 2
+            and all(label.match(part) for part in value.split("."))):
+        refuse(f"{jsonc} env.{env}.vars.PLATFORM_SHOP_DOMAIN is {canon(value)}, expected a lowercase hostname such as 'flippinstuff.se' (or no such var: shop subdomains off)")
+
 def canon(value):
     """Exact JSON equality: key order is free, but true is not 1 and "1" is not 1."""
     return json.dumps(value, sort_keys=True)
@@ -568,9 +583,13 @@ def check_edge(kind, jsonc, pinned_path, env):
     if canon(e.get("services")) != canon(want_services):
         refuse(f"{jsonc} env.{env}.services is {canon(e.get('services'))}, expected exactly {canon(want_services)} (pinned workerName, entrypoint Internal)")
     want_vars = {origin_var: p["origins"][kind], "PUBLIC_OBJECT_BASE_URL": p["r2"]["publicBaseUrl"]}
+    # CP14: the web Worker may also hold PLATFORM_SHOP_DOMAIN (optional; absent = no subdomain redirects).
+    optional_vars = {"PLATFORM_SHOP_DOMAIN"} if kind == "web" else set()
     v = e.get("vars")
-    if not isinstance(v, dict) or set(v) != set(want_vars):
-        refuse(f"{jsonc} env.{env}.vars are {sorted(v) if isinstance(v, dict) else canon(v)}, expected exactly {sorted(want_vars)}")
+    if not isinstance(v, dict) or not set(want_vars) <= set(v) <= set(want_vars) | optional_vars:
+        expected = f"exactly {sorted(want_vars)}" + (f" (and optionally {sorted(optional_vars)})" if optional_vars else "")
+        refuse(f"{jsonc} env.{env}.vars are {sorted(v) if isinstance(v, dict) else canon(v)}, expected {expected}")
+    check_platform_shop_domain(jsonc, env, v)
     if v[origin_var] != want_vars[origin_var]:
         refuse(f"{jsonc} env.{env}.vars.{origin_var} is {v[origin_var]!r}, pinned origins.{kind} is {want_vars[origin_var]!r}")
     if v["PUBLIC_OBJECT_BASE_URL"] != want_vars["PUBLIC_OBJECT_BASE_URL"]:

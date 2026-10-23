@@ -15,6 +15,12 @@ import {
   unreferencableStoreIdentityImages,
   writeTenantSettings,
 } from "../platform/tenant-config";
+import {
+  readPlatformShopDomain,
+  readSubdomainView,
+  type SetSubdomainResult,
+  setSubdomainLabel,
+} from "../tenancy/subdomain";
 
 /**
  * CP3-A — the shop admin's store settings (migrations/0032 tenant_settings):
@@ -47,6 +53,20 @@ import {
  *                                            invalid_request
  *       404                                  as the PUT (cross-origin PATCH too)
  *
+ *   GET also answers `subdomain` (CP14, src/tenancy/subdomain.ts SubdomainView):
+ *       { baseDomain, label, hostname, previous: [{ hostname, redirectUntil }] },
+ *       every field null/empty while PLATFORM_SHOP_DOMAIN is not configured.
+ *   PATCH /v1/admin/settings  { subdomainLabel: "<label>" }  (CP14) — the shop's
+ *       platform address. ALONE in the body (no expectedUpdatedAt, no other
+ *       field: the label is not part of the fenced settings row):
+ *       200 { subdomain }                    set (or unchanged)
+ *       400 subdomain_invalid                not a hostname label (a–z 0–9 '-')
+ *       400 subdomain_reserved               admin, api, www, …
+ *       409 subdomain_taken                  another shop holds it (or its old
+ *                                            hostname is still in its grace)
+ *       409 subdomains_off                   PLATFORM_SHOP_DOMAIN not configured
+ *       409 conflict                         a concurrent change won
+ *
  * Tenant = `X-Shop-Id` checked against the session's live memberships, or a
  * platform user's live acting-as grant on it (admitted here, unlike the
  * platform-terms acceptance: store settings are operational data an operator
@@ -68,11 +88,25 @@ export async function handleAdminSettingsRoute(env: Env, request: Request): Prom
   }
 
   if (request.method === "GET") {
-    return jsonResponse({ settings: await readTenantSettings(env.DB, principal.tenantId) });
+    return jsonResponse({
+      settings: await readTenantSettings(env.DB, principal.tenantId),
+      subdomain: await readSubdomainView(
+        env.DB,
+        principal.tenantId,
+        readPlatformShopDomain(env),
+        Date.now(),
+      ),
+    });
   }
 
   if (request.method === "PATCH") {
-    return patchSettings(env, principal, request);
+    const body = await readJsonBody(request);
+    if (isSubdomainBody(body)) {
+      return Object.keys(body).length === 1
+        ? patchSubdomain(env, principal, body.subdomainLabel)
+        : invalidRequestResponse();
+    }
+    return patchSettings(env, principal, body);
   }
 
   const parsed = parseStoreSettingsInput(await readJsonBody(request));
@@ -128,13 +162,66 @@ function unreferencableImagesResponse(keys: string[]): Response {
   );
 }
 
+/** A body that names `subdomainLabel` (the label route); any other key with it is invalid. */
+function isSubdomainBody(body: unknown): body is { subdomainLabel: unknown } {
+  return typeof body === "object" && body !== null && !Array.isArray(body) && Object.hasOwn(body, "subdomainLabel");
+}
+
+/** The answer of a label write, shared with the platform route. */
+export function subdomainResultResponse(
+  result: SetSubdomainResult,
+  ok: (view: Extract<SetSubdomainResult, { status: "ok" }>["view"]) => Response,
+): Response {
+  switch (result.status) {
+    case "ok":
+      return ok(result.view);
+    case "invalid":
+      return subdomainError("subdomain_invalid", "The label is not a hostname label", 400);
+    case "reserved":
+      return subdomainError("subdomain_reserved", "The label is reserved for the platform", 400);
+    case "taken":
+      return subdomainError("subdomain_taken", "Another shop holds this label", 409);
+    case "not_found":
+      return routeNotFoundResponse();
+    case "conflict":
+      return subdomainError("conflict", "Request conflicts with the current tenant state", 409);
+  }
+}
+
+function subdomainError(code: string, message: string, status: number): Response {
+  return jsonResponse({ error: { code, message } }, status);
+}
+
+export function subdomainsOffResponse(): Response {
+  return subdomainError("subdomains_off", "Shop subdomains are not configured", 409);
+}
+
+/** PATCH { subdomainLabel }: the label alone (the label route, CP14). */
+async function patchSubdomain(
+  env: Env,
+  principal: TenantAdminPrincipal,
+  value: unknown,
+): Promise<Response> {
+  if (typeof value !== "string") {
+    return invalidRequestResponse();
+  }
+  const base = readPlatformShopDomain(env);
+  if (base === null) {
+    return subdomainsOffResponse();
+  }
+  return subdomainResultResponse(
+    await setSubdomainLabel(env.DB, principal, principal.tenantId, value, base, Date.now()),
+    (subdomain) => jsonResponse({ subdomain }),
+  );
+}
+
 /** PATCH: the PUT's checks on the keys written, then the fenced write. */
 async function patchSettings(
   env: Env,
   principal: TenantAdminPrincipal,
-  request: Request,
+  body: unknown,
 ): Promise<Response> {
-  const parsed = parseStoreSettingsPatchInput(await readJsonBody(request));
+  const parsed = parseStoreSettingsPatchInput(body);
   if (parsed.status === "invalid") {
     return invalidRequestResponse();
   }

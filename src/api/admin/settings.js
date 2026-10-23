@@ -51,3 +51,23 @@ export async function patchSettings(body, { shopId } = {}) {
     throw error;
   }
 }
+
+// ── the shop's platform address (CP14) ─────────────────────────────────────
+//   GET  /v1/admin/settings → also { subdomain: { baseDomain, label, hostname,
+//        previous: [{ hostname, redirectUntil }] } } (all null while the
+//        platform has no shop domain configured)
+//   PATCH /v1/admin/settings { subdomainLabel } (alone in the body) → { subdomain }
+//        400 subdomain_invalid | subdomain_reserved · 409 subdomain_taken |
+//        subdomains_off | conflict
+
+/** The shop's subdomain view, or null when the answer carried none. */
+export async function getShopAddress({ shopId, signal } = {}) {
+  const { data } = await adminRequest('GET', '/v1/admin/settings', options(shopId, { signal }));
+  return data?.subdomain ?? null;
+}
+
+/** Sets the label; resolves the new subdomain view. Rejects with the AdminApiError (its `code`). */
+export async function setShopAddress(label, { shopId } = {}) {
+  const { data } = await adminRequest('PATCH', '/v1/admin/settings', options(shopId, { json: { subdomainLabel: label } }));
+  return data?.subdomain ?? null;
+}

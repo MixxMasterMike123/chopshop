@@ -21,6 +21,7 @@ import {
   withDeadline,
 } from "./seo";
 import type { SitemapEntry } from "./sitemap";
+import { subdomainLocation, subdomainQuestion } from "./subdomain";
 import {
   buildRobotsTxt,
   buildSitemapXml,
@@ -282,6 +283,37 @@ async function serveApi(
   }
 }
 
+/**
+ * CP14 — the 301 to the shop's platform subdomain, or null (serve here): asked
+ * of the API only while PLATFORM_SHOP_DOMAIN is configured and the request is
+ * the shared host's `/<shop>/…` or a host under that base. A slow, failing or
+ * malformed answer is no redirect: the page is served where it is.
+ */
+async function subdomainRedirect(
+  env: WebEnv,
+  config: WebConfig,
+  url: URL,
+  site: Site,
+  deadlineMs: number,
+): Promise<Response | null> {
+  const base = config.platformShopDomain;
+  const question = subdomainQuestion(base, url, site);
+  if (base === null || question === null || env.API.canonicalShopHost === undefined) {
+    return null;
+  }
+  const answer = await withDeadline(env.API.canonicalShopHost(question.target), deadlineMs).catch(
+    () => null,
+  );
+  const location =
+    answer === "timeout" ? null : subdomainLocation(base, answer, url, question.path);
+  return location === null
+    ? null
+    : new Response(null, {
+        headers: { "Cache-Control": "no-cache", Location: location },
+        status: 301,
+      });
+}
+
 export async function handleRequest(
   request: Request,
   env: WebEnv,
@@ -295,6 +327,7 @@ export async function handleRequest(
   const url = new URL(request.url);
   const shared = url.host === config.webHost;
   const route = classifyRequest(request.method, url.pathname, shared);
+  const deadlineMs = options.seoDeadlineMs ?? SEO_DEADLINE_MS;
 
   let response: Response;
   switch (route.kind) {
@@ -313,7 +346,9 @@ export async function handleRequest(
       );
       break;
     case "sitemap":
-      response = await serveSitemap(request, env, config, url, route.site);
+      response =
+        (await subdomainRedirect(env, config, url, route.site, deadlineMs)) ??
+        (await serveSitemap(request, env, config, url, route.site));
       break;
     case "static": {
       const found = await serveStatic(request, env, url);
@@ -321,11 +356,14 @@ export async function handleRequest(
         found ??
         (route.orPage === null
           ? notFound()
-          : await servePage(request, env, config, url, route.orPage.site, route.orPage.relativePath, options));
+          : (await subdomainRedirect(env, config, url, route.orPage.site, deadlineMs)) ??
+            (await servePage(request, env, config, url, route.orPage.site, route.orPage.relativePath, options)));
       break;
     }
     case "page":
-      response = await servePage(request, env, config, url, route.site, route.relativePath, options);
+      response =
+        (await subdomainRedirect(env, config, url, route.site, deadlineMs)) ??
+        (await servePage(request, env, config, url, route.site, route.relativePath, options));
       break;
     case "no_shop": {
       const shell = await env.ASSETS.fetch(new Request(new URL(SHELL_PATH, url)));

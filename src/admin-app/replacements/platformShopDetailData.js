@@ -23,10 +23,12 @@
 import {
   getTenantConnect,
   getTenantDetail,
+  getTenantSubdomain,
   patchTenant,
   setTenantConnectEnabled,
   setTenantPublished,
   setTenantStatus,
+  setTenantSubdomain,
 } from '../../api/admin/platform.js';
 import { SHOP_COUNT_COLUMNS, countsOf, toDetailShop } from '../adapters/platformShops.js';
 import { noteCurrentTermsVersion } from './shopCellsData.js';
@@ -80,6 +82,21 @@ export const SUPPORT_EMAIL_EDITABLE = true;
 export async function setShopSupportEmail(shop, email) {
   const detail = await patchTenant(shop.id, { supportEmail: email });
   return detail?.tenant?.supportEmail ?? null;
+}
+
+/**
+ * CP14: the shop's platform address ("Butikens adress"), set by the shop or
+ * here: GET / PUT /v1/platform/tenants/:id/subdomain. The view is
+ * { baseDomain, label, hostname, previous }; baseDomain null = not configured.
+ */
+export const SUBDOMAIN_EDITABLE = true;
+
+export async function loadShopSubdomain(shop) {
+  return getTenantSubdomain(shop.id);
+}
+
+export async function setShopSubdomain(shop, label) {
+  return setTenantSubdomain(shop.id, label);
 }
 
 export function storefrontUrlOf(shop) {

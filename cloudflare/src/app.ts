@@ -11,6 +11,7 @@ import {
   unpublishAdminProduct,
   updateAdminProduct,
 } from "./catalog/admin-catalog";
+import type { PlatformPrincipal } from "./auth/live-authorization";
 import type {
   DomainResult,
   MembershipResult,
@@ -108,6 +109,11 @@ import { isFeatureEnabled } from "./platform/tenant-config";
 import { handlePublicStorefrontRequest } from "./storefront/public-routes";
 import { isSameOriginRequest } from "./lib/same-origin";
 import { resolveRequestTenant } from "./tenancy/resolve-tenant";
+import {
+  defaultSubdomainLabel,
+  readPlatformShopDomain,
+  setSubdomainLabel,
+} from "./tenancy/subdomain";
 import { hasTenantHeader } from "./lib/tenant-headers";
 import { ACTING_AS_ROUTE, handleActingAsRoute } from "./routes/acting-as";
 import {
@@ -187,6 +193,7 @@ import {
   handlePlatformTenantDomainsRoute,
   handlePlatformTenantFeaturesRoute,
   handlePlatformTenantListRoute,
+  handlePlatformTenantSubdomainRoute,
   PLATFORM_DOMAIN_LOOKUP_PATH,
   PLATFORM_DOMAIN_MOVE_PATH,
   PLATFORM_TENANT_CLOSE_ROUTE,
@@ -198,6 +205,7 @@ import {
   PLATFORM_TENANT_FEATURES_ROUTE,
   PLATFORM_TENANT_LIST_PATH,
   PLATFORM_TENANT_PUBLISH_ROUTE,
+  PLATFORM_TENANT_SUBDOMAIN_ROUTE,
   PLATFORM_TENANT_UNPUBLISH_ROUTE,
 } from "./routes/platform-tenants";
 import { ADMIN_SETTINGS_PATH, handleAdminSettingsRoute } from "./routes/admin-settings";
@@ -510,7 +518,7 @@ const ADMIN_POD_PROFILES_PATH = "/v1/admin/pod/profiles";
 const ADMIN_POD_ARTWORK_PATH = "/v1/admin/pod/artwork";
 const ADMIN_POD_ARTWORK_PATH_PREFIX = "/v1/admin/pod/artwork/";
 const PLATFORM_POD_PROFILES_PATH = "/v1/platform/pod/profiles";
-const REQUIRED_MIGRATION = "0057_printer_provider.sql";
+const REQUIRED_MIGRATION = "0061_shop_subdomains.sql";
 
 const MINUTE_MS = 60 * 1_000;
 
@@ -2062,6 +2070,38 @@ async function handlePlatformUserRoute(
   return jsonResponse({ user: result.user }, 201);
 }
 
+/**
+ * CP14: a new shop's platform address is its id when the id is a valid,
+ * unreserved, free label; otherwise it has none until it picks one. Never
+ * fails the creation: the shop exists already, and a label can be set later.
+ */
+async function giveDefaultSubdomain(
+  env: Env,
+  principal: PlatformPrincipal,
+  tenantId: string,
+  now: number,
+): Promise<void> {
+  const base = readPlatformShopDomain(env);
+  const label = defaultSubdomainLabel(tenantId);
+  if (base === null || label === null) {
+    return;
+  }
+  try {
+    const result = await setSubdomainLabel(env.DB, principal, tenantId, label, base, now);
+    if (result.status !== "ok") {
+      console.log(JSON.stringify({ message: "default subdomain not given", status: result.status, tenantId }));
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        error: error instanceof Error ? error.message : String(error),
+        message: "default subdomain failed",
+        tenantId,
+      }),
+    );
+  }
+}
+
 async function handlePlatformTenantRoute(
   env: Env,
   request: Request,
@@ -2087,10 +2127,11 @@ async function handlePlatformTenantRoute(
       return invalidRequestResponse();
     }
 
-    return platformResultResponse(
-      await createTenant(env.DB, principal, input, now),
-      201,
-    );
+    const created = await createTenant(env.DB, principal, input, now);
+    if (created.status === "ok") {
+      await giveDefaultSubdomain(env, principal, input.tenantId, now);
+    }
+    return platformResultResponse(created, 201);
   }
 
   const route = platformTenantRouteFromPath(url.pathname);
@@ -2794,6 +2835,10 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.all(
     PLATFORM_TENANT_DOMAINS_ROUTE,
     onMethods(["GET"], (c) => handlePlatformTenantDomainsRoute(c.env, c.req.raw)),
+  );
+  app.all(
+    PLATFORM_TENANT_SUBDOMAIN_ROUTE,
+    onMethods(["GET", "PUT"], (c) => handlePlatformTenantSubdomainRoute(c.env, c.req.raw)),
   );
   app.all(
     PLATFORM_TENANT_DOMAIN_ROUTE,

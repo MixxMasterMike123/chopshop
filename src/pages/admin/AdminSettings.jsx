@@ -26,6 +26,7 @@ import { recordLegalAcceptance, renderAcceptedLegalTexts } from '../../utils/leg
 import {
   LEGAL_TEXTS_IN_SETTINGS,
   PLATFORM_OWNED_FIELDS,
+  SHOP_ADDRESS,
   collectCustomHtml,
   legalTextsChanged,
   loadLegalState,
@@ -34,6 +35,7 @@ import {
   takeOverLegalText,
 } from './adminSettingsData';
 import PickupLocationsEditor from '../../components/admin/PickupLocationsEditor';
+import ShopAddressCard from '../../components/admin/ShopAddressCard';
 import { LEGAL_DOC_TYPO } from '../../components/admin/PlatformTermsGate';
 import {
   Page,
@@ -565,6 +567,12 @@ const AdminSettings = () => {
                   (navigering, sidfot, kassa). Ladda om butiken efter sparande för att se ändringarna.
                 </p>
               </CardSection>
+
+              {/* CP14: the shop's platform address (admin build only; hidden while
+                  the platform has no shop domain configured). */}
+              {SHOP_ADDRESS && (
+                <ShopAddressCard shopId={shopId} load={SHOP_ADDRESS.load} save={SHOP_ADDRESS.save} />
+              )}
 
               <CardSection title="Allmänt" bodyClassName="space-y-5">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

@@ -10,6 +10,7 @@ import {
 import { isSameOriginRequest } from "../lib/same-origin";
 import { parseTenantIdPathSegment } from "../platform/provision-tenants";
 import {
+  isPlainObject,
   parseFeaturesInput,
   readTenantFeatures,
   readTenantStatus,
@@ -37,6 +38,12 @@ import {
   parseMoveDomainInput,
   setDomainEnabled,
 } from "../platform/tenant-domains";
+import {
+  readPlatformShopDomain,
+  readSubdomainView,
+  setSubdomainLabel,
+} from "../tenancy/subdomain";
+import { subdomainResultResponse, subdomainsOffResponse } from "./admin-settings";
 
 /**
  * CP3-A — the platform's tenant surface. PLATFORM session only; everyone else
@@ -61,6 +68,10 @@ import {
  *   DELETE /v1/platform/tenants/:tenantId/domains/:domainId
  *   POST   /v1/platform/tenants/:tenantId/domains/:domainId/disable
  *   POST   /v1/platform/tenants/:tenantId/domains/:domainId/enable
+ *   GET    /v1/platform/tenants/:tenantId/subdomain          { subdomain, tenantId } (CP14)
+ *   PUT    /v1/platform/tenants/:tenantId/subdomain { label } the shop's platform address;
+ *                                                           errors as PATCH /v1/admin/settings
+ *                                                           { subdomainLabel } (admin-settings.ts)
  *   GET    /v1/platform/domains/lookup?hostname=…            who holds a hostname
  *   POST   /v1/platform/domains/move   { hostname, toTenantId }
  *
@@ -84,6 +95,7 @@ export const PLATFORM_TENANT_DOMAIN_DISABLE_ROUTE =
   "/v1/platform/tenants/:tenantId/domains/:domainId/disable";
 export const PLATFORM_TENANT_DOMAIN_ENABLE_ROUTE =
   "/v1/platform/tenants/:tenantId/domains/:domainId/enable";
+export const PLATFORM_TENANT_SUBDOMAIN_ROUTE = "/v1/platform/tenants/:tenantId/subdomain";
 export const PLATFORM_DOMAIN_LOOKUP_PATH = "/v1/platform/domains/lookup";
 export const PLATFORM_DOMAIN_MOVE_PATH = "/v1/platform/domains/move";
 
@@ -256,6 +268,37 @@ export async function handlePlatformTenantFeaturesRoute(env: Env, request: Reque
     default:
       return routeNotFoundResponse();
   }
+}
+
+// ── subdomain (CP14) ────────────────────────────────────────────────────────
+
+export async function handlePlatformTenantSubdomainRoute(env: Env, request: Request): Promise<Response> {
+  const principal = await platformGuard(env, request, ["GET", "PUT"]);
+  const tenantId = tenantIdFrom(request);
+  if (principal === null || tenantId === null) {
+    return routeNotFoundResponse();
+  }
+  const base = readPlatformShopDomain(env);
+  const now = Date.now();
+
+  if (request.method === "GET") {
+    const subdomain = await readSubdomainView(env.DB, tenantId, base, now);
+    return subdomain === null ? routeNotFoundResponse() : jsonResponse({ subdomain, tenantId });
+  }
+
+  const body = await readJsonBody(request);
+  if (!isPlainObject(body) || Object.keys(body).length !== 1 || typeof body.label !== "string") {
+    return invalidRequestResponse();
+  }
+  if (base === null) {
+    return (await readTenantStatus(env.DB, tenantId)) === null
+      ? routeNotFoundResponse()
+      : subdomainsOffResponse();
+  }
+  return subdomainResultResponse(
+    await setSubdomainLabel(env.DB, principal, tenantId, body.label, base, now),
+    (subdomain) => jsonResponse({ subdomain, tenantId }),
+  );
 }
 
 // ── domains ─────────────────────────────────────────────────────────────────

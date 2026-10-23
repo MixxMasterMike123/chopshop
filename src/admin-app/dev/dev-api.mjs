@@ -34,6 +34,7 @@ import { ORDER_ROUTES } from './orders-dev.mjs';
 import { PLATFORM_REST_ROUTES } from './platform-rest-dev.mjs';
 import { MEMBER_ROUTES } from './members-dev.mjs';
 import { PREVIEW_ADMIN_ROUTES, platformShopRoutes } from './platform-dev.mjs';
+import { SUBDOMAIN_PLATFORM_ROUTES, subdomainAdminRoutes } from './subdomain-dev.mjs';
 import { PRINTER_ROUTES } from './printers-dev.mjs';
 import { MODEL_ROUTES } from './models-dev.mjs';
 import { POD_ROUTES } from './pod-dev.mjs';
@@ -429,6 +430,8 @@ const FP_ADMIN_ROUTES = [
 ];
 
 const ADMIN_ROUTES = [
+  // CP14: the settings' read and PATCH with the shop's address, over FP's rows.
+  ...subdomainAdminRoutes(FP_ADMIN_ROUTES[0][2], FP_ADMIN_ROUTES[1][2]),
   ...FP_ADMIN_ROUTES,
   // Unit FB: the terms rows first; its status keeps the legal-pages readiness of the row below.
   ...shellAdminRoutes(SETTINGS_LEGAL_ROUTES.find(([m, p]) => m === 'GET' && p === '/v1/admin/legal/status')?.[2]),
@@ -450,6 +453,7 @@ const ADMIN_ROUTES = [
 
 // Unit FB adds the platform rows (tenants, acting-as) here.
 const PLATFORM_ROUTES = [
+  ...SUBDOMAIN_PLATFORM_ROUTES, // CP14
   ...platformShopRoutes({ connectOf, rest: [...PLATFORM_REST_ROUTES, ...SHELL_PLATFORM_ROUTES] }), // unit FI: the shops, first
   ...PLATFORM_REST_ROUTES, // unit FJ: before the shells' stand-in for the reports badge
   ...SHELL_PLATFORM_ROUTES,

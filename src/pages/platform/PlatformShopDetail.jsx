@@ -11,14 +11,25 @@ import {
   SHOW_COUNTS,
   COUNT_COLUMNS,
   loadShop,
+  loadShopSubdomain,
   openStorefront,
   setShopConnectEnabled,
   setShopPublished,
   setShopStatus,
+  setShopSubdomain,
   setShopSupportEmail,
   storefrontUrlOf,
+  SUBDOMAIN_EDITABLE,
   SUPPORT_EMAIL_EDITABLE,
 } from './platformShopDetailData';
+import {
+  ADDRESS_COPY,
+  addressErrorMessage,
+  addressPreview,
+  labelProblem,
+  normalizeLabel,
+  swedishDate,
+} from '../../admin-app/adapters/shopAddress.js';
 import PlatformLayout from '../../components/platform/PlatformLayout';
 import ImpersonateShopModal from '../../components/platform/ImpersonateShopModal';
 import AddShopUserModal from '../../components/platform/AddShopUserModal';
@@ -115,6 +126,69 @@ const SupportEmailCell = ({ shop, onSaved }) => {
   );
 };
 
+// CP14: the shop's platform address (<label>.<base>), which the shop picks in
+// its settings; the operator can set it here too. Same rules and Swedish
+// messages as the seller's card (adapters/shopAddress.js). Inline editor in
+// the pattern of SupportEmailCell.
+const SubdomainCell = ({ shop, view, onSaved }) => {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(view.label ?? '');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const label = normalizeLabel(value);
+
+  const save = async () => {
+    const problem = labelProblem(label);
+    if (problem) { setError(problem); return; }
+    try {
+      setSaving(true);
+      const next = await setShopSubdomain(shop, label);
+      toast.success(ADDRESS_COPY.saved(next?.hostname ?? addressPreview(label, view.baseDomain)));
+      onSaved?.(next);
+      setError('');
+      setEditing(false);
+    } catch (e) {
+      setError(addressErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => { setValue(view.label ?? ''); setError(''); setEditing(true); }}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-2.5 py-1 font-mono text-xs font-medium text-gray-200 hover:bg-indigo-500/15 hover:text-indigo-300"
+      >
+        {view.hostname || <span className="font-sans text-amber-300">Välj adress</span>}
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-full sm:w-auto">
+      <div className="flex w-full items-center gap-1.5">
+        <div className="flex min-w-0 flex-1 items-center rounded-lg border border-white/10 bg-gray-950 focus-within:border-indigo-500 sm:flex-none">
+          <input
+            type="text" value={value} autoFocus autoCapitalize="none" spellCheck={false} maxLength={80}
+            aria-label={ADDRESS_COPY.title}
+            onChange={(e) => { setValue(e.target.value); setError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false); }}
+            placeholder="dinbutik"
+            className="min-w-0 flex-1 bg-transparent px-2 py-1 text-xs text-gray-100 focus:outline-none sm:w-40 sm:flex-none"
+          />
+          <span className="shrink-0 pr-2 text-xs text-gray-500">.{view.baseDomain}</span>
+        </div>
+        <button disabled={saving} onClick={save} className="rounded-lg bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50">
+          {saving ? '…' : 'Spara'}
+        </button>
+        <button onClick={() => setEditing(false)} className="rounded-lg bg-white/5 px-2 py-1 text-xs text-gray-400 hover:bg-white/10">✕</button>
+      </div>
+      {error && <p role="alert" className="mt-1 text-xs text-red-300">{error}</p>}
+    </div>
+  );
+};
+
 const PlatformShopDetail = () => {
   const { shopId } = useParams();
   const [shop, setShop] = useState(null);
@@ -128,6 +202,17 @@ const PlatformShopDetail = () => {
   const [migrate, setMigrate] = useState(false);
   const [migrateWoo, setMigrateWoo] = useState(false);
   const [impersonate, setImpersonate] = useState(false);
+  // CP14: the shop's platform address; null until read (and where the build has none).
+  const [subdomain, setSubdomain] = useState(null);
+
+  useEffect(() => {
+    if (!SUBDOMAIN_EDITABLE) return undefined;
+    let cancelled = false;
+    loadShopSubdomain({ id: shopId })
+      .then((view) => { if (!cancelled) setSubdomain(view); })
+      .catch((e) => console.warn('Shop address not available:', e?.code || e?.message));
+    return () => { cancelled = true; };
+  }, [shopId]);
 
   const load = useCallback(async () => {
     try {
@@ -420,6 +505,27 @@ const PlatformShopDetail = () => {
               />
             </div>
           </Card>
+
+          {/* Butikens adress (CP14): <label>.<base>; the shop picks it in its
+              settings, the operator may set it here. Hidden while the platform
+              has no shop domain configured. */}
+          {SUBDOMAIN_EDITABLE && subdomain?.baseDomain && (
+            <Card title={ADDRESS_COPY.title} tone={subdomain.label ? undefined : 'warn'}>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="min-w-0 text-sm text-gray-400">
+                  <p className={subdomain.label ? '' : 'text-amber-200'}>
+                    {subdomain.label ? ADDRESS_COPY.help : ADDRESS_COPY.none}
+                  </p>
+                  {subdomain.previous?.map((entry) => (
+                    <p key={entry.hostname} className="mt-1 text-xs text-gray-500">
+                      {ADDRESS_COPY.previous(entry.hostname, swedishDate(entry.redirectUntil))}
+                    </p>
+                  ))}
+                </div>
+                <SubdomainCell shop={shop} view={subdomain} onSaved={(next) => next && setSubdomain(next)} />
+              </div>
+            </Card>
+          )}
 
           {/* Support-e-post (CP9-OB): the platform sets it (D99); the shop's
               legal pages print it, so the seller cannot adopt them without it. */}

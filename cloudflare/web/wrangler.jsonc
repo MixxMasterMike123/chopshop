@@ -49,6 +49,11 @@
         // env.staging.vars and in pinned.staging.json → r2.publicBaseUrl; the preflight (--web)
         // requires them equal.
         "PUBLIC_OBJECT_BASE_URL": "https://pub-0e06052f19524b76bbefd4b411baa272.r2.dev"
+        // CP14: PLATFORM_SHOP_DOMAIN is deliberately NOT set on staging. The API's staging value
+        // is stg-shop.invalid, which no browser can reach: with it here, every /<shop>/ page of
+        // the shared host would 301 to https://<label>.stg-shop.invalid/… . Absent ⇒ this Worker
+        // redirects nothing and serves /<shop>/ as before. Set it only to a base domain whose
+        // wildcard actually routes to this Worker (production, CP7).
       }
     },
     "production": {
@@ -69,6 +74,9 @@
         // Must equal pinned.production.json → origins.web. CP7 replaces it with the real
         // domain (D7), here and in the pinned file together.
         "WEB_ORIGIN": "https://chopshop-web.kent-ee2.workers.dev"
+        // CP7 replaces: "PLATFORM_SHOP_DOMAIN": "flippinstuff.se" goes here (CP14), equal to the
+        // API's env.production.vars value, together with the wildcard route *.flippinstuff.se/*.
+        // Absent ⇒ no redirect: /<shop>/ on the shared host is served as before.
         // PUBLIC_OBJECT_BASE_URL goes here: the public bucket's address (D78). NOT SET YET:
         // production's comes with the real domain (CP7, D78; staging's waits for D95). It goes
         // here, into cloudflare/wrangler.jsonc env.production.vars and into

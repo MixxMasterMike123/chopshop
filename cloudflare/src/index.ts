@@ -8,6 +8,7 @@ import {
   shopStorefrontHostname,
 } from "./tenancy/shop-hostname";
 import { handleScheduled } from "./outbox/scheduled";
+import { canonicalPlatformHostname, readPlatformShopDomain } from "./tenancy/subdomain";
 import { handleQueueBatch } from "./queues";
 
 // The Container-backed Durable Object class wrangler.jsonc binds as RENDER_CONTAINER.
@@ -118,5 +119,21 @@ export class Internal extends WorkerEntrypoint<Env> {
     }
 
     return this.fetch(moved);
+  }
+
+  /**
+   * CP14 — where the web Worker should 301 a storefront page, or null (serve
+   * it where it is): `{ shop }` for the shared host's `/<shop>/…`, `{ hostname }`
+   * for a platform hostname the shop moved away from. Answers a hostname under
+   * PLATFORM_SHOP_DOMAIN, never a tenant; null whenever the feature is off
+   * (src/tenancy/subdomain.ts canonicalPlatformHostname).
+   */
+  canonicalShopHost(target: unknown): Promise<string | null> {
+    return canonicalPlatformHostname(
+      this.env.DB,
+      readPlatformShopDomain(this.env),
+      target,
+      Date.now(),
+    );
   }
 }
