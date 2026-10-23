@@ -28,8 +28,11 @@ const RESERVED_IDS = new Set([...NON_SHOP_FIRST_SEGMENTS, 'api', 'www', 'shop', 
 // contentStudio is EXPLICIT OPT-IN (gated on features.contentStudio === true,
 // not the default-ON helper) — new shops start with it off. `pod` is the one key
 // that varies by the Butikstyp choice below (see PRESETS).
+// affiliate is OFF at birth (CP13 design A12, R2-16): the platform turns the
+// program on per shop; the admin build writes it off whatever this says
+// (platformShops.js OFF_AT_PROVISION).
 const BASE_FEATURES = {
-  affiliate: true,
+  affiliate: false,
   campaigns: true,
   dining: false,
   ambassador: false,

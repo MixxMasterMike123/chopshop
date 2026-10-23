@@ -381,6 +381,12 @@ Integritetsskyddsmyndigheten (IMY), www.imy.se.
 Webbshoppen kan använda cookies och liknande tekniker. Information om vilka cookies som används och
 dina val kring dessa lämnas via webbplatsens cookie-funktion.
 
+Kommer du till webbshoppen via en affiliatelänk (en länk med en kod från någon som marknadsför
+webbshoppen) sparas koden tillsammans med varukorgen i din egen webbläsare i upp till 30 dagar, så
+att rabatten och provisionen kan knytas till ditt köp. Besöken via länken räknas per affiliate och
+dag utan att kopplas till dig. För att begränsa missbruk sparas en hashad (pseudonymiserad) form av
+din IP-adress i högst sju dagar. Den som delat länken får inte veta vem du är.
+
 ## 10. Kontakt
 
 {{seller_legal_name}}
@@ -421,7 +427,10 @@ export const isLegalSlug = (slug) => Boolean(LEGAL_PAGES[slug]);
 // rendering the CURRENT template (the mandatory text is the platform's floor),
 // the seller re-reads and re-accepts. Date-stamped so the version is readable in
 // the acceptance evidence (shops/{id}/legalAcceptances).
-export const LEGAL_TEMPLATE_VERSION = '2026-09-07';
+// 2026-10-23 (CP13 A4): the integritetspolicy's §9 gained the affiliate-link
+// paragraph (the code in the cart, landings counted without personal data),
+// pending Mikael's legal read.
+export const LEGAL_TEMPLATE_VERSION = '2026-10-23';
 
 // Stable Firestore-safe keys for the three pages (slugs contain '/', which can't
 // be a map key in a Firestore field path). Used for storeIdentity.legal.custom

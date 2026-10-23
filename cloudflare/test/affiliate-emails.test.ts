@@ -16,6 +16,8 @@ import {
   fingerprintAffiliateEmailJob,
   parseAffiliateEmailJob,
   renderAffiliateEmail,
+  stockholmDay,
+  swedishGenitive,
 } from "../src/email/affiliate-emails";
 import { fingerprintAuthEmailJob } from "../src/email/email-delivery-store";
 import { processOutboxRowById } from "../src/outbox/effects";
@@ -151,6 +153,125 @@ describe("the job of every kind", () => {
     expect(welcome.text).toContain("15 %");
     expect(welcome.text).toContain("SARA-25");
     expect(welcome.text).toContain("https://web.test/x/?ref=SARA-25");
+  });
+});
+
+describe("the final copy (A4)", () => {
+  const SV_SUBJECTS: Record<AffiliateEmailKind, string> = {
+    affiliate_application_denied: "Din ansökan till Butiks affiliateprogram",
+    affiliate_application_notice: "Ny affiliate-ansökan: Sara",
+    affiliate_application_received: "Tack för din ansökan till Butiks affiliateprogram",
+    affiliate_conversion: "Ny provision: 54,00\u00a0kr",
+    affiliate_payout: "Utbetalning registrerad: 100,00\u00a0kr",
+    affiliate_payout_requested: "Sara begär utbetalning: 100,00\u00a0kr",
+    affiliate_reversal: "Provision justerad: −27,00\u00a0kr",
+    affiliate_welcome: "Du har lagts till som affiliate hos Butik",
+  };
+
+  it.each(AFFILIATE_EMAIL_KINDS.map((kind) => [kind]))("%s has its Swedish subject", (kind) => {
+    expect(renderAffiliateEmail(jobOf(kind)).subject).toBe(SV_SUBJECTS[kind]);
+  });
+
+  it("every English mail is English, and the subject is never the Swedish one", () => {
+    for (const kind of AFFILIATE_EMAIL_KINDS.filter((k) => !SHOP_FACING.has(k))) {
+      const message = renderAffiliateEmail(jobOf(kind, { locale: "en" }));
+      expect(message.subject, kind).not.toBe(SV_SUBJECTS[kind]);
+      expect(message.text, kind).not.toMatch(/[åäö]/i);
+    }
+  });
+
+  it("the Swedish genitive: a name ending in s, x or z takes no extra s; no name reads 'butikens'", () => {
+    const named = (shopName: string | null) =>
+      renderAffiliateEmail(jobOf("affiliate_application_received", { content: { shopName, supportEmail: null } })).subject;
+    expect(named("Lars")).toBe("Tack för din ansökan till Lars affiliateprogram");
+    expect(named("Max")).toBe("Tack för din ansökan till Max affiliateprogram");
+    expect(named("Kent")).toBe("Tack för din ansökan till Kents affiliateprogram");
+    expect(named(null)).toBe("Tack för din ansökan till butikens affiliateprogram");
+  });
+
+  it("the genitive (round 1): trimmed; a digit, a non-letter or an all-caps last word takes ':s'", () => {
+    expect(swedishGenitive("  Kent  ")).toBe("Kents");
+    expect(swedishGenitive("Lars")).toBe("Lars");
+    expect(swedishGenitive("Fritz")).toBe("Fritz");
+    expect(swedishGenitive("Meteor PR AB")).toBe("Meteor PR AB:s");
+    expect(swedishGenitive("IKEA")).toBe("IKEA:s");
+    expect(swedishGenitive("Shop24")).toBe("Shop24:s");
+    expect(swedishGenitive("Kaffe & Co.")).toBe("Kaffe & Co.:s");
+    expect(swedishGenitive("Åsas Ö")).toBe("Åsas Ös");
+    expect(swedishGenitive("   ")).toBe("butikens");
+  });
+
+  it("the payable day is the Swedish calendar day, not the UTC one (round 1)", () => {
+    // Winter (CET, UTC+1): 23:30Z is 00:30 the next day; 22:30Z is still the same day.
+    expect(stockholmDay("2026-11-05T23:30:00.000Z")).toBe("2026-11-06");
+    expect(stockholmDay("2026-11-05T22:30:00.000Z")).toBe("2026-11-05");
+    // Summer (CEST, UTC+2): 22:30Z is 00:30 the next day.
+    expect(stockholmDay("2026-07-05T22:30:00.000Z")).toBe("2026-07-06");
+    expect(stockholmDay("2026-11-05T10:00:00.000Z")).toBe("2026-11-05");
+    const late = renderAffiliateEmail(
+      jobOf("affiliate_conversion", { content: { ...SAMPLES.affiliate_conversion, availableAt: "2026-11-05T23:15:00.000Z" } }),
+    );
+    expect(late.text).toContain("tidigast 2026-11-06");
+    expect(late.text).not.toContain("2026-11-05");
+  });
+
+  it("a mail under the shop's name closes with its support address and its name; the shop's own mails do not", () => {
+    const conversion = renderAffiliateEmail(jobOf("affiliate_conversion"));
+    expect(conversion.text).toContain("hej@butik.test");
+    expect(conversion.text).toContain("Hälsningar, Butik");
+    expect(conversion.text).toContain("14 dagar");
+    expect(conversion.text).toContain("2026-11-05");
+    expect(conversion.text).toContain("order 1001");
+    const notice = renderAffiliateEmail(jobOf("affiliate_application_notice"));
+    expect(notice.text).not.toContain("Hälsningar");
+    expect(notice.text).toContain("Kanal: Blogg");
+    expect(notice.text).toContain("Öppna ansökan: https://admin.test/admin/affiliates/applications/x");
+  });
+
+  it("each reversal says why: a refund, a lost dispute, a refund that failed", () => {
+    const of = (cause: string, direction: string) =>
+      renderAffiliateEmail(jobOf("affiliate_reversal", { content: { ...SAMPLES.affiliate_reversal, cause, direction } }));
+    expect(of("refund", "reversed").text).toMatch(/återbetalats helt eller delvis/);
+    expect(of("dispute", "reversed").text).toMatch(/förlorade tvisten/);
+    const restored = of("refund", "restored");
+    expect(restored.subject).toBe("Provision återställd: +27,00\u00a0kr");
+    expect(restored.text).toMatch(/gick inte igenom/);
+  });
+
+  it("a declined payout keeps the reason out of the subject and in the body", () => {
+    const declined = renderAffiliateEmail(
+      jobOf("affiliate_payout", { content: { ...SAMPLES.affiliate_payout, outcome: "void", reason: "Fakturan saknar org.nr", reference: null } }),
+    );
+    expect(declined.subject).toBe("Begäran om utbetalning avvisad");
+    expect(declined.text).toContain("Orsak: Fakturan saknar org.nr");
+    expect(declined.text).toContain("finns kvar i ditt saldo");
+  });
+
+  it("the applicant's mails cannot carry what the applicant typed: no such field exists", () => {
+    for (const kind of ["affiliate_application_received", "affiliate_application_denied"] as const) {
+      for (const typed of ["applicantName", "applicantEmail", "promotionMethod", "message", "name"]) {
+        expect(() => jobOf(kind, { content: { ...SAMPLES[kind], [typed]: "Ada" } }), `${kind}.${typed}`).toThrow();
+      }
+    }
+  });
+
+  // The values were cross-checked outside the Worker: SHA-256 of the canonical
+  // JSON (frame keys in fingerprintAuthEmailJob order, then the content in
+  // CONTENT order), computed independently.
+  it("the fingerprint is pinned (a field or frame-order change shows here)", async () => {
+    const fixed = (kind: AffiliateEmailKind) =>
+      createAffiliateEmailJob({
+        content: SAMPLES[kind],
+        createdAt: 1_787_300_000_000,
+        deliveryId: "4f6c2a8e-1b3d-4c5e-9f70-a1b2c3d4e5f6",
+        expiresAt: 1_787_300_060_000,
+        kind,
+        locale: "sv",
+        recipient: "sara@x.test",
+        tenantId: "shop",
+      });
+    expect(await fingerprintAffiliateEmailJob(fixed("affiliate_welcome"))).toBe("fe5774dfb087acb3dcf5676bf8244a170182746ad6189d15ff10f4c4a9107a3f");
+    expect(await fingerprintAffiliateEmailJob(fixed("affiliate_conversion"))).toBe("6fb29fda4d13fb184da6f705a3ef9b1975eba69034628d73279cc860721994b1");
   });
 });
 

@@ -10,9 +10,10 @@
  *   [CHOPSHOP_WEB_URL=…  (default: cloudflare/pinned.staging.json origins.web)] \
  *   CHOPSHOP_PLATFORM_EMAIL=… CHOPSHOP_PLATFORM_PASSWORD=… \
  *   STRIPE_SECRET_KEY=sk_test_… [FAKE_PRINTER_TOKEN=…] [CHOPSHOP_SLICE_ADMIN_PASSWORD=…] \
+ *   [CHOPSHOP_AFFILIATE_PASSWORD=…  (--affiliate)] \
  *   node scripts/cf-port/seed-staging-slice.mjs [--tenant slice-YYYYMMDD]
- *        [--purchase] [--refund <orderId>:<amountMinor>] [--connect-proof]
- *        [--printer fake-printer|prodigi|prodigi-prints]
+ *        [--purchase [--ref-code <CODE>]] [--refund <orderId>:<amountMinor>] [--connect-proof]
+ *        [--printer fake-printer|prodigi|prodigi-prints] [--affiliate]
  *
  * Steps (each idempotent; every id is printed):
  *   0. refuse unless the API origin is cloudflare/pinned.staging.json origins.api, /health says
@@ -60,6 +61,19 @@
  *  10. --connect-proof (docs/cf-port/CP3_F_REPORT.md, the v1 proof list): the dashboard login
  *      link as the shop's own admin and refused to the platform user acting-as, then the
  *      payout delay set to 7 days and back to the country's minimum.
+ *  11. --affiliate (CP13 A4): the shop's `affiliate` add-on switched ON through the platform
+ *      features route; ONE affiliate "Anna Affiliate" <anna-affiliate+<tenant>@example.com> with
+ *      the code ANNA10 invited through POST /v1/admin/affiliates (as the platform user
+ *      acting-as; nothing else is approved); her password SET through the staging reset-token
+ *      recipe (memory platform_users_and_superadmin): a token minted here, its HASHED identifier
+ *      (SHA-256 base64url of `reset-password:<token>`, Better Auth's storeIdentifier "hashed")
+ *      written to D1's `verification` with ONE `wrangler d1 execute --remote` INSERT … SELECT
+ *      (the user id is read from `affiliates` in that statement), then
+ *      POST /api/auth/reset-password with CHOPSHOP_AFFILIATE_PASSWORD, then a sign-in and
+ *      GET /v1/affiliate/me as her; and ONE pending application ("Sara Sökande") through the
+ *      storefront route on the web Worker. Re-running reuses all three.
+ *      --ref-code <CODE> (with --purchase): the checkout carries `refCode` as a `?ref=` landing
+ *      would have left it in the cart; the script stops if the code took nothing off.
  *
  * STOREFRONT ROUTES (since the 2026-10-14 audit, F16) are served only by the WEB Worker, as
  * `<web origin>/_api/<tenant id>/v1/…` (cloudflare/web/src/routing.ts: the first segment is the
@@ -68,10 +82,13 @@
  * go there, with Origin = the web origin and no session; platform/admin calls stay on the API.
  *
  * Credentials come ONLY from the environment variables above. Nothing is written to disk and no
- * secret, cookie or receipt token is printed. Never runs wrangler and needs no D1 statement.
+ * secret, cookie, reset token or receipt token is printed. Runs wrangler for exactly one
+ * statement, and only with --affiliate (the hashed reset-token row above; the token itself never
+ * leaves this process); everything else needs no D1 statement.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -128,6 +145,10 @@ const LEGAL_TEXTS = {
   kopvillkor: "<h1>Köpvillkor</h1><p>Testbutik på staging. Ingen verklig försäljning.</p>",
 };
 const RETURN_ADDRESS = "Slice Test AB\nTestgatan 1\n123 45 Teststad";
+/** CP13 A4 (--affiliate): the seeded affiliate and the seeded pending application. */
+const AFFILIATE_CODE = "ANNA10";
+const AFFILIATE_NAME = "Anna Affiliate";
+const APPLICANT_NAME = "Sara Sökande";
 const RENDER_TIMEOUT_MS = Number(process.env.SLICE_RENDER_TIMEOUT_S ?? "600") * 1_000;
 
 // ── plumbing ────────────────────────────────────────────────────────────────
@@ -154,13 +175,21 @@ function requireEnv(name) {
 }
 
 function parseArgs(argv) {
-  const out = { connectProof: false, purchase: false, refund: null, tenant: null };
+  const out = { affiliate: false, connectProof: false, purchase: false, refCode: null, refund: null, tenant: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--purchase") {
       out.purchase = true;
     } else if (arg === "--connect-proof") {
       out.connectProof = true;
+    } else if (arg === "--affiliate") {
+      out.affiliate = true;
+    } else if (arg === "--ref-code") {
+      const value = (argv[++index] ?? die("--ref-code needs a code")).trim().toUpperCase();
+      if (!/^[A-Z0-9-]{3,20}$/.test(value)) {
+        die("--ref-code needs a code of 3–20 letters, digits or dashes");
+      }
+      out.refCode = value;
     } else if (arg === "--printer") {
       const value = argv[++index] ?? die("--printer needs fake-printer, prodigi or prodigi-prints");
       if (value !== "fake-printer" && value !== "prodigi" && value !== "prodigi-prints") {
@@ -187,6 +216,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // ── configuration and the refusals ──────────────────────────────────────────
 
 const args = parseArgs(process.argv.slice(2));
+if (args.refCode !== null && !args.purchase) {
+  die("--ref-code goes with --purchase");
+}
 const API = (() => {
   let url;
   try {
@@ -225,6 +257,16 @@ if (!/^(sk|rk)_test_/.test(STRIPE_KEY)) {
   die("STRIPE_SECRET_KEY is not a test-mode key (sk_test_/rk_test_)");
 }
 const FAKE_PRINTER_TOKEN = process.env.FAKE_PRINTER_TOKEN?.trim() || null;
+const AFFILIATE_PASSWORD = (() => {
+  if (!args.affiliate) {
+    return null;
+  }
+  const value = process.env.CHOPSHOP_AFFILIATE_PASSWORD ?? "";
+  if (value.length < 12) {
+    die("--affiliate: set CHOPSHOP_AFFILIATE_PASSWORD (≥ 12 chars), the password the seeded affiliate gets");
+  }
+  return value;
+})();
 
 const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
 const TENANT_ID = args.tenant ?? `slice-${today}`;
@@ -232,6 +274,8 @@ if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(TENANT_ID)) {
   die(`tenant id ${TENANT_ID} is not a valid tenant id`);
 }
 const SHOP_NAME = `Slice ${TENANT_ID.replace(/^slice-/, "")}`;
+const AFFILIATE_EMAIL = `anna-affiliate+${TENANT_ID}@example.com`;
+const APPLICANT_EMAIL = `sara-applicant+${TENANT_ID}@example.com`;
 // ── the API ─────────────────────────────────────────────────────────────────
 
 let platformCookie = null;
@@ -1237,6 +1281,8 @@ async function purchase(productId, account) {
           postalCode: "852 30",
         },
         shippingCountry: "SE",
+        // CP13: the code a `?ref=` landing leaves in the cart (--ref-code).
+        ...(args.refCode === null ? {} : { refCode: args.refCode }),
       },
     }),
     [201],
@@ -1244,6 +1290,16 @@ async function purchase(productId, account) {
   );
   const checkoutId = checkout.json.checkout.checkoutId;
   info("checkout", `${checkoutId} (${checkout.json.checkout.totalMinor} öre)`);
+  if (args.refCode !== null) {
+    const discountMinor = checkout.json.checkout.discountMinor ?? 0;
+    if (!(discountMinor > 0)) {
+      die(
+        `the link code ${args.refCode} took nothing off (discountMinor ${discountMinor}): is the shop's affiliate ` +
+          "add-on ON and the affiliate active? (run with --affiliate)",
+      );
+    }
+    info("link code", `${args.refCode} → −${discountMinor} öre (discountCode ${checkout.json.checkout.discountCode ?? "?"})`);
+  }
 
   const payment = await api("POST", `/v1/checkout/${checkoutId}/payment`, { web: true });
   if (payment.status === 404) {
@@ -1292,6 +1348,208 @@ async function refund(target) {
   info("refund", `${result.json.refund.refundId} → ${result.json.refund.state}`);
 }
 
+
+// ── CP13 A4: the affiliate program (--affiliate) ────────────────────────────
+
+/** The add-on switched ON with an explicit row (opt-in, OFF at provisioning: design A12). */
+async function ensureAffiliateFeature() {
+  const route = `/v1/platform/tenants/${TENANT_ID}/features`;
+  const current = expectStatus(await api("GET", route, { session: true }), [200], "read features");
+  const feature = (current.json.features ?? []).find((entry) => entry.key === "affiliate");
+  if (feature === undefined) {
+    die("the Worker names no `affiliate` feature: is the CP13 Worker (migration 0059) deployed?");
+  }
+  if (feature.enabled === true && feature.source === "explicit") {
+    info("affiliate add-on", "ON (explicit row present)");
+    return;
+  }
+  const written = expectStatus(
+    await api("PUT", route, { json: { features: { affiliate: true } }, session: true }),
+    [200],
+    "PUT features (affiliate)",
+  );
+  const after = (written.json.features ?? []).find((entry) => entry.key === "affiliate");
+  if (after?.enabled !== true || after.source !== "explicit") {
+    die(`the affiliate feature is ${JSON.stringify(after)} after the write`);
+  }
+  info("affiliate add-on", `ON (explicit row written) — PUT ${API}${route}`);
+}
+
+/** The shop's affiliate with `code`, paging GET /v1/admin/affiliates; null when there is none. */
+async function findAffiliateByCode(code) {
+  let cursor = null;
+  for (let page = 0; page < 20; page += 1) {
+    const query = new URLSearchParams({ limit: "100", ...(cursor === null ? {} : { cursor }) });
+    const listed = expectStatus(
+      await api("GET", `/v1/admin/affiliates?${query}`, { session: true, shop: true }),
+      [200],
+      "list affiliates",
+    );
+    const found = (listed.json.affiliates ?? []).find((entry) => entry.code === code);
+    if (found !== undefined) {
+      return found;
+    }
+    cursor = listed.json.nextCursor ?? null;
+    if (cursor === null) {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** "Bjud in affiliate" for Anna (POST /v1/admin/affiliates), or the existing row. */
+async function ensureSeededAffiliate() {
+  let affiliate = await findAffiliateByCode(AFFILIATE_CODE);
+  if (affiliate === null) {
+    const invited = await api("POST", "/v1/admin/affiliates", {
+      json: { code: AFFILIATE_CODE, email: AFFILIATE_EMAIL, name: AFFILIATE_NAME, preferredLang: "sv" },
+      session: true,
+      shop: true,
+    });
+    if (invited.status === 503) {
+      die("POST /v1/admin/affiliates answered 503 email_unavailable: the invite queue is not bound on staging");
+    }
+    expectStatus(invited, [201], "invite the affiliate");
+    info(
+      "affiliate invited",
+      `${invited.json.affiliate.affiliateId} — POST ${API}/v1/admin/affiliates ` +
+        `(invited ${invited.json.invited}, mailConfigured ${invited.json.mailConfigured}` +
+        `${invited.json.inviteError ? `, inviteError ${invited.json.inviteError}` : ""})`,
+    );
+    affiliate = await findAffiliateByCode(AFFILIATE_CODE);
+    if (affiliate === null) {
+      die(`the invited affiliate ${AFFILIATE_CODE} is not in the list`);
+    }
+  } else {
+    info("affiliate", `${affiliate.affiliateId} exists (reused)`);
+  }
+  if (affiliate.status !== "active") {
+    expectStatus(
+      await api("PATCH", `/v1/admin/affiliates/${affiliate.affiliateId}`, { json: { status: "active" }, session: true, shop: true }),
+      [200],
+      "re-activate the affiliate",
+    );
+    info("affiliate", `${affiliate.affiliateId} re-activated`);
+  }
+  info("affiliate code", `${AFFILIATE_CODE} (${affiliate.commissionBp / 100} % commission, ${affiliate.discountBp / 100} % discount)`);
+  info("affiliate detail", `GET ${API}/v1/admin/affiliates/${affiliate.affiliateId}`);
+  return affiliate;
+}
+
+/** SQL string literal (the values below are generated here or validated, never user input). */
+function sqlText(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+/**
+ * The staging reset-token recipe (memory platform_users_and_superadmin): Better Auth stores a
+ * reset token's identifier HASHED, so a token minted here becomes usable once its hashed row is in
+ * `verification` (value = the user id, one hour). The token never leaves this process; the
+ * wrangler command line carries only its hash. Then the ordinary reset endpoint sets the password,
+ * consuming the row (single use) and revoking her sessions.
+ */
+async function setAffiliatePassword() {
+  const token = randomBytes(32).toString("base64url");
+  const identifier = createHash("sha256").update(`reset-password:${token}`).digest("base64url");
+  const nowIso = new Date().toISOString();
+  const expiresIso = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+  const sql =
+    'INSERT INTO "verification" ("id", "identifier", "value", "expiresAt", "createdAt", "updatedAt") ' +
+    `SELECT ${sqlText(randomUUID())}, ${sqlText(identifier)}, a.user_id, ${sqlText(expiresIso)}, ${sqlText(nowIso)}, ${sqlText(nowIso)} ` +
+    `FROM affiliates AS a WHERE a.tenant_id = ${sqlText(TENANT_ID)} AND a.code = ${sqlText(AFFILIATE_CODE)}`;
+  let output;
+  try {
+    output = execFileSync(
+      "npx",
+      ["wrangler", "d1", "execute", PINNED.d1.name, "--env", "staging", "--remote", "--json", "--command", sql],
+      { cwd: path.join(ROOT, "cloudflare"), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } catch (error) {
+    die(`wrangler d1 execute (the reset-token row) failed: ${String(error.stderr ?? error.message).slice(0, 300)}`);
+  }
+  let written = 0;
+  try {
+    written = JSON.parse(output)?.[0]?.meta?.changes ?? 0;
+  } catch {
+    written = 0;
+  }
+  if (written !== 1) {
+    die(`the reset-token row was not written (changes ${written}): no affiliate ${AFFILIATE_CODE} in ${TENANT_ID}?`);
+  }
+  info("reset token", `hashed row written to ${PINNED.d1.name}.verification (1 h, single use)`);
+
+  const reset = await fetch(`${API}/api/auth/reset-password`, {
+    body: JSON.stringify({ newPassword: AFFILIATE_PASSWORD, token }),
+    headers: { "content-type": "application/json", origin: API },
+    method: "POST",
+  });
+  if (reset.status !== 200) {
+    die(`POST ${API}/api/auth/reset-password answered HTTP ${reset.status}`);
+  }
+  info("affiliate password", `set — POST ${API}/api/auth/reset-password`);
+
+  const signedIn = await fetch(`${API}/api/auth/sign-in/email`, {
+    body: JSON.stringify({ email: AFFILIATE_EMAIL, password: AFFILIATE_PASSWORD }),
+    headers: { "content-type": "application/json", origin: API },
+    method: "POST",
+  });
+  if (signedIn.status !== 200) {
+    die(`the affiliate's sign-in failed: HTTP ${signedIn.status}`);
+  }
+  const cookie = signedIn.headers.getSetCookie().map((value) => value.split(";", 1)[0]).join("; ");
+  const me = expectStatus(
+    await api("GET", "/v1/affiliate/me", { headers: { cookie }, shop: true }),
+    [200],
+    "GET /v1/affiliate/me as the affiliate",
+  );
+  if (me.json?.affiliate?.code !== AFFILIATE_CODE) {
+    die(`/v1/affiliate/me answers code ${me.json?.affiliate?.code}, not ${AFFILIATE_CODE}`);
+  }
+  info("portal sign-in", `${AFFILIATE_EMAIL} → GET ${API}/v1/affiliate/me 200 (blockers: ${(me.json.affiliate.payoutBlockers ?? []).join(", ") || "none"})`);
+}
+
+/** One pending application through the storefront route (web Worker), found in the admin queue. */
+async function ensurePendingApplication() {
+  const terms = expectStatus(await api("GET", "/v1/affiliate-terms", { web: true }), [200], "GET /v1/affiliate-terms");
+  expectStatus(
+    await api("POST", "/v1/affiliate-applications", {
+      json: {
+        email: APPLICANT_EMAIL,
+        name: APPLICANT_NAME,
+        preferredLang: "sv",
+        promotionMethod: "instagram",
+        socials: { instagram: "@sara.staging" },
+        termsAccepted: true,
+        termsVersion: terms.json.terms.version,
+      },
+      web: true,
+    }),
+    [202],
+    "POST /v1/affiliate-applications",
+  );
+  info("application sent", `${WEB}/_api/${TENANT_ID}/v1/affiliate-applications → 202 (terms ${terms.json.terms.version})`);
+  const queue = expectStatus(
+    await api("GET", "/v1/admin/affiliates/applications?status=pending&limit=100", { session: true, shop: true }),
+    [200],
+    "list pending applications",
+  );
+  const pending = (queue.json.applications ?? []).find((entry) => entry.email === APPLICANT_EMAIL);
+  if (pending === undefined) {
+    die(`no pending application from ${APPLICANT_EMAIL} in GET ${API}/v1/admin/affiliates/applications?status=pending`);
+  }
+  info("application pending", `${pending.applicationId} — GET ${API}/v1/admin/affiliates/applications/${pending.applicationId}`);
+  return pending.applicationId;
+}
+
+async function ensureAffiliateProgram() {
+  step("affiliate program (--affiliate: add-on, one invited affiliate with a password, one pending application)");
+  await ensureAffiliateFeature();
+  const affiliate = await ensureSeededAffiliate();
+  await setAffiliatePassword();
+  const applicationId = await ensurePendingApplication();
+  return { affiliateId: affiliate.affiliateId, applicationId };
+}
+
 await preflight();
 await signIn();
 await ensureTenant();
@@ -1305,6 +1563,7 @@ await rescreen();
 if (args.connectProof) {
   await connectProof(account);
 }
+const seededAffiliate = args.affiliate ? await ensureAffiliateProgram() : null;
 let orderId = null;
 if (args.purchase) {
   orderId = await purchase(productId, account);
@@ -1321,6 +1580,12 @@ info("printer", PRINTER_ID);
 info("profile", PROFILE.profileId);
 info("artwork", artworkId);
 info("product", productId);
+if (seededAffiliate !== null) {
+  info("affiliate", `${seededAffiliate.affiliateId} (${AFFILIATE_CODE}, ${AFFILIATE_EMAIL})`);
+  info("pending application", seededAffiliate.applicationId);
+  info("ref link", `${WEB}/${TENANT_ID}/?ref=${AFFILIATE_CODE}`);
+  info("affiliate portal", `${PINNED.origins.admin}/affiliate (sign in as ${AFFILIATE_EMAIL})`);
+}
 if (orderId !== null) {
   info("order", orderId);
   if (PRODIGI) {

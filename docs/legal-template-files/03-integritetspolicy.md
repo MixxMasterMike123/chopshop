@@ -94,6 +94,24 @@ Integritetsskyddsmyndigheten (IMY), www.imy.se.
 Webbshoppen kan använda cookies och liknande tekniker. Information om vilka cookies som används och
 dina val kring dessa lämnas via webbplatsens cookie-funktion.
 
+Kommer du till webbshoppen via en affiliatelänk (en länk med en kod från någon som marknadsför
+webbshoppen) sparas koden tillsammans med varukorgen i din egen webbläsare i upp till 30 dagar, så
+att rabatten och provisionen kan knytas till ditt köp. Besöken via länken räknas per affiliate och
+dag utan att kopplas till dig. För att begränsa missbruk sparas en hashad (pseudonymiserad) form av
+din IP-adress i högst sju dagar. Den som delat länken får inte veta vem du är.
+
+> ► BESLUT (granskas av jurist, ta bort denna ruta): stycket om affiliatelänkar lades till
+> 2026-10-23 (CP13, affiliateprogrammet). Det står i alla butikers policy, även butiker utan
+> affiliateprogram (mallens villkor kan i dag inte styras av butikens tillägg), eftersom det bara
+> gäller den som kommer via en sådan länk. Frågor:
+> 1. Stämmer formuleringen? Fakta: koden sparas i besökarens webbläsare (localStorage, med
+>    varukorgen, högst 30 dagar); besök räknas per affiliate och dag utan koppling till besökaren;
+>    spärren mot missbruk sparar SHA-256 av IP-adressen (IPv6 per /64) i högst sju dagar.
+> 2. Kräver lagringen av koden i varukorgen samtycke enligt lagen om elektronisk kommunikation
+>    (LEK) 9 kap. 28 §, eller faller den under undantaget för det som är nödvändigt för en tjänst
+>    användaren uttryckligen har begärt? (Koden ger köparen rabatten, men tjänar också affiliaten.)
+> 3. Bör rättslig grund (berättigat intresse) för räkningen och spärren nämnas här?
+
 ## 10. Kontakt
 
 {{seller_legal_name}}

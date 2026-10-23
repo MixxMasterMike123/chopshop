@@ -110,7 +110,7 @@ Neither migration changes the value of any existing row. The only rows written a
 
 **New, empty tables:** `affiliates`, `affiliate_applications`, `affiliate_click_days`, `affiliate_ledger`, `affiliate_payouts`, `affiliate_invoice_objects`. Every one has tenant scope with the immutable-`tenant_id` trigger.
 
-**Seeded table:** `affiliate_terms_versions` gets one row: version `2026-10-22`, published at `2026-10-22T00:00:00.000Z`, sha256 `f075d79e…faec6 (A4 finalised the text; the version stays 2026-10-22, nothing deployed)`. That hash is `affiliateTermsSha256()` of `src/affiliate/terms.ts`; a schema test pins that they are equal.
+**Seeded table:** `affiliate_terms_versions` gets one row: version `2026-10-22`, published at `2026-10-22T00:00:00.000Z`, sha256 `bff6a137…fc2b3 (A4 finalised the rate-free text; the version stays 2026-10-22, nothing deployed)`. That hash is `affiliateTermsSha256()` of `src/affiliate/terms.ts`; a schema test pins that they are equal.
 
 **`checkouts` and `orders`:**
 1. Add `discount_authority`, with a value CHECK only.

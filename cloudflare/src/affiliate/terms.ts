@@ -13,16 +13,23 @@
  * A new version = a new template here AND a new row by migration; the portal
  * then asks every affiliate to accept again (`termsOutdated`).
  *
+ * NO FIGURE IN A TERM (A4 round 1): the numbered clauses never name a rate —
+ * an affiliate may be approved at other rates and the shop may change them.
+ * The rates appear only in the last, informational line, rendered per
+ * affiliate; the hash covers the template, so it never moves with a rate.
+ *
  * MERGE FIELDS, filled per shop at read time (renderAffiliateTerms):
  *   {{shop_name}}           the shop's name
  *   {{commission_percent}}  the affiliate's commission (the default before approval)
  *   {{discount_percent}}    the buyer discount (likewise)
  *   {{support_email}}       the shop's support address
  *
- * The final Swedish copy is unit A4's (CP13_BRIEFS.md): it replaces the
- * template below and, while 0059 is not yet applied anywhere, the seeded hash
- * with it (the pin test names the new value). It is flagged for Mikael's legal
- * read. This module imports nothing.
+ * The Swedish copy below is unit A4's final text (CP13_BRIEFS.md, design §8,
+ * the MFL sentence verbatim). It replaced A1's draft under the SAME version
+ * while 0059 was applied nowhere, so 0059's seeded hash changed with it
+ * (test/affiliate-schema.test.ts pins both). It is flagged for Mikael's legal
+ * read. From the first applied 0059 on, a wording change is a NEW version.
+ * This module imports nothing.
  */
 
 export const AFFILIATE_TERMS_VERSION = "2026-10-22";
@@ -36,17 +43,22 @@ export const DEFAULT_DISCOUNT_BP = 1_000;
 
 export const AFFILIATE_TERMS_TEMPLATE = [
   "Affiliatevillkor för {{shop_name}}",
-  "1. Parter. Avtalet gäller mellan dig som affiliate och {{shop_name}} (butiken). Plattformen är teknisk leverantör och är inte part i avtalet.",
-  "2. Kod och länk. Du får en personlig rabattkod och en länk. Köpare som använder koden eller länken får {{discount_percent}} % rabatt på varorna (inte på frakten).",
-  "3. Provision. Du får {{commission_percent}} % provision på orderns varuvärde efter rabatt, exklusive moms och frakt.",
-  "4. Ångerfrist och återföring. Provisionen kan betalas ut tidigast 14 dagar efter köpet och så länge ordern inte är bestriden. Återbetalas en order helt eller delvis justeras provisionen i proportion till återbetalningen. En förlorad tvist återför hela provisionen.",
-  "5. Utbetalning. Du begär utbetalning i portalen med faktura eller underlag. Butiken betalar ut. Är du privatperson kan ersättningen vara skattepliktig inkomst; du ansvarar för din deklaration.",
-  "6. Marknadsföring. Du måste tydligt märka inlägg, videor och länkar som reklam/annons (t.ex. 'Reklam' eller 'Annons') enligt marknadsföringslagen. Vilseledande påståenden om produkterna är inte tillåtna. Du får inte köpa sökord med butikens namn.",
-  "7. Egna köp. Du får inte använda din egen kod eller länk för egna köp. Sådana köp ger ingen provision.",
-  "8. Uppsägning. Båda parter kan avsluta samarbetet. Intjänad provision som inte har återförts betalas ut enligt punkt 4 och 5.",
-  "9. Personuppgifter. Butiken ser dina kontaktuppgifter, din kod, dina provisioner och utbetalningar. Du ser aldrig uppgifter om köparna. Plattformen lagrar antal länkbesök per dag utan personuppgifter.",
-  "10. Ändringar. Nya villkor gäller först när du har godkänt dem i portalen.",
-  "Frågor: {{support_email}}",
+  "1. Parter. Villkoren gäller mellan dig som affiliate och {{shop_name}} (butiken). Plattformen som driver butikens webbshop är teknisk leverantör och är inte part i avtalet.",
+  "2. Kod och länk. Du får en personlig kod och en länk till butiken. Ett köp räknas till dig när köparen kommer via din länk (koden sparas då i köparens varukorg i upp till 30 dagar) eller själv anger din kod i kassan. Har köparen kommit via en annan affiliates länk gäller den länken.",
+  "3. Rabatt till köparen. Köpare som använder din kod eller länk får den rabatt på varorna som butiken anger för dig och som visas i affiliateportalen. Rabatten gäller inte frakten och kan inte kombineras med en annan rabattkod.",
+  "4. Provision. Du får den provision som butiken anger för dig (visas i affiliateportalen), beräknad på orderns varuvärde efter rabatt, exklusive moms och frakt. Butiken kan ändra rabatt och provision; en ändring gäller köp som görs efter ändringen.",
+  "5. Ångerfrist och återföring. Provisionen kan betalas ut tidigast 14 dagar efter köpet och bara så länge betalningen inte är bestriden. Återbetalas en order helt eller delvis minskar provisionen i samma proportion. Förlorar butiken en tvist om betalningen återförs hela provisionen för ordern.",
+  "6. Utbetalning. Du begär utbetalning i affiliateportalen och bifogar faktura eller annat underlag. Butiken betalar ut beloppet och registrerar utbetalningen i portalen. Är du privatperson kan ersättningen vara skattepliktig inkomst; du ansvarar för din deklaration.",
+  "7. Marknadsföring. Du måste tydligt märka inlägg, videor och länkar som reklam/annons (t.ex. 'Reklam' eller 'Annons') enligt marknadsföringslagen; vilseledande påståenden om produkterna är inte tillåtna. Du får inte köpa annonser på sökord med butikens namn eller utge dig för att vara butiken.",
+  "8. Egna köp. Du får inte använda din kod eller länk för egna köp. Köp där du själv eller någon som administrerar butiken är köpare ger ingen provision.",
+  "9. Uppsägning. Både du och butiken kan avsluta samarbetet när som helst. Din kod slutar då att ge rabatt. Intjänad provision som inte har återförts betalas ut enligt punkt 5 och 6.",
+  "10. Personuppgifter. Butiken ser ditt namn, dina kontaktuppgifter, din kod, antal länkbesök och dina provisioner och utbetalningar. Du ser ordernummer, belopp och provision för köp med din kod eller länk, men aldrig vem köparen är. Plattformen räknar länkbesök per dag utan att spara uppgifter om besökarna.",
+  "11. Ändringar. Villkoren kan ändras. Nya villkor gäller för dig först när du har godkänt dem i affiliateportalen.",
+  "Frågor om villkoren: {{support_email}}",
+  // Information beside the terms, not a term: the rates in force when the
+  // text is shown (rendered per affiliate). The numbered clauses name no
+  // figure, so a rate change never changes what was accepted (A4 round 1).
+  "Information (inte en del av villkoren): just nu gäller {{discount_percent}} % rabatt till köparen och {{commission_percent}} % provision till dig. Aktuella nivåer visas alltid i affiliateportalen.",
 ].join("\n\n");
 
 export interface AffiliateTermsContext {
@@ -71,7 +83,7 @@ export function renderAffiliateTerms(context: AffiliateTermsContext): string {
   return AFFILIATE_TERMS_TEMPLATE.replaceAll("{{shop_name}}", context.shopName ?? "butiken")
     .replaceAll("{{commission_percent}}", percentText(context.commissionBp))
     .replaceAll("{{discount_percent}}", percentText(context.discountBp))
-    .replaceAll("{{support_email}}", context.supportEmail ?? "butiken");
+    .replaceAll("{{support_email}}", context.supportEmail ?? "kontakta butiken");
 }
 
 /** SHA-256 hex of the template as 0059 seeds it (see the module comment). */

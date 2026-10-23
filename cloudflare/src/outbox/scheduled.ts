@@ -2,6 +2,7 @@ import { purgeDeniedApplications } from "../affiliate/applications";
 import { rescreenStaleScreenings } from "../catalog/screening";
 import { runCheckoutReminders } from "../commerce/checkout-reminders";
 import { raiseStuckOnboardingAlerts } from "../commerce/connect-onboarding";
+import { sweepPendingObjects } from "../storage/object-sweep";
 import { runOutboxSweep } from "./sweeper";
 
 /**
@@ -13,7 +14,8 @@ import { runOutboxSweep } from "./sweeper";
  *                      same 15-minute cadence, so the 30-minute alert SLA holds
  *                      — THEN the CP3 steps (CP3_STEPS below), THEN CP9-AC's
  *                      abandoned-checkout reminders, THEN CP13's retention of
- *                      denied affiliate applications, THEN the digest
+ *                      denied affiliate applications and its sweep of stale
+ *                      pending object reservations, THEN the digest
  *   anything else    → logged and ignored (a cron this build does not know)
  *
  * Each step is isolated: one failing never skips the next. If any failed, the
@@ -96,9 +98,16 @@ export const CP9_STEPS: ReadonlyArray<readonly [string, CronStep]> = [
  * CP13 (design §3.2, a D68 default): denied affiliate applications decided
  * more than 12 months ago are deleted, at most 100 per tick, with one audit
  * row naming how many (src/affiliate/applications.ts). Approved ones are kept.
+ *
+ * CP13 A4 (design §6.2, CX-B7): object reservations that stayed `pending`
+ * for more than 7 days and that nothing names are tombstoned, their bytes
+ * deleted and the row removed, at most 100 per tick, each audited
+ * (src/storage/object-sweep.ts). An affiliate invoice's listed row stays as a
+ * tombstone (its listing is append-only).
  */
 export const CP13_STEPS: ReadonlyArray<readonly [string, CronStep]> = [
   ["affiliate_application_retention", (env, now) => purgeDeniedApplications(env.DB, now)],
+  ["pending_object_sweep", (env, now) => sweepPendingObjects(env, now)],
 ];
 
 export async function handleScheduled(

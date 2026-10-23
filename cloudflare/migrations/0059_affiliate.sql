@@ -295,7 +295,7 @@ INSERT INTO affiliate_terms_versions (version, published_at, text_sha256, create
 VALUES (
   '2026-10-22',
   '2026-10-22T00:00:00.000Z',
-  'ee41588cc6c220b79f1599c3febf04efde767f2a6a7b367f48f6b54be1779a3c',
+  'bff6a1379f0ee0ddfb10d8d14879ae8ca5c0b801c8a10fe475a4b435550fc2b3',
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 );
 

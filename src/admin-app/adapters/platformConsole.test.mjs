@@ -22,8 +22,9 @@ import {
 describe('add-ons', () => {
   const catalog = [{ key: 'affiliate' }, { key: 'discountCodes' }, { key: 'dining' }, { key: 'pod' }, { key: 'b2b' }, { key: 'writers' }];
   it('the columns are the catalogue entries the Worker knows, in order', () => {
-    assert.deepEqual(columnsOf(catalog).map((a) => a.key), ['discountCodes', 'pod']);
-    assert.equal(API_FEATURE_KEYS.length, 6);
+    // CP13: `affiliate` is ported (0058) and has its column.
+    assert.deepEqual(columnsOf(catalog).map((a) => a.key), ['affiliate', 'discountCodes', 'pod']);
+    assert.equal(API_FEATURE_KEYS.length, 7);
   });
   it('the map holds the effective value of the keys the Worker knows, nothing else', () => {
     const views = [

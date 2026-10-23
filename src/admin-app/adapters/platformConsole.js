@@ -11,11 +11,12 @@ import { toTimestamp } from '../../api/admin/time.js';
 /**
  * The add-ons the Worker accepts (tenant-config.ts FEATURE_KEYS). A key
  * outside this list is refused by the PUT: the pre-pivot CRM add-ons (deleted,
- * D2) and affiliate and wholesale (PORT-LATER, D62). The column of such a key
- * leaves the page.
+ * D2) and wholesale (PORT-LATER, D62). The column of such a key leaves the
+ * page. CP13: `affiliate` is ported (migration 0058) and has its column.
  */
 export const API_FEATURE_KEYS = Object.freeze([
   'abandonedCheckout',
+  'affiliate',
   'contentStudio',
   'discountCodes',
   'marketingMaterials',
@@ -51,6 +52,19 @@ export const sortShops = (shops) => [...shops].sort((a, b) => (a.name || a.id).l
 
 export const ADMIN_ACCOUNT_TYPES = Object.freeze(['platform_admin', 'tenant_admin']);
 
+/**
+ * CP13 A2: the user list's account-type filter. "Administratörer" is the list
+ * as it always was; "Affiliates" lists the shops' affiliates (the directory's
+ * `accountType=affiliate`), each with the shops they are an affiliate of.
+ */
+export const USER_FILTERS = Object.freeze([
+  Object.freeze({ value: 'admins', label: 'Administratörer', accountTypes: ADMIN_ACCOUNT_TYPES, empty: 'Inga administratörer ännu.' }),
+  Object.freeze({ value: 'affiliate', label: 'Affiliates', accountTypes: Object.freeze(['affiliate']), empty: 'Inga affiliates ännu.' }),
+]);
+
+/** The account types of a filter value (an unknown value: the administrators). */
+export const accountTypesOf = (filter) => (USER_FILTERS.find((f) => f.value === filter) ?? USER_FILTERS[0]).accountTypes;
+
 /** One row of the page's user list from a directory user. */
 export function userRowOf(user) {
   const shops = (Array.isArray(user.memberships) ? user.memberships : [])
@@ -62,6 +76,7 @@ export function userRowOf(user) {
     contactPerson: user.name || '',
     shopId: shops.length > 0 ? shops.join(', ') : null,
     platform: user.accountType === 'platform_admin',
+    affiliate: user.accountType === 'affiliate',
     suspended: user.status === 'suspended',
     // Whether the person has set a password of their own — the page offers
     // "Skicka inbjudan" to those who have not. Not the directory's bare

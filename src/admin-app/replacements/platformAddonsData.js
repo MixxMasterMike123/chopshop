@@ -10,10 +10,10 @@
 // EFFECTIVE value of each key, so its own isFeatureEnabled() reads it as the
 // server does.
 //
-// Which columns exist is the Worker's list (tenant-config.ts): the affiliate
-// and wholesale add-ons (not ported, D62) and the four deleted CRM add-ons
-// (D2) are refused by the PUT, so their columns leave. Closed shops are not
-// listed (closed is final).
+// Which columns exist is the Worker's list (tenant-config.ts): the wholesale
+// add-on (not ported, D62) and the four deleted CRM add-ons (D2) are refused
+// by the PUT, so their columns leave. CP13: the affiliate add-on is ported
+// (0058) and has its column. Closed shops are not listed (closed is final).
 
 import { ADDON_CATALOG } from '../../config/addons.js';
 import { getTenantFeatures, putTenantFeatures, readAllTenants } from '../../api/admin/platform.js';
@@ -21,7 +21,7 @@ import { columnsOf, listedTenants, shopRowOf, sortShops } from '../adapters/plat
 
 export const ADDON_COLUMNS = columnsOf(ADDON_CATALOG);
 
-/** The note under the table, without the sentence about the affiliate add-on (it has no column here). */
+/** The note under the table, without the older build's sentence that affiliate gating "comes later" (it is enforced here). */
 export const ADDONS_FOOTNOTE = 'Tillägg styrs endast härifrån (plattformsnivå).';
 
 /** Every shop, sorted by name: [{ id, name, features }]. */

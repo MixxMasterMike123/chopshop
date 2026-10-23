@@ -86,7 +86,13 @@ describe('the detail', () => {
     const map = featureMapOf(DETAIL.features);
     assert.equal(map.pod, true);
     assert.equal(map.discountCodes, false);
-    for (const key of ['affiliate', 'b2b', 'campaigns', 'dining', 'ambassador', 'writers']) assert.equal(map[key], false);
+    for (const key of ['b2b', 'campaigns', 'dining', 'ambassador', 'writers']) assert.equal(map[key], false);
+  });
+  it('CP13: the API names `affiliate`, so the detail shows its effective value', () => {
+    assert.equal(featureMapOf([{ key: 'affiliate', enabled: true }]).affiliate, true);
+    assert.equal(featureMapOf([{ key: 'affiliate', enabled: false }]).affiliate, false);
+    // The Worker names every allowed key (readTenantFeatures): an untouched shop answers the opt-in default, off.
+    assert.equal(featureMapOf([{ key: 'affiliate', enabled: false, source: 'default' }]).affiliate, false);
   });
 });
 
@@ -165,14 +171,21 @@ describe('provisioning', () => {
     // The older preset says the discount codes and the reminder are on: a new
     // shop is born without every opt-in add-on (but `pod`, the Butikstyp's).
     assert.deepEqual(provisionFeaturesOf(preset, API_FEATURE_KEYS), {
-      abandonedCheckout: false, contentStudio: false, discountCodes: false, marketingMaterials: false, pod: true, productReviews: true,
+      abandonedCheckout: false, affiliate: false, contentStudio: false, discountCodes: false, marketingMaterials: false, pod: true, productReviews: true,
     });
+  });
+
+  it('CP13 (design A12): a provisioned shop gets the affiliate program OFF, whatever the preset says', () => {
+    assert.ok(API_FEATURE_KEYS.includes('affiliate'));
+    assert.ok(OFF_AT_PROVISION.includes('affiliate'));
+    assert.equal(provisionFeaturesOf({ affiliate: true }, API_FEATURE_KEYS).affiliate, false);
+    assert.equal(provisionFeaturesOf({}, API_FEATURE_KEYS).affiliate, false);
   });
 
   it('an opt-in add-on is off at birth whatever the preset says, and pod follows the shop type', () => {
     const allOn = Object.fromEntries(API_FEATURE_KEYS.map((key) => [key, true]));
     assert.deepEqual(provisionFeaturesOf(allOn, API_FEATURE_KEYS), {
-      abandonedCheckout: false, contentStudio: false, discountCodes: false, marketingMaterials: false, pod: true, productReviews: true,
+      abandonedCheckout: false, affiliate: false, contentStudio: false, discountCodes: false, marketingMaterials: false, pod: true, productReviews: true,
     });
     assert.equal(provisionFeaturesOf({ ...allOn, pod: false }, API_FEATURE_KEYS).pod, false);
     for (const key of OFF_AT_PROVISION) assert.ok(API_FEATURE_KEYS.includes(key), key);

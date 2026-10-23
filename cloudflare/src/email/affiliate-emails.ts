@@ -32,9 +32,10 @@ import type { AuthEmailMessage } from "./auth-email-job";
  * canonical origins) is frozen at the first build — so every retry builds the
  * identical job. The fingerprint covers everything rendered.
  *
- * COPY: minimal and correct here; unit A4 writes the final Swedish/English
- * words (CP13_BRIEFS.md). TEXT, NEVER HTML: every value is escaped in the HTML
- * part. Nothing here logs.
+ * COPY: unit A4's final Swedish/English words (CP13_BRIEFS.md, design §9);
+ * the shapes, the fingerprint and the "nothing the applicant typed goes back
+ * to the applicant" rule are A1's and unchanged. TEXT, NEVER HTML: every
+ * value is escaped in the HTML part. Nothing here logs.
  */
 
 export { AFFILIATE_EMAIL_KINDS, isAffiliateEmailKind };
@@ -357,117 +358,285 @@ interface Copy {
   subject: string;
 }
 
-function contact(shop: string, supportEmail: string | null, locale: "en" | "sv"): string[] {
-  if (supportEmail === null) {
-    return [];
+/**
+ * The shop's name in the Swedish genitive (Språkrådet's rules), trimmed:
+ *   - ends in s, x or z                      → unchanged ("Lars", "Max")
+ *   - ends in a digit, a non-letter, or its
+ *     last word is an all-caps abbreviation  → colon genitive ("Meteor PR AB:s", "Shop24:s")
+ *   - otherwise                              → + s ("Kents")
+ * Null or blank → "butikens".
+ */
+export function swedishGenitive(shopName: string | null): string {
+  const name = shopName?.trim() ?? "";
+  if (name === "") {
+    return "butikens";
   }
-  return [locale === "sv" ? `Frågor? Kontakta ${shop} på ${supportEmail}.` : `Questions? Contact ${shop} at ${supportEmail}.`];
+  const lastWord = name.split(/\s+/).pop() ?? name;
+  if (!/\p{L}$/u.test(name) || (lastWord.length >= 2 && /^\p{Lu}+$/u.test(lastWord))) {
+    return `${name}:s`;
+  }
+  return /[sxz]$/i.test(name) ? name : `${name}s`;
 }
 
+/** An instant as the Swedish calendar day it falls on (Europe/Stockholm): "2026-11-05". */
+export function stockholmDay(isoInstant: string): string {
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "Europe/Stockholm",
+    year: "numeric",
+  }).formatToParts(new Date(isoInstant));
+  const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+/** The applicant's chosen channel, in the shop's words (the notice is Swedish). */
+const PROMOTION_LABELS: Readonly<Record<string, string>> = {
+  blog: "Blogg",
+  facebook: "Facebook",
+  forum: "Forum",
+  instagram: "Instagram",
+  other: "Annat",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+};
+
+/** The closing lines of a mail sent under the shop's name: the contact, then the shop. */
+function closing(shopName: string | null, supportEmail: string | null, locale: "en" | "sv"): string[] {
+  const sv = locale === "sv";
+  const shop = shopName ?? (sv ? "butiken" : "the shop");
+  return [
+    ...(supportEmail === null
+      ? []
+      : [sv ? `Har du frågor? Svara på det här mejlet eller skriv till ${supportEmail}.` : `Questions? Reply to this email or write to ${supportEmail}.`]),
+    ...(shopName === null ? [] : [sv ? `Hälsningar, ${shop}` : `Best regards, ${shop}`]),
+  ];
+}
+
+/**
+ * Every kind's words (design §9; A4's final copy). The two mails TO the
+ * applicant carry nothing the applicant typed (A1 round 1): the received mail
+ * is the shop's words only, the denial adds the SHOP's reason. The two mails
+ * TO the shop are Swedish only (assemble refuses another locale).
+ */
 function copyOf(job: AffiliateEmailJob): Copy {
   const c = job.content;
   const sv = job.locale === "sv";
-  const shop = (c.shopName as string | null) ?? (sv ? "butiken" : "the shop");
+  const shopName = (c.shopName as string | null) ?? null;
+  const shop = shopName ?? (sv ? "butiken" : "the shop");
   const support = (c.supportEmail as string | null | undefined) ?? null;
   switch (job.kind) {
     case "affiliate_application_received":
-      return {
-        lines: sv
-          ? ["Hej!", `Tack för din ansökan till ${shop}s affiliateprogram.`, "Vi hör av oss inom 1–3 arbetsdagar.", ...contact(shop, support, "sv")]
-          : ["Hi!", `Thank you for applying to the affiliate programme of ${shop}.`, "We will get back to you within 1–3 working days.", ...contact(shop, support, "en")],
-        link: null,
-        subject: sv ? `Tack för din ansökan till ${shop}s affiliateprogram` : `Thank you for applying to ${shop}`,
-      };
+      return sv
+        ? {
+            lines: [
+              "Hej!",
+              `Tack för din ansökan till ${swedishGenitive(shopName)} affiliateprogram. Vi har tagit emot den.`,
+              "Ansökan gås igenom inom 1–3 arbetsdagar. Blir den godkänd får du ett nytt mejl med din kod, din länk och hur du loggar in i affiliateportalen.",
+              "Har du inte skickat någon ansökan kan du bortse från det här mejlet.",
+              ...closing(shopName, support, "sv"),
+            ],
+            link: null,
+            subject: `Tack för din ansökan till ${swedishGenitive(shopName)} affiliateprogram`,
+          }
+        : {
+            lines: [
+              "Hi!",
+              `Thank you for applying to the affiliate programme of ${shop}. We have received your application.`,
+              "It will be reviewed within 1–3 working days. If it is approved, you will get another email with your code, your link and how to sign in to the affiliate portal.",
+              "If you did not apply, you can ignore this email.",
+              ...closing(shopName, support, "en"),
+            ],
+            link: null,
+            subject: `Thank you for applying to the affiliate programme of ${shop}`,
+          };
     case "affiliate_application_notice":
       return {
         lines: [
-          `Ny affiliate-ansökan: ${c.applicantName}`,
+          `${c.applicantName} har ansökt om att bli affiliate hos ${shop}.`,
           ...(c.applicantEmail === null ? [] : [`E-post: ${c.applicantEmail}`]),
-          `Kanal: ${c.promotionMethod}`,
-          c.adminUrl === null ? "Granska ansökan under Affiliate i butikens admin." : "Granska ansökan i butikens admin.",
+          `Kanal: ${PROMOTION_LABELS[c.promotionMethod as string] ?? (c.promotionMethod as string)}`,
+          "Godkänn eller avslå ansökan i butikens admin. Den sökande har fått ett mejl om att ansökan är mottagen.",
+          ...(c.adminUrl === null ? ["Du hittar den under Affiliate → Ansökningar."] : []),
         ],
-        link: c.adminUrl === null ? null : { href: c.adminUrl as string, label: "Granska ansökan" },
+        link: c.adminUrl === null ? null : { href: c.adminUrl as string, label: "Öppna ansökan" },
         subject: `Ny affiliate-ansökan: ${c.applicantName}`,
       };
     case "affiliate_application_denied":
-      return {
-        lines: sv
-          ? ["Hej!", `Din ansökan till ${shop}s affiliateprogram har inte godkänts.`, `Orsak: ${c.reason}`, ...contact(shop, support, "sv")]
-          : ["Hi!", `Your application to the affiliate programme of ${shop} was not approved.`, `Reason: ${c.reason}`, ...contact(shop, support, "en")],
-        link: null,
-        subject: sv ? `Din ansökan till ${shop}` : `Your application to ${shop}`,
-      };
-    case "affiliate_welcome":
-      return {
-        lines: sv
-          ? [
-              `Hej ${c.affiliateName},`,
-              `Du har lagts till som affiliate hos ${shop}.`,
+      return sv
+        ? {
+            lines: [
+              "Hej!",
+              `Tack för ditt intresse för ${swedishGenitive(shopName)} affiliateprogram. Vi har gått igenom din ansökan och kan tyvärr inte godkänna den den här gången.`,
+              `Motivering: ${c.reason}`,
+              ...closing(shopName, support, "sv"),
+            ],
+            link: null,
+            subject: `Din ansökan till ${swedishGenitive(shopName)} affiliateprogram`,
+          }
+        : {
+            lines: [
+              "Hi!",
+              `Thank you for your interest in the affiliate programme of ${shop}. We have reviewed your application and cannot approve it this time.`,
+              `Reason: ${c.reason}`,
+              ...closing(shopName, support, "en"),
+            ],
+            link: null,
+            subject: `Your application to the affiliate programme of ${shop}`,
+          };
+    case "affiliate_welcome": {
+      const discount = percent(c.discountBp as number, job.locale);
+      const commission = percent(c.commissionBp as number, job.locale);
+      return sv
+        ? {
+            lines: [
+              `Hej ${c.affiliateName}!`,
+              `Du har lagts till som affiliate hos ${shop}. Du loggar in i affiliateportalen med samma e-postadress och lösenord som du redan använder.`,
               `Din kod: ${c.code}`,
               `Din länk: ${c.refLink}`,
-              `Kundrabatt ${percent(c.discountBp as number, "sv")} % · Din provision ${percent(c.commissionBp as number, "sv")} % av nettovärdet (exkl. moms och frakt).`,
-              "Logga in i affiliateportalen med ditt vanliga lösenord.",
-              ...contact(shop, support, "sv"),
-            ]
-          : [
-              `Hi ${c.affiliateName},`,
-              `You have been added as an affiliate of ${shop}.`,
+              `Köpare som använder din kod eller länk får ${discount} % rabatt på varorna. Du får ${commission} % provision på orderns varuvärde efter rabatt, exklusive moms och frakt.`,
+              "Märk alltid dina inlägg, videor och länkar som reklam eller annons.",
+              ...closing(shopName, support, "sv"),
+            ],
+            link: { href: c.portalUrl as string, label: "Öppna affiliateportalen" },
+            subject: `Du har lagts till som affiliate hos ${shop}`,
+          }
+        : {
+            lines: [
+              `Hi ${c.affiliateName}!`,
+              `You have been added as an affiliate of ${shop}. Sign in to the affiliate portal with the email address and password you already use.`,
               `Your code: ${c.code}`,
               `Your link: ${c.refLink}`,
-              `Customer discount ${percent(c.discountBp as number, "en")} % · Your commission ${percent(c.commissionBp as number, "en")} % of the net value (excl. VAT and shipping).`,
-              "Sign in to the affiliate portal with your usual password.",
-              ...contact(shop, support, "en"),
+              `Buyers who use your code or link get ${discount} % off the goods. You earn ${commission} % commission on the order's goods value after the discount, excluding VAT and shipping.`,
+              "Always mark your posts, videos and links as advertising.",
+              ...closing(shopName, support, "en"),
             ],
-        link: { href: c.portalUrl as string, label: sv ? "Öppna portalen" : "Open the portal" },
-        subject: sv ? `Du har lagts till som affiliate hos ${shop}` : `You are now an affiliate of ${shop}`,
-      };
+            link: { href: c.portalUrl as string, label: "Open the affiliate portal" },
+            subject: `You have been added as an affiliate of ${shop}`,
+          };
+    }
     case "affiliate_conversion": {
       const amount = money(c.commissionMinor as number, c.currency as string, job.locale);
-      const day = (c.availableAt as string).slice(0, 10);
-      return {
-        lines: sv
-          ? [`Ny provision: ${amount}`, `Order: ${c.orderNumber}`, `Provisionen kan betalas ut efter ångerfristen (14 dagar), från ${day}.`, ...contact(shop, support, "sv")]
-          : [`New commission: ${amount}`, `Order: ${c.orderNumber}`, `It can be paid out after the 14-day withdrawal period, from ${day}.`, ...contact(shop, support, "en")],
-        link: null,
-        subject: sv ? `Ny provision: ${amount}` : `New commission: ${amount}`,
-      };
+      // The Swedish calendar day (a 22:00–23:59 UTC instant is the next day here).
+      const day = stockholmDay(c.availableAt as string);
+      return sv
+        ? {
+            lines: [
+              `Ny provision: ${amount}`,
+              `Någon har handlat hos ${shop} med din kod eller länk (order ${c.orderNumber}).`,
+              `Provisionen kan betalas ut efter ångerfristen (14 dagar), tidigast ${day}. Återbetalas ordern justeras provisionen.`,
+              ...closing(shopName, support, "sv"),
+            ],
+            link: null,
+            subject: `Ny provision: ${amount}`,
+          }
+        : {
+            lines: [
+              `New commission: ${amount}`,
+              `Someone bought from ${shop} with your code or link (order ${c.orderNumber}).`,
+              `The commission can be paid out after the 14-day withdrawal period, from ${day} at the earliest. If the order is refunded, the commission is adjusted.`,
+              ...closing(shopName, support, "en"),
+            ],
+            link: null,
+            subject: `New commission: ${amount}`,
+          };
     }
     case "affiliate_reversal": {
       const amount = money(c.amountMinor as number, c.currency as string, job.locale);
       const restored = c.direction === "restored";
-      const why = sv
-        ? c.cause === "dispute" ? "Köpet bestreds och betalningen gick tillbaka." : "Ordern har återbetalats helt eller delvis; provisionen justeras i proportion till återbetalningen."
-        : c.cause === "dispute" ? "The purchase was disputed and the payment returned." : "The order was refunded in full or in part; the commission follows the refund.";
+      const dispute = c.cause === "dispute";
+      if (sv) {
+        const subject = restored ? `Provision återställd: +${amount}` : `Provision justerad: −${amount}`;
+        return {
+          lines: [
+            subject,
+            `Order: ${c.orderNumber}`,
+            restored
+              ? "En återbetalning av ordern gick inte igenom, så provisionen gäller igen."
+              : dispute
+                ? "Köparen bestred betalningen och butiken förlorade tvisten, så hela provisionen för ordern har återförts."
+                : "Ordern har återbetalats helt eller delvis, så provisionen har minskat i samma proportion.",
+            ...closing(shopName, support, "sv"),
+          ],
+          link: null,
+          subject,
+        };
+      }
+      const subject = restored ? `Commission restored: +${amount}` : `Commission adjusted: −${amount}`;
       return {
-        lines: sv
-          ? [restored ? `Provision återställd: +${amount}` : `Provision justerad: −${amount}`, `Order: ${c.orderNumber}`, restored ? "En återbetalning gick inte igenom, så provisionen gäller igen." : why, ...contact(shop, support, "sv")]
-          : [restored ? `Commission restored: +${amount}` : `Commission adjusted: −${amount}`, `Order: ${c.orderNumber}`, restored ? "A refund did not go through, so the commission stands again." : why, ...contact(shop, support, "en")],
+        lines: [
+          subject,
+          `Order: ${c.orderNumber}`,
+          restored
+            ? "A refund of the order did not go through, so the commission stands again."
+            : dispute
+              ? "The buyer disputed the payment and the shop lost the dispute, so the whole commission for the order has been reversed."
+              : "The order was refunded in full or in part, so the commission has been reduced in the same proportion.",
+          ...closing(shopName, support, "en"),
+        ],
         link: null,
-        subject: sv
-          ? restored ? `Provision återställd: +${amount}` : `Provision justerad: −${amount}`
-          : restored ? `Commission restored: +${amount}` : `Commission adjusted: −${amount}`,
+        subject,
       };
     }
     case "affiliate_payout": {
       const amount = money(c.amountMinor as number, c.currency as string, job.locale);
       const paid = c.outcome === "paid";
-      return {
-        lines: sv
-          ? paid
-            ? [`Utbetalning registrerad: ${amount}`, ...(c.reference === null ? [] : [`Referens: ${c.reference}`]), ...contact(shop, support, "sv")]
-            : [`Begäran avvisad: ${amount}`, ...(c.reason === null ? [] : [`Orsak: ${c.reason}`]), "Beloppet finns kvar i ditt saldo.", ...contact(shop, support, "sv")]
-          : paid
-            ? [`Payout recorded: ${amount}`, ...(c.reference === null ? [] : [`Reference: ${c.reference}`]), ...contact(shop, support, "en")]
-            : [`Request declined: ${amount}`, ...(c.reason === null ? [] : [`Reason: ${c.reason}`]), "The amount stays in your balance.", ...contact(shop, support, "en")],
-        link: null,
-        subject: sv ? (paid ? `Utbetalning registrerad: ${amount}` : "Begäran om utbetalning avvisad") : paid ? `Payout recorded: ${amount}` : "Payout request declined",
-      };
+      if (sv) {
+        return paid
+          ? {
+              lines: [
+                `Utbetalning registrerad: ${amount}`,
+                `${shop} har registrerat utbetalningen av din provision.`,
+                ...(c.reference === null ? [] : [`Referens: ${c.reference}`]),
+                "Du ser alla utbetalningar i affiliateportalen.",
+                ...closing(shopName, support, "sv"),
+              ],
+              link: null,
+              subject: `Utbetalning registrerad: ${amount}`,
+            }
+          : {
+              lines: [
+                `Din begäran om utbetalning av ${amount} har avvisats.`,
+                ...(c.reason === null ? [] : [`Orsak: ${c.reason}`]),
+                "Beloppet finns kvar i ditt saldo och du kan göra en ny begäran i affiliateportalen.",
+                ...closing(shopName, support, "sv"),
+              ],
+              link: null,
+              subject: "Begäran om utbetalning avvisad",
+            };
+      }
+      return paid
+        ? {
+            lines: [
+              `Payout recorded: ${amount}`,
+              `${shop} has recorded the payout of your commission.`,
+              ...(c.reference === null ? [] : [`Reference: ${c.reference}`]),
+              "You can see every payout in the affiliate portal.",
+              ...closing(shopName, support, "en"),
+            ],
+            link: null,
+            subject: `Payout recorded: ${amount}`,
+          }
+        : {
+            lines: [
+              `Your payout request of ${amount} was declined.`,
+              ...(c.reason === null ? [] : [`Reason: ${c.reason}`]),
+              "The amount stays in your balance, and you can make a new request in the affiliate portal.",
+              ...closing(shopName, support, "en"),
+            ],
+            link: null,
+            subject: "Payout request declined",
+          };
     }
     case "affiliate_payout_requested": {
       const amount = money(c.amountMinor as number, c.currency as string, "sv");
       return {
-        lines: [`${c.affiliateName} begär utbetalning: ${amount}`, c.adminUrl === null ? "Hantera begäran under Affiliate i butikens admin." : "Hantera begäran i butikens admin."],
-        link: c.adminUrl === null ? null : { href: c.adminUrl as string, label: "Hantera utbetalning" },
+        lines: [
+          `${c.affiliateName} begär utbetalning av ${amount} i provision.`,
+          "Betala ut beloppet (t.ex. via bank eller Swish) och markera sedan begäran som betald i butikens admin. Avvisar du begäran går beloppet tillbaka till affiliatens saldo.",
+          ...(c.adminUrl === null ? ["Du hittar begäran under Affiliate → affiliatens sida → Utbetalningar."] : []),
+        ],
+        link: c.adminUrl === null ? null : { href: c.adminUrl as string, label: "Hantera utbetalningen" },
         subject: `${c.affiliateName} begär utbetalning: ${amount}`,
       };
     }

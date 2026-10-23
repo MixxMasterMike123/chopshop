@@ -7,8 +7,12 @@
 
 import { signerLabelOf } from './signer.js';
 
-/** The add-on keys the old document could hold that the API never names (deleted D2, not ported D81). */
-const KEYS_THE_API_DOES_NOT_NAME = ['affiliate', 'ambassador', 'b2b', 'campaigns', 'dining', 'writers'];
+/**
+ * The add-on keys the old document could hold that the API never names
+ * (deleted D2, not ported D81). CP13: `affiliate` left this list — the API
+ * names it now (migration 0058), so the detail shows its effective value.
+ */
+const KEYS_THE_API_DOES_NOT_NAME = ['ambassador', 'b2b', 'campaigns', 'dining', 'writers'];
 
 /**
  * The console's two-state status: the API's `active` → 'active'; suspended,
@@ -169,8 +173,10 @@ export const isConflict = (error) => error?.status === 409;
  * checkout reminder ON for every new shop, from the days they were on by
  * default; on Cloudflare they are off until the platform turns them on for a
  * shop (CP8-DC DC2, CP9-AC AC2), and a preset must not undo that silently.
+ * CP13 (design A12, R2-16): the affiliate program likewise — the older preset
+ * says `affiliate: true`; a new shop is born without it.
  */
-export const OFF_AT_PROVISION = ['abandonedCheckout', 'contentStudio', 'discountCodes', 'marketingMaterials'];
+export const OFF_AT_PROVISION = ['abandonedCheckout', 'affiliate', 'contentStudio', 'discountCodes', 'marketingMaterials'];
 
 /**
  * The provisioned shop's add-ons: the preset's values for the keys the API
@@ -187,7 +193,7 @@ export function provisionFeaturesOf(presetFeatures, allowedKeys) {
 }
 
 /** The API's add-on keys (cloudflare/src/platform/tenant-config.ts FEATURE_KEYS). */
-export const API_FEATURE_KEYS = ['abandonedCheckout', 'contentStudio', 'discountCodes', 'marketingMaterials', 'pod', 'productReviews'];
+export const API_FEATURE_KEYS = ['abandonedCheckout', 'affiliate', 'contentStudio', 'discountCodes', 'marketingMaterials', 'pod', 'productReviews'];
 
 /** The invite's failure, in the modal's words. */
 export function inviteErrorText(error) {
