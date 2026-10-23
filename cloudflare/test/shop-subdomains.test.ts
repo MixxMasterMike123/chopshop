@@ -10,8 +10,10 @@ import {
   parsePlatformShopDomain,
   RESERVED_SUBDOMAIN_LABELS,
   SUBDOMAIN_GRACE_MS,
+  setSubdomainLabel,
 } from "../src/tenancy/subdomain";
-import { call, type CallOptions } from "./slice-harness";
+import type { PlatformPrincipal } from "../src/auth/live-authorization";
+import { call, type CallOptions, instrumentedDb } from "./slice-harness";
 import {
   auditRows,
   domainByHostname,
@@ -612,5 +614,122 @@ describe("GET/PUT /v1/platform/tenants/:id/subdomain — the platform's route", 
     );
     expect(refused.error.code).toBe("conflict");
     expect(await labelOf("sd-closing")).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe("Codex round 1 on b7a1112d", () => {
+  const OPERATOR: PlatformPrincipal = { accountType: "platform_admin", userId: "sd-operator" };
+
+  async function bare(tenantId: string): Promise<void> {
+    await expectJson(
+      await platform(world, "POST", "/v1/platform/tenants", {
+        body: { hostname: `${tenantId}.shops.cp3a.test`, shopName: tenantId, tenantId },
+      }),
+      201,
+      `create ${tenantId}`,
+    );
+  }
+
+  async function domainRow(hostname: string) {
+    return env.DB.prepare("SELECT tenant_id, kind, status, redirect_until FROM tenant_domains WHERE hostname = ?")
+      .bind(hostname)
+      .first<{ kind: string; redirect_until: number | null; status: string; tenant_id: string }>();
+  }
+
+  it("P2: taking back an own retired hostname an operator disabled restores it verified, and it resolves", async () => {
+    await bare("sd-r1");
+    expect((await setSubdomainLabel(env.DB, OPERATOR, "sd-r1", "sd-r1-a", BASE, Date.now())).status).toBe("ok");
+    expect((await setSubdomainLabel(env.DB, OPERATOR, "sd-r1", "sd-r1-b", BASE, Date.now())).status).toBe("ok");
+    await env.DB.prepare("UPDATE tenant_domains SET status = 'disabled' WHERE hostname = ?").bind(`sd-r1-a.${BASE}`).run();
+
+    const back = await setSubdomainLabel(env.DB, OPERATOR, "sd-r1", "sd-r1-a", BASE, Date.now());
+    expect(back.status).toBe("ok");
+    expect(await domainRow(`sd-r1-a.${BASE}`)).toMatchObject({ redirect_until: null, status: "verified" });
+    expect(await resolves(`sd-r1-a.${BASE}`)).toBe("sd-r1");
+    expect((await domainRow(`sd-r1-b.${BASE}`))?.redirect_until).toBeGreaterThan(Date.now());
+    expect(await canonicalPlatformHostname(env.DB, BASE, { shop: "sd-r1" }, Date.now())).toBe(`sd-r1-a.${BASE}`);
+  });
+
+  it("P2: the same label again restores its disabled row", async () => {
+    await env.DB.prepare("UPDATE tenant_domains SET status = 'disabled' WHERE hostname = ?").bind(`sd-r1-a.${BASE}`).run();
+    const again = await setSubdomainLabel(env.DB, OPERATOR, "sd-r1", "sd-r1-a", BASE, Date.now());
+    expect(again).toMatchObject({ changed: false, status: "ok" });
+    expect((await domainRow(`sd-r1-a.${BASE}`))?.status).toBe("verified");
+  });
+
+  it("P2: an own row of the hostname that is not a storefront row is refused, nothing retired", async () => {
+    await bare("sd-r2");
+    expect((await setSubdomainLabel(env.DB, OPERATOR, "sd-r2", "sd-r2-live", BASE, Date.now())).status).toBe("ok");
+    await expectJson(
+      await platform(world, "POST", "/v1/platform/tenants/sd-r2/domains", {
+        body: { hostname: `sd-r2-adm.${BASE}`, kind: "admin" },
+      }),
+      201,
+      "admin row",
+    );
+    const audits = (await auditRows("sd-r2", "tenant.subdomain_set")).length;
+
+    const refused = await setSubdomainLabel(env.DB, OPERATOR, "sd-r2", "sd-r2-adm", BASE, Date.now());
+    expect(refused).toEqual({ status: "conflict" });
+    expect(await labelOf("sd-r2")).toBe("sd-r2-live");
+    expect(await domainRow(`sd-r2-live.${BASE}`)).toMatchObject({ redirect_until: null, status: "verified" });
+    expect(await domainRow(`sd-r2-adm.${BASE}`)).toMatchObject({ kind: "admin", redirect_until: null });
+    expect(await auditRows("sd-r2", "tenant.subdomain_set")).toHaveLength(audits);
+  });
+
+  it("P2: of two concurrent A→B requests the loser writes no audit row and no domain row", async () => {
+    await bare("sd-r3");
+    expect((await setSubdomainLabel(env.DB, OPERATOR, "sd-r3", "sd-r3-a", BASE, Date.now())).status).toBe("ok");
+    const audits = (await auditRows("sd-r3", "tenant.subdomain_set")).length;
+
+    let winner: Awaited<ReturnType<typeof setSubdomainLabel>> | null = null;
+    const loser = instrumentedDb(async (op) => {
+      // The loser has read label A; the winner commits A → B before its label UPDATE.
+      if (winner === null && op.kind === "run" && op.sql[0]?.includes("SET subdomain_label = ?")) {
+        winner = await setSubdomainLabel(env.DB, OPERATOR, "sd-r3", "sd-r3-b", BASE, Date.now());
+      }
+    });
+    const lost = await setSubdomainLabel(loser.db, OPERATOR, "sd-r3", "sd-r3-b", BASE, Date.now());
+
+    expect(winner).toMatchObject({ changed: true, status: "ok" });
+    expect(lost).toEqual({ status: "conflict" });
+    expect(loser.ops.some((op) => op.kind === "batch")).toBe(false);
+    expect(await auditRows("sd-r3", "tenant.subdomain_set")).toHaveLength(audits + 1);
+    const rows = await env.DB.prepare("SELECT hostname FROM tenant_domains WHERE tenant_id = 'sd-r3' ORDER BY hostname")
+      .all<{ hostname: string }>();
+    expect(rows.results.map((row) => row.hostname)).toEqual([
+      `sd-r3-a.${BASE}`,
+      `sd-r3-b.${BASE}`,
+      "sd-r3.shops.cp3a.test",
+    ]);
+  });
+
+  it("a crash between the two steps resolves nothing wrongly, and the next identical write completes it", async () => {
+    await bare("sd-r4");
+    expect((await setSubdomainLabel(env.DB, OPERATOR, "sd-r4", "sd-r4-a", BASE, Date.now())).status).toBe("ok");
+    const dying = instrumentedDb((op) => {
+      if (op.kind === "batch") {
+        throw new Error("worker died");
+      }
+    });
+    await expect(setSubdomainLabel(dying.db, OPERATOR, "sd-r4", "sd-r4-b", BASE, Date.now())).rejects.toThrow(
+      "worker died",
+    );
+    // Label moved, its row missing; the old address is still live and canonical redirects nothing.
+    expect(await labelOf("sd-r4")).toBe("sd-r4-b");
+    expect(await domainRow(`sd-r4-b.${BASE}`)).toBeNull();
+    expect(await resolves(`sd-r4-a.${BASE}`)).toBe("sd-r4");
+    expect(await canonicalPlatformHostname(env.DB, BASE, { shop: "sd-r4" }, Date.now())).toBeNull();
+
+    const completed = await setSubdomainLabel(env.DB, OPERATOR, "sd-r4", "sd-r4-b", BASE, Date.now());
+    expect(completed).toMatchObject({ changed: false, status: "ok" });
+    expect(await domainRow(`sd-r4-b.${BASE}`)).toMatchObject({ redirect_until: null, status: "verified" });
+    expect((await domainRow(`sd-r4-a.${BASE}`))?.redirect_until).toBeGreaterThan(Date.now());
+    expect(await canonicalPlatformHostname(env.DB, BASE, { hostname: `sd-r4-a.${BASE}` }, Date.now())).toBe(
+      `sd-r4-b.${BASE}`,
+    );
+    // The creation hostname is not under the base: never retired.
+    expect((await domainRow("sd-r4.shops.cp3a.test"))?.redirect_until).toBeNull();
   });
 });

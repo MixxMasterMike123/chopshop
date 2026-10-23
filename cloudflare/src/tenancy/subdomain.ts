@@ -214,19 +214,33 @@ function auditJson(
  * answers "off" before calling).
  *
  *   same label as now        the hostname row is made sure of (inserted when
- *                            missing, un-retired when retired); changed: false
+ *                            missing, restored to a live verified storefront
+ *                            row when retired or disabled); changed: false
  *   a new label              the new hostname becomes the shop's (inserted
- *                            verified, or un-retired when the shop held it
- *                            before), the previous one is retired for
- *                            SUBDOMAIN_GRACE_MS; audited `tenant.subdomain_set`
+ *                            verified, or restored when the shop held it
+ *                            before), every other live platform hostname of
+ *                            the shop is retired for SUBDOMAIN_GRACE_MS;
+ *                            audited `tenant.subdomain_set`
+ *   the shop's own row of the hostname is not a storefront row → conflict,
+ *   nothing written (Codex P2 on b7a1112d)
  *
- * One batch, in this order: (1) delete ANOTHER shop's row of the new hostname
- * when its grace is over; (2) the label UPDATE, guarded by the label as read
- * and an open shop — the unique index refuses a label another shop took in
- * between, which aborts the batch (→ taken); (3–6) retire, un-retire, insert,
- * audit, each conditional on the label now being the new one, so a lost race
- * writes nothing. An INSERT that meets another shop's live row of the hostname
- * fails on tenant_domains' unique hostname and aborts the batch (→ taken).
+ * TWO STEPS (Codex P2 on b7a1112d: the follow-ups must hang on THIS request's
+ * own write, not on the label they find):
+ *   1. the label UPDATE alone, guarded by the label as read and an open shop.
+ *      0 rows → conflict (another request moved the label first); the unique
+ *      index refusing it → taken. Either way NOTHING was written.
+ *   2. the batch: free ANOTHER shop's expired row of the hostname, retire this
+ *      shop's other live platform hostnames, restore or insert the hostname,
+ *      audit — each guarded by the label being the new one. Its INSERT failing
+ *      on the unique hostname (another shop's live row appeared in between) →
+ *      the label is put back (guarded) and the answer is taken.
+ * Safe between the steps: a crash after step 1 leaves the label set and its
+ * row missing, while the previous platform hostname is still live, so nothing
+ * resolves wrongly (the shop still resolves on its old address and nothing
+ * redirects to the missing one: canonicalPlatformHostname needs the row). The
+ * next identical write takes the "same label, row missing" path and completes
+ * it, retiring the old hostname then (step 2 retires every other live platform
+ * hostname, not only the one read as previous).
  */
 export async function setSubdomainLabel(
   db: D1Database,
@@ -277,18 +291,47 @@ export async function setSubdomainLabel(
   }
 
   const own = await db
-    .prepare("SELECT redirect_until FROM tenant_domains WHERE hostname = ? AND tenant_id = ? LIMIT 1")
+    .prepare(
+      "SELECT kind, status, redirect_until FROM tenant_domains WHERE hostname = ? AND tenant_id = ? LIMIT 1",
+    )
     .bind(hostname, tenantId)
-    .first<{ redirect_until: number | null }>();
+    .first<{ kind: string; redirect_until: number | null; status: string }>();
+  if (own !== null && own.kind !== "storefront") {
+    return { status: "conflict" };
+  }
   const changed = previous !== label;
-  if (!changed && own !== null && own.redirect_until === null) {
+  const ownLive = own !== null && own.redirect_until === null && own.status === "verified";
+  if (!changed && ownLive) {
     const view = await readSubdomainView(db, tenantId, base, now);
     return view === null ? { status: "not_found" } : { changed: false, status: "ok", view };
   }
 
+  // ── step 1: this request's own guarded write, alone ──────────────────────
+  try {
+    const moved = await db
+      .prepare(
+        `UPDATE tenants
+         SET subdomain_label = ?, updated_at = MAX(updated_at, ?)
+         WHERE tenant_id = ? AND subdomain_label IS ? AND status <> 'closed'`,
+      )
+      .bind(label, now, tenantId, previous)
+      .run();
+    if ((moved.meta.changes ?? 0) === 0) {
+      return { status: "conflict" };
+    }
+  } catch (error) {
+    if (isUniqueConstraintFailure(error)) {
+      return { status: "taken" };
+    }
+    throw error;
+  }
+
+  // ── step 2: the rows and the audit, guarded by the label being the new one ─
   const isNow = "EXISTS (SELECT 1 FROM tenants WHERE tenant_id = ? AND subdomain_label = ?)";
   const redirectUntil = now + SUBDOMAIN_GRACE_MS;
   const retiring = changed && previousHostname !== null ? previousHostname : null;
+  // One label under the base: ends with ".<base>" and holds no other dot before it.
+  const onePlatformLabel = `hostname LIKE '%.' || ? AND instr(substr(hostname, 1, length(hostname) - length(?) - 1), '.') = 0`;
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -299,25 +342,21 @@ export async function setSubdomainLabel(
       .bind(hostname, tenantId, now),
     db
       .prepare(
-        `UPDATE tenants
-         SET subdomain_label = ?, updated_at = MAX(updated_at, ?)
-         WHERE tenant_id = ? AND subdomain_label IS ? AND status <> 'closed'`,
-      )
-      .bind(label, now, tenantId, previous),
-    db
-      .prepare(
         `UPDATE tenant_domains
          SET redirect_until = ?, updated_at = MAX(updated_at, ?)
-         WHERE hostname = ? AND tenant_id = ? AND redirect_until IS NULL AND ${isNow}`,
+         WHERE tenant_id = ? AND hostname <> ? AND kind = 'storefront'
+           AND redirect_until IS NULL AND ${onePlatformLabel} AND ${isNow}`,
       )
-      .bind(redirectUntil, now, retiring, tenantId, tenantId, label),
+      .bind(redirectUntil, now, tenantId, hostname, base, base, tenantId, label),
     db
       .prepare(
         `UPDATE tenant_domains
-         SET redirect_until = NULL, updated_at = MAX(updated_at, ?)
-         WHERE hostname = ? AND tenant_id = ? AND redirect_until IS NOT NULL AND ${isNow}`,
+         SET redirect_until = NULL, status = 'verified', verified_at = COALESCE(verified_at, ?),
+             updated_at = MAX(updated_at, ?)
+         WHERE hostname = ? AND tenant_id = ? AND kind = 'storefront'
+           AND (redirect_until IS NOT NULL OR status <> 'verified') AND ${isNow}`,
       )
-      .bind(now, hostname, tenantId, tenantId, label),
+      .bind(now, now, hostname, tenantId, tenantId, label),
     db
       .prepare(
         `INSERT INTO tenant_domains (
@@ -361,11 +400,22 @@ export async function setSubdomainLabel(
     results = await db.batch(statements);
   } catch (error) {
     if (isUniqueConstraintFailure(error)) {
+      // Another shop's live row of the hostname appeared after the check: the
+      // batch wrote nothing; put the label back (only if it is still ours).
+      await db
+        .prepare(
+          `UPDATE tenants SET subdomain_label = ?, updated_at = MAX(updated_at, ?)
+           WHERE tenant_id = ? AND subdomain_label = ?`,
+        )
+        .bind(previous, now, tenantId, label)
+        .run();
       return { status: "taken" };
     }
     throw error;
   }
-  if ((results[1]?.meta.changes ?? 0) === 0) {
+  // The audit row is the last statement: written exactly when the label was
+  // still the new one, i.e. when the batch did its work.
+  if ((results[4]?.meta.changes ?? 0) === 0) {
     return { status: "conflict" };
   }
 

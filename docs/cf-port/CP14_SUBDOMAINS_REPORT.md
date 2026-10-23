@@ -45,12 +45,16 @@ ALTER TABLE tenant_domains ADD COLUMN redirect_until INTEGER CHECK (redirect_unt
 
 The goal was to keep it small: one nullable column, `tenant_domains.redirect_until` (epoch ms).
 
-- **Changing the label from A to B, in one D1 batch:**
-  - The new row `B.<base>` is inserted as verified, or un-retired if the shop held B before.
-  - `A.<base>` gets `redirect_until = now + 90 days`.
-  - `tenants.subdomain_label` is updated, guarded by the label as it was read.
-  - The change is audited as `tenant.subdomain_set`. The audit metadata records `{from, label, hostname, retiredHostname, redirectUntil}` and `actingAsGrantId` under acting-as.
-  - Every statement after the label UPDATE is conditional on the label now being B. A lost race therefore writes nothing (409 `conflict`). A label or hostname another shop took in between fails a unique index, and the batch aborts with 409 `subdomain_taken`.
+- **Changing the label from A to B, in two steps** (since Codex round 1, see §9):
+  1. `tenants.subdomain_label` is updated **alone**, guarded by the label as it was read and an open shop. If 0 rows change, the answer is 409 `conflict`; if the unique index refuses it, the answer is 409 `subdomain_taken`. Either way nothing has been written.
+  2. One batch, each statement guarded by the label now being B:
+     - another shop's expired row of `B.<base>` is deleted;
+     - **every other** live platform hostname of the shop (one label under the base, kind `storefront`) gets `redirect_until = now + 90 days`;
+     - `B.<base>` is restored to a live verified storefront row if the shop holds it (retired or disabled), or inserted as verified;
+     - the change is audited as `tenant.subdomain_set`, recording `{from, label, hostname, retiredHostname, redirectUntil}` and `actingAsGrantId` under acting-as.
+  - If the batch's INSERT meets another shop's live row that appeared after the check, the batch writes nothing, the label is put back (guarded), and the answer is 409 `subdomain_taken`.
+  - If the shop's own row of `B.<base>` is not a storefront row (e.g. kind `admin`), the answer is 409 `conflict` and nothing is written.
+  - **A crash between the two steps** leaves the label set to B with no B row while A is still live. Nothing resolves wrongly: the shop still resolves on A, and nothing redirects to B because `canonicalPlatformHostname` needs the row. The next identical write takes the "same label, row missing" path and completes it, retiring A then; this is why step 2 retires every other live platform hostname rather than only the one read as previous. Tested.
 - **During the grace period:**
   - `A.<base>` still resolves to the shop, so an open tab and its `/_api` calls keep working.
   - The web Worker 301s A's pages and sitemap to B.
@@ -59,8 +63,8 @@ The goal was to keep it small: one nullable column, `tenant_domains.redirect_unt
   - `A.<base>` resolves to nothing (`resolve-tenant.ts` compares `redirect_until` with the time now).
   - The next shop to claim A deletes the expired row in the same batch as its claim.
   - Nothing sweeps expired rows on a schedule. They are dead rows until someone claims the label.
-- **Going back to A within the grace period** un-retires A and retires B.
-- **The same label again** returns 200 and writes nothing. If its row is missing it is inserted, and the call is audited.
+- **Going back to A within the grace period** un-retires A (restored to `verified` even if an operator disabled it meanwhile) and retires B.
+- **The same label again** returns 200 and writes nothing when its row is a live verified storefront row. If the row is missing it is inserted; if it is retired or disabled it is restored; both are audited.
 - **The grace length** is `SUBDOMAIN_GRACE_MS = 90 days`. See Q2.
 
 ## 3. The routes' contracts
@@ -118,7 +122,7 @@ This applies only when `PLATFORM_SHOP_DOMAIN` is set and valid.
 
 - **Shared host:** `GET/HEAD /<shop>/…` (pages and `sitemap.xml`) returns `301 Location: https://<label>.<base>/…` with the same path and query, and `Cache-Control: no-cache`.
 - **Retired host:** a host exactly one label under the base whose answer is a different host returns a 301 to it.
-- **Never redirected:** `/_api/…`, static files, writes, a shop's own domain, a host with a port, and any answer that is not one label under the base.
+- **Never redirected:** `/_api/…`, static files, writes, a shop's own domain, a host with a port, any answer that is not one label under the base, and **the buying flow** (`NO_SUBDOMAIN_REDIRECT_PATHS`: `/cart`, `/checkout`, `/order-return`, `/order-confirmation/…`, matched exactly or as a path prefix, relative to `<root>`). Their state is in origin-scoped storage, so they are served where they arrive for as long as that host resolves.
 - **Failures:** a failing or slow answer (the SEO deadline) means no redirect, and the page is served as before.
 - **When the var is absent,** the API is never asked.
 
@@ -189,6 +193,7 @@ The rendered pages were checked on the admin dev server (dev API, invented data)
 6. **Q6: storefront links.** The console's "Öppna butiken" link (`storefrontUrlOf`) and the storefront's own links still use the shared host's `/<shop>` address. With the web var on, those 301 once. Should they point straight at the subdomain once production is on it?
 7. **Q7: unpublished-shop previews.** The preview of an unpublished shop (D57, grant in the fragment) follows the 301 to the subdomain. Browsers keep the fragment across a redirect, but this is not verified end to end.
 8. **Q8: production setup.** For production at CP7, set each imported shop's label through `PUT /v1/platform/tenants/:id/subdomain`, and Kent picks `melodiemc` himself. The runbook's §6.5 step 1 (`<shop>.shop.invalid`) could become that call. Should the runbook be changed?
+9. **Q9: the cart at the first move.** The cart is in origin-scoped `localStorage`. A customer who has filled a cart on the shared host's `/<shop>/` (or on a retired host) and then opens an ordinary page is moved to the subdomain, where the cart is empty. The buying flow itself is exempt (Codex round 1), but browsing is not. This only bites at the moment the var is switched on, or during a label change. Accept it, or carry the cart across (e.g. a one-time hand-over in the redirect)?
 
 ## 8. For the reviewer
 
@@ -199,3 +204,26 @@ The rendered pages were checked on the admin dev server (dev API, invented data)
   - The web Worker is unchanged because its var is absent.
 - **Merging with `cp13-affiliate`:** it also edits `provision-tenants.ts` (reserved tenant ids), `REQUIRED_MIGRATION` (`0060`) and the two `0057` test pins. Expect small conflicts there. `REQUIRED_MIGRATION` must end up as `0061_shop_subdomains.sql`.
 - **Not mine, left alone:** `docs/cf-port/CP10_OB_DESIGN.md` (modified) and `scripts/cf-port/prestage-zones.mjs` (untracked) were in the tree from someone else and are not part of this commit.
+
+## 9. Codex round 1 (on `b7a1112d`, log `docs/cf-port/codex-logs/codex-b7a1112d.log`)
+
+There is no schema change: 0061 is already applied on staging, and every fix is in code.
+
+| Finding | What changed | Test |
+|---|---|---|
+| **P1: the payment return during a label change.** A redirect-based Stripe payment returns to `<origin><root>/order-return`, and the pending checkout id and receipt token live in that origin's `sessionStorage` (`src/api/orders.js`). A 301 of the return (on a retired host, or on the shared host's `/<shop>/` form) to the subdomain lost them, so the paid order could not be shown. | `web/src/subdomain.ts`: `NO_SUBDOMAIN_REDIRECT_PATHS` = `/cart`, `/checkout` (the cart is in `localStorage`, `src/storefront/providers/Cart.jsx`), `/order-return` (Stripe's `return_url`, `StripePaymentForm.jsx`) and `/order-confirmation/…`. These are matched exactly or as a prefix followed by `/`, so `/order-returns` still moves. `subdomainQuestion` asks nothing for them, so they are served where they arrive while that host resolves. | `web-subdomains.test.ts`: the four paths with a Stripe return query on the shared and on a retired host are not redirected and the API is not asked; `/produkt/x`, `/order-returns` and `/checkouts` still 301. |
+| **P2: reclaiming an own retired hostname that an operator disabled.** The batch cleared `redirect_until`, skipped the INSERT, left the row `disabled`, reported success and retired the working address. | The restore UPDATE now sets `status = 'verified'`, `verified_at = COALESCE(verified_at, now)`, and only matches `kind = 'storefront'`. It runs whenever the row is retired **or** not verified; the same-label short-circuit applies only to a live verified row. An own row that is not a storefront row is refused as **409 `conflict`**, nothing written. I chose `conflict` because the row is the shop's own and `taken` would misdescribe it; the seller sees "Kunde inte spara adressen. Försök igen." | Own row disabled → after the claim it is verified, resolves, is canonical, and the other is retired. The same label again restores a disabled row. Own row of kind `admin` → `conflict`, label unchanged, the live row not retired, no audit row. |
+| **P2: two concurrent A→B requests.** The loser's label UPDATE changed 0 rows, but `isNow` (label = B) was true, so its follow-ups ran and a second audit row was written before the 409. | Two steps (§2): the guarded label UPDATE runs alone first; 0 changes → `conflict` before any batch. The batch's success is read from its last statement (the audit INSERT). The code comment explains why a crash between the steps is safe. | A losing request (the winner commits inside the loser's label UPDATE) gets `conflict`, sends no batch, adds no audit row and no domain row. A crash at the batch leaves the old address live and no redirect, and the next identical write completes it. |
+
+Gates after the fixes:
+
+| Gate | Result |
+|---|---|
+| Worker vitest | 145 files / 5213 tests, 0 failed (`shop-subdomains` 35, `web-subdomains` 13) |
+| tsc (root, `-p web`, `-p admin`) | clean ×3 |
+| `guard/preflight.test.sh` | 453 |
+| `guard/deploy.test.sh` | 90 |
+| Frontend `node --test` | 1182 |
+| `node guard/guards.test.mjs` | PASS |
+
+Q9 (the cart at the first move) was added as a result of P1.

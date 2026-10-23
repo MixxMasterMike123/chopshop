@@ -204,6 +204,26 @@ describe("handleRequest", () => {
     expect(spy.asked).toEqual([]);
   });
 
+  it("never moves the buying flow: cart, checkout, the payment return and the confirmation stay where they arrive (Codex P1)", async () => {
+    const spy = api((target) => ("shop" in target ? `melodiemc.${BASE}` : `nya.${BASE}`));
+    for (const path of ["/cart", "/checkout", "/order-return", "/order-confirmation/ord-1"]) {
+      const query = "?payment_intent=pi_1&redirect_status=succeeded";
+      const shared = await handleRequest(page(`${WEB_ORIGIN}/melodie-mc${path}${query}`), webEnv(spy.api));
+      expect(shared.status, `shared ${path}`).toBe(200);
+      const retired = await handleRequest(page(`https://gamla.${BASE}${path}${query}`), webEnv(spy.api));
+      expect(retired.status, `retired ${path}`).toBe(200);
+    }
+    expect(spy.asked).toEqual([]);
+
+    // An ordinary page still moves, on both, and so does a lookalike path.
+    for (const path of ["/produkt/x", "/order-returns", "/checkouts"]) {
+      expect((await handleRequest(page(`${WEB_ORIGIN}/melodie-mc${path}`), webEnv(spy.api))).status, path).toBe(301);
+    }
+    const ordinary = await handleRequest(page(`https://gamla.${BASE}/produkt/x`), webEnv(spy.api));
+    expect(ordinary.status).toBe(301);
+    expect(ordinary.headers.get("Location")).toBe(`https://nya.${BASE}/produkt/x`);
+  });
+
   it("an API binding without the method (an older API) redirects nothing", async () => {
     const { canonicalShopHost: _unused, ...older } = api(() => `melodiemc.${BASE}`).api;
     const response = await handleRequest(page(`${WEB_ORIGIN}/melodie-mc/`), webEnv(older));

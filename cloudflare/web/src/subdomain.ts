@@ -16,6 +16,31 @@ export interface SubdomainQuestion {
   target: SubdomainTarget;
 }
 
+/**
+ * Storefront paths (relative to `<root>`) that are NEVER moved to another
+ * origin, on the shared host's `/<shop>/…` form or on a retired host: the
+ * buying flow keeps its state in origin-scoped browser storage, so a 301 to
+ * the subdomain would lose it (Codex P1 on b7a1112d).
+ *   /cart, /checkout          the cart (src/storefront/providers/Cart.jsx, localStorage)
+ *   /order-return             where Stripe returns a redirect-based payment
+ *                             (StripePaymentForm.jsx `return_url` = this origin);
+ *                             the pending checkout id is in sessionStorage
+ *                             (src/api/orders.js)
+ *   /order-confirmation/…     the receipt token is in sessionStorage (src/api/orders.js)
+ * They are served where they arrive for as long as that host resolves (a
+ * retired host: its grace period).
+ */
+export const NO_SUBDOMAIN_REDIRECT_PATHS: readonly string[] = [
+  "/cart",
+  "/checkout",
+  "/order-return",
+  "/order-confirmation",
+];
+
+function isBuyingFlowPath(path: string): boolean {
+  return NO_SUBDOMAIN_REDIRECT_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 /** The label of `hostname` when it is exactly one label under `base`, else null. */
 export function labelUnder(hostname: string, base: string): string | null {
   const suffix = `.${base}`;
@@ -31,16 +56,17 @@ export function labelUnder(hostname: string, base: string): string | null {
  *   - the shared host's `/<shop>/…` → `{ shop }`, the path without `/<shop>`;
  *   - a host one label under the base → `{ hostname }`, the path as it is;
  *   - anything else (the feature off, a shop's own domain, a host with a
- *     port) → null.
+ *     port, a path of the buying flow: NO_SUBDOMAIN_REDIRECT_PATHS) → null.
  */
 export function subdomainQuestion(base: string | null, url: URL, site: Site): SubdomainQuestion | null {
   if (base === null || url.port !== "") {
     return null;
   }
   if (site.shop !== null) {
-    return { path: url.pathname.slice(site.root.length) || "/", target: { shop: site.shop } };
+    const path = url.pathname.slice(site.root.length) || "/";
+    return isBuyingFlowPath(path) ? null : { path, target: { shop: site.shop } };
   }
-  return labelUnder(url.hostname, base) === null
+  return labelUnder(url.hostname, base) === null || isBuyingFlowPath(url.pathname)
     ? null
     : { path: url.pathname, target: { hostname: url.hostname } };
 }
