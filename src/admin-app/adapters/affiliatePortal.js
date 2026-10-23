@@ -14,11 +14,31 @@ export function usableAffiliateShops(me) {
   );
 }
 
-/** The shop to open: the one chosen earlier in this tab when still usable, else the only one, else null (the picker). */
-export function resolveAffiliateShopId(me, chosen = null) {
+/**
+ * The shop to open, each only when `/v1/me` lists it as usable: the one the
+ * address asks for (`?shopId=`, the portal links of the mails; Codex finding
+ * 6), else the one chosen earlier in this tab, else the only one, else null
+ * (the picker). A requested shop the person may not use is ignored.
+ */
+export function resolveAffiliateShopId(me, chosen = null, requested = null) {
   const ids = usableAffiliateShops(me).map((m) => m.tenantId);
+  if (requested && ids.includes(requested)) return requested;
   if (chosen && ids.includes(chosen)) return chosen;
   return ids.length === 1 ? ids[0] : null;
+}
+
+/** A shop id of the tenant grammar (the API's SHOP_SEGMENT_PATTERN), or null. */
+export const SHOP_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/** The `shopId` a query string asks for, when it is one and of the tenant grammar; else null. */
+export function requestedShopIdOf(search) {
+  let values;
+  try {
+    values = new URLSearchParams(search ?? '').getAll('shopId');
+  } catch {
+    return null;
+  }
+  return values.length === 1 && SHOP_ID_PATTERN.test(values[0]) ? values[0] : null;
 }
 
 /**
@@ -229,16 +249,21 @@ export function portalBannerOf(affiliate) {
 }
 
 // A portal address to come back to after signing in: /affiliate or below,
-// plain path characters only (never another host, never a scheme).
-const RETURN_PATH = /^\/affiliate(?:\/[A-Za-z0-9/_-]*)?$/;
+// plain path characters only (never another host, never a scheme), with at
+// most ONE query key, `shopId`, of the tenant grammar (Codex finding 6).
+const RETURN_PATH = /^\/affiliate(?:\/[A-Za-z0-9/_-]*)?(?:\?shopId=[a-z0-9][a-z0-9-]{0,62})?$/;
 
 /** The `next` of the sign-in page when it is a portal address; else null. */
 export function affiliateReturnPath(next) {
   return typeof next === 'string' && RETURN_PATH.test(next) && !next.includes('//') ? next : null;
 }
 
-/** The sign-in page that brings the person back to `pathname` (a portal address) afterwards. */
-export function signInUrlFor(pathname) {
-  const back = affiliateReturnPath(pathname);
+/**
+ * The sign-in page that brings the person back to `pathname` (a portal
+ * address) afterwards, keeping the `shopId` of `search` when it is valid.
+ */
+export function signInUrlFor(pathname, search = '') {
+  const shopId = requestedShopIdOf(search);
+  const back = affiliateReturnPath(shopId ? `${pathname}?shopId=${shopId}` : pathname) ?? affiliateReturnPath(pathname);
   return back && back !== '/affiliate' ? `/login?next=${encodeURIComponent(back)}` : '/login';
 }

@@ -24,6 +24,7 @@ import { getPortalMe, onPortalSessionLost, setPortalShopId } from '../api/affili
 import {
   homeOfAccount,
   portalBannerOf,
+  requestedShopIdOf,
   resolveAffiliateShopId,
   signInUrlFor,
   usableAffiliateShops,
@@ -313,21 +314,43 @@ function ShopPortal({ shopId, shopName, shops, onPick, onLogout, onLost, email }
 function PortalShell() {
   const { me, loading, logout, refresh } = useAuth();
   const [chosen, setChosen] = useState(storedChoice);
+  // The shop the address asks for (`?shopId=`, the portal links of the
+  // mails; Codex finding 6), read once on arrival. It counts only when
+  // `/v1/me` lists it as usable, and then wins over the stored choice.
+  const [requested, setRequested] = useState(() => requestedShopIdOf(window.location.search));
 
   // A lost session: the sign-in page, which brings the person back here.
   useEffect(() => {
-    onPortalSessionLost(() => window.location.assign(signInUrlFor(window.location.pathname)));
+    onPortalSessionLost(() => window.location.assign(signInUrlFor(window.location.pathname, window.location.search)));
     return () => onPortalSessionLost(null);
   }, []);
 
   const shops = useMemo(() => usableAffiliateShops(me), [me]);
-  const shopId = resolveAffiliateShopId(me, chosen);
+  const shopId = resolveAffiliateShopId(me, chosen, requested);
   // Every request of this render's pages names this shop (before any effect runs).
   setPortalShopId(shopId);
+
+  // An authorised request becomes the tab's choice, and leaves the address
+  // (a reload, or a later "Byt butik", then follows the choice).
+  useEffect(() => {
+    if (!requested || shopId !== requested) return;
+    storeChoice(requested);
+    setChosen(requested);
+    setRequested(null);
+    try {
+      const params = new URLSearchParams(window.location.search);
+      params.delete('shopId');
+      const rest = params.toString();
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`);
+    } catch {
+      /* the address keeps its parameter; the choice is stored */
+    }
+  }, [requested, shopId]);
 
   const pick = useCallback((id) => {
     storeChoice(id);
     setChosen(id);
+    setRequested(null);
   }, []);
 
   // A shop that no longer answers: re-read `/v1/me`; when the shop has left
@@ -360,7 +383,7 @@ function PortalShell() {
   if (loading) return <Spinner label="Verifierar inloggning…" />;
   const home = homeOfAccount(me);
   // Signed out: the sign-in page, then back to the portal address asked for.
-  if (home) return <Leave to={me ? home : signInUrlFor(window.location.pathname)} />;
+  if (home) return <Leave to={me ? home : signInUrlFor(window.location.pathname, window.location.search)} />;
 
   if (shops.length === 0) {
     return (

@@ -1028,7 +1028,11 @@ const Checkout = () => {
                 {discountNotApplied && (
                   <div className="mt-3 sm:mt-4 p-3 bg-ink/5 border border-ink/15 rounded-lg" role="status">
                     <p className="text-xs sm:text-sm text-ink">
-                      {t('checkout_discount_not_applied', 'Rabattkoden {{code}} kunde inte användas för den här beställningen.', { code: quote.discountCode })}
+                      {/* CP13 (Codex 1): neutral and true for every case — an unknown code,
+                          a rule that set the discount aside, a 0 % affiliate (which
+                          still earns on this order). "Ta bort koden" drops the typed
+                          code only, never the link stamp. */}
+                      {t('checkout_discount_no_discount', 'Koden {{code}} gav ingen rabatt just nu.', { code: quote.discountCode })}
                     </p>
                     <button
                       type="button"

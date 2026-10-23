@@ -36,12 +36,14 @@ const ShoppingCart = () => {
   const { subtotal, discountAmount, discountCode, appliedCode } = calculateTotals();
   // The stored code no longer applies to these lines (the last preview said
   // so). CP13: the Cloudflare cart says it in `discountNotice`.
-  const discountNotApplying = discountNotice
-    ? discountNotice.kind === 'not_applicable'
-    : Boolean(discountCode) && discountPreview?.code === discountCode && discountPreview?.applies === false;
+  // (The older build's cart has no `discountNotice`: its own rule stays.)
+  const discountNotApplying =
+    !discountNotice && Boolean(discountCode) && discountPreview?.code === discountCode && discountPreview?.applies === false;
   // CP13: what the box says about the link's code (`?ref=`): added, or used
   // instead of the typed one.
-  const linkLine = discountNotice && discountNotice.kind !== 'not_applicable' ? discountNoticeMessage : null;
+  const linkLine = discountNotice && discountNotice.kind.startsWith('link_') ? discountNoticeMessage : null;
+  // CP13 (Codex 1): a kept typed code that gives no discount now.
+  const typedLine = discountNotice?.kind === 'no_discount' ? discountNoticeMessage : null;
   // The code the discount row names: the one the server applied.
   const discountLabelCode = appliedCode || discountCode || null;
 
@@ -301,7 +303,7 @@ const ShoppingCart = () => {
                     {discountCode && (
                       <div className="mt-3 flex items-start justify-between gap-3">
                         <p role="status" className="text-sm text-ink-muted">
-                          {linkLine || (discountNotApplying ? t('discount_code_not_applicable', 'Koden kan inte användas för den här varukorgen.') : null)}
+                          {linkLine || typedLine || (discountNotApplying ? t('discount_code_not_applicable', 'Koden kan inte användas för den här varukorgen.') : null)}
                         </p>
                         <button
                           type="button"

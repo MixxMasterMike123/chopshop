@@ -180,3 +180,35 @@ describe('CP13 round 1: the banner and the way back after sign-in', () => {
     assert.equal(signInUrlFor('/admin/orders'), '/login');
   });
 });
+
+describe('Codex finding 6: the shop a portal link asks for', () => {
+  it('an explicit shop the person may use wins over the stored one', async () => {
+    const { resolveAffiliateShopId, requestedShopIdOf } = await import('./affiliatePortal.js');
+    const requested = requestedShopIdOf('?shopId=andra-butiken');
+    assert.equal(requested, 'andra-butiken');
+    assert.equal(resolveAffiliateShopId(ME, 'provbutik', requested), 'andra-butiken');
+  });
+
+  it('a shop the person may not use, or a malformed one, is ignored', async () => {
+    const { resolveAffiliateShopId, requestedShopIdOf } = await import('./affiliatePortal.js');
+    assert.equal(resolveAffiliateShopId(ME, 'provbutik', 'stangd'), 'provbutik', 'suspended shop');
+    assert.equal(resolveAffiliateShopId(ME, 'provbutik', 'admin-butik'), 'provbutik', 'an admin membership');
+    assert.equal(resolveAffiliateShopId(ME, null, 'okand'), null, 'unknown: the picker');
+    for (const search of ['?shopId=Provbutik', '?shopId=a%2Fb', '?shopId=x&shopId=y', '?shopId=', '']) {
+      assert.equal(requestedShopIdOf(search), null, search);
+    }
+  });
+
+  it('is kept through the sign-in round trip, and nothing else is', async () => {
+    const { affiliateReturnPath, signInUrlFor } = await import('./affiliatePortal.js');
+    const url = signInUrlFor('/affiliate', '?shopId=andra-butiken');
+    assert.equal(url, '/login?next=%2Faffiliate%3FshopId%3Dandra-butiken');
+    const next = new URLSearchParams(url.split('?')[1]).get('next');
+    assert.equal(affiliateReturnPath(next), '/affiliate?shopId=andra-butiken');
+    assert.equal(signInUrlFor('/affiliate/payouts', '?shopId=andra-butiken&x=1'), '/login?next=%2Faffiliate%2Fpayouts%3FshopId%3Dandra-butiken');
+    assert.equal(signInUrlFor('/affiliate/payouts', '?shopId=BAD'), '/login?next=%2Faffiliate%2Fpayouts');
+    for (const bad of ['/affiliate?x=1', '/affiliate?shopId=a&x=1', '/affiliate?shopId=A', '/affiliate?shopId=//evil']) {
+      assert.equal(affiliateReturnPath(bad), null, bad);
+    }
+  });
+});

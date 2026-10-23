@@ -383,7 +383,8 @@ describe('toCheckoutTotals', () => {
 });
 
 describe('discountNotAppliedOf (CP8-DC, CP13 round 1)', () => {
-  it('a typed code echoed with 0 is "not applied"', () => {
+  it('a typed code echoed with 0 is told (neutrally: "gav ingen rabatt just nu"), a 0 % affiliate typed included', () => {
+    assert.equal(discountNotAppliedOf({ ...PRICED, discountCode: 'ANNA', discountMinor: 0 }, null), true);
     assert.equal(discountNotAppliedOf({ ...PRICED, discountCode: 'SOMMAR20', discountMinor: 0 }, 'ANNA10'), true);
     assert.equal(discountNotAppliedOf({ ...PRICED, discountCode: 'SOMMAR20', discountMinor: 0 }, null), true);
   });

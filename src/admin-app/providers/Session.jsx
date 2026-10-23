@@ -111,7 +111,7 @@ export function AuthProvider({ children, tree = 'admin' }) {
         setMe(null);
         if (tree === 'affiliate') {
           // CP13: back to the portal address after signing in.
-          window.location.assign(signInUrlFor(window.location.pathname));
+          window.location.assign(signInUrlFor(window.location.pathname, window.location.search));
         } else if (tree === 'platform') {
           window.location.assign('/login');
         } else if (location.pathname !== '/login') {

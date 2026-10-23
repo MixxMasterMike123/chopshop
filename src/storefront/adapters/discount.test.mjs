@@ -17,6 +17,7 @@ import {
   refCodeFromSearch,
   searchWithoutRef,
   storedRef,
+  keepTypedCode,
   isDiscountCodeShape,
   normalizeDiscountCode,
   previewedDiscountMinor,
@@ -24,6 +25,7 @@ import {
   storedDiscountCode,
 } from './discount.js';
 import { ApiError } from '../../api/client.js';
+import { buildCheckoutRequest } from './checkout.js';
 
 describe('the code as the server reads it', () => {
   it('is trimmed and upper case', () => {
@@ -186,7 +188,8 @@ describe('the link notice', () => {
 
   it('nothing applies: the typed code is named, a lone link code is not (a 0 % affiliate is attribution only)', () => {
     const typedPreview = { applies: false, code: 'NOPE', discountMinor: 0, typed: 'NOPE', ref };
-    assert.deepEqual(discountNoticeOf(typedPreview, { typed: 'NOPE', ref }), { kind: 'not_applicable', code: 'NOPE' });
+    assert.deepEqual(discountNoticeOf(typedPreview, { typed: 'NOPE', ref }), { kind: 'no_discount', code: 'NOPE' });
+    assert.equal(LINK_MESSAGES.no_discount[1].replace('{{code}}', 'NOPE'), 'Koden NOPE gav ingen rabatt just nu');
     const linkPreview = { applies: false, code: ref, discountMinor: 0, typed: null, ref };
     assert.equal(discountNoticeOf(linkPreview, { ref }), null);
     assert.equal(discountNoticeOf(null, { ref }), null);
@@ -197,5 +200,31 @@ describe('the link notice', () => {
     const incoming = refCodeFromSearch('?ref=<script>');
     assert.equal(incoming, null);
     assert.deepEqual(storedRef(incoming === null ? live : { ...live, refCode: incoming }), live);
+  });
+});
+
+describe('a typed code without a discount (Codex finding 1: a 0 % affiliate earns)', () => {
+  it('a 200 without a discount keeps a code of the affiliate grammar, and the checkout sends it', () => {
+    // previewOutcome of { applies: false, discountMinor: 0 } is 'not_applicable', exactly as for an unknown code.
+    const outcome = previewOutcome({ discount: { applies: false, code: 'ANNA', discountMinor: 0 } });
+    assert.equal(outcome, 'not_applicable');
+    assert.equal(keepTypedCode(outcome, 'ANNA'), true);
+    const request = buildCheckoutRequest({
+      items: [{ productId: 'p1', quantity: 1 }],
+      email: 'kund@example.test',
+      deliveryMethod: 'pickup',
+      discountCode: 'ANNA',
+    });
+    assert.equal(request.discountCode, 'ANNA');
+  });
+
+  it('a code outside the grammar, or a refused answer, is not kept', () => {
+    assert.equal(keepTypedCode('not_applicable', 'SOMMAR_20'), false);
+    assert.equal(keepTypedCode('not_applicable', 'AB'), false);
+    assert.equal(keepTypedCode('not_applicable', 'A'.repeat(21)), false);
+    assert.equal(keepTypedCode('invalid_format', 'ANNA'), false);
+    assert.equal(keepTypedCode('rate_limited', 'ANNA'), false);
+    assert.equal(keepTypedCode('unavailable', 'ANNA'), false);
+    assert.equal(keepTypedCode('applies', 'SOMMAR_20'), true, 'a code that applies is kept whatever its shape');
   });
 });

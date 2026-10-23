@@ -167,7 +167,9 @@ export function currentDiscountMinor(preview) {
  *                                           no percent: the preview names no rate, and one read back from a
  *                                           possibly stale cart price could be wrong)
  *   { kind: 'link_overridden', code }       a typed code was set aside for it ("Länkkoden X används i stället")
- *   { kind: 'not_applicable', code }        the typed code applies to nothing here
+ *   { kind: 'no_discount', code }           the typed code gives no discount now ("Koden X gav ingen
+ *                                           rabatt just nu"): true alike for an unknown code, a code
+ *                                           below its minimum and a 0 % affiliate (no oracle)
  *   null                                    nothing to say (no code, not asked yet)
  */
 export function discountNoticeOf(preview, { typed = null, ref = null } = {}) {
@@ -177,7 +179,7 @@ export function discountNoticeOf(preview, { typed = null, ref = null } = {}) {
       ? { kind: 'link_overridden', code: ref }
       : { kind: 'link_added', code: ref };
   }
-  if (typed && preview.applies !== true) return { kind: 'not_applicable', code: typed };
+  if (typed && preview.applies !== true) return { kind: 'no_discount', code: typed };
   return null;
 }
 
@@ -185,4 +187,19 @@ export function discountNoticeOf(preview, { typed = null, ref = null } = {}) {
 export const LINK_MESSAGES = {
   link_added: ['discount_link_added', 'Länkkod {{code}} tillagd – rabatten visas i summeringen'],
   link_overridden: ['discount_link_overridden', 'Länkkoden {{code}} används i stället'],
+  no_discount: ['discount_code_no_discount', 'Koden {{code}} gav ingen rabatt just nu'],
 };
+
+/**
+ * CP13 (Codex review, finding 1): whether the cart keeps a typed code after
+ * the preview answered. A code that applies is kept, as before. A code the
+ * preview answered 200 for WITHOUT a discount is kept too when it has the
+ * affiliate code's grammar: a commission-only affiliate (0 % buyer discount)
+ * answers exactly like an unknown code (the preview names no affiliate, by
+ * design), and only the checkout can attribute it. A 400/429/unreachable
+ * answer, or a code outside the grammar, is not kept.
+ */
+export function keepTypedCode(outcome, code) {
+  if (outcome === 'applies') return true;
+  return outcome === 'not_applicable' && typeof code === 'string' && REF_CODE_PATTERN.test(code);
+}

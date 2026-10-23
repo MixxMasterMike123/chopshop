@@ -274,3 +274,91 @@ These use the same scratch harness as before. The storefront fixture gains `admi
 **Not looked at rendered:**
 - the checkout payment step for the 0 % case (it needs Stripe; the rule is tested in the adapter);
 - the sign-in round trip and the mid-session revoke (they need a real session; the helpers are tested).
+
+## 9. Round 2 (Codex, `docs/cf-port/CP13_CODEX_REVIEW.md`, findings 1 and 6)
+
+### Finding 1 (BLOCKING): a typed 0 % affiliate code never reached checkout
+
+**The defect.** The cart kept a typed code only when the preview said `applies: true`. The preview answers a commission-only affiliate (0 % buyer discount) exactly like an unknown code; that is its no-oracle rule. So the cart dropped the code, and the affiliate earned nothing.
+
+**Fix, without adding an oracle.**
+- **`keepTypedCode(outcome, code)`** is new in `src/storefront/adapters/discount.js`.
+  - A code that applies is kept, as before.
+  - A code the preview answered 200 for without a discount (`not_applicable`) is kept when it matches the affiliate grammar `^[A-Z0-9-]{3,20}$`.
+  - A 400, a 429, an unreachable preview, or a code outside the grammar is not kept, as before.
+- **`applyDiscountCode` in `Cart.jsx`** stores such a code as `cart.discountCode`. The payment form already sends `cart.discountCode` as `discountCode`, so it reaches the checkout and the affiliate earns.
+- **The cart's notice for a kept code without a discount** is now `{ kind: 'no_discount' }`: "Koden ANNA gav ingen rabatt just nu", beside the existing "Ta bort".
+  - The sentence is true for an unknown code, for a code below its minimum, and for a 0 % affiliate alike.
+  - The confirming toast after "Applicera" is neutral rather than green.
+- **The checkout's not-applied box** for a typed code with 0 now reads "Koden {{code}} gav ingen rabatt just nu." (new key `checkout_discount_no_discount`).
+  - "Ta bort koden" still calls `removeDiscount()`, which drops the typed code only and never the link stamp.
+  - The link code echoed with 0 stays silent (round 1, item 1).
+
+**Tests.**
+- `discount.test.mjs`, "a typed code without a discount":
+  - a 200 `{ applies: false, discountMinor: 0 }` is `not_applicable`, `keepTypedCode` keeps `ANNA`, and `buildCheckoutRequest` sends `discountCode: 'ANNA'`;
+  - `SOMMAR_20`, `AB`, 21 characters, and the `invalid_format`/`rate_limited`/`unavailable` outcomes are not kept;
+  - the `no_discount` notice and its words.
+- `checkout.test.mjs`: a typed `ANNA` echoed with 0 is told (the neutral sentence); the link code echoed with 0 is silent.
+
+**Note.** A grammar-valid campaign code below its minimum spend is now also kept, with the same neutral line. That matches the cart's existing rule: a code that stops applying stays stored, so the buyer may add items to reach the minimum.
+
+### Finding 6: portal links with `?shopId=` were ignored
+
+**What changed in the adapter (`affiliatePortal.js`).**
+- **`requestedShopIdOf(search)`** reads exactly one `shopId` of the tenant grammar.
+- **`resolveAffiliateShopId(me, chosen, requested)`** takes the shop in this order:
+  1. the requested shop, when `/v1/me` lists it as a usable affiliate membership;
+  2. else the stored choice;
+  3. else the only shop;
+  4. else the picker.
+  An unauthorised or malformed request is ignored.
+- **The shell (`AffiliateApp.jsx`)** reads `?shopId=` once on arrival. An authorised request becomes the tab's stored choice, is consumed, and leaves the address. The top-bar picker also clears any pending request.
+
+**Through sign-in.**
+- `signInUrlFor(pathname, search)` keeps exactly one query key, `shopId`, validated to the tenant grammar.
+- `affiliateReturnPath` admits `/affiliate…?shopId=<tenant>` and nothing else: no other key, no second key, no upper case, no `//`.
+- Three call sites pass `window.location.search`: the shell's sign-out redirect, the client's lost-session handler, and `Session.jsx`'s affiliate tree.
+- `LoginPage` loads the validated `next`.
+
+**Tests (`affiliatePortal.test.mjs`).**
+- An explicit valid shop wins over the stored one.
+- These are ignored: a suspended shop, an admin membership, an unknown shop (which gives the picker), and malformed queries (upper case, `%2F`, two keys, empty).
+- The round trip `/affiliate?shopId=andra-butiken` → `/login?next=%2Faffiliate%3FshopId%3Dandra-butiken` → `affiliateReturnPath` gives the same address back.
+- Extra keys are dropped and a bad `shopId` is dropped; hostile `next` values are refused.
+
+### Gate (round 2, final tree)
+
+```
+node --test src/api/*.test.mjs src/api/admin/*.test.mjs src/admin-app/**/*.test.mjs \
+            src/storefront/adapters/*.test.mjs src/storefront/dev/*.test.mjs
+    → # tests 1278 · # pass 1278 · # fail 0
+npx vite build --config vite.admin.config.js   → ✓ built
+node cloudflare/admin/check-admin-build.mjs    → admin build: 28 files (22 text) checked, no Firebase code, no source map, no secret, every file servable.
+node cloudflare/web/check-storefront-build.mjs → storefront build: 11 files (7 text) checked, no Firebase code, every file servable.
+npx vite build                                 → ✓ built
+node guard/guards.test.mjs                     → guard: PASS (allowlist 288, baseline 288)
+```
+
+### Screenshots (same scratch harness)
+
+- `30-varukorg-skriven-kod-utan-rabatt.png`: a cart holding the typed `ANNA`, which the dev preview answers without a discount. It shows "Koden ANNA gav ingen rabatt just nu" with "Ta bort" and no discount row.
+- `31-portal-lank-med-shopid.png`: `/affiliate?shopId=sportbutiken` for a person in two shops opens Sportbutiken directly, with no picker. The page's data is the stub's single fixture, so the overview text still names Provbutiken.
+
+**Not looked at rendered:**
+- the "Applicera" click itself, which needs interaction; its logic is tested;
+- the checkout payment step, which needs Stripe;
+- the sign-in round trip, which needs a real session; its helpers are tested.
+
+### Files this round
+
+- `src/storefront/adapters/discount.js` + test
+- `src/storefront/adapters/checkout.test.mjs`
+- `src/storefront/providers/Cart.jsx`
+- `src/pages/shop/ShoppingCart.jsx`, `Checkout.jsx`
+- `src/admin-app/adapters/affiliatePortal.js` + test
+- `src/admin-app/AffiliateApp.jsx`
+- `src/admin-app/providers/Session.jsx`
+- this report
+
+Nothing under `cloudflare/` was touched, and no A2 or A4 file was touched.

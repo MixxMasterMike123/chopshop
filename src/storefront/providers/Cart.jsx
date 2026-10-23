@@ -39,6 +39,7 @@ import {
   currentPreview,
   discountNoticeOf,
   hasRefParameter,
+  keepTypedCode,
   isDiscountCodeShape,
   normalizeDiscountCode,
   previewCodes,
@@ -320,8 +321,9 @@ export const CartProvider = ({ children }) => {
     ref: linkCode,
   });
   const linkMessage = (notice) => {
-    if (!notice || notice.kind === 'not_applicable') return null;
-    const [key, fallback] = notice.kind === 'link_overridden' ? LINK_MESSAGES.link_overridden : LINK_MESSAGES.link_added;
+    const words = notice ? LINK_MESSAGES[notice.kind] : null;
+    if (!words) return null;
+    const [key, fallback] = words;
     return t(key, fallback, { code: notice.code });
   };
 
@@ -369,6 +371,16 @@ export const CartProvider = ({ children }) => {
         return { success: true, notice: true, message: linkMessage(notice) };
       }
       return { success: true, message: messageOf('applies') };
+    }
+    // CP13 (Codex 1): a 200 without a discount keeps a code of the affiliate
+    // grammar, so a commission-only affiliate's code still reaches the
+    // checkout and earns; the buyer is told, truthfully, that it gave no
+    // discount now, and may take it away.
+    if (typed && keepTypedCode(outcome, typed)) {
+      previewedFor.current = `${typed}\n${linkCode}\n${JSON.stringify(checkoutItems())}`;
+      setCart((prev) => ({ ...prev, discountCode: typed }));
+      setDiscountPreview({ applies: false, code: discount.code, discountMinor: 0, typed, ref: linkCode });
+      return { success: true, notice: true, message: linkMessage({ kind: 'no_discount', code: typed }) };
     }
     return { success: false, message: messageOf(outcome) };
   };
