@@ -1,16 +1,16 @@
-# guard/allowlist.txt — tracked files that still contain forbidden B8shield/Firebase residue.
 #
-# THIS FILE MAY ONLY SHRINK. Seeded 2026-09-26 (CP0) from `git ls-files` + `git grep`; it must
-# be EMPTY by CP7 (docs/cf-port/PLAN.md §0, §8). When a file is cleaned or deleted, delete its
-# line (and commit the refreshed guard/allowlist.baseline). Never add a line: new code must not
-# match. guard/guards.test.mjs fails on (a) a matching file not listed here, (b) a listed file
-# that no longer matches (stale — remove it), (c) growth past guard/allowlist.baseline.
 #
 # Patterns: /b8shield|b8s[-_]/i and /reseller/i (path or text); firebase package imports in
-# text: from '…firebase…' (firebase/*, firebase-admin, firebase-functions), require('firebase…'),
-# import('firebase…'). Out of scope: node_modules, dist/, functions/lib/, OBSOLETE/,
+# THIS FILE MAY ONLY SHRINK. Seeded 2026-09-26 (CP0) from `git ls-files` + `git grep`; it must
+# be EMPTY by CP7 (docs/cf-port/PLAN.md §0, §8). When a file is cleaned or deleted, delete its
 # docs/_archive/, .claude/, lockfiles. "reseller" as a live legal/business term belongs in
+# guard/allowlist.txt — tracked files that still contain forbidden B8shield/Firebase residue.
 # guard/permanent-exemptions.txt, never here.
+# import('firebase…'). Out of scope: node_modules, dist/, functions/lib/, OBSOLETE/,
+# line (and commit the refreshed guard/allowlist.baseline). Never add a line: new code must not
+# match. guard/guards.test.mjs fails on (a) a matching file not listed here, (b) a listed file
+# text: from '…firebase…' (firebase/*, firebase-admin, firebase-functions), require('firebase…'),
+# that no longer matches (stale — remove it), (c) growth past guard/allowlist.baseline.
 .cursorrules
 .env.example
 .firebaserc
@@ -197,6 +197,7 @@ src/pages/admin/AdminMyTaxData.jsx
 src/pages/admin/AdminReviews.jsx
 src/pages/admin/AdminUserCreate.jsx
 src/pages/admin/AdminUserEdit.jsx
+src/pages/admin/adminAffiliateData.js
 src/pages/admin/adminCollectionEditData.js
 src/pages/admin/adminCollectionsData.js
 src/pages/admin/adminDashboardData.js
