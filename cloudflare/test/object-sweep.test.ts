@@ -310,3 +310,117 @@ describe("(round 1) every holder of an object id is guarded", () => {
     expect([...STORE_IDENTITY_IMAGE_KEYS, GALLERY_IMAGE_KEY].every((key) => /ObjectId$/.test(key))).toBe(true);
   });
 });
+
+describe("(round 2) bytes a late invoice upload orphaned after the sweep", () => {
+  async function audit(objectId: string, action: string, createdAt: number): Promise<void> {
+    await env.DB.prepare(
+      `INSERT INTO audit_events (event_id, tenant_id, actor_user_id, action, resource_type, resource_id, request_id, metadata_json, created_at)
+       VALUES (?, ?, NULL, ?, 'stored_object', ?, ?, NULL, ?)`,
+    )
+      .bind(crypto.randomUUID(), SHOP, action, objectId, crypto.randomUUID(), createdAt)
+      .run();
+  }
+
+  /** A tombstone written straight into the table (unlisted), its key under the shop. */
+  async function tombstone(bucket: ObjectBucket, createdAt: number): Promise<{ objectId: string; objectKey: string }> {
+    const objectId = crypto.randomUUID();
+    const objectKey = `shops/${SHOP}/${bucket === "temp" ? "temp_upload" : "document"}/${objectId}/v1/f.pdf`;
+    await env.DB.prepare(
+      `INSERT INTO stored_objects (object_id, tenant_id, bucket, object_key, kind, content_type, status, immutable, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'application/pdf', 'deleted', 0, ?, ?)`,
+    )
+      .bind(objectId, SHOP, bucket, objectKey, bucket === "temp" ? "temp_upload" : "document", createdAt, createdAt)
+      .run();
+    return { objectId, objectKey };
+  }
+
+  async function count(objectId: string, action: string): Promise<number> {
+    const row = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM audit_events WHERE resource_type = 'stored_object' AND resource_id = ? AND action = ?",
+    )
+      .bind(objectId, action)
+      .first<{ n: number }>();
+    return row?.n ?? 0;
+  }
+
+  it("a listed invoice tombstone whose bytes came back is retried: key deleted, a fresh marker, kept (listed)", async () => {
+    const invoice = await reserve(OLD, "document", "private", true);
+    await sweepPendingObjects(env, NOW);
+    expect(await actionsOf(invoice.objectId)).toEqual(["object.reserve", "object.sweep", "object.bytes_deleted"]);
+    // The late upload: bytes written after the sweep, its own delete failed.
+    await env.PRIVATE_BUCKET.put(invoice.objectKey, "%PDF-");
+    await audit(invoice.objectId, "object.bytes_orphaned", NOW + 1_000);
+
+    const result = await sweepPendingObjects(env, NOW + 2_000);
+    expect(result.retried).toBe(1);
+    expect(await env.PRIVATE_BUCKET.get(invoice.objectKey)).toBeNull();
+    expect(await rowOf(invoice.objectId)).toEqual({ status: "deleted" });
+    expect(await count(invoice.objectId, "object.bytes_deleted")).toBe(2);
+    // Cleared: the next tick leaves it alone.
+    expect((await sweepPendingObjects(env, NOW + 3_000)).retried).toBe(0);
+  });
+
+  it("an unlisted tombstone with orphaned bytes is retried and purged; an equal timestamp falls to the write order", async () => {
+    const swept = await tombstone("private", OLD);
+    await audit(swept.objectId, "object.sweep", NOW);
+    await audit(swept.objectId, "object.bytes_deleted", NOW);
+    // Same millisecond as the marker, but written after it: still the newer one.
+    await audit(swept.objectId, "object.bytes_orphaned", NOW);
+    await env.PRIVATE_BUCKET.put(swept.objectKey, "%PDF-");
+
+    const result = await sweepPendingObjects(env, NOW + 1_000);
+    expect(result.retried).toBe(1);
+    expect(result.purged).toBe(1);
+    expect(await rowOf(swept.objectId)).toBeNull();
+    expect(await env.PRIVATE_BUCKET.get(swept.objectKey)).toBeNull();
+    expect(await count(swept.objectId, "object.purge")).toBe(1);
+  });
+
+  it("an orphan row a later bytes_deleted already cleared is not taken again", async () => {
+    const handled = await tombstone("private", OLD);
+    await audit(handled.objectId, "object.sweep", NOW);
+    await audit(handled.objectId, "object.bytes_orphaned", NOW + 1_000);
+    await audit(handled.objectId, "object.bytes_deleted", NOW + 2_000);
+    const result = await sweepPendingObjects(env, NOW + 3_000);
+    expect(result.retried).toBe(0);
+    expect(await rowOf(handled.objectId)).toEqual({ status: "deleted" });
+    expect(await count(handled.objectId, "object.bytes_deleted")).toBe(1);
+  });
+
+  it("an orphan stamped by a clock ahead of the sweep's is still cleared by the fresh marker", async () => {
+    const ahead = await tombstone("private", OLD);
+    await audit(ahead.objectId, "object.sweep", NOW);
+    await audit(ahead.objectId, "object.bytes_deleted", NOW);
+    await audit(ahead.objectId, "object.bytes_orphaned", NOW + 60_000);
+    await env.DB.prepare(
+      `INSERT INTO ${INVOICE_LISTING.table} (object_id, tenant_id, affiliate_id, created_at) VALUES (?, ?, ?, ?)`,
+    )
+      .bind(ahead.objectId, SHOP, affiliateId, iso(OLD))
+      .run();
+    expect((await sweepPendingObjects(env, NOW + 1_000)).retried).toBe(1);
+    expect((await sweepPendingObjects(env, NOW + 2_000)).retried).toBe(0);
+  });
+
+  it("orphan retries count within the 100 per tick", async () => {
+    const ids: string[] = [];
+    for (let index = 0; index < OBJECT_SWEEP_BATCH + 3; index += 1) {
+      const row = await tombstone("temp", OLD - index);
+      await audit(row.objectId, "object.bytes_deleted", NOW);
+      await audit(row.objectId, "object.bytes_orphaned", NOW + 1);
+      ids.push(row.objectId);
+    }
+    const fresh = await reserve(OLD);
+    const first = await sweepPendingObjects(env, NOW + 1_000);
+    expect(first.retried).toBe(OBJECT_SWEEP_BATCH);
+    expect(first.swept).toBe(0);
+    expect(await rowOf(fresh.objectId)).toEqual({ status: "pending" });
+    const second = await sweepPendingObjects(env, NOW + 2_000);
+    expect(second.retried).toBe(3);
+    expect(second.swept).toBe(1);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS n FROM stored_objects WHERE object_id IN (SELECT value FROM json_each(?))")
+        .bind(JSON.stringify(ids))
+        .first<{ n: number }>(),
+    ).toEqual({ n: 0 });
+  });
+});

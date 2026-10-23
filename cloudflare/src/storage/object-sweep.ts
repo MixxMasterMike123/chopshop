@@ -26,7 +26,11 @@
  * OBJECT_SWEEP_BATCH rows in all, in the D93 order of deleteAdminObject:
  *   0. RETRIES first: rows this sweep tombstoned whose bytes were not yet
  *      confirmed gone (an `object.sweep` audit row and no `object.bytes_deleted`
- *      one), so a failed R2 delete is retried every tick until it succeeds.
+ *      one), so a failed R2 delete is retried every tick until it succeeds;
+ *      and (round 2) any deleted row whose newest `object.bytes_orphaned` row
+ *      is later than its newest `object.bytes_deleted` one — bytes a late
+ *      invoice upload wrote after the sweep and could not remove — which get
+ *      their key deleted again and a fresh `object.bytes_deleted` row.
  *   1. one batch: the new rows are TOMBSTONED (`status = 'deleted'`, each guard
  *      re-checked inside the UPDATE), with an `object.sweep` audit row each
  *      (reason `pending_expired` or `unattached_invoice`). From here the
@@ -118,6 +122,39 @@ function auditedSql(action: string): string {
   )`;
 }
 
+/**
+ * Round 2 (A1 Codex round 4, finding 5): the object's NEWEST `object.bytes_orphaned`
+ * row is later than its newest `object.bytes_deleted` one — a late invoice upload
+ * that lost the race with this sweep wrote bytes after the sweep deleted the key,
+ * and could not delete them itself (object-routes.ts releaseLateInvoiceBytes).
+ * "Later" is (created_at, rowid): audit_events is append-only (0001), so among
+ * rows of one millisecond the higher rowid was written later. Written as "an
+ * orphan row that no `bytes_deleted` row follows".
+ */
+const ORPHAN_NEWER_SQL = `EXISTS (
+    SELECT 1 FROM audit_events AS orphan
+    WHERE orphan.resource_type = 'stored_object' AND orphan.resource_id = o.object_id
+      AND orphan.action = 'object.bytes_orphaned'
+      AND NOT EXISTS (
+        SELECT 1 FROM audit_events AS cleared
+        WHERE cleared.resource_type = 'stored_object' AND cleared.resource_id = o.object_id
+          AND cleared.action = 'object.bytes_deleted'
+          AND (cleared.created_at > orphan.created_at
+            OR (cleared.created_at = orphan.created_at AND cleared.rowid > orphan.rowid))
+      )
+  )`;
+
+/**
+ * A fresh `bytes_deleted` row is stamped no earlier than the newest orphan row,
+ * so an orphan stamped by a clock ahead of this one is still cleared by it
+ * (the equal-time case falls to rowid, and this row is written later).
+ */
+const BYTES_DELETED_AT_SQL = `MAX(?, COALESCE((
+    SELECT MAX(orphan.created_at) FROM audit_events AS orphan
+    WHERE orphan.resource_type = 'stored_object' AND orphan.resource_id = o.object_id
+      AND orphan.action = 'object.bytes_orphaned'
+  ), 0))`;
+
 interface ObjectRow {
   bucket: "private" | "public" | "temp";
   object_id: string;
@@ -141,6 +178,7 @@ function auditStatement(
   now: number,
   where: string,
   binds: unknown[],
+  createdAtSql = "?",
 ): D1PreparedStatement {
   return db
     .prepare(
@@ -149,7 +187,7 @@ function auditStatement(
          resource_id, request_id, metadata_json, created_at
        )
        SELECT lower(hex(randomblob(16))), o.tenant_id, NULL, ?, 'stored_object', o.object_id, ?,
-              json_object('kind', o.kind, 'bucket', o.bucket, 'reason', ?, 'listed', ${LISTED_SQL}), ?
+              json_object('kind', o.kind, 'bucket', o.bucket, 'reason', ?, 'listed', ${LISTED_SQL}), ${createdAtSql}
        FROM stored_objects AS o
        WHERE o.object_id IN (SELECT value FROM json_each(?)) AND ${where}`,
     )
@@ -170,7 +208,8 @@ export async function sweepPendingObjects(env: Env, now: number): Promise<Object
         `SELECT o.object_id, o.bucket, o.object_key
          FROM stored_objects AS o
          WHERE o.bucket IN ('private', 'public', 'temp') AND o.status = 'deleted' AND o.immutable = 0
-           AND ${auditedSql("object.sweep")} AND NOT ${auditedSql("object.bytes_deleted")}
+           AND ((${auditedSql("object.sweep")} AND NOT ${auditedSql("object.bytes_deleted")})
+             OR ${ORPHAN_NEWER_SQL})
          ORDER BY o.updated_at, o.object_id
          LIMIT ${OBJECT_SWEEP_BATCH}`,
       )
@@ -260,8 +299,9 @@ export async function sweepPendingObjects(env: Env, now: number): Promise<Object
         gone,
         requestId,
         now,
-        `o.status = 'deleted' AND NOT ${auditedSql("object.bytes_deleted")}`,
+        `o.status = 'deleted' AND (NOT ${auditedSql("object.bytes_deleted")} OR ${ORPHAN_NEWER_SQL})`,
         [],
+        BYTES_DELETED_AT_SQL,
       ),
       auditStatement(db, "object.purge", "swept", gone, requestId, now, purgeable, []),
       db

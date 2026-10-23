@@ -330,3 +330,46 @@ node --check scripts/cf-port/seed-staging-slice.mjs → OK
 ```
 
 My untracked files (`object-sweep.ts` and its test, `affiliate-terms.test.ts`, the smoke, this report) were grepped by hand for the guard's two name patterns: no match.
+
+## Round 2 (from A1's Codex round 4, finding 5)
+
+**The gap.** A late invoice upload can lose the race with the sweep: the sweep tombstones the row and deletes its key, then the upload writes its bytes. The upload deletes those bytes itself (`object-routes.ts` `releaseLateInvoiceBytes`). When THAT delete fails, it writes an `object.bytes_orphaned` audit row with ids only. The sweep's retry never revisited such a tombstone, because the row already carried its `object.bytes_deleted` marker.
+
+**The change** (`cloudflare/src/storage/object-sweep.ts`, only that file, its test and this report):
+
+- **Retry selection (step 0).** A deleted, non-immutable row is now also taken when its newest `object.bytes_orphaned` row is LATER than its newest `object.bytes_deleted` row (`ORPHAN_NEWER_SQL`).
+  - "Later" is `(created_at, rowid)`: `audit_events` is append-only (0001), so within one millisecond the higher rowid was written later.
+  - The orphan case does not need an `object.sweep` row.
+  - Retries still come first and count within the 100 per tick.
+- **Step 2 is unchanged:** the key is deleted again.
+- **Step 3:**
+  - It writes a FRESH `object.bytes_deleted` row when the row has none OR an orphan row is newer.
+  - That row is stamped `MAX(now, the newest orphan's created_at)`, so an orphan stamped by a clock ahead of the sweep's is still cleared by it; equal stamps fall to rowid.
+  - The purge rule is unchanged: an unlisted row is deleted, a listed invoice stays as a tombstone.
+- **Out of scope.** An orphan row whose stored row is already gone (purged) cannot be revisited: the key is not recoverable from ids alone. On the invoice route every row is listed and is never purged, so this does not arise there.
+
+**Tests** (`object-sweep.test.ts`, 10 → 15):
+- A listed invoice tombstone whose bytes came back: retried, key deleted, a second `bytes_deleted` row, row kept, and not taken on the next tick.
+- An unlisted tombstone with orphaned bytes, the orphan written in the SAME millisecond as the marker but after it: retried and purged.
+- An orphan already cleared by a later `bytes_deleted` row: not re-selected (retried 0, one marker).
+- An orphan stamped 60 s ahead of the sweep's clock: cleared by one retry, then left alone.
+- The bound: 103 orphan retries take two ticks, 100 then 3, and a due new row waits until there is room.
+
+**Mutation checks.** Each of these makes at least one test fail:
+- the orphan clause dropped from the selection (4 tests fail);
+- dropped from the marker condition (5);
+- the marker's `MAX` stamp removed (2);
+- the rowid tie-break removed (1).
+
+**Gate (round 2)**
+
+Run from `cloudflare/`:
+
+```
+npx tsc --noEmit                                                       → exit 0
+npx vitest run test/object-sweep.test.ts test/affiliate-invoice-race.test.ts
+                                                                       → Test Files  2 passed (2)
+                                                                         Tests  19 passed (19)
+npx vitest run                                                         → Test Files  155 passed (155)
+                                                                         Tests  5397 passed (5397)
+```
