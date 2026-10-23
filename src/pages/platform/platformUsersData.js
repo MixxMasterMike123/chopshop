@@ -29,6 +29,9 @@ export const REMOVE_COPY = {
   failed: 'Kunde inte ta bort användaren',
 };
 
+/** No account-type filter here: the list is the admins (the admin build adds "Affiliates"). */
+export const ACCOUNT_FILTERS = [];
+
 /** The admins: [{ uid, email, contactPerson, shopId, platform }], platform admins first, then by e-mail. */
 export async function loadUsers() {
   const snap = await getDocs(query(collection(db, 'users'), where('role', '==', 'admin')));

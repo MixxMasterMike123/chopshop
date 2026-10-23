@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { setRequestShopId } from '../../api/admin/client.js';
-import { REFUND_PENDING_MESSAGE, refundWholeOrder } from './adminOrderDetailData.js';
+import { REFUND_PENDING_MESSAGE, orderAffiliateOf, refundWholeOrder } from './adminOrderDetailData.js';
 
 const realFetch = globalThis.fetch;
 const ORDER_ID = '0a000000-0000-4000-8000-000000000001';
@@ -54,5 +54,19 @@ describe('the whole-order refund, as the page announces it', () => {
     };
     await assert.rejects(refundWholeOrder(ORDER_ID, { refundableMinor: 0 }));
     assert.equal(sent, 0);
+  });
+});
+
+describe('the order\'s affiliate row (CP13 A2)', () => {
+  it('null without an affiliate; the member as given, with a link only when the server names the affiliate', () => {
+    assert.equal(orderAffiliateOf({}), null);
+    assert.equal(orderAffiliateOf({ affiliate: null }), null);
+    const member = { code: 'ANNA10', attribution: 'link', affiliateCommissionMinor: 5400, ledgerState: 'held', selfReferral: false };
+    const row = orderAffiliateOf({ affiliate: member });
+    assert.equal(row.affiliateCommissionMinor, 5400);
+    assert.equal(row.ledgerState, 'held');
+    assert.equal(row.detailPath, null);
+    const id = '11111111-2222-4333-8444-555555555555';
+    assert.equal(orderAffiliateOf({ affiliate: { ...member, affiliateId: id } }).detailPath, `/admin/affiliates/${id}`);
   });
 });

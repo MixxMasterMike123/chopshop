@@ -29,6 +29,7 @@
 
 import { toTimestamp } from '../../api/admin/time.js';
 import { minorToKronor } from './money.js';
+import { orderAffiliateOf } from './affiliate.js';
 
 /** The fulfilment steps a seller may target, in the order the menu lists them. */
 export const FULFILMENT_TARGETS = ['processing', 'ready_for_pickup', 'shipped', 'delivered', 'completed'];
@@ -255,7 +256,16 @@ export function orderFromDetail(order) {
     statusHistory: (order.statusHistory ?? []).map(historyEntry),
     withdrawal: withdrawalOf(order),
     withdrawalRequest: withdrawalRequestOf(order.withdrawalRequest),
+    // CP13 A2: the order's affiliate (the shop's own cost to its affiliate,
+    // design A14: shown, never the platform's fee), only on an attributed
+    // order. `affiliateCommission` (kr) is the field the order export reads.
+    ...affiliateFieldsOf(order.affiliate),
   };
+}
+
+function affiliateFieldsOf(raw) {
+  const affiliate = orderAffiliateOf(raw);
+  return affiliate ? { affiliate, affiliateCommission: kr(affiliate.affiliateCommissionMinor) } : {};
 }
 
 // ── refusals, in Swedish, for the page's existing error toast ────────────────

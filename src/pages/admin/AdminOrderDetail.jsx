@@ -7,7 +7,8 @@ import { sv } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import AppLayout from '../../components/layout/AppLayout';
 import OrderStatusMenu from '../../components/OrderStatusMenu';
-import { fetchOrderUser, refundWholeOrder } from './adminOrderDetailData';
+import { fetchOrderUser, orderAffiliateOf, refundWholeOrder } from './adminOrderDetailData';
+import { ATTRIBUTION, ORDER_STATE, SELF_REFERRAL, formatMinor } from './affiliateView';
 import { useContentTranslation } from '../../hooks/useContentTranslation';
 import { printShippingLabel } from '../../utils/labelPrinter';
 import LabelPrintInstructions from '../../components/LabelPrintInstructions';
@@ -526,9 +527,12 @@ const AdminOrderDetail = () => {
   const subtotal = hasNewShape ? order.subtotal : order.prisInfo?.produktPris;
   const vat = hasNewShape ? order.vat : order.prisInfo?.moms;
   const total = hasNewShape ? order.total : order.prisInfo?.totalPris;
-  const affiliateCode = order.affiliateCode || order.affiliate?.code;
-  const affiliatePct =
-    order.discountPercentage || order.affiliate?.discountPercentage || order.affiliateDiscount?.percentage || 0;
+  // CP13 A2: the order's affiliate in one shape for both builds (the data
+  // module maps it): the code, how it was found, and the shop's own cost to
+  // its affiliate ("Affiliate-provision", design A14) with its ledger state.
+  const affiliate = orderAffiliateOf(order);
+  const affiliateCode = affiliate?.code;
+  const affiliatePct = affiliate?.discountPercent || 0;
 
   const headerActions = (
     <>
@@ -844,14 +848,38 @@ const AdminOrderDetail = () => {
                   <span className="text-admin-text-muted">Leverans</span>
                   <span className="text-admin-text">{isPickup ? 'Upphämtning' : 'Hemleverans'}</span>
                 </div>
-                {affiliateCode && (
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-admin-text-muted">Affiliate</span>
-                    <span className="inline-flex items-center gap-1.5">
-                      <StatusPill tone="info" marker="none">{affiliateCode}</StatusPill>
-                      {affiliatePct ? <span className="text-[12px] text-admin-text-faint">{affiliatePct}%</span> : null}
-                    </span>
-                  </div>
+                {affiliate && (
+                  <>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-admin-text-muted">Affiliate</span>
+                      {affiliate.detailPath ? (
+                        <Link to={affiliate.detailPath} className="hover:opacity-80">
+                          <StatusPill tone="info" marker="none">
+                            Affiliate: {affiliate.code}{ATTRIBUTION[affiliate.attribution] ? ` (${ATTRIBUTION[affiliate.attribution]})` : ''}
+                          </StatusPill>
+                        </Link>
+                      ) : (
+                        <StatusPill tone="info" marker="none">
+                          Affiliate: {affiliate.code}{ATTRIBUTION[affiliate.attribution] ? ` (${ATTRIBUTION[affiliate.attribution]})` : ''}
+                        </StatusPill>
+                      )}
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-admin-text-muted">Affiliate-provision</span>
+                      {affiliate.selfReferral ? (
+                        <span className="text-right text-admin-text-muted">{SELF_REFERRAL}</span>
+                      ) : (
+                        <span className="text-right">
+                          <span className="tabular-nums text-admin-text">
+                            {affiliate.affiliateCommissionMinor === null ? '–' : formatMinor(affiliate.affiliateCommissionMinor, order.currency || 'SEK')}
+                          </span>
+                          {ORDER_STATE[affiliate.ledgerState] && (
+                            <span className="block text-[12px] text-admin-text-muted">{ORDER_STATE[affiliate.ledgerState].label}</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  </>
                 )}
               </CardSection>
             </>

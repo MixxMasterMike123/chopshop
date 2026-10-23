@@ -140,6 +140,9 @@ const ADMIN_ALIASES = [
   // CP8-DC: the discount codes.
   ['src/pages/admin/adminDiscountCodesData.js', 'src/admin-app/replacements/adminDiscountCodesData.js',
     'AdminDiscountCodes: the codes by /v1/admin/discount-codes; deactivate, never delete; dates as Stockholm days, the end day inclusive'],
+  // CP13 A2: the affiliate program's six pages (one data module).
+  ['src/pages/admin/adminAffiliateData.js', 'src/admin-app/replacements/adminAffiliateData.js',
+    'the affiliate pages: /v1/admin/affiliates/* (applications, approve/deny, invite, the ledger, adjustments, the manual payout rail, analytics); "Ta bort" = revoke, nothing deleted; no credentials mail, no view-portal trick, no verify helpers'],
   // Unit FH: the shop's own admins.
   ['src/pages/admin/adminUsersData.js', 'src/admin-app/replacements/adminUsersData.js',
     'AdminUsers: the shop\'s own admins by GET/POST /v1/admin/members (invite, revoke); no roles, no trade margin, no user create/edit pages'],

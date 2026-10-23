@@ -1,0 +1,145 @@
+{
+  "_comment": "INVENTED affiliates of Test Shop A for the admin dev API (CP13 A2). Money in öre, rates in basis points, times ISO. The days of clicksByDay are offsets from today (0 = today). orderOverlay adds the `affiliate` member (with affiliateId, as the Worker sends it) to two of orders.fixtures.json's orders.",
+  "test-shop-a": {
+    "affiliates": [
+      {
+        "affiliateId": "af000000-0000-4000-8000-000000000001",
+        "applicationId": "aa000000-0000-4000-8000-000000000009",
+        "code": "ANNA10",
+        "name": "Anna Berg",
+        "email": "anna.berg@example.com",
+        "phone": "070-111 22 33",
+        "address": { "line1": "Storgatan 12", "line2": null, "postalCode": "111 22", "city": "Stockholm", "country": "SE" },
+        "status": "active",
+        "commissionBp": 1500,
+        "discountBp": 1000,
+        "currency": "SEK",
+        "preferredLang": "sv",
+        "promotionMethod": "instagram",
+        "socials": { "instagram": "@annaberg", "website": "https://annaberg.example.com" },
+        "createdAt": "2026-09-02T09:00:00.000Z",
+        "account": { "invited": false, "membership": "active" },
+        "terms": { "acceptedAt": "2026-09-03T10:00:00.000Z", "acceptedVersion": "2026-10-22", "currentVersion": "2026-10-22", "outdated": false },
+        "clickOffsets": [[0, 4], [1, 7], [2, 3], [4, 9], [5, 12], [7, 6], [9, 2], [12, 5], [15, 8], [18, 3], [22, 4], [26, 1]],
+        "conversions": 3,
+        "reversedMinor": 0,
+        "balances": [{ "currency": "SEK", "balanceMinor": 16200, "earnedMinor": 21600, "heldMinor": 5400, "paidMinor": 5400, "payableMinor": 10800, "requestedMinor": 0 }],
+        "orders": [
+          { "orderId": "0a000000-0000-4000-8000-000000000001", "orderNumber": "20261003-A1B2C3D4", "paidAt": "2026-10-03T08:12:00.000Z", "totalMinor": 74600, "currency": "SEK", "attribution": "link", "affiliateCommissionMinor": 5400, "selfReferral": false, "state": "held" },
+          { "orderId": "0a000000-0000-4000-8000-000000000002", "orderNumber": "20261002-B2C3D4E5", "paidAt": "2026-10-02T15:40:00.000Z", "totalMinor": 34900, "currency": "SEK", "attribution": "code", "affiliateCommissionMinor": 0, "selfReferral": true, "state": "none" },
+          { "orderId": "0a000000-0000-4000-8000-000000000101", "orderNumber": "20260914-C4D5E6F7", "paidAt": "2026-09-14T12:00:00.000Z", "totalMinor": 89900, "currency": "SEK", "attribution": "link", "affiliateCommissionMinor": 8100, "selfReferral": false, "state": "payable" },
+          { "orderId": "0a000000-0000-4000-8000-000000000102", "orderNumber": "20260906-D5E6F7A8", "paidAt": "2026-09-06T17:20:00.000Z", "totalMinor": 89900, "currency": "SEK", "attribution": "code", "affiliateCommissionMinor": 8100, "selfReferral": false, "state": "payable" }
+        ],
+        "ledger": [
+          { "entryId": "ee000000-0000-4000-8000-000000000004", "kind": "accrual", "amountMinor": 5400, "currency": "SEK", "availableAt": "2026-10-17T08:12:00.000Z", "orderNumber": "20261003-A1B2C3D4", "reason": null, "createdAt": "2026-10-03T08:12:00.000Z" },
+          { "entryId": "ee000000-0000-4000-8000-000000000003", "kind": "payout", "amountMinor": -5400, "currency": "SEK", "availableAt": null, "orderNumber": null, "reason": null, "createdAt": "2026-09-30T10:00:00.000Z" },
+          { "entryId": "ee000000-0000-4000-8000-000000000002", "kind": "accrual", "amountMinor": 8100, "currency": "SEK", "availableAt": "2026-09-28T12:00:00.000Z", "orderNumber": "20260914-C4D5E6F7", "reason": null, "createdAt": "2026-09-14T12:00:00.000Z" },
+          { "entryId": "ee000000-0000-4000-8000-000000000001", "kind": "accrual", "amountMinor": 8100, "currency": "SEK", "availableAt": "2026-09-20T17:20:00.000Z", "orderNumber": "20260906-D5E6F7A8", "reason": null, "createdAt": "2026-09-06T17:20:00.000Z" }
+        ],
+        "payouts": [
+          { "payoutId": "bb000000-0000-4000-8000-000000000001", "status": "paid", "amountMinor": 5400, "currency": "SEK", "requestedAt": "2026-09-29T08:00:00.000Z", "paidAt": "2026-09-30T10:00:00.000Z", "reference": "Swish 4711", "invoiceNumber": "2026-001", "invoiceObjectId": null, "notes": null, "voidedAt": null, "voidReason": null }
+        ]
+      },
+      {
+        "affiliateId": "af000000-0000-4000-8000-000000000002",
+        "applicationId": null,
+        "code": "ERIK-YT",
+        "name": "Erik Lund",
+        "email": "erik.lund@example.com",
+        "phone": null,
+        "address": { "line1": "Kvarngatan 3", "line2": "lgh 1202", "postalCode": "411 05", "city": "Göteborg", "country": "SE" },
+        "status": "active",
+        "commissionBp": 2000,
+        "discountBp": 1000,
+        "currency": "SEK",
+        "preferredLang": "sv",
+        "promotionMethod": "youtube",
+        "socials": { "youtube": "https://youtube.example.com/@eriklund" },
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "account": { "invited": true, "membership": "active" },
+        "terms": { "acceptedAt": null, "acceptedVersion": null, "currentVersion": "2026-10-22", "outdated": true },
+        "clickOffsets": [[0, 1], [3, 2], [6, 1], [10, 3]],
+        "conversions": 1,
+        "reversedMinor": 1500,
+        "balances": [{ "currency": "SEK", "balanceMinor": 8000, "earnedMinor": 12000, "heldMinor": 0, "paidMinor": 0, "payableMinor": 8000, "requestedMinor": 4000 }],
+        "orders": [
+          { "orderId": "0a000000-0000-4000-8000-000000000201", "orderNumber": "20260901-E6F7A8B9", "paidAt": "2026-09-01T11:00:00.000Z", "totalMinor": 84000, "currency": "SEK", "attribution": "link", "affiliateCommissionMinor": 12000, "selfReferral": false, "state": "payable" }
+        ],
+        "ledger": [
+          { "entryId": "ee000000-0000-4000-8000-000000000013", "kind": "payout", "amountMinor": -4000, "currency": "SEK", "availableAt": null, "orderNumber": null, "reason": null, "createdAt": "2026-10-20T09:00:00.000Z" },
+          { "entryId": "ee000000-0000-4000-8000-000000000012", "kind": "reversal", "amountMinor": -1500, "currency": "SEK", "availableAt": null, "orderNumber": "20260901-E6F7A8B9", "reason": null, "createdAt": "2026-09-05T09:00:00.000Z" },
+          { "entryId": "ee000000-0000-4000-8000-000000000011", "kind": "accrual", "amountMinor": 13500, "currency": "SEK", "availableAt": "2026-09-15T11:00:00.000Z", "orderNumber": "20260901-E6F7A8B9", "reason": null, "createdAt": "2026-09-01T11:00:00.000Z" }
+        ],
+        "payouts": [
+          { "payoutId": "bb000000-0000-4000-8000-000000000002", "status": "requested", "amountMinor": 4000, "currency": "SEK", "requestedAt": "2026-10-20T09:00:00.000Z", "paidAt": null, "reference": null, "invoiceNumber": "EL-7", "invoiceObjectId": "cc000000-0000-4000-8000-000000000002", "notes": null, "voidedAt": null, "voidReason": null }
+        ]
+      },
+      {
+        "affiliateId": "af000000-0000-4000-8000-000000000003",
+        "applicationId": null,
+        "code": "SARA",
+        "name": "Sara Nilsson",
+        "email": "sara.nilsson@example.com",
+        "phone": null,
+        "address": { "line1": null, "line2": null, "postalCode": null, "city": null, "country": "SE" },
+        "status": "suspended",
+        "commissionBp": 1500,
+        "discountBp": 500,
+        "currency": "SEK",
+        "preferredLang": "en",
+        "promotionMethod": "tiktok",
+        "socials": {},
+        "createdAt": "2026-07-11T09:00:00.000Z",
+        "account": { "invited": false, "membership": "active" },
+        "terms": { "acceptedAt": "2026-07-12T10:00:00.000Z", "acceptedVersion": "2026-10-22", "currentVersion": "2026-10-22", "outdated": false },
+        "clickOffsets": [],
+        "conversions": 0,
+        "reversedMinor": 0,
+        "balances": [],
+        "orders": [],
+        "ledger": [],
+        "payouts": []
+      }
+    ],
+    "applications": [
+      {
+        "applicationId": "aa000000-0000-4000-8000-000000000001",
+        "status": "pending",
+        "name": "Maja Ek",
+        "email": "maja.ek@example.com",
+        "phone": "073-555 01 02",
+        "socials": { "instagram": "@majaek", "tiktok": "@maja.ek" },
+        "promotionMethod": "instagram",
+        "message": "Hej! Jag driver ett konto om hållbart mode med 8 000 följare och skulle gärna tipsa om era tröjor.",
+        "preferredLang": "sv",
+        "termsVersion": "2026-10-22",
+        "termsAcceptedAt": "2026-10-22T18:30:00.000Z",
+        "decidedAt": null,
+        "decisionReason": null,
+        "affiliateId": null,
+        "createdAt": "2026-10-22T18:30:00.000Z"
+      },
+      {
+        "applicationId": "aa000000-0000-4000-8000-000000000002",
+        "status": "pending",
+        "name": "Leo Holm",
+        "email": "leo.holm@example.com",
+        "phone": null,
+        "socials": { "youtube": "https://youtube.example.com/@leoholm" },
+        "promotionMethod": "youtube",
+        "message": null,
+        "preferredLang": "en",
+        "termsVersion": "2026-10-22",
+        "termsAcceptedAt": "2026-10-21T07:05:00.000Z",
+        "decidedAt": null,
+        "decisionReason": null,
+        "affiliateId": null,
+        "createdAt": "2026-10-21T07:05:00.000Z"
+      }
+    ],
+    "orderOverlay": {
+      "0a000000-0000-4000-8000-000000000001": { "affiliateId": "af000000-0000-4000-8000-000000000001", "attribution": "link", "code": "ANNA10", "affiliateCommissionMinor": 5400, "ledgerState": "held", "selfReferral": false },
+      "0a000000-0000-4000-8000-000000000002": { "affiliateId": "af000000-0000-4000-8000-000000000001", "attribution": "code", "code": "ANNA10", "affiliateCommissionMinor": 0, "ledgerState": "none", "selfReferral": true }
+    }
+  }
+}

@@ -14,8 +14,14 @@
 //   completedOrders   'shipped', 'delivered' or 'completed' (and open)
 //   recentOrders      the five newest rows
 // Not ported (null: the page leaves the tile and its link out): the customer
-// count (no customer accounts, D81), the affiliate revenue and the active
-// affiliates (PORT-LATER).
+// count (no customer accounts, D81).
+//
+// CP13 A2, from GET /v1/admin/affiliates/analytics (the last 30 days), only
+// while the shop's `affiliate` add-on is ON (else null, and the tiles leave):
+//   affiliateRevenue  the commission the shop owes its affiliates for the
+//                     period, in kronor: the tile "Affiliate-provision (30
+//                     dagar)" — a COST of the shop, never a revenue (A14)
+//   activeAffiliates  the shop's active affiliates
 //
 // The "Kom igång" checklist (CP9-OB item 3): loadOnboarding reads the facts
 // the admin already has (the legal status, the shop, the Connect view, the
@@ -37,11 +43,34 @@ import { notEnabledPayments, toPagePayments } from '../adapters/payments.js';
 import { orderFromListRow } from '../adapters/order.js';
 import { minorToKronor } from '../adapters/money.js';
 import { readForShop } from '../providers/ordersForShop.js';
+import { getAnalytics } from '../../api/admin/affiliates.js';
+import { sinceForDays } from '../adapters/affiliate.js';
 
 const DONE = new Set(['shipped', 'delivered', 'completed']);
 
 export function loadDashboardStats(shopId) {
-  return readForShop(shopId, async (id) => statsOf(await listAllOrders({}, { shopId: id })));
+  return readForShop(shopId, async (id) => {
+    const [orders, affiliate] = await Promise.all([listAllOrders({}, { shopId: id }), affiliateStatsOf(id)]);
+    return { ...statsOf(orders), ...affiliate };
+  });
+}
+
+/** The two affiliate tiles, or nulls while the add-on is OFF (or the read failed: no tile on a guess). */
+async function affiliateStatsOf(shopId) {
+  const none = { affiliateRevenue: null, activeAffiliates: null };
+  try {
+    const { data } = await adminRequest('GET', '/v1/admin/shop', { shopId });
+    if (data?.shop?.features?.affiliate !== true) return none;
+    const analytics = await getAnalytics({ since: sinceForDays(30), shopId });
+    if (!analytics) return none;
+    return {
+      affiliateRevenue: minorToKronor(analytics.commissionMinor),
+      activeAffiliates: Number.isSafeInteger(analytics.activeAffiliates) ? analytics.activeAffiliates : null,
+    };
+  } catch (error) {
+    console.warn('AdminDashboard: no affiliate figures:', error?.message);
+    return none;
+  }
 }
 
 function statsOf({ orders, count, totalMinor }) {

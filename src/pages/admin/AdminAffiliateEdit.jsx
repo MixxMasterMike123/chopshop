@@ -1,1220 +1,716 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, useLocation, useNavigate } from 'react-router-dom';
-import { doc, getDoc, updateDoc, deleteDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { db, functions } from '../../firebase/config';
-import { httpsCallable } from 'firebase/functions';
-import { getAffiliatePayoutHistory, formatCurrency as formatPayoutCurrency, formatDate as formatPayoutDate } from '../../utils/affiliatePayouts';
-import { validateCustomAffiliateCode, generateSimpleAffiliateCode } from '../../utils/affiliateCalculations';
+// One affiliate (CP13 A2, design §7.2): statistics, the orders attributed to
+// them, the ledger ("Reskontra") with adjustments, payouts, the editable
+// details, the account (invite state) and the status. NOT behind the add-on
+// gate (design §4.5): with the program switched OFF the page still opens (by
+// direct link, or from an order's affiliate pill) and says so in a banner.
+// Every figure is the server's; the page formats and never computes money.
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import AppLayout from '../../components/layout/AppLayout';
 import { useShopId } from '../../contexts/ShopContext';
-import { APP_URLS } from '../../config/urls';
+import { useShopFeatures } from '../../contexts/ShopFeaturesContext';
 import {
-  CheckIcon,
-  XMarkIcon,
-  GlobeAltIcon,
-  LinkIcon,
-  ClockIcon,
-  DocumentArrowDownIcon,
-  PaperAirplaneIcon,
-  KeyIcon,
-  EyeIcon
-} from '@heroicons/react/24/solid';
-import { format } from 'date-fns';
-import { sv } from 'date-fns/locale';
-import { useTranslation } from '../../contexts/TranslationContext';
-import { Page, Card, CardSection, RightRail, Button, StatusPill, MetricsBar } from '../../components/admin/ui';
+  CAPABILITIES,
+  PATHS,
+  addAdjustment,
+  loadAffiliate,
+  loadAffiliateLedger,
+  loadAffiliateOrders,
+  loadAffiliatePayouts,
+  removeAffiliate,
+  resendInvite,
+  saveAffiliate,
+  setAffiliateStatus,
+} from './adminAffiliateData';
+import {
+  AFFILIATE_STATUS,
+  ATTRIBUTION,
+  CODE_CHANGE_WARNING,
+  COUNTRIES,
+  LANGUAGES,
+  LEDGER_KIND,
+  ORDER_STATE,
+  PAYOUT_STATUS,
+  PROGRAM_OFF_BANNER,
+  PROMOTION_METHODS,
+  SELF_REFERRAL,
+  SOCIALS,
+  formatBp,
+  formatCount,
+  formatDay,
+  formatMinor,
+  formatSignedMinor,
+  languageLabel,
+  promotionLabel,
+  balanceOf,
+  clickSeries,
+  editFormOf,
+} from './affiliateView';
+import AdminAffiliateApplication from './AdminAffiliateApplication';
+import {
+  Page,
+  Card,
+  CardSection,
+  RightRail,
+  Button,
+  StatusPill,
+  DataTable,
+  SegmentedTabs,
+  Field,
+  Input,
+  Select,
+} from '../../components/admin/ui';
+import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 
-const SocialLinks = ({ socials }) => {
-  if (!socials || Object.values(socials).every(val => !val)) {
-    return <p className="text-[13px] text-admin-text-muted">-</p>;
-  }
+export const ProgramOffBanner = () => (
+  <div role="status" className="mb-5 flex items-start gap-2 rounded-[var(--radius-admin)] border border-admin-caution-dot bg-admin-caution-bg px-4 py-3 text-[13px] text-admin-caution-text">
+    <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+    <p>{PROGRAM_OFF_BANNER}</p>
+  </div>
+);
 
-  const socialPlatforms = [
-    { key: 'website', name: 'Hemsida', icon: <GlobeAltIcon className="h-4 w-4" /> },
-    { key: 'instagram', name: 'Instagram', icon: <LinkIcon className="h-4 w-4" /> },
-    { key: 'youtube', name: 'YouTube', icon: <LinkIcon className="h-4 w-4" /> },
-    { key: 'facebook', name: 'Facebook', icon: <LinkIcon className="h-4 w-4" /> },
-    { key: 'tiktok', name: 'TikTok', icon: <LinkIcon className="h-4 w-4" /> },
-  ];
-
+/** Link landings per day, the last 30 days (oldest left). */
+const ClickBars = ({ series }) => {
+  const max = Math.max(1, ...series);
+  const total = series.reduce((sum, n) => sum + n, 0);
   return (
-    <ul className="space-y-2">
-      {socialPlatforms.map(platform =>
-        socials[platform.key] ? (
-          <li key={platform.key}>
-            <a
-              href={socials[platform.key]}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 text-[13px] text-admin-text hover:text-admin-info-text group"
-            >
-              <span className="text-admin-text-faint group-hover:text-admin-info-text transition-colors">
-                {platform.icon}
-              </span>
-              <span>{platform.name}</span>
-            </a>
-          </li>
-        ) : null
-      )}
-    </ul>
+    <svg
+      viewBox={`0 0 ${series.length * 6} 40`}
+      preserveAspectRatio="none"
+      className="h-12 w-full"
+      role="img"
+      aria-label={`Klick per dag de senaste 30 dagarna, ${total} totalt`}
+    >
+      {series.map((n, i) => {
+        const h = n === 0 ? 1 : Math.max(2, (n / max) * 40);
+        return <rect key={i} x={i * 6 + 1} y={40 - h} width="4" height={h} rx="1" fill={n === 0 ? 'var(--color-admin-border)' : 'var(--color-admin-text-faint)'} />;
+      })}
+    </svg>
   );
 };
 
-// Map affiliate status → StatusPill tone (green→success, gray→neutral, orange→warning, yellow→warning)
-const STATUS_TONE = {
-  active: 'success',
-  inactive: 'neutral',
-  suspended: 'warning',
-  pending: 'warning',
-};
-const STATUS_TEXT = {
-  active: 'Aktiv',
-  inactive: 'Inte Aktiv',
-  suspended: 'Suspenderad',
-  pending: 'Väntar',
+const Stat = ({ label, value }) => (
+  <div>
+    <div className="text-[12px] text-admin-text-muted">{label}</div>
+    <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-admin-text">{value}</div>
+  </div>
+);
+
+const Row = ({ label, children }) => (
+  <div className="flex items-baseline justify-between gap-4 py-1 text-[13px]">
+    <span className="text-admin-text-muted">{label}</span>
+    <span className="min-w-0 break-words text-right text-admin-text">{children}</span>
+  </div>
+);
+
+const STATUS_OPTIONS = ['active', 'inactive', 'suspended'].map((value) => ({ value, label: AFFILIATE_STATUS[value].label }));
+
+const MEMBERSHIP_TEXT = {
+  active: 'Kan logga in i affiliateportalen',
+  revoked: 'Borttagen: kan inte logga in',
+  suspended: 'Avstängd av plattformen',
 };
 
 const AdminAffiliateEdit = () => {
+  const location = useLocation();
+  // The older build routes an application here (/admin/affiliates/application/:id).
+  if (location.pathname.includes('/affiliates/application/')) return <AdminAffiliateApplication />;
+  return <AffiliateDetail />;
+};
+
+const AffiliateDetail = () => {
   const { id } = useParams();
   const shopId = useShopId();
-  const location = useLocation();
   const navigate = useNavigate();
-  const { t } = useTranslation();
 
-  const [data, setData] = useState(null);
+  const [affiliate, setAffiliate] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [isApplication, setIsApplication] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [affiliateStats, setAffiliateStats] = useState(null);
-  const [recentOrders, setRecentOrders] = useState([]);
-  const [payoutHistory, setPayoutHistory] = useState([]);
-  const [loadingPayouts, setLoadingPayouts] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [orders, setOrders] = useState({ rows: [], nextCursor: null, loading: true });
+  const [ledger, setLedger] = useState({ rows: [], nextCursor: null, loading: true });
+  const [payouts, setPayouts] = useState({ rows: [], nextCursor: null, loading: true });
+  const { isEnabled } = useShopFeatures();
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [adjusting, setAdjusting] = useState(false);
+  const [adjustment, setAdjustment] = useState({ amount: '', reason: '' });
 
-  // Credential sending state
-  const [sendingCredentials, setSendingCredentials] = useState(false);
-  const [credentialsResult, setCredentialsResult] = useState(null);
-
-  // Editable fields
-  const [commissionRate, setCommissionRate] = useState('');
-  const [checkoutDiscount, setCheckoutDiscount] = useState('');
-  const [status, setStatus] = useState('');
-  const [preferredLang, setPreferredLang] = useState('');
-  const [customAffiliateCode, setCustomAffiliateCode] = useState('');
-  const [codeValidationError, setCodeValidationError] = useState('');
-
-  // Personal/Contact fields
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [address, setAddress] = useState('');
-  const [postalCode, setPostalCode] = useState('');
-  const [city, setCity] = useState('');
-  const [country, setCountry] = useState('');
-
-  // Social media fields
-  const [website, setWebsite] = useState('');
-  const [instagram, setInstagram] = useState('');
-  const [youtube, setYoutube] = useState('');
-  const [facebook, setFacebook] = useState('');
-  const [tiktok, setTiktok] = useState('');
-
-  // Marketing fields
-  const [promotionMethod, setPromotionMethod] = useState('');
-  const [message, setMessage] = useState('');
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('sv-SE', {
-      style: 'currency',
-      currency: 'SEK',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }).format(amount || 0);
-  };
-
-  const fetchAffiliateStats = async (affiliateCode, affiliateData = null) => {
+  const fetchLedger = useCallback(async () => {
+    if (!CAPABILITIES.ledger) return setLedger({ rows: [], nextCursor: null, loading: false });
     try {
-      // Use passed affiliateData or fall back to state (for manual refreshes)
-      const currentAffiliateData = affiliateData || data;
-
-      console.log(`🔍 Fetching stats for affiliate ${affiliateCode}, data available:`, {
-        hasData: !!currentAffiliateData,
-        hasStats: !!(currentAffiliateData?.stats),
-        stats: currentAffiliateData?.stats
-      });
-
-      // Get recent orders with this affiliate code (for detailed list display)
-      // Query 1: Orders with top-level affiliateCode (Mock payments)
-      const ordersRef = collection(db, 'orders');
-      const q1 = query(ordersRef, where('shopId', '==', shopId), where('affiliateCode', '==', affiliateCode));
-      const orderSnap1 = await getDocs(q1);
-      const orders1 = orderSnap1.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-
-      // Query 2: Orders with affiliate.code structure (Stripe payments)
-      const q2 = query(ordersRef, where('shopId', '==', shopId), where('affiliate.code', '==', affiliateCode));
-      const orderSnap2 = await getDocs(q2);
-      const orders2 = orderSnap2.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-
-      // Merge and deduplicate orders by ID, then filter cancelled orders
-      const allOrders = [...orders1, ...orders2];
-      const orders = allOrders
-        .filter((order, index, array) => array.findIndex(o => o.id === order.id) === index)
-        .filter(order => order.status !== 'cancelled'); // Only count non-cancelled orders
-
-      // Get click data for unique clicks calculation
-      const clicksRef = collection(db, 'affiliateClicks');
-      const clicksQuery = query(clicksRef, where('shopId', '==', shopId), where('affiliateCode', '==', affiliateCode));
-      const clicksSnap = await getDocs(clicksQuery);
-      const clicks = clicksSnap.docs.map(doc => doc.data());
-
-      // Calculate unique clicks by IP (for additional insight)
-      const uniqueClicks = new Set(clicks.map(c => c.ipAddress)).size;
-
-      // 🎯 USE AFFILIATE.STATS AS AUTHORITATIVE SOURCE (same as affiliate portal)
-      const affiliateDbStats = currentAffiliateData?.stats || {};
-      const totalClicks = affiliateDbStats.clicks || 0;
-      const totalOrders = affiliateDbStats.conversions || 0;
-      const totalEarnings = affiliateDbStats.totalEarnings || 0;
-
-      console.log(`📊 Affiliate ${affiliateCode} stats comparison:`, {
-        fromDatabase: { clicks: affiliateDbStats.clicks, conversions: affiliateDbStats.conversions },
-        fromActualClicks: { totalClicks: clicks.length, uniqueClicks },
-        willDisplay: { totalClicks, totalOrders, uniqueClicks }
-      });
-
-      setRecentOrders(orders);
-      setAffiliateStats({
-        totalClicks,
-        uniqueClicks,
-        totalOrders,
-        totalEarnings,
-        conversionRate: totalClicks > 0 ? ((totalOrders / totalClicks) * 100).toFixed(1) : '0.0'
-      });
+      const page = await loadAffiliateLedger(shopId, id);
+      setLedger({ rows: page.entries, nextCursor: page.nextCursor, loading: false });
     } catch (error) {
-      console.error('Error fetching affiliate stats:', error);
-      toast.error('Kunde inte hämta affiliate-statistik');
+      setLedger({ rows: [], nextCursor: null, loading: false, error: error?.message });
     }
-  };
+  }, [shopId, id]);
 
-  const fetchPayoutHistory = async (affiliateId) => {
-    setLoadingPayouts(true);
-    console.log('🔍 Fetching payout history for affiliate ID:', affiliateId);
-
-    try {
-      const payouts = await getAffiliatePayoutHistory(affiliateId, shopId);
-      console.log('📊 Payout history results:', payouts);
-      setPayoutHistory(payouts);
-
-      if (payouts.length === 0) {
-        console.log('⚠️ No payouts found for affiliate ID:', affiliateId);
-        // Let's also try to fetch all payouts to see what's in the database
-        console.log('🔍 Checking all payouts in database...');
-
-        // Debug: Get all payouts to see what's available
-        const allPayoutsQuery = query(collection(db, 'affiliatePayouts'), where('shopId', '==', shopId));
-        const allPayoutsSnap = await getDocs(allPayoutsQuery);
-        const allPayouts = allPayoutsSnap.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        console.log('📋 All payouts in database:', allPayouts);
-
-        // Check if there are payouts for this affiliate with different ID format
-        const matchingPayouts = allPayouts.filter(p =>
-          p.affiliateId === affiliateId ||
-          p.affiliateId === data?.id ||
-          p.affiliateCode === data?.affiliateCode
-        );
-        console.log('🔍 Matching payouts found:', matchingPayouts);
-
-        if (matchingPayouts.length > 0) {
-          console.log('✅ Found payouts with different ID matching, using those');
-          setPayoutHistory(matchingPayouts);
-        }
-      }
-    } catch (error) {
-      console.error('❌ Error fetching payout history:', error);
-      toast.error('Kunde inte hämta utbetalningshistorik');
-    } finally {
-      setLoadingPayouts(false);
-    }
-  };
-
-  const fetchData = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      // First check if this is an application
-      const appRef = doc(db, 'affiliateApplications', id);
-      const appSnap = await getDoc(appRef);
-
-      if (appSnap.exists()) {
-        setData(appSnap.data());
-        setIsApplication(true);
-      } else {
-        // If not an application, get affiliate data
-        const affiliateRef = doc(db, 'affiliates', id);
-        const affiliateSnap = await getDoc(affiliateRef);
-
-        if (affiliateSnap.exists()) {
-          const affiliateData = affiliateSnap.data();
-          setData(affiliateData);
-          setIsApplication(false);
-
-          // Only fetch stats after we have the affiliate data
-          if (affiliateData.affiliateCode) {
-            console.log('🔍 Affiliate data loaded:', {
-              id: id,
-              affiliateId: affiliateData.id,
-              affiliateCode: affiliateData.affiliateCode,
-              email: affiliateData.email,
-              name: affiliateData.name
-            });
-
-            await fetchAffiliateStats(affiliateData.affiliateCode, affiliateData);
-            await fetchPayoutHistory(id);
-          }
-
-          // Set form values
-          setCommissionRate(affiliateData.commissionRate?.toString() || '');
-          setCheckoutDiscount(affiliateData.checkoutDiscount?.toString() || '');
-          setStatus(affiliateData.status || '');
-          setPreferredLang(affiliateData.preferredLang || 'sv-SE');
-          setCustomAffiliateCode(''); // Initialize empty for new custom codes
-
-          // Set personal/contact fields
-          setName(affiliateData.name || '');
-          setEmail(affiliateData.email || '');
-          setPhone(affiliateData.phone || '');
-          setAddress(affiliateData.address || '');
-          setPostalCode(affiliateData.postalCode || '');
-          setCity(affiliateData.city || '');
-          setCountry(affiliateData.country || '');
-
-          // Set social media fields
-          setWebsite(affiliateData.socials?.website || '');
-          setInstagram(affiliateData.socials?.instagram || '');
-          setYoutube(affiliateData.socials?.youtube || '');
-          setFacebook(affiliateData.socials?.facebook || '');
-          setTiktok(affiliateData.socials?.tiktok || '');
-
-          // Set marketing fields
-          setPromotionMethod(affiliateData.promotionMethod || '');
-          setMessage(affiliateData.message || '');
-        } else {
-          toast.error('Kunde inte hitta affiliate eller ansökan.');
-          navigate('/admin/affiliates');
-        }
-      }
+      const detail = await loadAffiliate(shopId, id);
+      setAffiliate(detail);
+      setForm(detail ? editFormOf(detail) : null);
+      if (!detail) return;
+      loadAffiliateOrders(shopId, id).then(
+        (page) => setOrders({ rows: page.orders, nextCursor: page.nextCursor, loading: false }),
+        (error) => setOrders({ rows: [], nextCursor: null, loading: false, error: error?.message }),
+      );
+      loadAffiliatePayouts(shopId, id).then(
+        (page) => setPayouts({ rows: page.payouts, nextCursor: page.nextCursor, loading: false }),
+        (error) => setPayouts({ rows: [], nextCursor: null, loading: false, error: error?.message }),
+      );
+      fetchLedger();
     } catch (error) {
-      console.error('Error fetching data:', error);
-      toast.error('Kunde inte hämta data.');
+      setLoadError(error?.message || 'Kunde inte hämta affiliaten.');
     } finally {
       setLoading(false);
     }
-  }, [id, navigate]);
+  }, [shopId, id, fetchLedger]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    fetchAll();
+  }, [fetchAll]);
 
-  useEffect(() => {
-    if (data && data.preferredLang) setPreferredLang(data.preferredLang);
-  }, [data]);
-
-  const handleApprove = async () => {
-    const toastId = toast.loading('Godkänner affiliate...');
-    try {
-      const approveAffiliate = httpsCallable(functions, 'approveAffiliate');
-      const applicationData = {
-        applicationId: id,
-        name: data.name,
-        email: data.email,
-        phone: data.phone || '',
-        address: data.address || '',
-        postalCode: data.postalCode || '',
-        city: data.city || '',
-        country: data.country || '',
-        socials: data.socials || {},
-        promotionMethod: data.promotionMethod || '',
-        message: data.message || '',
-        checkoutDiscount: Number(checkoutDiscount) || 10,
-      };
-      await approveAffiliate(applicationData);
-      toast.success('Affiliate godkänd och e-post skickat!', { id: toastId, duration: 6000 });
-      navigate('/admin/affiliates');
-    } catch (error) {
-      toast.error(`Fel vid godkännande: ${error.message}`, { id: toastId });
+  const refreshDetail = async () => {
+    const detail = await loadAffiliate(shopId, id);
+    if (detail) {
+      setAffiliate(detail);
+      setForm(editFormOf(detail));
     }
   };
 
-  const handleDeny = async () => {
-    if (!window.confirm('Är du säker på att du vill neka och radera denna ansökan?')) return;
-    const toastId = toast.loading('Nekar ansökan...');
+  const moreOrders = async () => {
     try {
-      await deleteDoc(doc(db, 'affiliateApplications', id));
-      toast.success('Ansökan har nekats och raderats.', { id: toastId });
-      navigate('/admin/affiliates');
+      const page = await loadAffiliateOrders(shopId, id, orders.nextCursor);
+      setOrders((prev) => ({ ...prev, rows: [...prev.rows, ...page.orders], nextCursor: page.nextCursor }));
     } catch (error) {
-      toast.error('Kunde inte neka ansökan.', { id: toastId });
+      toast.error(error?.message || 'Kunde inte hämta fler beställningar.');
+    }
+  };
+
+  const morePayouts = async () => {
+    try {
+      const page = await loadAffiliatePayouts(shopId, id, payouts.nextCursor);
+      setPayouts((prev) => ({ ...prev, rows: [...prev.rows, ...page.payouts], nextCursor: page.nextCursor }));
+    } catch (error) {
+      toast.error(error?.message || 'Kunde inte hämta fler utbetalningar.');
+    }
+  };
+
+  const moreLedger = async () => {
+    try {
+      const page = await loadAffiliateLedger(shopId, id, ledger.nextCursor);
+      setLedger((prev) => ({ ...prev, rows: [...prev.rows, ...page.entries], nextCursor: page.nextCursor }));
+    } catch (error) {
+      toast.error(error?.message || 'Kunde inte hämta fler rader.');
     }
   };
 
   const handleSave = async (e) => {
     e.preventDefault();
-    setLoading(true);
-    const toastId = toast.loading('Sparar ändringar...');
-
+    setBusy('save');
     try {
-      // Validate custom affiliate code if provided
-      if (customAffiliateCode.trim()) {
-        const validationResult = await validateCustomAffiliateCode(customAffiliateCode, id, shopId);
-        if (!validationResult.isValid) {
-          setCodeValidationError(validationResult.error);
-          toast.error(`Kunde inte spara: ${validationResult.error}`, { id: toastId });
-          setLoading(false);
-          return;
-        }
+      const saved = await saveAffiliate(shopId, affiliate, form);
+      if (saved) {
+        setAffiliate(saved);
+        setForm(editFormOf(saved));
       }
-
-      const updateData = {
-        // Business settings
-        commissionRate: Number(commissionRate),
-        checkoutDiscount: Number(checkoutDiscount),
-        status: status,
-        preferredLang: preferredLang,
-
-        // Personal/Contact information
-        name: name.trim(),
-        email: email.trim(),
-        phone: phone.trim(),
-        address: address.trim(),
-        postalCode: postalCode.trim(),
-        city: city.trim(),
-        country: country,
-
-        // Social media
-        socials: {
-          website: website.trim(),
-          instagram: instagram.trim(),
-          youtube: youtube.trim(),
-          facebook: facebook.trim(),
-          tiktok: tiktok.trim(),
-        },
-
-        // Marketing information
-        promotionMethod: promotionMethod.trim(),
-        message: message.trim(),
-
-        updatedAt: new Date(),
-      };
-
-      // Only update affiliate code if a new one was provided
-      if (customAffiliateCode.trim()) {
-        updateData.affiliateCode = customAffiliateCode.trim().toUpperCase();
-      }
-
-      const affiliateRef = doc(db, 'affiliates', id);
-      await updateDoc(affiliateRef, updateData);
-
-      toast.success('Ändringar sparade!', { id: toastId });
-      setIsEditing(false);
-      fetchData();
+      setEditing(false);
+      toast.success('Ändringarna är sparade.');
     } catch (error) {
-      toast.error(`Kunde inte spara: ${error.message}`, { id: toastId });
+      toast.error(error?.message || 'Kunde inte spara ändringarna.');
     } finally {
-      setLoading(false);
+      setBusy(null);
     }
   };
 
-  const handleDeleteAffiliate = async () => {
-    if (!window.confirm(`Är du säker på att du vill radera affiliate "${data.name}"? Detta kan inte ångras och kommer att ta bort all historik och statistik.`)) {
-      return;
-    }
-
-    const toastId = toast.loading('Raderar affiliate...');
+  const handleStatus = async (status) => {
+    if (status === affiliate.status) return;
+    const label = AFFILIATE_STATUS[status].label.toLowerCase();
+    const effect = status === 'active'
+      ? 'Koden börjar gälla igen för nya köp.'
+      : 'Koden ger ingen rabatt eller provision på nya köp. Det som redan är intjänat finns kvar.';
+    if (!window.confirm(`Sätt ${affiliate.name} som ${label}? ${effect}`)) return;
+    setBusy('status');
     try {
-      // Delete the affiliate document
-      await deleteDoc(doc(db, 'affiliates', id));
-
-      toast.success(`Affiliate "${data.name}" har raderats.`, { id: toastId });
-      navigate('/admin/affiliates'); // Redirect back to list
+      const updated = await setAffiliateStatus(shopId, affiliate.affiliateId, status);
+      if (updated) setAffiliate(updated);
+      toast.success(`${affiliate.name} är nu ${label}.`);
     } catch (error) {
-      console.error("Error deleting affiliate: ", error);
-      toast.error(`Kunde inte radera affiliate: ${error.message}`, { id: toastId });
-    }
-  };
-
-  const handleToggleAffiliateStatus = async () => {
-    let newStatus;
-    let actionText;
-
-    if (data.status === 'active') {
-      newStatus = 'suspended';
-      actionText = 'suspendra';
-    } else if (data.status === 'suspended') {
-      newStatus = 'inactive';
-      actionText = 'inaktivera';
-    } else if (data.status === 'inactive') {
-      newStatus = 'active';
-      actionText = 'aktivera';
-    } else {
-      newStatus = 'active';
-      actionText = 'aktivera';
-    }
-
-    if (!window.confirm(`Är du säker på att du vill ${actionText} affiliate "${data.name}"?`)) {
-      return;
-    }
-
-    const toastId = toast.loading(`${actionText.charAt(0).toUpperCase() + actionText.slice(1)} affiliate...`);
-    try {
-      // Update the affiliate status
-      await updateDoc(doc(db, 'affiliates', id), {
-        status: newStatus,
-        updatedAt: new Date().toISOString()
-      });
-
-      const statusText = {
-        active: 'aktiverats',
-        suspended: 'suspenderats',
-        inactive: 'inaktiverats'
-      };
-
-      toast.success(`Affiliate "${data.name}" har ${statusText[newStatus] || 'uppdaterats'}.`, { id: toastId });
-      fetchData(); // Refresh the data
-    } catch (error) {
-      console.error("Error updating affiliate status: ", error);
-      toast.error(`Kunde inte uppdatera affiliate-status: ${error.message}`, { id: toastId });
-    }
-  };
-
-  // Handle sending affiliate credentials (Updated to use orchestrator)
-  const handleSendCredentials = async () => {
-    if (!id || !data) return;
-
-    try {
-      setSendingCredentials(true);
-
-      // Call the unified orchestrator function to send affiliate credentials
-      const sendLoginCredentialsEmail = httpsCallable(functions, 'sendLoginCredentialsEmail');
-
-      // Determine if this is an existing Firebase Auth user
-      const wasExistingAuthUser = !!data.firebaseAuthUid;
-
-      const result = await sendLoginCredentialsEmail({
-        userInfo: {
-          name: data.name,
-          email: data.email
-        },
-        credentials: {
-          email: data.email,
-          affiliateCode: data.affiliateCode,
-          temporaryPassword: wasExistingAuthUser ? undefined : 'Affiliate' + Math.random().toString(36).substring(2, 8)
-        },
-        accountType: 'AFFILIATE',
-        wasExistingAuthUser: wasExistingAuthUser,
-        userId: id,
-        language: data.preferredLang || 'sv-SE'
-      });
-
-      setCredentialsResult(result.data);
-
-      // Refresh affiliate data to show updated credential status
-      await fetchData();
-
-      toast.success('Inloggningsuppgifter skickade framgångsrikt!');
-
-    } catch (error) {
-      console.error('Error sending affiliate credentials:', error);
-      toast.error(`Kunde inte skicka inloggningsuppgifter: ${error.message}`);
+      toast.error(error?.message || 'Kunde inte ändra status.');
     } finally {
-      setSendingCredentials(false);
+      setBusy(null);
     }
   };
 
-  if (loading) {
+  const handleRemove = async () => {
+    if (!window.confirm(
+      `Ta bort ${affiliate.name} som affiliate? Koden slutar gälla och inloggningen till affiliateportalen stängs. Reskontra och historik sparas, och affiliaten kan aktiveras igen.`,
+    )) return;
+    setBusy('remove');
+    try {
+      const updated = await removeAffiliate(shopId, affiliate.affiliateId);
+      if (updated) setAffiliate(updated);
+      toast.success(`${affiliate.name} är borttagen som affiliate.`);
+    } catch (error) {
+      toast.error(error?.message || 'Kunde inte ta bort affiliaten.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleResend = async () => {
+    setBusy('invite');
+    try {
+      const result = await resendInvite(shopId, affiliate);
+      if (result.notice) toast(result.notice, { icon: '⚠️', duration: 15000 });
+      else toast.success(`En ny inbjudan har skickats till ${affiliate.email}. Den tidigare länken fungerar inte längre.`);
+    } catch (error) {
+      toast.error(error?.message || 'Kunde inte skicka inbjudan.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleAdjustment = async (e) => {
+    e.preventDefault();
+    setBusy('adjustment');
+    try {
+      await addAdjustment(shopId, affiliate.affiliateId, adjustment);
+      toast.success('Justeringen är tillagd.');
+      setAdjusting(false);
+      setAdjustment({ amount: '', reason: '' });
+      await Promise.all([fetchLedger(), refreshDetail()]);
+    } catch (error) {
+      toast.error(error?.message || 'Kunde inte lägga till justeringen.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const copyLink = async (link) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      toast.success('Länken är kopierad.');
+    } catch {
+      toast(link, { duration: 10000 });
+    }
+  };
+
+  // With the program OFF the list is gated away (design §4.5): back leads to the
+  // orders, where an affiliate's order links here. Before the affiliate is read,
+  // the shop's switch decides.
+  const programOn = affiliate ? affiliate.programOn : isEnabled('affiliate');
+  const back = programOn ? { to: PATHS.list, label: 'Affiliates' } : { to: '/admin/orders', label: 'Ordrar' };
+
+  if (loading || loadError || !affiliate) {
     return (
       <AppLayout>
-        <Page title="Affiliate" back={{ to: '/admin/affiliates', label: 'Affiliates' }}>
+        <Page title="Affiliate" back={back}>
           <Card className="px-6 py-12 text-center">
-            <div className="inline-block h-7 w-7 animate-spin rounded-full border-2 border-solid border-admin-text-muted border-r-transparent" />
-            <p className="mt-3 text-[13px] text-admin-text-muted">Laddar…</p>
-          </Card>
-        </Page>
-      </AppLayout>
-    );
-  }
-  if (!data) {
-    return (
-      <AppLayout>
-        <Page title="Affiliate" back={{ to: '/admin/affiliates', label: 'Affiliates' }}>
-          <Card className="px-6 py-12 text-center">
-            <p className="text-[13px] text-admin-text-muted">Ingen data hittades.</p>
+            {loading ? (
+              <>
+                <div className="inline-block h-7 w-7 animate-spin rounded-full border-2 border-solid border-admin-text-muted border-r-transparent" />
+                <p className="mt-3 text-[13px] text-admin-text-muted">Laddar…</p>
+              </>
+            ) : (
+              <>
+                <p className="text-[13px] text-admin-text-muted">{loadError || 'Affiliaten hittades inte.'}</p>
+                {loadError && (
+                  <div className="mt-4"><Button variant="secondary" onClick={fetchAll}>Försök igen</Button></div>
+                )}
+              </>
+            )}
           </Card>
         </Page>
       </AppLayout>
     );
   }
 
-  const formatDate = (date) => {
-    if (!date) return '-';
-    return format(date.toDate(), 'PPP', { locale: sv });
-  };
+  const status = AFFILIATE_STATUS[affiliate.status] ?? AFFILIATE_STATUS.inactive;
+  const currency = affiliate.currency;
+  const balance = balanceOf(affiliate.balances, currency);
+  const series = clickSeries(affiliate.clicksByDay);
+  const set = (key) => (e) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
+  const setSocial = (key) => (e) => setForm((prev) => ({ ...prev, socials: { ...prev.socials, [key]: e.target.value } }));
+  const codeChanged = editing && form.code.trim().toUpperCase() !== affiliate.code;
+  const membership = affiliate.account?.membership;
+  const inviteBlocked = !affiliate.programOn
+    ? 'Affiliateprogrammet är avstängt: inga inbjudningar kan skickas.'
+    : membership !== 'active'
+      ? 'Aktivera affiliaten först.'
+      : null;
 
-  // Admin portal access function
-  const handleViewAffiliatePortal = () => {
-    if (!data?.affiliateCode) {
-      toast.error('Affiliate-kod saknas');
-      return;
-    }
-
-    // Use URL parameters for cross-domain admin access (sessionStorage doesn't work across domains)
-    const adminParams = new URLSearchParams({
-      admin_code: data.affiliateCode,
-      admin_name: encodeURIComponent(data.name),
-      admin_access: 'true',
-      timestamp: Date.now().toString()
-    });
-
-    // Open affiliate portal in new tab with admin parameters
-    const affiliatePortalUrl = `${APP_URLS.B2C_SHOP}/affiliate-portal?${adminParams.toString()}`;
-    window.open(affiliatePortalUrl, '_blank');
-
-    toast.success(`Öppnar ${data.name}s affiliate-portal i ny flik`);
-  };
-
-  // Shared field styling (matches ProductForm labelCls/inputCls pattern)
-  const labelCls = 'block text-[13px] font-medium text-admin-text mb-1';
-  const inputCls =
-    'w-full rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-3 py-1.5 text-[13px] text-admin-text placeholder:text-admin-text-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-admin-primary)]';
-  const helpCls = 'mt-1 text-[12px] text-admin-text-muted';
-
-  // Header action cluster (only for affiliates, when not editing)
-  const headerActions = !isApplication && !isEditing ? (
-    <>
-      {/* Send Credentials Button/Status */}
-      {data.credentialsSent ? (
-        <div className="flex items-center gap-2 rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface px-3 py-1.5">
-          <CheckIcon className="h-4 w-4 text-admin-success-dot" />
-          <div className="leading-tight">
-            <div className="text-[12px] font-medium text-admin-text">
-              Inloggningsuppgifter skickade
-            </div>
-            <div className="text-[11px] text-admin-text-muted">
-              {data.credentialsSentAt && new Date(data.credentialsSentAt.seconds * 1000).toLocaleDateString('sv-SE')}
-            </div>
-          </div>
-        </div>
+  const orderColumns = [
+    {
+      key: 'order',
+      header: 'Order',
+      render: (o) => (
+        <Link to={PATHS.order(o.orderId)} onClick={(e) => e.stopPropagation()} className="font-medium text-admin-text hover:underline">
+          #{o.orderNumber}
+        </Link>
+      ),
+    },
+    { key: 'paid', header: 'Betald', render: (o) => <span className="whitespace-nowrap text-admin-text-muted">{formatDay(o.paidAt)}</span> },
+    { key: 'total', header: 'Belopp', align: 'right', render: (o) => <span className="tabular-nums">{formatMinor(o.totalMinor, o.currency)}</span> },
+    { key: 'via', header: 'Via', render: (o) => <span className="text-admin-text-muted">{ATTRIBUTION[o.attribution] ?? '–'}</span> },
+    {
+      key: 'commission',
+      header: 'Affiliate-provision',
+      align: 'right',
+      render: (o) => <span className="tabular-nums">{o.selfReferral ? '–' : formatMinor(o.affiliateCommissionMinor, o.currency)}</span>,
+    },
+    {
+      key: 'state',
+      header: 'Status',
+      render: (o) => (o.selfReferral ? (
+        <span className="text-[12px] text-admin-text-muted">{SELF_REFERRAL}</span>
       ) : (
-        <Button variant="secondary" onClick={handleSendCredentials} disabled={sendingCredentials}>
-          {sendingCredentials ? (
-            <>
-              <ClockIcon className="h-4 w-4 animate-spin" />
-              Skickar...
-            </>
-          ) : (
-            <>
-              <PaperAirplaneIcon className="h-4 w-4" />
-              Skicka inloggningsuppgifter
-            </>
-          )}
-        </Button>
-      )}
+        <StatusPill tone={ORDER_STATE[o.state]?.tone || 'neutral'}>{ORDER_STATE[o.state]?.label || o.state}</StatusPill>
+      )),
+    },
+  ];
 
-      {/* View Portal Button */}
-      <Button variant="secondary" onClick={handleViewAffiliatePortal} title="Visa affiliate-portal som admin">
-        <EyeIcon className="h-4 w-4" />
-        Visa Portal
-      </Button>
+  const ledgerColumns = [
+    { key: 'date', header: 'Datum', render: (e) => <span className="whitespace-nowrap text-admin-text-muted">{formatDay(e.createdAt)}</span> },
+    { key: 'kind', header: 'Typ', render: (e) => <span>{LEDGER_KIND[e.kind] ?? e.kind}</span> },
+    {
+      key: 'about',
+      header: 'Avser',
+      render: (e) => <span className="text-admin-text-muted">{e.orderNumber ? `Order #${e.orderNumber}` : e.reason || '–'}</span>,
+    },
+    {
+      key: 'amount',
+      header: 'Belopp',
+      align: 'right',
+      render: (e) => <span className="tabular-nums">{formatSignedMinor(e.amountMinor, e.currency)}</span>,
+    },
+  ];
 
-      <Button variant="primary" onClick={() => setIsEditing(true)}>
-        Redigera
-      </Button>
-
-      <Button variant="secondary" onClick={handleToggleAffiliateStatus}>
-        {data.status === 'active' ? 'Suspendra' : data.status === 'suspended' ? 'Inaktivera' : 'Aktivera'}
-      </Button>
-
-      <Button variant="destructive" onClick={handleDeleteAffiliate}>
-        Radera
-      </Button>
-    </>
-  ) : null;
-
-  // Quick-stat metrics (mirrors the previous StatCard strip values 1:1).
-  const statMetrics = affiliateStats ? [
-    { key: 'clicks', label: 'Totalt antal besök', value: affiliateStats.totalClicks.toLocaleString('sv-SE') },
-    { key: 'unique', label: 'Unika besökare', value: affiliateStats.uniqueClicks.toLocaleString('sv-SE') },
-    { key: 'conversions', label: 'Konverteringar', value: affiliateStats.totalOrders.toLocaleString('sv-SE') },
-    { key: 'rate', label: 'Konverteringsgrad', value: `${affiliateStats.conversionRate}%` },
-    { key: 'commission', label: 'Provision', value: formatCurrency(data.stats?.totalEarnings || 0) },
-  ] : [];
+  const footerMore = (onClick) => (
+    <div className="flex justify-center py-2">
+      <Button variant="plain" onClick={onClick}>Visa fler</Button>
+    </div>
+  );
 
   return (
     <AppLayout>
       <Page
-        title={isApplication ? `Ansökan från ${data.name}` : `Affiliate: ${data.name}`}
-        titleAdornment={!isApplication ? <StatusPill tone={STATUS_TONE[data.status] || 'neutral'}>{STATUS_TEXT[data.status] || data.status}</StatusPill> : undefined}
-        back={{ to: '/admin/affiliates', label: 'Affiliates' }}
-        actions={headerActions}
+        title={affiliate.name}
+        titleAdornment={
+          <>
+            <span className="rounded-[var(--radius-admin-el)] bg-admin-surface-2 px-2 py-0.5 font-mono text-[12px] text-admin-text">{affiliate.code}</span>
+            <StatusPill tone={status.tone}>{status.label}</StatusPill>
+          </>
+        }
+        back={back}
+        actions={
+          <Button as={Link} to={PATHS.payout(affiliate.affiliateId)} variant="secondary">
+            Utbetalning
+          </Button>
+        }
       >
-        {/* Credentials Result Display */}
-        {credentialsResult && (
-          <CardSection className="mb-5" bodyClassName="space-y-2">
-            <div className="flex items-start gap-2">
-              <KeyIcon className="h-5 w-5 text-admin-info-text mt-0.5 shrink-0" />
-              <div>
-                <h4 className="text-[13px] font-semibold text-admin-text mb-2">
-                  {credentialsResult.isExistingUser ?
-                    'Befintligt konto uppdaterat och inloggningsuppgifter skickade!' :
-                    'Nytt konto skapat och inloggningsuppgifter skickade!'
-                  }
-                </h4>
-                <div className="text-[13px] text-admin-text-muted space-y-1">
-                  <p><strong className="text-admin-text">E-post:</strong> {data.email}</p>
-                  <p><strong className="text-admin-text">Tillfälligt lösenord:</strong> <code className="rounded-sm bg-admin-surface-2 px-2 py-1 font-mono text-admin-text">{credentialsResult.temporaryPassword}</code></p>
-                  {credentialsResult.isExistingUser && (
-                    <p className="text-[12px] text-admin-text-muted">
-                      <strong className="text-admin-text">Obs:</strong> Ett befintligt Firebase Auth-konto uppdaterades med nytt lösenord.
-                    </p>
-                  )}
-                  <p className="text-[12px] text-admin-text-muted">
-                    Affiliate kommer att få instruktioner om att ändra lösenordet vid första inloggningen.
-                  </p>
+        {!affiliate.programOn && <ProgramOffBanner />}
+
+        <RightRail
+          main={
+            <>
+              <CardSection title="Statistik" bodyClassName="space-y-4">
+                <div>
+                  <div className="mb-1 flex items-baseline justify-between text-[12px] text-admin-text-muted">
+                    <span>Klick per dag, 30 dagar</span>
+                    <span className="tabular-nums">{formatCount(series.reduce((a, b) => a + b, 0))} klick</span>
+                  </div>
+                  <ClickBars series={series} />
                 </div>
-              </div>
-            </div>
-          </CardSection>
-        )}
+                <div className="grid grid-cols-2 gap-4 border-t border-admin-border-soft pt-4 sm:grid-cols-5">
+                  <Stat label="Konverteringar" value={formatCount(affiliate.conversions)} />
+                  <Stat label="Intjänat" value={formatMinor(balance.earnedMinor, currency)} />
+                  <Stat label="Återfört" value={formatMinor(affiliate.reversedMinor, currency)} />
+                  <Stat label="Utbetalt" value={formatMinor(balance.paidMinor, currency)} />
+                  <Stat label="Saldo" value={formatMinor(balance.balanceMinor, currency)} />
+                </div>
+              </CardSection>
 
-        {/* Quick Stats for Active Affiliates */}
-        {!isApplication && data && affiliateStats && (
-          <MetricsBar className="mb-5" metrics={statMetrics} />
-        )}
-
-        <form onSubmit={handleSave}>
-          <RightRail
-            main={
-              <>
-                {/* Basic Info Card */}
-                <CardSection title="Grundinformation" bodyClassName="space-y-5">
-                  <div>
-                    <label className={labelCls}>Namn</label>
-                    {isEditing ? (
-                      <input
-                        type="text"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className={inputCls}
-                        placeholder="Förnamn Efternamn"
-                      />
-                    ) : (
-                      <p className="text-[13px] text-admin-text">{data.name}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className={labelCls}>E-post</label>
-                    {isEditing ? (
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className={inputCls}
-                        placeholder="email@example.com"
-                      />
-                    ) : (
-                      <a href={`mailto:${data.email}`} className="text-[13px] text-admin-info-text hover:underline">
-                        {data.email}
-                      </a>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className={labelCls}>Telefon</label>
-                    {isEditing ? (
-                      <input
-                        type="tel"
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        className={inputCls}
-                        placeholder="+46 70 123 45 67"
-                      />
-                    ) : (
-                      <p className="text-[13px] text-admin-text">{data.phone || '-'}</p>
-                    )}
-                  </div>
-
-                  {!isApplication && (
-                    <>
-                      <div>
-                        <label className={labelCls}>Affiliate Kod</label>
-                        <code className="inline-block rounded-[var(--radius-admin-el)] bg-admin-info-bg px-3 py-1 font-mono text-[13px] text-admin-info-text">
-                          {data.affiliateCode}
-                        </code>
-                      </div>
-
-                      <div>
-                        <label className={labelCls}>Skapad</label>
-                        <p className="text-[13px] text-admin-text">{formatDate(data.createdAt)}</p>
-                      </div>
-                    </>
-                  )}
-                </CardSection>
-
-                {/* Settings Card */}
-                {!isApplication && (
-                  <CardSection title="Inställningar" bodyClassName="space-y-5">
-                    <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-                      <div>
-                        <label className={labelCls}>Status</label>
-                        {isEditing ? (
-                          <select
-                            value={status}
-                            onChange={(e) => setStatus(e.target.value)}
-                            className={inputCls}
-                          >
-                            <option value="active">Aktiv</option>
-                            <option value="suspended">Suspenderad</option>
-                            <option value="inactive">Inte Aktiv</option>
-                          </select>
-                        ) : (
-                          <StatusPill tone={STATUS_TONE[status] || 'neutral'}>{STATUS_TEXT[status] || status}</StatusPill>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className={labelCls}>Anpassad Affiliate-kod</label>
-                        {isEditing ? (
-                          <div>
-                            <div className="flex gap-2">
-                              <input
-                                type="text"
-                                value={customAffiliateCode}
-                                onChange={(e) => {
-                                  const value = e.target.value.toUpperCase();
-                                  setCustomAffiliateCode(value);
-                                  setCodeValidationError('');
-                                }}
-                                placeholder="t.ex. EMMA, FISHING"
-                                className={`${inputCls} flex-1 ${codeValidationError ? 'border-admin-critical-dot' : ''}`}
-                              />
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => {
-                                  const simpleCode = generateSimpleAffiliateCode(data.name);
-                                  setCustomAffiliateCode(simpleCode);
-                                  setCodeValidationError('');
-                                }}
-                                title="Generera enkel kod från namn"
-                              >
-                                Auto
-                              </Button>
-                            </div>
-                            {codeValidationError && (
-                              <p className="mt-1 text-[12px] text-admin-critical-text">{codeValidationError}</p>
-                            )}
-                            <p className={helpCls}>
-                              3-20 tecken, endast bokstäver, siffror och bindestreck. Lämna tomt för att behålla nuvarande kod.
-                            </p>
-                          </div>
-                        ) : (
-                          <span className="text-[15px] font-semibold text-admin-text">
-                            {data.affiliateCode}
-                          </span>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className={labelCls}>Provision</label>
-                        {isEditing ? (
-                          <div className="relative">
-                            <input
-                              type="number"
-                              value={commissionRate}
-                              onChange={(e) => setCommissionRate(e.target.value)}
-                              className={`${inputCls} pr-10`}
-                            />
-                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
-                              <span className="text-[13px] text-admin-text-muted">%</span>
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-[15px] font-semibold text-admin-text">{data.commissionRate}%</span>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className={labelCls}>Rabatt vid checkout</label>
-                        {isEditing ? (
-                          <div className="relative">
-                            <input
-                              type="number"
-                              value={checkoutDiscount}
-                              onChange={(e) => setCheckoutDiscount(e.target.value)}
-                              className={`${inputCls} pr-10`}
-                            />
-                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
-                              <span className="text-[13px] text-admin-text-muted">%</span>
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-[15px] font-semibold text-admin-text">{data.checkoutDiscount}%</span>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className={labelCls}>
-                          {isEditing ? t('affiliate_reg_preferred_lang', 'Föredraget språk') : 'Föredraget språk'}
-                        </label>
-                        {isEditing ? (
-                          <select
-                            value={preferredLang}
-                            onChange={e => setPreferredLang(e.target.value)}
-                            className={inputCls}
-                          >
-                            <option value="sv-SE">{t('lang_swedish', 'Svenska')}</option>
-                            <option value="en-GB">{t('lang_english_uk', 'English (UK)')}</option>
-                            <option value="en-US">{t('lang_english_us', 'English (US)')}</option>
-                          </select>
-                        ) : (
-                          <span className="text-[15px] font-semibold text-admin-text">
-                            {preferredLang === 'sv-SE' && t('lang_swedish', 'Svenska')}
-                            {preferredLang === 'en-GB' && t('lang_english_uk', 'English (UK)')}
-                            {preferredLang === 'en-US' && t('lang_english_us', 'English (US)')}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {isEditing && (
-                      <div className="flex justify-end gap-2">
-                        <Button type="button" variant="secondary" onClick={() => setIsEditing(false)}>
-                          Avbryt
-                        </Button>
-                        <Button type="submit" variant="primary">
-                          Spara ändringar
-                        </Button>
-                      </div>
-                    )}
-                  </CardSection>
+              <CardSection title="Beställningar" bodyClassName="!p-0">
+                {orders.error ? (
+                  <p className="px-4 py-4 text-[13px] text-admin-text-muted">{orders.error}</p>
+                ) : (
+                  <DataTable
+                    columns={orderColumns}
+                    rows={orders.rows}
+                    rowKey={(o) => o.orderId}
+                    loading={orders.loading}
+                    onRowClick={(o) => navigate(PATHS.order(o.orderId))}
+                    empty="Inga beställningar via affiliaten ännu."
+                    className="rounded-none border-0"
+                    footer={orders.nextCursor ? footerMore(moreOrders) : undefined}
+                  />
                 )}
+              </CardSection>
 
-                {/* Marketing Info */}
-                <CardSection title="Marknadsföring" bodyClassName="space-y-5">
-                  <div>
-                    <label className={labelCls}>Primär kanal</label>
-                    {isEditing ? (
-                      <textarea
-                        value={promotionMethod}
-                        onChange={(e) => setPromotionMethod(e.target.value)}
-                        rows="3"
-                        className={inputCls}
-                        placeholder="Beskriv hur affiliate planerar att marknadsföra produkterna..."
-                      />
-                    ) : (
-                      <p className="text-[13px] text-admin-text">{data.promotionMethod || '-'}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className={labelCls}>Meddelande</label>
-                    {isEditing ? (
-                      <textarea
-                        value={message}
-                        onChange={(e) => setMessage(e.target.value)}
-                        rows="3"
-                        className={inputCls}
-                        placeholder="Ytterligare information eller meddelande..."
-                      />
-                    ) : (
-                      <p className="whitespace-pre-wrap text-[13px] text-admin-text">{data.message || '-'}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className={labelCls}>Sociala medier</label>
-                    {isEditing ? (
-                      <div className="space-y-3">
-                        <div>
-                          <label className="block text-[12px] font-medium text-admin-text-muted mb-1">Hemsida</label>
-                          <input
-                            type="url"
-                            value={website}
-                            onChange={(e) => setWebsite(e.target.value)}
-                            className={inputCls}
-                            placeholder="https://example.com"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[12px] font-medium text-admin-text-muted mb-1">Instagram</label>
-                          <input
-                            type="text"
-                            value={instagram}
-                            onChange={(e) => setInstagram(e.target.value)}
-                            className={inputCls}
-                            placeholder="@username"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[12px] font-medium text-admin-text-muted mb-1">YouTube</label>
-                          <input
-                            type="text"
-                            value={youtube}
-                            onChange={(e) => setYoutube(e.target.value)}
-                            className={inputCls}
-                            placeholder="Kanalnamn"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[12px] font-medium text-admin-text-muted mb-1">Facebook</label>
-                          <input
-                            type="text"
-                            value={facebook}
-                            onChange={(e) => setFacebook(e.target.value)}
-                            className={inputCls}
-                            placeholder="Sidnamn"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[12px] font-medium text-admin-text-muted mb-1">TikTok</label>
-                          <input
-                            type="text"
-                            value={tiktok}
-                            onChange={(e) => setTiktok(e.target.value)}
-                            className={inputCls}
-                            placeholder="@username"
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <SocialLinks socials={data.socials} />
-                    )}
-                  </div>
-                </CardSection>
-              </>
-            }
-            rail={
-              <>
-                {/* Address Card */}
-                <CardSection title="Adress" bodyClassName="space-y-3">
-                  {isEditing ? (
-                    <>
-                      <div>
-                        <label className="block text-[12px] font-medium text-admin-text-muted mb-1">Adress</label>
-                        <input
-                          type="text"
-                          value={address}
-                          onChange={(e) => setAddress(e.target.value)}
-                          className={inputCls}
-                          placeholder="Gatunamn 123"
+              {CAPABILITIES.ledger && (
+                <CardSection
+                  title="Reskontra"
+                  actions={CAPABILITIES.adjustments && !adjusting ? (
+                    <Button variant="secondary" size="sm" onClick={() => setAdjusting(true)}>Lägg till justering</Button>
+                  ) : undefined}
+                  bodyClassName="!p-0"
+                >
+                  {adjusting && (
+                    <form onSubmit={handleAdjustment} className="grid grid-cols-1 gap-3 border-b border-admin-border-soft px-4 py-4 sm:grid-cols-[10rem_minmax(0,1fr)_auto] sm:items-end">
+                      <Field label="Belopp (kr)" htmlFor="adjust-amount" help="Minus drar av, t.ex. -50">
+                        <Input
+                          id="adjust-amount"
+                          inputMode="decimal"
+                          value={adjustment.amount}
+                          onChange={(e) => setAdjustment((a) => ({ ...a, amount: e.target.value }))}
+                          placeholder="50,00"
                         />
+                      </Field>
+                      <Field label="Orsak" htmlFor="adjust-reason" help="Syns i reskontran.">
+                        <Input
+                          id="adjust-reason"
+                          maxLength={500}
+                          value={adjustment.reason}
+                          onChange={(e) => setAdjustment((a) => ({ ...a, reason: e.target.value }))}
+                        />
+                      </Field>
+                      <div className="flex gap-2 sm:pb-5">
+                        <Button type="button" variant="secondary" onClick={() => setAdjusting(false)} disabled={busy === 'adjustment'}>Avbryt</Button>
+                        <Button type="submit" variant="primary" disabled={busy === 'adjustment'}>
+                          {busy === 'adjustment' ? 'Sparar…' : 'Spara'}
+                        </Button>
                       </div>
-
-                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <div>
-                          <label className="block text-[12px] font-medium text-admin-text-muted mb-1">Postnummer</label>
-                          <input
-                            type="text"
-                            value={postalCode}
-                            onChange={(e) => setPostalCode(e.target.value)}
-                            className={inputCls}
-                            placeholder="123 45"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[12px] font-medium text-admin-text-muted mb-1">Stad</label>
-                          <input
-                            type="text"
-                            value={city}
-                            onChange={(e) => setCity(e.target.value)}
-                            className={inputCls}
-                            placeholder="Stockholm"
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-[12px] font-medium text-admin-text-muted mb-1">Land</label>
-                        <select
-                          value={country}
-                          onChange={(e) => setCountry(e.target.value)}
-                          className={inputCls}
-                        >
-                          <option value="SE">Sverige</option>
-                          <option value="NO">Norge</option>
-                          <option value="DK">Danmark</option>
-                          <option value="FI">Finland</option>
-                          <option value="DE">Tyskland</option>
-                          <option value="US">USA</option>
-                          <option value="GB">Storbritannien</option>
-                        </select>
-                      </div>
-                    </>
+                    </form>
+                  )}
+                  {ledger.error ? (
+                    <p className="px-4 py-4 text-[13px] text-admin-text-muted">{ledger.error}</p>
                   ) : (
-                    <address className="not-italic text-[13px] text-admin-text space-y-0.5">
-                      <p>{data.address || '-'}</p>
-                      <p>{data.postalCode || '-'}</p>
-                      <p>{data.city || '-'}</p>
-                      <p>{data.country || '-'}</p>
-                    </address>
+                    <DataTable
+                      columns={ledgerColumns}
+                      rows={ledger.rows}
+                      rowKey={(e) => e.entryId}
+                      loading={ledger.loading}
+                      empty="Inga rader i reskontran ännu."
+                      className="rounded-none border-0"
+                      footer={ledger.nextCursor ? footerMore(moreLedger) : undefined}
+                    />
                   )}
                 </CardSection>
+              )}
 
-                {/* Recent Orders */}
-                {!isApplication && recentOrders.length > 0 && (
-                  <CardSection title="Senaste ordrar" bodyClassName="p-0" className="overflow-hidden">
-                    <div className="divide-y divide-admin-border-soft">
-                      {recentOrders.slice(0, 5).map((order) => (
-                        <button
-                          key={order.id}
-                          type="button"
-                          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-admin-surface-2"
-                          onClick={() => navigate(`/admin/orders/${order.id}`)}
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-[13px] font-medium text-admin-text">
-                              Order #{order.orderNumber || order.id}
-                            </p>
-                            <p className="text-[12px] text-admin-text-muted">{formatDate(order.createdAt)}</p>
+              <CardSection
+                title="Utbetalningar"
+                actions={<Button as={Link} to={PATHS.payout(affiliate.affiliateId)} variant="plain" size="sm">Hantera</Button>}
+                bodyClassName="!p-0"
+              >
+                {payouts.loading ? (
+                  <p className="px-4 py-4 text-[13px] text-admin-text-muted">Laddar…</p>
+                ) : payouts.error ? (
+                  <p className="px-4 py-4 text-[13px] text-admin-text-muted">{payouts.error}</p>
+                ) : payouts.rows.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-[13px] text-admin-text-muted">Inga utbetalningar ännu.</p>
+                ) : (
+                  <ul className="divide-y divide-admin-border-soft">
+                    {payouts.rows.map((p) => (
+                      <li key={p.payoutId} className="flex items-center justify-between gap-3 px-4 py-2.5 text-[13px]">
+                        <div className="min-w-0">
+                          <div className="font-medium tabular-nums text-admin-text">{formatMinor(p.amountMinor, p.currency)}</div>
+                          <div className="text-[12px] text-admin-text-muted">
+                            {formatDay(p.paidAt || p.voidedAt || p.requestedAt)}
+                            {p.invoiceNumber ? ` · Faktura ${p.invoiceNumber}` : ''}
                           </div>
-                          <div className="text-right">
-                            <p className="text-[13px] font-medium text-admin-text tabular-nums">{formatCurrency(order.total || order.totalAmount || 0)}</p>
-                            <p className="text-[12px] text-admin-success-text tabular-nums">{formatCurrency(order.affiliateCommission || 0)}</p>
-                          </div>
-                        </button>
+                        </div>
+                        <StatusPill tone={PAYOUT_STATUS[p.status]?.tone || 'neutral'}>{PAYOUT_STATUS[p.status]?.label || p.status}</StatusPill>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {payouts.nextCursor && <div className="border-t border-admin-border-soft">{footerMore(morePayouts)}</div>}
+              </CardSection>
+
+              <CardSection
+                title="Uppgifter"
+                actions={!editing ? <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>Redigera</Button> : undefined}
+              >
+                {!editing ? (
+                  <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
+                    <div className="space-y-0.5">
+                      <Row label="Kod"><span className="font-mono">{affiliate.code}</span></Row>
+                      <Row label="Provision">{formatBp(affiliate.commissionBp)}</Row>
+                      <Row label="Kundrabatt">{formatBp(affiliate.discountBp)}</Row>
+                      <Row label="Kanal">{promotionLabel(affiliate.promotionMethod)}</Row>
+                      <Row label="Språk">{languageLabel(affiliate.preferredLang)}</Row>
+                      <Row label="Skapad">{formatDay(affiliate.createdAt)}</Row>
+                    </div>
+                    <div className="space-y-0.5">
+                      <Row label="Telefon">{affiliate.phone || '–'}</Row>
+                      <Row label="Adress">
+                        {[affiliate.address?.line1, affiliate.address?.line2].filter(Boolean).join(', ') || '–'}
+                      </Row>
+                      <Row label="Postort">
+                        {[affiliate.address?.postalCode, affiliate.address?.city].filter(Boolean).join(' ') || '–'}
+                      </Row>
+                      <Row label="Land">{COUNTRIES.find((c) => c.value === affiliate.address?.country)?.label ?? affiliate.address?.country ?? '–'}</Row>
+                      {SOCIALS.filter(({ key }) => affiliate.socials?.[key]).map(({ key, label }) => (
+                        <Row key={key} label={label}>{affiliate.socials[key]}</Row>
                       ))}
                     </div>
-                  </CardSection>
-                )}
-
-                {/* Payment History */}
-                {!isApplication && (
-                  <CardSection
-                    title="Utbetalningshistorik"
-                    actions={data?.stats?.payoutCount > 0 ? (
-                      <StatusPill tone="info" marker="none">{data.stats.payoutCount} utbetalningar</StatusPill>
-                    ) : undefined}
-                    bodyClassName="space-y-4"
-                  >
-                    {loadingPayouts ? (
-                      <div className="flex items-center justify-center py-8">
-                        <div className="h-7 w-7 animate-spin rounded-full border-2 border-solid border-admin-text-muted border-r-transparent"></div>
-                        <span className="ml-2 text-[13px] text-admin-text-muted">Laddar utbetalningar...</span>
+                  </div>
+                ) : (
+                  <form onSubmit={handleSave} className="space-y-5">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                      <Field label="Kod" htmlFor="edit-code" help={codeChanged ? CODE_CHANGE_WARNING : 'A–Z, 0–9 och bindestreck, 3–20 tecken.'}>
+                        <Input
+                          id="edit-code"
+                          value={form.code}
+                          onChange={(e) => setForm((prev) => ({ ...prev, code: e.target.value.toUpperCase() }))}
+                          className="font-mono"
+                        />
+                      </Field>
+                      <Field label="Provision (%)" htmlFor="edit-commission" help="Gäller nya köp.">
+                        <Input id="edit-commission" type="number" min="0" max="100" step="1" value={form.commissionPercent} onChange={set('commissionPercent')} />
+                      </Field>
+                      <Field label="Kundrabatt (%)" htmlFor="edit-discount" help="Gäller nya köp.">
+                        <Input id="edit-discount" type="number" min="0" max="100" step="1" value={form.discountPercent} onChange={set('discountPercent')} />
+                      </Field>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <Field label="Namn" htmlFor="edit-name" required>
+                        <Input id="edit-name" value={form.name} onChange={set('name')} maxLength={100} />
+                      </Field>
+                      <Field label="Telefon" htmlFor="edit-phone">
+                        <Input id="edit-phone" type="tel" value={form.phone} onChange={set('phone')} maxLength={40} />
+                      </Field>
+                      <Field label="Adress" htmlFor="edit-line1">
+                        <Input id="edit-line1" value={form.addressLine1} onChange={set('addressLine1')} maxLength={200} />
+                      </Field>
+                      <Field label="Adressrad 2" htmlFor="edit-line2">
+                        <Input id="edit-line2" value={form.addressLine2} onChange={set('addressLine2')} maxLength={200} />
+                      </Field>
+                      <Field label="Postnummer" htmlFor="edit-postal">
+                        <Input id="edit-postal" value={form.postalCode} onChange={set('postalCode')} maxLength={20} />
+                      </Field>
+                      <Field label="Ort" htmlFor="edit-city">
+                        <Input id="edit-city" value={form.city} onChange={set('city')} maxLength={100} />
+                      </Field>
+                      <Field label="Land" htmlFor="edit-country">
+                        <Select id="edit-country" value={form.country} onChange={set('country')}>
+                          {!COUNTRIES.some((c) => c.value === form.country) && <option value={form.country}>{form.country}</option>}
+                          {COUNTRIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                        </Select>
+                      </Field>
+                      <Field label="Kanal" htmlFor="edit-channel">
+                        <Select id="edit-channel" value={form.promotionMethod} onChange={set('promotionMethod')}>
+                          <option value="">–</option>
+                          {PROMOTION_METHODS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                        </Select>
+                      </Field>
+                      <Field label="Språk" htmlFor="edit-lang">
+                        <Select id="edit-lang" value={form.preferredLang} onChange={set('preferredLang')}>
+                          {LANGUAGES.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+                        </Select>
+                      </Field>
+                    </div>
+                    <div>
+                      <h4 className="mb-2 text-[13px] font-medium text-admin-text">Sociala medier</h4>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        {SOCIALS.map(({ key, label }) => (
+                          <Field key={key} label={label} htmlFor={`edit-social-${key}`}>
+                            <Input id={`edit-social-${key}`} value={form.socials[key]} onChange={setSocial(key)} maxLength={300} />
+                          </Field>
+                        ))}
                       </div>
-                    ) : payoutHistory.length > 0 ? (
-                      <>
-                        <div className="space-y-3">
-                          {payoutHistory.map((payout) => (
-                            <div key={payout.id} className="rounded-[var(--radius-admin-el)] border border-admin-border bg-admin-surface-2 p-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0 flex-1">
-                                  <div className="mb-2 flex items-center gap-2">
-                                    <span className="text-[13px] font-semibold text-admin-text tabular-nums">
-                                      {formatPayoutCurrency(payout.payoutAmount)}
-                                    </span>
-                                    <StatusPill tone="success">
-                                      {payout.status === 'completed' ? 'Slutförd' : payout.status}
-                                    </StatusPill>
-                                  </div>
-
-                                  <div className="space-y-1 text-[12px] text-admin-text-muted">
-                                    <div>{formatPayoutDate(payout.payoutDate)}</div>
-                                    <div>Faktura: {payout.invoiceNumber}</div>
-                                  </div>
-
-                                  {payout.notes && (
-                                    <p className="mt-2 text-[12px] italic text-admin-text-muted">
-                                      "{payout.notes}"
-                                    </p>
-                                  )}
-                                </div>
-
-                                {payout.invoiceUrl && (
-                                  <a
-                                    href={payout.invoiceUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 rounded-[var(--radius-admin-el)] bg-admin-info-bg px-3 py-1.5 text-[12px] font-medium text-admin-info-text transition-colors hover:opacity-80"
-                                    title="Ladda ner faktura"
-                                  >
-                                    <DocumentArrowDownIcon className="h-4 w-4" />
-                                    Ladda ner
-                                  </a>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Summary Stats */}
-                        {data?.stats && (
-                          <div className="border-t border-admin-border-soft pt-4">
-                            <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-3">
-                              <div className="rounded-[var(--radius-admin-el)] bg-admin-surface-2 p-3">
-                                <p className="text-[12px] font-medium text-admin-text-muted">Totalt utbetalt</p>
-                                <p className="text-[15px] font-bold text-admin-text tabular-nums">
-                                  {formatPayoutCurrency(data.stats.totalPaidOut || 0)}
-                                </p>
-                              </div>
-                              <div className="rounded-[var(--radius-admin-el)] bg-admin-surface-2 p-3">
-                                <p className="text-[12px] font-medium text-admin-text-muted">Aktuellt saldo</p>
-                                <p className="text-[15px] font-bold text-admin-text tabular-nums">
-                                  {formatPayoutCurrency(data.stats.balance || 0)}
-                                </p>
-                              </div>
-                              <div className="rounded-[var(--radius-admin-el)] bg-admin-surface-2 p-3">
-                                <p className="text-[12px] font-medium text-admin-text-muted">Antal utbetalningar</p>
-                                <p className="text-[15px] font-bold text-admin-text tabular-nums">
-                                  {data.stats.payoutCount || 0}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="py-8 text-center">
-                        <p className="text-[13px] text-admin-text-muted">Inga utbetalningar ännu</p>
-                        <p className="mt-1 text-[12px] text-admin-text-faint">
-                          Utbetalningar kommer att visas här när de har genomförts
-                        </p>
-                      </div>
-                    )}
-                  </CardSection>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => { setForm(editFormOf(affiliate)); setEditing(false); }}
+                        disabled={busy === 'save'}
+                      >
+                        Avbryt
+                      </Button>
+                      <Button type="submit" variant="primary" disabled={busy === 'save'}>
+                        {busy === 'save' ? 'Sparar…' : 'Spara ändringar'}
+                      </Button>
+                    </div>
+                  </form>
                 )}
-              </>
-            }
-          />
-        </form>
+              </CardSection>
+            </>
+          }
+          rail={
+            <>
+              <CardSection title="Status" bodyClassName="space-y-3">
+                <SegmentedTabs
+                  ariaLabel="Affiliatens status"
+                  options={STATUS_OPTIONS}
+                  value={affiliate.status}
+                  onChange={busy ? undefined : handleStatus}
+                  className="w-full [&>button]:flex-1 [&>button]:justify-center"
+                />
+                <p className="text-[12px] text-admin-text-muted">
+                  Inaktiv eller avstängd: koden ger ingen rabatt eller provision på nya köp. Det som redan är intjänat finns kvar.
+                </p>
+                {CAPABILITIES.revoke && membership !== 'revoked' && (
+                  <Button variant="plain" size="sm" onClick={handleRemove} disabled={busy !== null} className="-ml-2">
+                    Ta bort som affiliate
+                  </Button>
+                )}
+              </CardSection>
 
-        {/* Action Buttons for Applications */}
-        {isApplication && (
-          <div className="fixed bottom-0 left-0 right-0 z-10 border-t border-admin-border bg-admin-surface p-4">
-            <div className="mx-auto flex max-w-7xl justify-end gap-2 px-4 sm:px-6 lg:px-8">
-              <Button variant="destructive" onClick={handleDeny}>
-                <XMarkIcon className="h-4 w-4" />
-                Neka
-              </Button>
-              <Button variant="primary" onClick={handleApprove}>
-                <CheckIcon className="h-4 w-4" />
-                Godkänn
-              </Button>
-            </div>
-          </div>
-        )}
+              <CardSection title="Konto" bodyClassName="space-y-3 text-[13px]">
+                <div>
+                  <div className="text-[12px] text-admin-text-muted">Inloggning</div>
+                  <div className="break-words text-admin-text">{affiliate.email || '–'}</div>
+                </div>
+                {CAPABILITIES.invites && (
+                  affiliate.account?.invited ? (
+                    <div className="space-y-2">
+                      <StatusPill tone="warning">Inbjudan skickad, lösenord ej satt</StatusPill>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleResend}
+                        disabled={busy !== null || inviteBlocked !== null}
+                        title={inviteBlocked ?? undefined}
+                        className="w-full"
+                      >
+                        {busy === 'invite' ? 'Skickar…' : 'Skicka inbjudan igen'}
+                      </Button>
+                      {inviteBlocked && <p className="text-[12px] text-admin-text-muted">{inviteBlocked}</p>}
+                    </div>
+                  ) : (
+                    <StatusPill tone="success">Lösenord satt</StatusPill>
+                  )
+                )}
+                {membership && !(membership === 'active' && affiliate.account?.invited) && (
+                  <p className="text-admin-text-muted">{MEMBERSHIP_TEXT[membership] ?? membership}</p>
+                )}
+                {CAPABILITIES.invites && (
+                  <Row label="Villkor">
+                    {affiliate.terms?.acceptedVersion
+                      ? `Godkända (version ${affiliate.terms.acceptedVersion}${affiliate.terms.outdated ? ', ny version finns' : ''})`
+                      : 'Inte godkända ännu'}
+                  </Row>
+                )}
+              </CardSection>
+
+              {affiliate.links?.refLink && (
+                <CardSection title="Affiliatelänk" bodyClassName="space-y-2">
+                  <p className="break-all font-mono text-[12px] text-admin-text">{affiliate.links.refLink}</p>
+                  <Button variant="secondary" size="sm" onClick={() => copyLink(affiliate.links.refLink)}>Kopiera länk</Button>
+                </CardSection>
+              )}
+            </>
+          }
+        />
       </Page>
     </AppLayout>
   );

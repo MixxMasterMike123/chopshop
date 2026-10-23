@@ -1,10 +1,11 @@
 // The shop admin's router (CP5 brief FA.4): every address of the admin tree.
 // The routes and guards mirror src/App.jsx's admin branch for the launch-scope
-// pages (CP5_GAP_ANALYSIS.md §1a); a page that left the build (§1b: affiliate,
+// pages (CP5_GAP_ANALYSIS.md §1a); a page that left the build (§1b:
 // customers, marketing material, reviews, content studio, tax data, the
 // wagons, the user editor, the landing page) has no route, and its address
 // goes back to the root as any unknown address did. Discount codes came back
-// in CP8-DC (D81 reversed for that key only), gated by `features.discountCodes`.
+// in CP8-DC (D81 reversed for that key only), gated by `features.discountCodes`;
+// the affiliate pages in CP13 A2, gated by `features.affiliate` (see below).
 //
 // `/` → /login when signed out, the dashboard when signed in (D103). A
 // platform user reaches the admin tree only to work AS a shop: without an
@@ -49,6 +50,16 @@ export const ADMIN_ROUTES = [
   { path: '/admin/pod', page: 'PodAdminPage', guard: 'admin', feature: 'pod' },
   { path: '/admin/discount-codes', page: 'AdminDiscountCodes', guard: 'admin', feature: 'discountCodes' }, // CP8-DC
   { path: '/admin/redirects', page: 'AdminRedirects', guard: 'admin' }, // CP5-FL: new page, no older page
+  // CP13 A2: the affiliate program. The list, the invite, an application and
+  // the analytics are gated on `features.affiliate`; one affiliate's page and
+  // its payout page are NOT (design §4.5: liabilities are settled with the
+  // add-on OFF; the pages say so in a banner). Literal paths before `:id`.
+  { path: '/admin/affiliates', page: 'AdminAffiliates', guard: 'admin', feature: 'affiliate' },
+  { path: '/admin/affiliates/new', page: 'AdminAffiliateCreate', guard: 'admin', feature: 'affiliate' },
+  { path: '/admin/affiliates/analytics', page: 'AdminAffiliateAnalytics', guard: 'admin', feature: 'affiliate' },
+  { path: '/admin/affiliates/applications/:id', page: 'AdminAffiliateApplication', guard: 'admin', feature: 'affiliate' },
+  { path: '/admin/affiliates/:id', page: 'AdminAffiliateEdit', guard: 'admin' },
+  { path: '/admin/affiliates/:id/payout', page: 'AdminAffiliatePayout', guard: 'admin' },
 ];
 
 /** `/`: the login for a visitor, the dashboard for a signed-in user (D103). */

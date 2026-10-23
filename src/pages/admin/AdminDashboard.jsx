@@ -227,12 +227,13 @@ const AdminDashboard = () => {
         <div className="space-y-4">
           {onboarding && <OnboardingChecklist steps={onboarding.steps} />}
 
-          {/* Primary metrics strip — revenue, B2C customers, affiliate revenue. */}
+          {/* Primary metrics strip — revenue, B2C customers, the affiliate
+              commission of the last 30 days (a cost of the shop, CP13 A2). */}
           <MetricsBar
             metrics={[
               { key: 'revenue', label: 'Total Intäkt', value: formatCurrency(stats.totalRevenue) },
               { key: 'b2c', label: 'B2C Kunder', value: stats.b2cCustomers },
-              { key: 'affiliateRevenue', label: 'Affiliate Intäkt', value: stats.affiliateRevenue === null ? null : formatCurrency(stats.affiliateRevenue) },
+              { key: 'affiliateRevenue', label: 'Affiliate-provision (30 dagar)', value: stats.affiliateRevenue === null ? null : formatCurrency(stats.affiliateRevenue) },
             ].filter((m) => m.value !== null)}
           />
           {/* Quick links mirroring the old card footers. */}
@@ -262,7 +263,7 @@ const AdminDashboard = () => {
               { key: 'pending', label: 'Väntande', value: stats.pendingOrders },
               { key: 'processing', label: 'Bearbetas', value: stats.processingOrders },
               { key: 'completed', label: 'Levererade', value: stats.completedOrders },
-              { key: 'affiliates', label: 'Aktiva Affiliates', value: stats.activeAffiliates },
+              { key: 'affiliates', label: 'Aktiva affiliates', value: stats.activeAffiliates },
             ].filter((m) => m.value !== null)}
           />
 

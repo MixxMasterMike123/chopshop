@@ -42,6 +42,7 @@ import { FL_PLATFORM_ROUTES } from './platform-settings-dev.mjs';
 import { REDIRECT_ROUTES } from './redirects-dev.mjs';
 import { DISCOUNT_CODE_ROUTES } from './discount-codes-dev.mjs';
 import { CHECKOUT_REMINDER_ROUTES } from './checkout-reminders-dev.mjs';
+import { AFFILIATE_ROUTES, affiliateOrderDetailRoute } from './affiliates-dev.mjs';
 import { PRINT_JOB_ROUTES, balanceRoute, settingsPatchRoute, settingsReadRoute } from './fp-dev.mjs';
 
 export const DEV_API_MARKER = 'admin-dev-api-invented-data';
@@ -436,6 +437,7 @@ const ADMIN_ROUTES = [
   ['GET', '/v1/admin/shop', (_state, { shop }) => json(200, { shop: structuredClone(shop.shop) })],
   ['GET', '/v1/admin/settings', (_state, { shop }) => json(200, { settings: structuredClone(shop.settings) })],
   ...CONNECT_ROUTES,
+  affiliateOrderDetailRoute(ORDER_ROUTES), // CP13 A2: the order detail's `affiliate` member, before the order routes
   ...ORDER_ROUTES,
   ...PRODUCT_ROUTES,
   ...CONTENT_ROUTES,
@@ -446,6 +448,7 @@ const ADMIN_ROUTES = [
   ...REDIRECT_ROUTES, // unit FL
   ...DISCOUNT_CODE_ROUTES, // CP8-DC
   ...CHECKOUT_REMINDER_ROUTES, // CP9-AC
+  ...AFFILIATE_ROUTES, // CP13 A2
 ];
 
 // Unit FB adds the platform rows (tenants, acting-as) here.

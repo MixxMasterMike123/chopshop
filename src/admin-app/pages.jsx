@@ -36,6 +36,12 @@ export { default as AdminPlatformTerms } from '../pages/admin/AdminPlatformTerms
 export { default as AdminDiscountCodes } from '../pages/admin/AdminDiscountCodes.jsx'; // CP8-DC
 export { default as PodAdminPage } from '../wagons/pod-wagon/components/PodAdminPage.jsx';
 export { default as AdminRedirects } from './pages/new/AdminRedirects.jsx'; // CP5-FL: new, admin build only
+export { default as AdminAffiliates } from '../pages/admin/AdminAffiliates.jsx'; // CP13 A2
+export { default as AdminAffiliateCreate } from '../pages/admin/AdminAffiliateCreate.jsx'; // CP13 A2: the invite
+export { default as AdminAffiliateApplication } from '../pages/admin/AdminAffiliateApplication.jsx'; // CP13 A2: new
+export { default as AdminAffiliateEdit } from '../pages/admin/AdminAffiliateEdit.jsx'; // CP13 A2
+export { default as AdminAffiliatePayout } from '../pages/admin/AdminAffiliatePayout.jsx'; // CP13 A2
+export { default as AdminAffiliateAnalytics } from '../pages/admin/AdminAffiliateAnalytics.jsx'; // CP13 A2
 
 // ── the platform console (PlatformLayout shell, always dark) ──
 export { default as PlatformShops } from '../pages/platform/PlatformShops.jsx';

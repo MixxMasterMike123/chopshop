@@ -19,7 +19,7 @@ import {
   reactivatePlatformUser,
   readAllPlatformUsers,
 } from '../../api/admin/platform.js';
-import { ADMIN_ACCOUNT_TYPES, sortUsers, userActionMessage, userRowOf } from '../adapters/platformConsole.js';
+import { USER_FILTERS, accountTypesOf, sortUsers, userActionMessage, userRowOf } from '../adapters/platformConsole.js';
 import { mailNotSentMessage } from '../adapters/member.js';
 
 /** D51: a platform admin is not created over HTTP. */
@@ -61,9 +61,15 @@ async function run(call) {
   }
 }
 
-/** The admins: [{ uid, email, contactPerson, shopId, platform, suspended, hasPassword }]. */
-export async function loadUsers() {
-  const users = await readAllPlatformUsers(ADMIN_ACCOUNT_TYPES);
+/** CP13 A2: the list's account-type filter (the first is the default). */
+export const ACCOUNT_FILTERS = USER_FILTERS;
+
+/**
+ * The users of a filter ('admins', the default, or 'affiliate'):
+ * [{ uid, email, contactPerson, shopId, platform, affiliate, suspended, hasPassword }].
+ */
+export async function loadUsers(filter = 'admins') {
+  const users = await readAllPlatformUsers(accountTypesOf(filter));
   return sortUsers(users.map(userRowOf));
 }
 

@@ -35,3 +35,25 @@ export async function refundWholeOrder(orderId, _order) {
   await httpsCallable(functions, 'refundOrder')({ orderId });
   return { pending: false };
 }
+
+/**
+ * CP13 A2: the order's affiliate in the page's one shape (the admin build's
+ * module gives the API's), or null. Firestore keeps the code, the discount
+ * percent and the commission in kronor; it has no ledger state and no
+ * self-referral verdict.
+ */
+export function orderAffiliateOf(order) {
+  const code = order?.affiliateCode || order?.affiliate?.code;
+  if (!code) return null;
+  const commission = Number(order.affiliateCommission);
+  return {
+    code,
+    attribution: null,
+    affiliateCommissionMinor: Number.isFinite(commission) && order.affiliateCommission != null ? Math.round(commission * 100) : null,
+    ledgerState: null,
+    selfReferral: false,
+    discountPercent:
+      order.discountPercentage || order.affiliate?.discountPercentage || order.affiliateDiscount?.percentage || null,
+    detailPath: order.affiliateId ? `/admin/affiliates/manage/${order.affiliateId}` : null,
+  };
+}

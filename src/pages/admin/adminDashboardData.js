@@ -57,8 +57,10 @@ export async function loadDashboardStats(shopId) {
       completedOrders++;
     }
 
-    // Calculate affiliate revenue
-    if (order.affiliateCommission) {
+    // The affiliate commission of the last 30 days (CP13 A2: the tile is
+    // "Affiliate-provision (30 dagar)", the shop's cost to its affiliates).
+    const createdMs = order.createdAt?.toMillis ? order.createdAt.toMillis() : Date.parse(order.createdAt);
+    if (order.affiliateCommission && Number.isFinite(createdMs) && createdMs >= Date.now() - 30 * 24 * 60 * 60 * 1000) {
       affiliateRevenue += order.affiliateCommission;
     }
   });

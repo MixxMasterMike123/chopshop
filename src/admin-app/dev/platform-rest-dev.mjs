@@ -29,7 +29,7 @@ const refused = (status, code, message) => json(status, { error: { code, message
 const FEATURE_KEYS = ['abandonedCheckout', 'contentStudio', 'discountCodes', 'marketingMaterials', 'pod', 'productReviews'];
 // The Worker's opt-in keys (cloudflare/src/platform/tenant-config.ts OPT_IN_KEYS; CP8-DC DC2: discountCodes).
 const OPT_IN = new Set(['contentStudio', 'discountCodes', 'marketingMaterials', 'pod']);
-const ACCOUNT_TYPES = ['ordinary', 'platform_admin', 'print_operator', 'tenant_admin'];
+const ACCOUNT_TYPES = ['affiliate', 'ordinary', 'platform_admin', 'print_operator', 'tenant_admin']; // CP13 A2: + affiliate
 const REPORT_STATUSES = ['new', 'reviewing', 'rejected', 'taken_down'];
 const SCREENING_STATUSES = ['advisory', 'approved', 'blocked', 'flagged', 'pending'];
 

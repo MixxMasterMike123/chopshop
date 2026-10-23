@@ -185,8 +185,11 @@ export const exportOrdersToCSV = (orders, options = {}) => {
       'Totalt inkl. moms (kr)',
       'Betalmetod',
       'Affiliatekod',
-      'Affiliatekommission (kr)',
-      'Affiliaterabatt (kr)',
+      // CP13 A2 (design §7.1b): the shop's cost to its affiliate, named so. The
+      // former "Affiliaterabatt (kr)" column left: it held the same figure as
+      // "Rabatt (kr)" above (order.discountAmount, any code's discount), and a
+      // second "Rabatt" header would duplicate that column.
+      'Affiliate-provision (kr)',
       'Anteckningar'
     ];
 
@@ -238,7 +241,6 @@ export const exportOrdersToCSV = (orders, options = {}) => {
       // Affiliate information
       const affiliateCode = order.affiliateCode || order.affiliate?.code || '';
       const affiliateCommission = order.affiliateCommission || 0;
-      const affiliateDiscount = order.discountAmount || 0;
       
       // Total number of items
       const totalItems = (order.items || []).reduce((sum, item) => sum + (item.quantity || 0), 0);
@@ -271,7 +273,6 @@ export const exportOrdersToCSV = (orders, options = {}) => {
         paymentMethod,
         affiliateCode,
         affiliateCommission.toFixed(2),
-        affiliateDiscount.toFixed(2),
         notes
       ];
     });

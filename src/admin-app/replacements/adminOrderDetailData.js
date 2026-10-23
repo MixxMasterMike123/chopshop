@@ -14,6 +14,9 @@
 //                     is NOT a refund yet — the webhook or the reconciliation
 //                     settles it — so it is pending, with `message` to show
 //                     instead of "Ordern återbetalad" (CP5-FX, finding 3).
+//   orderAffiliateOf  CP13 A2: the order's `affiliate` member as the order
+//                     adapter passed it on (null without one); the pill links
+//                     to the affiliate's page when the server names its id.
 
 import { refundOrder } from '../../api/admin/orders.js';
 import { withUserMessage } from '../providers/ordersForShop.js';
@@ -48,4 +51,15 @@ export async function refundWholeOrder(orderId, order) {
     return { pending: true, message: REFUND_PENDING_MESSAGE, refund };
   }
   return { pending: false, refund };
+}
+
+/** The order's affiliate, or null: `{ code, attribution, affiliateCommissionMinor, ledgerState, selfReferral, detailPath }`. */
+export function orderAffiliateOf(order) {
+  const affiliate = order?.affiliate;
+  if (!affiliate || typeof affiliate.code !== 'string') return null;
+  return {
+    ...affiliate,
+    discountPercent: null,
+    detailPath: typeof affiliate.affiliateId === 'string' && affiliate.affiliateId !== '' ? `/admin/affiliates/${encodeURIComponent(affiliate.affiliateId)}` : null,
+  };
 }

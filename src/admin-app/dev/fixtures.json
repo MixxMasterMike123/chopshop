@@ -14,7 +14,7 @@
         "features": {
           "pod": true,
           "pickup": true,
-          "affiliate": false,
+          "affiliate": true,
           "discountCodes": true,
           "productReviews": false,
           "abandonedCheckout": true,

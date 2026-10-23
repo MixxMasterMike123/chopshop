@@ -7,6 +7,7 @@
 // API's (vite.admin.config.js).
 import React, { useState, useEffect, useCallback } from 'react';
 import {
+  ACCOUNT_FILTERS,
   CAN_CREATE_PLATFORM_ADMIN,
   REMOVE_COPY,
   USER_LIFECYCLE,
@@ -25,6 +26,7 @@ import {
   TrashIcon,
   ShieldCheckIcon,
   BuildingStorefrontIcon,
+  LinkIcon,
   ArrowPathIcon,
   EnvelopeIcon,
 } from '@heroicons/react/24/outline';
@@ -37,12 +39,15 @@ const PlatformUsers = () => {
   const [deletingId, setDeletingId] = useState(null);
   const [workingId, setWorkingId] = useState(null); // reactivate / invite
   const [showCreate, setShowCreate] = useState(false);
+  // CP13 A2: the account-type filter (the admin build: Administratörer | Affiliates).
+  const [filter, setFilter] = useState(ACCOUNT_FILTERS[0]?.value);
+  const activeFilter = ACCOUNT_FILTERS.find((f) => f.value === filter);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setLoadError(false);
-      setUsers(await loadUsers());
+      setUsers(await loadUsers(filter));
     } catch (e) {
       console.error('Error loading users:', e);
       setLoadError(true);
@@ -50,7 +55,7 @@ const PlatformUsers = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filter]);
 
   useEffect(() => {
     load();
@@ -107,7 +112,9 @@ const PlatformUsers = () => {
         <div className="flex items-start justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold text-white">Användare</h1>
-            <p className="text-gray-400 mt-1">Plattformsadministratörer och butiksadmins.</p>
+            <p className="text-gray-400 mt-1">
+              Plattformsadministratörer och butiksadmins{ACCOUNT_FILTERS.length > 0 ? ', och butikernas affiliates.' : '.'}
+            </p>
           </div>
           {CAN_CREATE_PLATFORM_ADMIN && (
             <button
@@ -119,6 +126,26 @@ const PlatformUsers = () => {
             </button>
           )}
         </div>
+
+        {ACCOUNT_FILTERS.length > 0 && (
+          <div role="radiogroup" aria-label="Kontotyp" className="mb-4 inline-flex rounded-lg bg-white/5 p-0.5">
+            {ACCOUNT_FILTERS.map((f) => (
+              <button
+                key={f.value}
+                type="button"
+                role="radio"
+                aria-checked={f.value === filter}
+                onClick={() => setFilter(f.value)}
+                className={
+                  'rounded-md px-3 py-1 text-sm font-medium ' +
+                  (f.value === filter ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200')
+                }
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {loading ? (
           <div className="py-16 text-center text-gray-500">Laddar…</div>
@@ -136,7 +163,7 @@ const PlatformUsers = () => {
         ) : users.length === 0 ? (
           <div className="py-16 text-center text-gray-500">
             <UsersIcon className="h-10 w-10 mx-auto mb-3 text-gray-700" />
-            Inga administratörer ännu.
+            {activeFilter?.empty ?? 'Inga administratörer ännu.'}
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-white/10 bg-gray-900">
@@ -155,7 +182,7 @@ const PlatformUsers = () => {
                   // Group divider: rows are sorted platform-first, so the first
                   // non-platform row starts the "shop admins" section. Makes the
                   // two kinds read as distinct groups, not one mixed roster.
-                  const startsShopSection = !u.platform && (i === 0 || users[i - 1].platform);
+                  const startsShopSection = !u.platform && !u.affiliate && (i === 0 || users[i - 1].platform);
                   return (
                     <React.Fragment key={u.uid}>
                     {startsShopSection && (
@@ -176,6 +203,11 @@ const PlatformUsers = () => {
                           <span className="inline-flex items-center gap-1 rounded-md bg-indigo-500/15 px-2 py-0.5 text-xs font-medium text-indigo-300">
                             <ShieldCheckIcon className="h-3.5 w-3.5" />
                             Plattformsadmin
+                          </span>
+                        ) : u.affiliate ? (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                            <LinkIcon className="h-3.5 w-3.5" />
+                            Affiliate · {u.shopId || 'ingen butik'}
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-300">
