@@ -18,7 +18,6 @@ if (!TOKEN) throw new Error("CLOUDFLARE_API_TOKEN missing (source ~/.config/chop
 const API = "https://api.cloudflare.com/client/v4";
 const MAIN = "8398c81a4350f45e807f7ef4610baa1a"; // flippinstuff.se
 const TYPO = "dd0bd49f5c4baa32834cd91edd1ba2d5"; // flippingstuff.se
-const err = (d) => JSON.stringify(d.errors);
 
 async function cf(method, path, body) {
   const r = await fetch(API + path, {
@@ -26,19 +25,23 @@ async function cf(method, path, body) {
     headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return r.json();
+  const d = await r.json();
+  // A refused write is a failed run (Codex P2 on b04a3ab1): never print "ok"
+  // around it and exit 0. Reads that fail throw the same way.
+  if (!r.ok || !d.success) throw new Error(`${method} ${path} -> ${r.status} ${JSON.stringify(d.errors ?? d)}`);
+  return d;
 }
 
 async function record(zone, name, type, content, comment) {
   const have = (await cf("GET", `/zones/${zone}/dns_records?name=${name}&type=${type}`)).result;
   if (have.length) { console.log(`  record ${type} ${name}: exists`); return; }
-  const d = await cf("POST", `/zones/${zone}/dns_records`, { type, name, content, proxied: true, ttl: 1, comment });
-  console.log(`  record ${type} ${name}: ${d.success ? "ok" : err(d)}`);
+  await cf("POST", `/zones/${zone}/dns_records`, { type, name, content, proxied: true, ttl: 1, comment });
+  console.log(`  record ${type} ${name}: ok`);
 }
 
 async function setting(zone, key, value) {
-  const d = await cf("PATCH", `/zones/${zone}/settings/${key}`, { value });
-  console.log(`  setting ${key}=${value}: ${d.success ? "ok" : err(d)}`);
+  await cf("PATCH", `/zones/${zone}/settings/${key}`, { value });
+  console.log(`  setting ${key}=${value}: ok`);
 }
 
 const rule = (ref, description, expression, target) => ({
@@ -52,8 +55,8 @@ async function redirects(zone, name, rules) {
   const d = have.length
     ? await cf("PUT", `/zones/${zone}/rulesets/${have[0].id}`, body)
     : await cf("POST", `/zones/${zone}/rulesets`, body);
-  console.log(`  redirect ruleset (${have.length ? "updated" : "created"}): ${d.success ? "ok" : err(d)}`);
-  if (d.success) for (const r of d.result.rules) console.log(`    - ${r.description} | ${r.expression}`);
+  console.log(`  redirect ruleset (${have.length ? "updated" : "created"}): ok`);
+  for (const r of d.result.rules) console.log(`    - ${r.description} | ${r.expression}`);
 }
 
 console.log("== flippinstuff.se (main) ==");
@@ -80,5 +83,8 @@ await redirects(TYPO, "flippingstuff.se -> flippinstuff.se", [
     'concat("https://flippinstuff.se", http.request.uri.path)'),
   rule("typo_subdomains", "subdomains -> same label on flippinstuff.se",
     '(http.host ne "flippingstuff.se") and (http.host ne "www.flippingstuff.se")',
-    'wildcard_replace(http.request.full_uri, "https://*.flippingstuff.se/*", "https://${1}.flippinstuff.se/${2}")'),
+    // Any scheme (Codex P2 on b04a3ab1: an http:// request would otherwise 301 to
+    // itself, since Single Redirects run before the HTTPS upgrade): the scheme is
+    // ${1} and dropped, the label ${2}, the path ${3}; the query is preserved.
+    'wildcard_replace(http.request.full_uri, "*://*.flippingstuff.se/*", "https://${2}.flippinstuff.se/${3}")'),
 ]);
