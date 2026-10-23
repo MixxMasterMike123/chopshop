@@ -39,9 +39,9 @@ describe("features.abandonedCheckout = ported AND the add-on AND the seller's sw
     expect(await featureOf(host)).toBe(expected);
   });
 
-  it("is ported, and the body revision is 3 or later (CP13 raised it to 4)", () => {
+  it("is ported, and the body revision is 3 or later (CP13 raised it to 4, round 2 to 5)", () => {
     expect(PORTED_FEATURE_KEYS).toContain("abandonedCheckout");
-    expect(STOREFRONT_BODY_REVISION).toBe(4);
+    expect(STOREFRONT_BODY_REVISION).toBe(5);
   });
 
   it("a switch change (and an add-on change) bumps the version: never a stale 304", async () => {

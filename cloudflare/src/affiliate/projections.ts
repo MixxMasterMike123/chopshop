@@ -81,6 +81,7 @@ export type OrderCommissionState = "held" | "none" | "payable" | "reversed";
 interface OrderCommissionRow {
   accrued: number | null;
   affiliate_attribution: string;
+  affiliate_id: string;
   affiliate_code: string;
   affiliate_self_referral: number;
   created_at: number;
@@ -101,7 +102,7 @@ interface OrderCommissionRow {
  * Binds: now, cutoff (HELD_ORDER_SQL), in that order.
  */
 const ORDER_COMMISSION_COLUMNS = `o.order_id, o.order_number, o.paid_at, o.created_at, o.total_minor,
-  o.shipping_minor, o.vat_rate_bp, o.currency, o.affiliate_code, o.affiliate_attribution,
+  o.shipping_minor, o.vat_rate_bp, o.currency, o.affiliate_id, o.affiliate_code, o.affiliate_attribution,
   o.affiliate_self_referral,
   a.amount_minor AS accrued,
   CASE WHEN a.entry_id IS NULL THEN NULL ELSE ${ORDER_NET_SQL} END AS net,
@@ -122,6 +123,12 @@ function stateOf(row: Pick<OrderCommissionRow, "accrued" | "held" | "net">): Ord
 
 /** The admin order views' affiliate member (A14), or null on an order without one. */
 export interface OrderAffiliateView {
+  /**
+   * Round 2: the affiliate's id (the order pill links to
+   * /admin/affiliates/:id, design §4.5). The shop's own affiliate, never a
+   * buyer field; the admin views only (the portal's order row has no id).
+   */
+  affiliateId: string;
   /** 'link' | 'code'. */
   attribution: string;
   code: string;
@@ -135,6 +142,7 @@ export interface OrderAffiliateView {
 function orderAffiliateView(row: OrderCommissionRow): OrderAffiliateView {
   return {
     affiliateCommissionMinor: Math.max(0, row.net ?? 0),
+    affiliateId: row.affiliate_id,
     attribution: row.affiliate_attribution,
     code: row.affiliate_code,
     ledgerState: stateOf(row),

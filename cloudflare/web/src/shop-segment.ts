@@ -23,6 +23,8 @@ export const TENANCY_RESERVED_SEGMENTS: readonly string[] = [
   "forgot-password",
   "reset-password",
   "affiliate-login",
+  // CP13: the affiliate portal's tree on the admin host (/affiliate/*).
+  "affiliate",
   "__",
   "account",
   "admin",

@@ -54,10 +54,11 @@ import { getPublicStorefrontVersioned } from "./public-storefront";
  * before from ever matching a body of this one, across a rollback too.
  * Revision 4: features.affiliate (CP13): the key is named in every body (an
  * allowed key since 0058) and ported, true only with the platform's switch on.
+ * Revision 5: adminOrigin (CP13 round 2), the canonical admin origin or null.
  */
 
 /** Raise with any code change to the storefront body (PORTED_FEATURE_KEYS, ordersOpen). */
-export const STOREFRONT_BODY_REVISION = 4;
+export const STOREFRONT_BODY_REVISION = 5;
 
 function etagFor(catalogVersion: number, tenant: StorefrontTenant, revision: number, ordersClosed: boolean): string {
   const base = hidesStandInFrames(tenant) ? `${catalogVersion}-c` : `${catalogVersion}`;

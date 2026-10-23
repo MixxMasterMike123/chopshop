@@ -110,7 +110,7 @@ Neither migration changes the value of any existing row. The only rows written a
 
 **New, empty tables:** `affiliates`, `affiliate_applications`, `affiliate_click_days`, `affiliate_ledger`, `affiliate_payouts`, `affiliate_invoice_objects`. Every one has tenant scope with the immutable-`tenant_id` trigger.
 
-**Seeded table:** `affiliate_terms_versions` gets one row: version `2026-10-22`, published at `2026-10-22T00:00:00.000Z`, sha256 `ee41588c…79a3c`. That hash is `affiliateTermsSha256()` of `src/affiliate/terms.ts`; a schema test pins that they are equal.
+**Seeded table:** `affiliate_terms_versions` gets one row: version `2026-10-22`, published at `2026-10-22T00:00:00.000Z`, sha256 `f075d79e…faec6 (A4 finalised the text; the version stays 2026-10-22, nothing deployed)`. That hash is `affiliateTermsSha256()` of `src/affiliate/terms.ts`; a schema test pins that they are equal.
 
 **`checkouts` and `orders`:**
 1. Add `discount_authority`, with a value CHECK only.
@@ -153,6 +153,7 @@ The portal is gated on the **membership, not the add-on**: with the program OFF,
 | GET | `/v1/affiliate/payouts?cursor&limit` | — | 200 `{ payouts: [{ payoutId, status: "requested"\|"paid"\|"void", amountMinor, currency, requestedAt, paidAt, reference, invoiceNumber, hasInvoice, voidedAt, voidReason }], nextCursor }` |
 | POST | `/v1/affiliate/payouts` | `{ amountMinor? (defaults to the whole payable), invoiceObjectId?, invoiceNumber? }` | 201 `{ payout }` · 409 `payout_open \| insufficient_balance \| profile_incomplete \| terms_required \| invalid_invoice` · 400 |
 | GET | `/v1/affiliate/payouts/:payoutId/invoice` | — | 200, the PDF as a download (attachment) · 404 when the payout is not this affiliate's or has no invoice. Since round 1, the payout → affiliate check is the ownership, so a document the shop attached when recording the payout is served too. |
+| — | (no `marketingMaterials` flag) | — | `PortalMe` carries no `marketingMaterials` flag. That add-on is not ported on the Cloudflare side, so the portal's Material page stays out until it is (round 2). |
 | PATCH | `/v1/affiliate/profile` | `{ name?, phone?, addressLine1?, addressLine2?, postalCode?, city?, country?, socials?, preferredLang? }` | 200 `{ affiliate: PortalMe }` · 400 (any other key, e.g. code, rates, status) |
 | GET | `/v1/affiliate/terms` | — | 200 `{ terms: { version, publishedAt, sha256, text, accepted } }`, rendered at the affiliate's own rates |
 | POST | `/v1/affiliate/terms/accept` | `{ version }` | 200 `{ terms: {…, accepted: true} }` · 409 `terms_changed`. Writes audit `affiliate.terms_accept` with the text's hash. |
@@ -198,6 +199,10 @@ Rates go IN as whole percent (`commissionPercent`, `discountPercent`, 0–100) a
 - **The order's discount label** is `CASE WHEN o.discount_minor > 0 THEN COALESCE(campaign code, o.affiliate_code) END`, in the admin order, receipts and order mails. Since round 1, a 0-öre affiliate attribution shows no label.
 - **`GET /v1/me`** serves `accountType: "affiliate"`, with memberships of role `affiliate` only.
 - **The storefront body** gains `features.affiliate`; `STOREFRONT_BODY_REVISION` goes 3 → 4.
+
+**Round 2 additions:**
+- **`affiliateId`** on the admin order `affiliate` member (detail and list). It is `o.affiliate_id`, so the order pill can link to `/admin/affiliates/:id` (design §4.5). It is the shop's own affiliate's id, not a buyer field, and the portal's order row still has no id.
+- **`adminOrigin`** on `GET /v1/storefront`. It is the canonical ADMIN origin from `readCanonicalOrigins(env)` (the source the invite links use), or `null` when the allowlist names none, for the footer's "Logga in som affiliate". Only that one origin string is answered; no other member of `CanonicalOrigins` leaves. A test proves the api and web origins are absent. `STOREFRONT_BODY_REVISION` goes 4 → 5.
 - **The Rabattkoder create/rename** answers 409 `conflict` when the code collides with an affiliate's code.
 
 ## 5. Invariants touched in webhook.ts / refunds.ts / stripe-events.ts / checkout.ts, and why each still holds
@@ -358,3 +363,22 @@ None with the findings as stated. Item 4 goes slightly further than asked (the d
 - **Review #10:** payouts exist only in `affiliates.currency`, the known R2-11 limit. Balances are per currency, but a request reserves in the affiliate's currency only. An accrual in another currency stays in the balance and is visible, but cannot be requested until a per-currency payout exists.
 - **Review #12:** converting an unaccepted affiliate (tenant-members invite, platform provisioning) commits before the invite flow. Accepted: if the invite then fails, the person is a tenant admin without a link, and the existing members re-send path applies, exactly as for any admin invite.
 - **Review #14:** a counted landing costs two writes (limiter window and click day). Accepted.
+
+### Round 2 (contract fixes for A2/A3)
+
+1. **`affiliateId` on the admin order member.**
+   - **Change:** `src/affiliate/projections.ts`. `ORDER_COMMISSION_COLUMNS` selects `o.affiliate_id`, and `OrderAffiliateView` / `orderAffiliateView` answer it as `affiliateId`. It flows through `admin-orders.ts` and `admin-order-list.ts` unchanged.
+   - **Test:** `affiliate-payouts` (admin order detail) pins `affiliateId`, and the denylist walk of that member stays green. No admin-order suite pinned the member with `toEqual`, so none needed editing.
+2. **`adminOrigin` on the storefront body.**
+   - **Change:** `src/storefront/public-storefront.ts` answers `adminOrigin: readCanonicalOrigins(env)?.admin ?? null`. `src/storefront/public-routes.ts` bumps `STOREFRONT_BODY_REVISION` from 4 to 5.
+   - **Test:** `test/public-storefront.test.ts` pins the member in the allowlisted-body test. A new test proves the admin origin is answered, the api and web origins are not, and the value is `null` with an allowlist that names no admin.
+   - **Three other pins also had to follow the bump** for the gate to pass. They are files I had already touched in A1, and only the pinned values changed:
+     - `test/checkout-reminders-storefront.test.ts` (revision 5)
+     - `test/onboarding-identity.test.ts` (revision 5)
+     - `test/checkout-reminders-off-golden.test.ts` (the golden body gains `adminOrigin`)
+3. **Report only:** §4.2 notes that `PortalMe` has no `marketingMaterials` flag.
+
+**Gate after round 2:**
+- `cd cloudflare && npx tsc --noEmit` → clean.
+- `npx vitest run` → Test Files 153 passed (153) · Tests 5367 passed (5367). The file count includes suites other units added to the tree.
+

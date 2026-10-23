@@ -467,7 +467,13 @@ describe("the projections (design §7.1, §8.9)", () => {
     ]);
     // The shop's order detail carries the attribution, never a platform figure in it.
     const detail = await (await asAdmin("GET", `/v1/admin/orders/${orderId}`)).json<{ order: { affiliate: unknown } }>();
-    expect(detail.order.affiliate).toMatchObject({ attribution: "link", code: "PROJ10", affiliateCommissionMinor: 5_400 });
+    expect(detail.order.affiliate).toMatchObject({
+      affiliateCommissionMinor: 5_400,
+      // Round 2: the pill links to /admin/affiliates/:id.
+      affiliateId: person.affiliateId,
+      attribution: "link",
+      code: "PROJ10",
+    });
     walk(detail.order.affiliate, "admin order affiliate");
   });
 

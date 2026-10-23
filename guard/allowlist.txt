@@ -187,11 +187,6 @@ src/hooks/useAdminPresence.js
 src/hooks/useDarkMode.js
 src/pages/HandoffPage.jsx
 src/pages/LandingPage.jsx
-src/pages/admin/AdminAffiliateAnalytics.jsx
-src/pages/admin/AdminAffiliateCreate.jsx
-src/pages/admin/AdminAffiliateEdit.jsx
-src/pages/admin/AdminAffiliatePayout.jsx
-src/pages/admin/AdminAffiliates.jsx
 src/pages/admin/AdminB2BCustomers.jsx
 src/pages/admin/AdminB2CCustomerEdit.jsx
 src/pages/admin/AdminB2CCustomers.jsx

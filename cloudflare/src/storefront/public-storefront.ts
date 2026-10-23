@@ -29,6 +29,7 @@ import {
 } from "./identity-projection";
 import { isPreview, type StorefrontTenant } from "./preview";
 import { publicShopStatement, type PublicShopRow } from "./public-shop";
+import { readCanonicalOrigins } from "../lib/origins";
 
 interface ConnectAccountRow {
   stripe_account_id: string | null;
@@ -64,6 +65,16 @@ export const PORTED_FEATURE_KEYS: readonly FeatureKey[] = ["pod", "discountCodes
  */
 export interface PublicStorefrontResponse extends PublicStorefront {
   accent: string | null;
+  /**
+   * CP13 round 2 (design §2.1/§7.4): the canonical ADMIN origin
+   * (CANONICAL_ORIGINS via readCanonicalOrigins, the source the invite links
+   * use), or null when the allowlist names none — the footer's "Logga in som
+   * affiliate" links to its login without a literal hostname. Only this one
+   * origin string leaves; no other member of CanonicalOrigins is answered.
+   * It is deployment configuration: it changes only with a deploy, so the
+   * catalog version (the ETag) need not carry it.
+   */
+  adminOrigin: string | null;
   branding: PublicBranding;
   features: Record<FeatureKey, boolean>;
   identity: PublicStoreIdentity;
@@ -227,6 +238,7 @@ export async function getPublicStorefrontVersioned(
     catalogVersion: shop.catalog_version,
     value: {
       accent: projectAccent(identity.accent),
+      adminOrigin: readCanonicalOrigins(env)?.admin ?? null,
       branding: projectBranding(identity, images),
       currency: shop.default_currency,
       features,

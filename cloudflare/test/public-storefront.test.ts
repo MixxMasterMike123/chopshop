@@ -99,6 +99,8 @@ describe("GET /v1/storefront", () => {
     expect(body).toEqual({
       storefront: {
         accent: null,
+        // CP13 round 2: the canonical admin origin (the footer's affiliate login).
+        adminOrigin: "https://admin.test.invalid",
         branding: { emailLogo: null, favicon: null, hero: null, logo: null },
         currency: "SEK",
         features: EMPTY_FEATURES,
@@ -116,6 +118,21 @@ describe("GET /v1/storefront", () => {
     expect(JSON.stringify(body)).not.toContain("tenant-route-b");
     expect(JSON.stringify(body)).not.toContain("must-not-leak");
     expect(JSON.stringify(body)).not.toContain('"tenant-route-a"');
+  });
+
+  it("answers the admin origin only (no other canonical origin), and null when the allowlist names none (CP13 round 2)", async () => {
+    await seedStorefront("tenant-route-origin", "origin.route.test", "Store O");
+    const request = () => new Request("https://origin.route.test/v1/storefront");
+    const listed = await (await exports.default.fetch(request())).json<{ storefront: { adminOrigin: string | null } }>();
+    expect(listed.storefront.adminOrigin).toBe("https://admin.test.invalid");
+    expect(JSON.stringify(listed)).not.toContain("api.test.invalid");
+    expect(JSON.stringify(listed)).not.toContain("web.test.invalid");
+    const withoutAdmin = {
+      ...env,
+      CANONICAL_ORIGINS: { api: "https://api.test.invalid", web: "https://web.test.invalid" },
+    } as unknown as Env;
+    const unlisted = await (await worker.fetch(request(), withoutAdmin)).json<{ storefront: { adminOrigin: string | null } }>();
+    expect(unlisted.storefront.adminOrigin).toBeNull();
   });
 
   it("fails closed for an unknown hostname", async () => {
