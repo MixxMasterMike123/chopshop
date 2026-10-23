@@ -242,6 +242,9 @@ function auditJson(
  * it, retiring the old hostname then (step 2 retires every other live platform
  * hostname, not only the one read as previous).
  */
+/** One label under the base: ends with ".<base>" and holds no other dot before it. Binds: base, base. */
+const onePlatformLabel = `hostname LIKE '%.' || ? AND instr(substr(hostname, 1, length(hostname) - length(?) - 1), '.') = 0`;
+
 export async function setSubdomainLabel(
   db: D1Database,
   principal: PlatformPrincipal | TenantAdminPrincipal,
@@ -301,7 +304,26 @@ export async function setSubdomainLabel(
   }
   const changed = previous !== label;
   const ownLive = own !== null && own.redirect_until === null && own.status === "verified";
-  if (!changed && ownLive) {
+  // The shop's OTHER live platform hostnames (one label under the base,
+  // storefront, not retired). Normally none; one is left when an A→B change
+  // died between its two steps while B already existed as a live alias
+  // (Codex P2 on 9445da34): the label already reads B and B's row is live, so
+  // only this tells that A still waits to be retired (and the change audited).
+  const others = await db
+    .prepare(
+      `SELECT hostname FROM tenant_domains
+       WHERE tenant_id = ? AND hostname <> ? AND kind = 'storefront'
+         AND redirect_until IS NULL AND ${onePlatformLabel}
+       ORDER BY hostname`,
+    )
+    .bind(tenantId, hostname, base, base)
+    .all<{ hostname: string }>();
+  const otherLive = others.results.map((row) => row.hostname);
+  // Nothing left to do only when the row is live AND nothing else is.
+  // Otherwise step 2 runs: it retires the others and audits. Its audit then
+  // says `from` = the label as read (B, on such a retry) and names the
+  // hostnames it retires in `retiredHostnames`.
+  if (!changed && ownLive && otherLive.length === 0) {
     const view = await readSubdomainView(db, tenantId, base, now);
     return view === null ? { status: "not_found" } : { changed: false, status: "ok", view };
   }
@@ -330,8 +352,6 @@ export async function setSubdomainLabel(
   const isNow = "EXISTS (SELECT 1 FROM tenants WHERE tenant_id = ? AND subdomain_label = ?)";
   const redirectUntil = now + SUBDOMAIN_GRACE_MS;
   const retiring = changed && previousHostname !== null ? previousHostname : null;
-  // One label under the base: ends with ".<base>" and holds no other dot before it.
-  const onePlatformLabel = `hostname LIKE '%.' || ? AND instr(substr(hostname, 1, length(hostname) - length(?) - 1), '.') = 0`;
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -387,6 +407,7 @@ export async function setSubdomainLabel(
           hostname,
           label,
           retiredHostname: retiring,
+          retiredHostnames: otherLive,
           ...(retiring === null ? {} : { redirectUntil: new Date(redirectUntil).toISOString() }),
         }),
         now,

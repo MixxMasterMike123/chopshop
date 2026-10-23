@@ -732,4 +732,47 @@ describe("Codex round 1 on b7a1112d", () => {
     // The creation hostname is not under the base: never retired.
     expect((await domainRow("sd-r4.shops.cp3a.test"))?.redirect_until).toBeNull();
   });
+
+  it("round 2: an interrupted A→B where B already was a live alias — the retry retires A and audits once; then a true no-op writes nothing", async () => {
+    await bare("sd-r5");
+    expect((await setSubdomainLabel(env.DB, OPERATOR, "sd-r5", "sd-r5-a", BASE, Date.now())).status).toBe("ok");
+    await expectJson(
+      await platform(world, "POST", "/v1/platform/tenants/sd-r5/domains", {
+        body: { hostname: `sd-r5-b.${BASE}`, kind: "storefront" },
+      }),
+      201,
+      "alias by hand",
+    );
+    const dying = instrumentedDb((op) => {
+      if (op.kind === "batch") {
+        throw new Error("worker died");
+      }
+    });
+    await expect(setSubdomainLabel(dying.db, OPERATOR, "sd-r5", "sd-r5-b", BASE, Date.now())).rejects.toThrow();
+    expect(await labelOf("sd-r5")).toBe("sd-r5-b");
+    expect((await domainRow(`sd-r5-a.${BASE}`))?.redirect_until).toBeNull();
+    const audits = (await auditRows("sd-r5", "tenant.subdomain_set")).length;
+
+    const retry = await setSubdomainLabel(env.DB, OPERATOR, "sd-r5", "sd-r5-b", BASE, Date.now());
+    expect(retry).toMatchObject({ changed: false, status: "ok" });
+    expect((await domainRow(`sd-r5-a.${BASE}`))?.redirect_until).toBeGreaterThan(Date.now());
+    expect(await domainRow(`sd-r5-b.${BASE}`)).toMatchObject({ redirect_until: null, status: "verified" });
+    expect(await canonicalPlatformHostname(env.DB, BASE, { hostname: `sd-r5-a.${BASE}` }, Date.now())).toBe(
+      `sd-r5-b.${BASE}`,
+    );
+    const after = await auditRows("sd-r5", "tenant.subdomain_set");
+    expect(after).toHaveLength(audits + 1);
+    expect(after.at(-1)?.metadata).toMatchObject({
+      from: "sd-r5-b",
+      label: "sd-r5-b",
+      retiredHostnames: [`sd-r5-a.${BASE}`],
+    });
+
+    // Now there is nothing left to do: the same label writes nothing at all.
+    const watched = instrumentedDb(() => undefined);
+    const noop = await setSubdomainLabel(watched.db, OPERATOR, "sd-r5", "sd-r5-b", BASE, Date.now());
+    expect(noop).toMatchObject({ changed: false, status: "ok" });
+    expect(watched.ops.filter((op) => op.kind === "run" || op.kind === "batch")).toEqual([]);
+    expect(await auditRows("sd-r5", "tenant.subdomain_set")).toHaveLength(audits + 1);
+  });
 });

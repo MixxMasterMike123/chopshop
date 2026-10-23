@@ -227,3 +227,25 @@ Gates after the fixes:
 | `node guard/guards.test.mjs` | PASS |
 
 Q9 (the cart at the first move) was added as a result of P1.
+
+### Codex round 2 (on `9445da34`, log `docs/cf-port/codex-logs/codex-9445da34.log`)
+
+**P2: the same-label early return could skip a retirement that was never finished.** Codex reproduced it against SQLite. The case:
+1. The shop already held a live verified row for B, an alias added by hand.
+2. An A→B change crashed after step 1. The label read B, A was still live, and there was no audit row.
+3. The retry saw "same label, own row live" and answered `ok, changed: false`.
+
+A was never retired, never redirected, and the change was never audited.
+
+**Fix (`subdomain.ts`):** the early return now requires that nothing is left to do: the own row is live **and** the shop has no other live platform hostname (one label under the base, kind `storefront`, `redirect_until` NULL, not the target). The check uses the same `onePlatformLabel` predicate as step 2. Otherwise the call falls through to both steps. Step 1 is a guarded no-op re-write of the same label; step 2 retires the others and audits. That audit says `from` = the label as read (B, on such a retry) and names what it retired in the new `retiredHostnames` metadata key, which an ordinary A→B change also fills.
+
+**Test:** an interrupted A→B where B was already a live alias. The retry retires A (A now redirects to B), audits exactly once with `from: B` and `retiredHostnames: [A]`, and answers `ok, changed: false`. A further same-label call then issues no write at all (no `run`, no batch) and adds no audit row. With the old condition put back, this test fails.
+
+**Gates after round 2:**
+
+| Gate | Result |
+|---|---|
+| Worker vitest | 145 files / 5214 tests, 0 failed |
+| tsc (root, `-p web`, `-p admin`) | clean ×3 |
+| `guard/preflight.test.sh` | 453 passed |
+| `guard/deploy.test.sh` | 90 passed |
