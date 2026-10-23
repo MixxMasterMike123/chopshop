@@ -20,7 +20,9 @@
 #   CHOPSHOP_API_URL=https://chopshop-api-stg.kent-ee2.workers.dev \
 #   CHOPSHOP_PLATFORM_EMAIL=… CHOPSHOP_PLATFORM_PASSWORD=… \
 #   CHOPSHOP_AFFILIATE_PASSWORD=… STRIPE_SECRET_KEY=sk_test_… [CHOPSHOP_SLICE_ADMIN_PASSWORD=…] \
-#   bash cloudflare/scripts/stg-affiliate-smoke.sh --tenant <slice tenant>
+#   [SMOKE_SEED_ARGS='--printer prodigi'] bash cloudflare/scripts/stg-affiliate-smoke.sh --tenant <slice tenant>
+# (SMOKE_SEED_ARGS is appended to the seed's purchase and refund calls: a slice whose printers are
+#  prodigi rows needs `--printer prodigi`, or the seed refuses its replace-all printer PUT.)
 #
 # Credentials come only from the environment; none is printed or written to disk (the cookie jars
 # live in a temp directory removed on exit). Writes to staging: one application, one approved
@@ -213,7 +215,7 @@ pass "landing counted ($BEFORE → $AFTER) — $API/v1/admin/affiliates/$ANNA_ID
 # ── 4. purchase with the link code ──────────────────────────────────────────
 step "purchase with refCode $CODE_ANNA (seed-staging-slice.mjs --purchase --ref-code)"
 show "node $SEED --tenant $TENANT --purchase --ref-code $CODE_ANNA"
-node "$SEED" --tenant "$TENANT" --purchase --ref-code "$CODE_ANNA" | tee "$TMPD/purchase.log" || fail "the seed's purchase failed"
+node "$SEED" --tenant "$TENANT" ${SMOKE_SEED_ARGS:-} --purchase --ref-code "$CODE_ANNA" | tee "$TMPD/purchase.log" || fail "the seed's purchase failed"
 ORDER_ID="$(grep -Eo '^  order +[0-9a-f-]{36}' "$TMPD/purchase.log" | tail -1 | awk '{print $2}')"
 [ -n "$ORDER_ID" ] || fail "the seed printed no order id (the receipt may have been handed out already: re-run)"
 show "orderId $ORDER_ID"
@@ -245,7 +247,7 @@ show "entry $(jv "next(e['entryId'] for e in d['entries'] if e['kind'] == 'accru
 REFUND=$((CHARGED / 2))
 step "a partial refund of $REFUND öre (seed-staging-slice.mjs --refund)"
 show "node $SEED --tenant $TENANT --refund $ORDER_ID:$REFUND"
-node "$SEED" --tenant "$TENANT" --refund "$ORDER_ID:$REFUND" | tee "$TMPD/refund.log" || fail "the seed's refund failed"
+node "$SEED" --tenant "$TENANT" ${SMOKE_SEED_ARGS:-} --refund "$ORDER_ID:$REFUND" | tee "$TMPD/refund.log" || fail "the seed's refund failed"
 REVERSAL=""
 for _ in $(seq 1 30); do
   ledger
