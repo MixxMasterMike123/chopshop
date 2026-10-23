@@ -87,6 +87,16 @@ const LoginPage = () => {
         </div>
 
         <div>
+          {/* Platform wordmark (Flippin Stuff, 2026-10-23: the working logo
+              until a vector version exists). The login is the platform's
+              door, so it carries the platform brand, never a shop's. */}
+          <img
+            src="/images/flippin-stuff-logo.jpg"
+            alt="Flippin Stuff"
+            width="1400"
+            height="964"
+            className="mx-auto h-28 w-auto"
+          />
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
             {t('login.title', 'Sign in to your account')}
           </h2>

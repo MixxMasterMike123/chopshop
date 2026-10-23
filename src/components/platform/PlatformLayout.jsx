@@ -76,12 +76,20 @@ const PlatformLayout = ({ children, badgeCounts }) => {
     <div className="min-h-screen bg-gray-950 text-gray-100">
       {/* Sidebar */}
       <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col bg-gray-900 border-r border-white/10">
-        <div className="flex items-center gap-2 px-5 py-6">
-          <ShieldCheckIcon className="h-7 w-7 text-indigo-400" />
-          <div>
-            <div className="text-sm font-bold tracking-tight">meteorpr</div>
-            <div className="text-[11px] uppercase tracking-widest text-indigo-300/70">Platform</div>
+        <div className="px-5 py-5">
+          {/* Platform wordmark (Flippin Stuff, 2026-10-23). The working logo
+              is a raster on an off-white ground, so it sits on its own card
+              until a vector version exists. */}
+          <div className="rounded-lg bg-[#faf7f3] px-3 py-2">
+            <img
+              src="/images/flippin-stuff-logo.jpg"
+              alt="Flippin Stuff"
+              width="1400"
+              height="964"
+              className="h-12 w-auto mx-auto"
+            />
           </div>
+          <div className="mt-2 text-[11px] uppercase tracking-widest text-indigo-300/70">Platform</div>
         </div>
 
         <nav className="mt-2 flex-1 px-3 space-y-1">

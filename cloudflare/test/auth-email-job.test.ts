@@ -158,16 +158,16 @@ describe("the display name and the invite wording (CP3-B review round 1)", () =>
   }
 
   it("names the product through one constant; reset and verification subjects are unchanged", () => {
-    expect(PLATFORM_DISPLAY_NAME).toBe("ChopShop");
+    expect(PLATFORM_DISPLAY_NAME).toBe("Flippin Stuff");
 
     const svReset = renderAuthEmail(resetJob("sv"));
     expect(svReset.subject).toBe("Återställ ditt lösenord");
     expect(svReset.text).toBe(
-      `Du har begärt att återställa ditt lösenord för ChopShop.\n\nÅterställ lösenord: ${actionUrl}`,
+      `Du har begärt att återställa ditt lösenord för Flippin Stuff.\n\nÅterställ lösenord: ${actionUrl}`,
     );
     const enReset = renderAuthEmail(resetJob("en"));
     expect(enReset.subject).toBe("Reset your password");
-    expect(enReset.text).toContain("You requested a password reset for ChopShop.");
+    expect(enReset.text).toContain("You requested a password reset for Flippin Stuff.");
 
     const verification = renderAuthEmail(
       createAuthEmailJob(
@@ -182,7 +182,7 @@ describe("the display name and the invite wording (CP3-B review round 1)", () =>
       ),
     );
     expect(verification.subject).toBe("Verifiera din e-postadress");
-    expect(verification.text).toContain("Bekräfta din e-postadress för ChopShop.");
+    expect(verification.text).toContain("Bekräfta din e-postadress för Flippin Stuff.");
 
     for (const message of [svReset, enReset, verification]) {
       expect(message.text).not.toContain("MeteorShop");
@@ -207,10 +207,10 @@ describe("the display name and the invite wording (CP3-B review round 1)", () =>
     expect(parsed).toEqual(sv);
 
     const svMessage = renderAuthEmail(parsed);
-    expect(svMessage.subject).toBe("Välj ditt lösenord för ChopShop");
+    expect(svMessage.subject).toBe("Välj ditt lösenord för Flippin Stuff");
     expect(svMessage.text).toBe(
       [
-        "Ett konto har skapats åt dig på ChopShop.",
+        "Ett konto har skapats åt dig på Flippin Stuff.",
         "Välj ett lösenord för att logga in.",
         "",
         `Välj lösenord: ${actionUrl}`,
@@ -224,10 +224,10 @@ describe("the display name and the invite wording (CP3-B review round 1)", () =>
     expect(svMessage.text).not.toContain("begärt");
 
     const enMessage = renderAuthEmail(resetJob("en", "invite"));
-    expect(enMessage.subject).toBe("Choose your password for ChopShop");
+    expect(enMessage.subject).toBe("Choose your password for Flippin Stuff");
     expect(enMessage.text).toBe(
       [
-        "An account has been created for you on ChopShop.",
+        "An account has been created for you on Flippin Stuff.",
         "Choose a password to sign in.",
         "",
         `Choose password: ${actionUrl}`,

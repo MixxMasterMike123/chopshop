@@ -634,8 +634,8 @@ describe("review round 1", () => {
 
     const payload = await (requests[0] as Request).json<{ subject: string; text: string; to: string[] }>();
     expect(payload.to).toEqual([platformTarget.email]);
-    expect(payload.subject).toBe("Välj ditt lösenord för ChopShop");
-    expect(payload.text).toContain("Ett konto har skapats åt dig på ChopShop.");
+    expect(payload.subject).toBe("Välj ditt lösenord för Flippin Stuff");
+    expect(payload.text).toContain("Ett konto har skapats åt dig på Flippin Stuff.");
     expect(payload.text).toContain("Länken gäller i 72 timmar");
     expect(payload.text).toContain(job.actionUrl);
 

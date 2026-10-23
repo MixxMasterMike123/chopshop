@@ -227,7 +227,7 @@ const ShopFooter = () => {
                   the counterparty of the purchase; the platform only provides
                   the service it runs on. */}
               <p className="text-white/40 mt-1">
-                {t('footer_powered_by', 'Drivs av ChopShop')}{' · '}
+                {t('footer_powered_by', 'Drivs av Flippin Stuff')}{' · '}
                 <Link to={getCountryAwareUrl(PLATFORM_TERMS_SLUG)} className="text-white/40 hover:text-white/70 transition-colors underline">
                   {t('footer_platform_terms', 'Plattformsvillkor')}
                 </Link>

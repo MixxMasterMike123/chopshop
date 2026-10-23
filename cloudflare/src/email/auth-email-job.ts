@@ -45,7 +45,7 @@ export type AuthActionEmailKind = "email_verification" | "password_reset";
  * The product's display name in every email this module renders. ONE place:
  * the reset, verification and invite templates all read it.
  */
-export const PLATFORM_DISPLAY_NAME = "ChopShop";
+export const PLATFORM_DISPLAY_NAME = "Flippin Stuff";
 
 /**
  * How long an invite link works, in the words of the invite email. The token's

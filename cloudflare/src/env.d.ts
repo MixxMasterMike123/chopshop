@@ -28,7 +28,7 @@ interface Env {
   RESEND_API_KEY: string | undefined;
 
   // The `from` address for transactional email, e.g.
-  // "ChopShop <no-reply@example.com>". Absent or malformed ⇒ same as a
+  // "Flippin Stuff <no-reply@example.com>". Absent or malformed ⇒ same as a
   // missing RESEND_API_KEY: no delivery attempt, retry later.
   EMAIL_FROM: string | undefined;
 
@@ -98,6 +98,12 @@ interface Env {
   // digest goes through EMAIL_QUEUE and Resend like every other mail, so it
   // also needs RESEND_API_KEY + EMAIL_FROM to be delivered.
   PLATFORM_ALERT_EMAIL?: string;
+
+  // Optional plain var (CP14): the base domain of the shops' platform
+  // subdomains, `<label>.<PLATFORM_SHOP_DOMAIN>` (src/tenancy/subdomain.ts).
+  // The same value is on the web Worker. Absent or not a hostname ⇒ the feature
+  // is off: no label can be set, none is given at creation, nothing redirects.
+  PLATFORM_SHOP_DOMAIN?: string;
 
   // ── THE POD / RENDER-FARM CONFIGURATION ──────────────────────────────────
   // Six values, and the ENTIRE POD surface answers a fail-closed 404 until all
