@@ -1,0 +1,5 @@
+codex: PASS
+
+fable: PASS
+
+context: CP14 shop subdomains b7a1112d + Codex round 1 9445da34 (P1 buying flow, P2 restore, P2 two-step) + round 2 ee6bc98a; logs docs/cf-port/codex-logs/codex-{b7a1112d,9445da34,ee6bc98a}.log; migration 0061 applied on staging 2026-10-23 (bookmark 00000a91-00000000-0000510d-56a1fa9a40eecbfd88a30e4589d347ed)
