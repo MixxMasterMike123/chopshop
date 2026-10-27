@@ -4,6 +4,12 @@ One entry per checkpoint (PLAN §9): what exists, how it was verified, both revi
 
 ## CP14 — Shop subdomains + the domain day (2026-10-23)
 
+### ✅ UPDATE 2026-10-27 ≈ 22:00 — "Snart här" page LIVE on https://flippinstuff.se (Mikael's ask); the typo-domain rule re-run and proven for http
+
+- `cloudflare/coming-soon/` — an assets-only Worker `flippinstuff-coming-soon` (one HTML page in Swedish + the logo, no code; version `9d9f0809-…`), bound by the ROUTE `flippinstuff.se/*` on zone `8398c81a…` (not a custom domain: the placeholder record stays). Rendered at 390/768/1280. Any path answers the page (SPA fallback); www → apex and http → https still redirect first; shop subdomains still 522 until production.
+- **⚠️ CUTOVER STEP (CP7, add to the runbook's §2.5 and the config commit's checklist): delete this Worker and its route BEFORE the production web Worker takes `flippinstuff.se` — `wrangler delete --config cloudflare/coming-soon/wrangler.jsonc` — a route on the same hostname takes precedence over the custom domain and would hide the real site.**
+- Mikael re-ran `prestage-zones.mjs` (both rulesets "updated"): `http://ninetone.flippingstuff.se/produkter?a=1` → 301 `https://ninetone.flippinstuff.se/produkter?a=1` (the loop is gone). Mail decision 2026-10-27: Loopia mailboxes on the apex (MX/SPF/DKIM records to be placed on the Cloudflare zone — Mikael sends Loopia's list), Resend on `mail.flippinstuff.se` for the platform's mail; account still to be created on Kent's side. Proposed and open: `flippinstuff.nu` as the staging base.
+
 ### ✅ UPDATE 2026-10-27 — both zones ACTIVE (registered + nameservers moved 2026-10-27 ≈ 09:40); Universal SSL active for apex + `*` on both; every redirect proven live
 
 - Registry (whois.iis.se): flippinstuff.se and flippingstuff.se `active`, nserver john/ines.ns.cloudflare.com. Cloudflare: both zones `active` 07:39 UTC, certificate packs `universal` active (`flippinstuff.se`, `*.flippinstuff.se`; same for the typo zone). Public DNS answers for apex, www, `melodiemc.flippinstuff.se`, the typo apex and `ninetone.flippingstuff.se`.
