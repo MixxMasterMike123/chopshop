@@ -25,6 +25,9 @@
     p { font-size: 17px; line-height: 1.55; margin: 0 auto; max-width: 44ch; color: var(--muted); }
     .mark { display: inline-block; width: 44px; height: 4px; background: var(--accent); border-radius: 2px; margin: 26px 0 0; }
     footer { margin-top: 44px; font-size: 13px; color: var(--muted); }
+    footer a { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+    footer a:hover { color: var(--ink); }
+    footer span { margin: 0 8px; }
   </style>
 </head>
 <body>
@@ -33,7 +36,9 @@
     <h1>Snart här.</h1>
     <p>Flippin Stuff är en e-handelsplattform för kreatörer: egen butik, print on demand och allt som hör till. Vi öppnar dörrarna inom kort.</p>
     <span class="mark" aria-hidden="true"></span>
-    <footer>© 2026 Flippin Stuff</footer>
+    <!-- The admin lives on staging until the cutover; this page is deleted then
+         (see wrangler.jsonc), so the link never needs to change. -->
+    <footer>© 2026 Flippin Stuff<span aria-hidden="true">·</span><a href="https://chopshop-admin-stg.kent-ee2.workers.dev/login" rel="nofollow">Logga in</a></footer>
   </main>
 </body>
 </html>
