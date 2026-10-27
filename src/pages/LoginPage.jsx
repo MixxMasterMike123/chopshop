@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import CredentialLanguageSwitcher from '../components/CredentialLanguageSwitcher';
+import DarkModeToggle from '../components/DarkModeToggle';
 import credentialTranslations from '../utils/credentialTranslations';
 
 const LoginPage = () => {
@@ -66,20 +67,21 @@ const LoginPage = () => {
   // Show loading state until translations are loaded
   if (!translationsLoaded) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
+          <p className="text-gray-600 dark:text-gray-400">Loading...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         {/* Language Switcher */}
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-3">
+          <DarkModeToggle />
           <CredentialLanguageSwitcher
             currentLanguage={currentLanguage}
             onLanguageChange={handleLanguageChange}
@@ -87,24 +89,32 @@ const LoginPage = () => {
         </div>
 
         <div>
-          {/* Platform wordmark (Flippin Stuff, 2026-10-23: the working logo
-              until a vector version exists). The login is the platform's
-              door, so it carries the platform brand, never a shop's. */}
+          {/* Platform wordmark (Flippin Stuff, 2026-10-28: Kent's rasters keyed
+              to transparency, one per ground, until a vector version exists).
+              The login is the platform's door, so it carries the platform
+              brand, never a shop's. */}
           <img
-            src="/images/flippin-stuff-logo.jpg"
+            src="/images/flippin-stuff-logo-light.webp"
             alt="Flippin Stuff"
             width="1400"
-            height="964"
-            className="mx-auto h-28 w-auto"
+            height="877"
+            className="mx-auto h-28 w-auto dark:hidden"
           />
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <img
+            src="/images/flippin-stuff-logo-dark.webp"
+            alt=""
+            width="1400"
+            height="877"
+            className="mx-auto h-28 w-auto hidden dark:block"
+          />
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-gray-100">
             {t('login.title', 'Sign in to your account')}
           </h2>
         </div>
         
         {error && (
-          <div className="bg-red-50 border-l-4 border-red-400 p-4">
-            <p className="text-red-700">{error}</p>
+          <div className="bg-red-50 dark:bg-red-950/40 border-l-4 border-red-400 p-4">
+            <p className="text-red-700 dark:text-red-300">{error}</p>
           </div>
         )}
         
@@ -121,7 +131,7 @@ const LoginPage = () => {
                 type="email"
                 autoComplete="email"
                 required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
+                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 bg-white dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500 rounded-t-md focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
                 placeholder={t('login.placeholders.email', 'Email address')}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -137,7 +147,7 @@ const LoginPage = () => {
                 type="password"
                 autoComplete="current-password"
                 required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
+                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 bg-white dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500 rounded-b-md focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
                 placeholder={t('login.placeholders.password', 'Password')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -151,15 +161,15 @@ const LoginPage = () => {
                 id="remember-me"
                 name="remember-me"
                 type="checkbox"
-                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded-sm"
+                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-600 dark:bg-gray-900 rounded-sm"
               />
-              <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-900">
+              <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-900 dark:text-gray-200">
                 {t('login.remember_me', 'Remember me')}
               </label>
             </div>
 
             <div className="text-sm">
-              <Link to="/forgot-password" className="font-medium text-primary-600 hover:text-primary-500">
+              <Link to="/forgot-password" className="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
                 {t('login.forgot_password', 'Forgot your password?')}
               </Link>
             </div>

@@ -45,7 +45,7 @@ const CredentialLanguageSwitcher = ({ currentLanguage, onLanguageChange }) => {
     <div className="relative language-switcher">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center space-x-2 px-3 py-2 border border-gray-300 rounded-md bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+        className="flex items-center space-x-2 px-3 py-2 border border-gray-300 rounded-md bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
       >
         <span className="text-lg">{currentLang.flag}</span>
         <span>{currentLang.name}</span>
@@ -53,14 +53,14 @@ const CredentialLanguageSwitcher = ({ currentLanguage, onLanguageChange }) => {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-50">
+        <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-50 dark:bg-gray-900 dark:border-gray-700">
           <div className="py-1">
             {languages.map((language) => (
               <button
                 key={language.code}
                 onClick={() => handleLanguageChange(language.code)}
-                className={`w-full text-left px-4 py-2 text-sm flex items-center space-x-3 hover:bg-gray-50 ${
-                  currentLanguage === language.code ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
+                className={`w-full text-left px-4 py-2 text-sm flex items-center space-x-3 hover:bg-gray-50 dark:hover:bg-gray-800 ${
+                  currentLanguage === language.code ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300' : 'text-gray-700 dark:text-gray-200'
                 }`}
               >
                 <span className="text-lg">{language.flag}</span>

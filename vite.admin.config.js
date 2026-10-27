@@ -224,7 +224,8 @@ const PUBLIC_FILES = [
   'apple-touch-icon.png',
   'images/logo.svg',
   // The platform wordmark (login page, platform console), 2026-10-23.
-  'images/flippin-stuff-logo.jpg',
+  'images/flippin-stuff-logo-light.webp',
+  'images/flippin-stuff-logo-dark.webp',
   // The appearance page's template picker (src/config/templates.js names them).
   'template-thumbs/nord.png',
   'template-thumbs/sport.png',

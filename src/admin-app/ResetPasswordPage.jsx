@@ -15,6 +15,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import CredentialLanguageSwitcher from '../components/CredentialLanguageSwitcher';
+import DarkModeToggle from '../components/DarkModeToggle';
 import credentialTranslations from '../utils/credentialTranslations';
 
 // Better Auth's minimum and maximum (create-auth.ts keeps its defaults).
@@ -101,20 +102,21 @@ const ResetPasswordPage = () => {
 
   if (!translationsLoaded) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
+          <p className="text-gray-600 dark:text-gray-400">Loading...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         {/* Language Switcher */}
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-3">
+          <DarkModeToggle />
           <CredentialLanguageSwitcher
             currentLanguage={currentLanguage}
             onLanguageChange={handleLanguageChange}
@@ -122,10 +124,10 @@ const ResetPasswordPage = () => {
         </div>
 
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-gray-100">
             {t('reset_password.title', 'Välj nytt lösenord')}
           </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
+          <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
             {linkIsValid
               ? t('reset_password.subtitle', `Ange ditt nya lösenord, minst ${MIN_LENGTH} tecken`)
               : t('reset_password.invalid_subtitle', 'Länken i mejlet fungerar inte längre')}
@@ -133,16 +135,16 @@ const ResetPasswordPage = () => {
         </div>
 
         {!linkIsValid && (
-          <div className="bg-red-50 border-l-4 border-red-400 p-4">
-            <p className="text-red-700">
+          <div className="bg-red-50 dark:bg-red-950/40 border-l-4 border-red-400 p-4">
+            <p className="text-red-700 dark:text-red-300">
               {t('reset_password.errors.invalid_link', 'Länken är ogiltig eller har gått ut. Begär en ny.')}
             </p>
           </div>
         )}
 
         {error && (
-          <div className="bg-red-50 border-l-4 border-red-400 p-4">
-            <p className="text-red-700">{error}</p>
+          <div className="bg-red-50 dark:bg-red-950/40 border-l-4 border-red-400 p-4">
+            <p className="text-red-700 dark:text-red-300">{error}</p>
           </div>
         )}
 
@@ -159,7 +161,7 @@ const ResetPasswordPage = () => {
                   type="password"
                   autoComplete="new-password"
                   required
-                  className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
+                  className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 bg-white dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500 rounded-t-md focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
                   placeholder={t('reset_password.placeholders.password', 'Nytt lösenord')}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -175,7 +177,7 @@ const ResetPasswordPage = () => {
                   type="password"
                   autoComplete="new-password"
                   required
-                  className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
+                  className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 bg-white dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500 rounded-b-md focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
                   placeholder={t('reset_password.placeholders.confirm', 'Upprepa lösenordet')}
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
@@ -195,7 +197,7 @@ const ResetPasswordPage = () => {
 
             <div className="flex items-center justify-between">
               <div className="text-sm">
-                <Link to="/login" className="font-medium text-primary-600 hover:text-primary-500">
+                <Link to="/login" className="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
                   {t('reset_password.back_to_login', 'Tillbaka till inloggningen')}
                 </Link>
               </div>
@@ -204,12 +206,12 @@ const ResetPasswordPage = () => {
         ) : (
           <div className="mt-8 flex items-center justify-between">
             <div className="text-sm">
-              <Link to="/forgot-password" className="font-medium text-primary-600 hover:text-primary-500">
+              <Link to="/forgot-password" className="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
                 {t('reset_password.request_new', 'Begär en ny länk')}
               </Link>
             </div>
             <div className="text-sm">
-              <Link to="/login" className="font-medium text-primary-600 hover:text-primary-500">
+              <Link to="/login" className="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
                 {t('reset_password.back_to_login', 'Tillbaka till inloggningen')}
               </Link>
             </div>

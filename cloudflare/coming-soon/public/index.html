@@ -7,10 +7,13 @@
   <meta name="description" content="Flippin Stuff är en e-handelsplattform för kreatörer: egen butik, print on demand och allt som hör till. Öppnar snart.">
   <meta property="og:title" content="Flippin Stuff – snart här">
   <meta property="og:description" content="E-handel för kreatörer. Öppnar snart.">
-  <meta property="og:image" content="https://flippinstuff.se/flippin-stuff-logo.jpg">
+  <meta property="og:image" content="https://flippinstuff.se/flippin-stuff-og.jpg">
   <link rel="icon" href="data:,">
   <style>
-    :root { --ground: #fbfaf6; --ink: #26292e; --muted: #6b6f76; --accent: #ee7b2a; }
+    :root { --ground: #fafafa; --ink: #26292e; --muted: #6b6f76; --accent: #ee7b2a; color-scheme: light dark; }
+    @media (prefers-color-scheme: dark) {
+      :root { --ground: #0f1114; --ink: #f2f2f0; --muted: #a3a7ad; }
+    }
     * { box-sizing: border-box; }
     html { height: 100%; } body { margin: 0; }
     body {
@@ -20,7 +23,8 @@
       -webkit-font-smoothing: antialiased;
     }
     main { width: 100%; min-width: 0; max-width: 560px; text-align: center; }
-    img { display: block; width: 100%; max-width: 420px; height: auto; margin: 0 auto 28px; }
+    picture, img { display: block; width: 100%; max-width: 420px; height: auto; margin: 0 auto; }
+    picture { margin-bottom: 28px; }
     h1 { font-size: clamp(28px, 5vw, 40px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.01em; }
     p { font-size: 17px; line-height: 1.55; margin: 0 auto; max-width: 44ch; color: var(--muted); }
     .mark { display: inline-block; width: 44px; height: 4px; background: var(--accent); border-radius: 2px; margin: 26px 0 0; }
@@ -32,7 +36,10 @@
 </head>
 <body>
   <main>
-    <img src="flippin-stuff-logo.jpg" alt="Flippin Stuff – e-commerce for creators" width="900" height="620">
+    <picture>
+      <source srcset="flippin-stuff-logo-dark.webp" media="(prefers-color-scheme: dark)">
+      <img src="flippin-stuff-logo-light.webp" alt="Flippin Stuff – e-commerce for creators" width="900" height="564">
+    </picture>
     <h1>Snart här.</h1>
     <p>Flippin Stuff är en e-handelsplattform för kreatörer: egen butik, print on demand och allt som hör till. Vi öppnar dörrarna inom kort.</p>
     <span class="mark" aria-hidden="true"></span>

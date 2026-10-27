@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useSimpleAuth } from '../contexts/SimpleAuthContext';
 import CredentialLanguageSwitcher from '../components/CredentialLanguageSwitcher';
+import DarkModeToggle from '../components/DarkModeToggle';
 import credentialTranslations from '../utils/credentialTranslations';
 
 const ForgotPasswordPage = () => {
@@ -58,20 +59,21 @@ const ForgotPasswordPage = () => {
   // Show loading state until translations are loaded
   if (!translationsLoaded) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
+          <p className="text-gray-600 dark:text-gray-400">Loading...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         {/* Language Switcher */}
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-3">
+          <DarkModeToggle />
           <CredentialLanguageSwitcher
             currentLanguage={currentLanguage}
             onLanguageChange={handleLanguageChange}
@@ -79,17 +81,17 @@ const ForgotPasswordPage = () => {
         </div>
 
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-gray-100">
             {t('forgot_password.title', 'Reset Password')}
           </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
+          <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
             {t('forgot_password.subtitle', 'Enter your email address and we\'ll send you a link to reset your password')}
           </p>
         </div>
         
         {error && (
-          <div className="bg-red-50 border-l-4 border-red-400 p-4">
-            <p className="text-red-700">{error}</p>
+          <div className="bg-red-50 dark:bg-red-950/40 border-l-4 border-red-400 p-4">
+            <p className="text-red-700 dark:text-red-300">{error}</p>
           </div>
         )}
         
@@ -111,7 +113,7 @@ const ForgotPasswordPage = () => {
                 type="email"
                 autoComplete="email"
                 required
-                className="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
+                className="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 bg-white dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-500 focus:outline-hidden focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
                 placeholder={t('forgot_password.placeholders.email', 'Email address')}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -131,7 +133,7 @@ const ForgotPasswordPage = () => {
           
           <div className="flex items-center justify-between">
             <div className="text-sm">
-              <Link to="/login" className="font-medium text-primary-600 hover:text-primary-500">
+              <Link to="/login" className="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
                 {t('forgot_password.back_to_login', 'Back to login')}
               </Link>
             </div>
